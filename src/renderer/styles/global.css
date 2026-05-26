@@ -149,6 +149,11 @@ button:disabled {
   padding: 22px;
 }
 
+.pdf-canvas-wrap.is-panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
 .pdf-pages {
   display: flex;
   flex-direction: column;

@@ -10,6 +10,7 @@ import {
   updateTranslationAtIndex,
   type TranslationDocument
 } from './lib/translation';
+import type { ExtractedPdfBlock } from './lib/pdfTextStructure';
 import {
   buildPaperRecord,
   PAPER_LIBRARY_KEY,
@@ -44,6 +45,7 @@ export default function App() {
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
   const [pdf, setPdf] = useState<PdfState | null>(null);
   const [translationDocument, setTranslationDocument] = useState<TranslationDocument | null>(null);
+  const [extractedPdfBlocks, setExtractedPdfBlocks] = useState<ExtractedPdfBlock[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageCount, setPageCount] = useState(0);
   const [scale, setScale] = useState(1.15);
@@ -94,6 +96,7 @@ export default function App() {
     };
 
     setPdf(nextPdf);
+    setExtractedPdfBlocks([]);
     setCurrentPage(initialPage);
     setPageCount(0);
     return nextPdf;
@@ -367,6 +370,7 @@ export default function App() {
             currentPage={currentPage}
             scale={scale}
             highlightText={translationDocument?.kind === 'json' ? currentItem?.original ?? '' : ''}
+            onScaleChange={(nextScale) => setScale(nextScale)}
             onDocumentLoad={(nextPageCount) => {
               setPageCount(nextPageCount);
               setCurrentPage((page) => Math.min(Math.max(1, page), nextPageCount));
@@ -374,6 +378,7 @@ export default function App() {
             onCurrentPageChange={(page) => {
               setCurrentPage((current) => (current === page ? current : page));
             }}
+            onExtractedTextReady={setExtractedPdfBlocks}
             onHighlightStatusChange={setStatusMessage}
             onStatusChange={setStatusMessage}
           />
