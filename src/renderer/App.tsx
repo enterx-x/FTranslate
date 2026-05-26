@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
+import { AI_PROVIDER_PRESETS, shouldTranslateItem, type AiProviderId } from '../shared/aiTranslation';
+import { AiModePanel, type AiFormState } from './components/AiModePanel';
 import { HomePage } from './components/HomePage';
 import { PdfViewer } from './components/PdfViewer';
 import { Toolbar } from './components/Toolbar';
 import { TranslationPanel } from './components/TranslationPanel';
+import { buildAiCacheDocument, getDefaultAiCacheFileName } from './lib/aiMode';
 import {
   exportBilingualMarkdown,
   parseTranslationFile,
   serializeTranslationDocument,
   updateTranslationAtIndex,
-  type TranslationDocument
+  type TranslationDocument,
+  type TranslationItem
 } from './lib/translation';
 import type { ExtractedPdfBlock } from './lib/pdfTextStructure';
 import {
@@ -20,7 +24,14 @@ import {
   upsertPaperRecord,
   type PaperRecord
 } from './lib/papers';
-import type { PdfFilePayload, TextFilePayload } from './types/electron';
+import { buildCurrentJsonPrompt, buildFullJsonPrompt } from './lib/promptTemplates';
+import type {
+  AiSettingsView,
+  AiTranslateResult,
+  PdfFilePayload,
+  SaveTextResult,
+  TextFilePayload
+} from './types/electron';
 
 interface PdfState {
   filePath: string;
@@ -34,11 +45,13 @@ interface RecentProject {
 }
 
 type AppView = 'home' | 'reader';
+type ReaderMode = 'manual' | 'ai';
 
 const RECENT_PROJECT_KEY = 'pdfTranslationReader:lastProject';
 
 export default function App() {
   const [view, setView] = useState<AppView>('home');
+  const [readerMode, setReaderMode] = useState<ReaderMode>('manual');
   const [paperLibrary, setPaperLibrary] = useState<PaperRecord[]>(() =>
     parsePaperLibrary(localStorage.getItem(PAPER_LIBRARY_KEY))
   );
@@ -53,9 +66,34 @@ export default function App() {
   const [showTranslation, setShowTranslation] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editingText, setEditingText] = useState('');
+  const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null);
+  const [aiForm, setAiForm] = useState<AiFormState>({
+    provider: AI_PROVIDER_PRESETS.deepseek.provider,
+    baseURL: AI_PROVIDER_PRESETS.deepseek.baseURL,
+    model: AI_PROVIDER_PRESETS.deepseek.model,
+    apiKey: ''
+  });
+  const [isAiBusy, setIsAiBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('请在论文库中新建或打开一个翻译项目。');
 
   const currentItem = translationDocument?.items[currentParagraphIndex] ?? null;
+
+  useEffect(() => {
+    window.electronAPI
+      .loadAiSettings()
+      .then((settings) => {
+        setAiSettings(settings);
+        setAiForm({
+          provider: settings.provider,
+          baseURL: settings.baseURL,
+          model: settings.model,
+          apiKey: ''
+        });
+      })
+      .catch((error) => {
+        setStatusMessage(`读取 AI 设置失败：${String(error)}`);
+      });
+  }, []);
 
   const recentProject = useMemo<RecentProject>(() => {
     return {
@@ -270,6 +308,178 @@ export default function App() {
     }
   }
 
+  function handleProviderChange(provider: AiProviderId): void {
+    if (provider === 'custom') {
+      setAiForm((value) => ({ ...value, provider }));
+      return;
+    }
+
+    const preset = AI_PROVIDER_PRESETS[provider];
+    setAiForm((value) => ({
+      ...value,
+      provider,
+      baseURL: preset.baseURL,
+      model: preset.model
+    }));
+  }
+
+  function handleAiFormChange(patch: Partial<AiFormState>): void {
+    setAiForm((value) => ({ ...value, ...patch }));
+  }
+
+  async function handleSaveAiSettings(): Promise<void> {
+    try {
+      setIsAiBusy(true);
+      const settings = await window.electronAPI.saveAiSettings(aiForm);
+      setAiSettings(settings);
+      setAiForm({
+        provider: settings.provider,
+        baseURL: settings.baseURL,
+        model: settings.model,
+        apiKey: ''
+      });
+      setStatusMessage('AI 设置已保存。');
+    } catch (error) {
+      setStatusMessage(`保存 AI 设置失败：${String(error)}`);
+    } finally {
+      setIsAiBusy(false);
+    }
+  }
+
+  function handleBuildAiCacheDocument(): void {
+    if (extractedPdfBlocks.length === 0) {
+      setStatusMessage('还没有可用的 PDF 文本提取结果，请先等待 PDF 渲染完成。');
+      return;
+    }
+
+    const document = buildAiCacheDocument(extractedPdfBlocks, pdf?.fileName, translationDocument);
+    setTranslationDocument(document);
+    setCurrentParagraphIndex(0);
+    setShowTranslation(true);
+    setReaderMode('ai');
+    setStatusMessage(`已生成 AI JSON 缓存草稿：${document.items.length} 段。`);
+  }
+
+  async function handleSaveAiCache(): Promise<void> {
+    if (!translationDocument || translationDocument.kind !== 'json') {
+      setStatusMessage('当前没有 JSON 缓存可保存。');
+      return;
+    }
+
+    try {
+      setIsAiBusy(true);
+      await saveAiCacheDocument(translationDocument);
+    } catch (error) {
+      setStatusMessage(`保存 AI JSON 失败：${String(error)}`);
+    } finally {
+      setIsAiBusy(false);
+    }
+  }
+
+  async function handleTranslateCurrentWithAi(force = false): Promise<void> {
+    const document = ensureJsonDocumentForAi();
+    if (!document) {
+      return;
+    }
+
+    const index = Math.min(currentParagraphIndex, document.items.length - 1);
+    const item = document.items[index];
+    if (!item) {
+      setStatusMessage('当前没有可翻译的段落。');
+      return;
+    }
+
+    try {
+      setIsAiBusy(true);
+      let workingDocument = await ensureAiCacheSaved(document);
+      if (!workingDocument) {
+        return;
+      }
+
+      if (!force && !shouldTranslateItem(item)) {
+        setStatusMessage('当前段已有缓存译文，未重复调用 API。');
+        return;
+      }
+
+      setStatusMessage(`AI 正在翻译第 ${index + 1} 段...`);
+      const result = await window.electronAPI.translateWithAi({
+        section: item.section,
+        original: item.original,
+        translation: item.translation,
+        type: item.type,
+        sourceHash: item.sourceHash,
+        force
+      });
+
+      workingDocument = applyAiResultToDocument(workingDocument, index, result);
+      setTranslationDocument(workingDocument);
+      setShowTranslation(true);
+      await persistAiCache(workingDocument);
+      setStatusMessage(result.skipped ? '当前段已跳过。' : `AI 已翻译第 ${index + 1} 段并保存缓存。`);
+    } catch (error) {
+      setStatusMessage(`AI 翻译当前段失败：${String(error)}`);
+    } finally {
+      setIsAiBusy(false);
+    }
+  }
+
+  async function handleTranslatePendingWithAi(): Promise<void> {
+    const document = ensureJsonDocumentForAi();
+    if (!document) {
+      return;
+    }
+
+    try {
+      setIsAiBusy(true);
+      let workingDocument = await ensureAiCacheSaved(document);
+      if (!workingDocument) {
+        return;
+      }
+
+      let translatedCount = 0;
+      for (let index = 0; index < workingDocument.items.length; index += 1) {
+        const item = workingDocument.items[index];
+        if (!shouldTranslateItem(item)) {
+          continue;
+        }
+
+        setCurrentParagraphIndex(index);
+        setStatusMessage(`AI 正在翻译第 ${index + 1} / ${workingDocument.items.length} 段...`);
+        const result = await window.electronAPI.translateWithAi({
+          section: item.section,
+          original: item.original,
+          translation: item.translation,
+          type: item.type,
+          sourceHash: item.sourceHash
+        });
+
+        workingDocument = applyAiResultToDocument(workingDocument, index, result);
+        setTranslationDocument(workingDocument);
+        await persistAiCache(workingDocument);
+        translatedCount += result.skipped ? 0 : 1;
+      }
+
+      setShowTranslation(true);
+      setStatusMessage(`AI 批量翻译完成，本次新增 ${translatedCount} 段译文。`);
+    } catch (error) {
+      setStatusMessage(`AI 批量翻译失败：${String(error)}`);
+    } finally {
+      setIsAiBusy(false);
+    }
+  }
+
+  async function handleCopyCurrentPrompt(): Promise<void> {
+    const prompt = buildCurrentJsonPrompt(getCurrentPromptItem());
+    await navigator.clipboard.writeText(prompt);
+    setStatusMessage('已复制当前段 JSON 提示词。');
+  }
+
+  async function handleCopyFullPrompt(): Promise<void> {
+    const prompt = buildFullJsonPrompt(getPromptItemsForFullDocument());
+    await navigator.clipboard.writeText(prompt);
+    setStatusMessage('已复制全文 JSON 提示词。');
+  }
+
   function handlePreviousParagraph(): void {
     setCurrentParagraphIndex((value) => Math.max(0, value - 1));
     resetParagraphDisplay();
@@ -322,6 +532,129 @@ export default function App() {
     }
 
     setCurrentPage(Math.min(pageCount, Math.max(1, nextPage)));
+  }
+
+  function ensureJsonDocumentForAi(): TranslationDocument | null {
+    if (translationDocument?.kind === 'json') {
+      return translationDocument;
+    }
+
+    if (extractedPdfBlocks.length === 0) {
+      setStatusMessage('AI 模式需要 JSON 翻译文件，或先从 PDF 文本层生成 JSON 缓存。');
+      return null;
+    }
+
+    const document = buildAiCacheDocument(extractedPdfBlocks, pdf?.fileName, translationDocument);
+    setTranslationDocument(document);
+    setCurrentParagraphIndex(0);
+    setShowTranslation(true);
+    return document;
+  }
+
+  async function ensureAiCacheSaved(document: TranslationDocument): Promise<TranslationDocument | null> {
+    if (document.sourcePath) {
+      return document;
+    }
+
+    return saveAiCacheDocument(document);
+  }
+
+  async function saveAiCacheDocument(document: TranslationDocument): Promise<TranslationDocument | null> {
+    const result = await window.electronAPI.saveTranslationCache({
+      filePath: document.sourcePath,
+      content: serializeTranslationDocument(document),
+      defaultFileName: document.sourceName ?? getDefaultAiCacheFileName(pdf?.fileName)
+    });
+
+    if (!result) {
+      setStatusMessage('已取消保存 AI JSON。');
+      return null;
+    }
+
+    const savedDocument = applySavedTranslationPath(document, result);
+    setTranslationDocument(savedDocument);
+    setStatusMessage(`AI JSON 已保存：${result.fileName}`);
+    return savedDocument;
+  }
+
+  async function persistAiCache(document: TranslationDocument): Promise<void> {
+    if (!document.sourcePath) {
+      return;
+    }
+
+    const result = await window.electronAPI.saveTranslationCache({
+      filePath: document.sourcePath,
+      content: serializeTranslationDocument(document),
+      defaultFileName: document.sourceName ?? getDefaultAiCacheFileName(pdf?.fileName)
+    });
+
+    if (result) {
+      setTranslationDocument(applySavedTranslationPath(document, result));
+    }
+  }
+
+  function applySavedTranslationPath(
+    document: TranslationDocument,
+    result: SaveTextResult
+  ): TranslationDocument {
+    const savedDocument = {
+      ...document,
+      sourcePath: result.filePath,
+      sourceName: result.fileName
+    };
+
+    if (activePaperId) {
+      setPaperLibrary((library) =>
+        library.map((paper) =>
+          paper.id === activePaperId
+            ? updatePaperRecord(paper, {
+                translationPath: result.filePath,
+                translationName: result.fileName,
+                lastOpenedAt: new Date().toISOString()
+              })
+            : paper
+        )
+      );
+    }
+
+    return savedDocument;
+  }
+
+  function applyAiResultToDocument(
+    document: TranslationDocument,
+    index: number,
+    result: AiTranslateResult
+  ): TranslationDocument {
+    return {
+      ...document,
+      items: document.items.map((item, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...item,
+              translation: result.translation,
+              translatedAt: result.translatedAt,
+              provider: result.provider,
+              model: result.model
+            }
+          : item
+      )
+    };
+  }
+
+  function getCurrentPromptItem(): TranslationItem | null {
+    if (currentItem?.original.trim()) {
+      return currentItem;
+    }
+
+    return extractedPdfBlocks[currentParagraphIndex] ?? currentItem;
+  }
+
+  function getPromptItemsForFullDocument(): TranslationItem[] {
+    if (translationDocument?.kind === 'json' && translationDocument.items.some((item) => item.original.trim())) {
+      return translationDocument.items;
+    }
+
+    return extractedPdfBlocks;
   }
 
   if (view === 'home') {
@@ -385,23 +718,66 @@ export default function App() {
         </section>
 
         <section className="translation-pane">
-          <TranslationPanel
-            document={translationDocument}
-            currentIndex={currentParagraphIndex}
-            showTranslation={showTranslation}
-            isEditing={isEditing}
-            editingText={editingText}
-            onEditingTextChange={setEditingText}
-            onPrevious={handlePreviousParagraph}
-            onShowTranslation={handleShowTranslation}
-            onNext={handleNextParagraph}
-            onStartEdit={handleStartEdit}
-            onApplyEdit={handleApplyEdit}
-            onCancelEdit={() => {
-              setIsEditing(false);
-              setEditingText('');
-            }}
-          />
+          <div className="side-panel">
+            <div className="mode-tabs">
+              <button
+                type="button"
+                className={readerMode === 'manual' ? 'mode-tab active' : 'mode-tab'}
+                onClick={() => setReaderMode('manual')}
+              >
+                手动模式
+              </button>
+              <button
+                type="button"
+                className={readerMode === 'ai' ? 'mode-tab active' : 'mode-tab'}
+                onClick={() => setReaderMode('ai')}
+              >
+                AI 模式
+              </button>
+            </div>
+            {readerMode === 'manual' ? (
+              <TranslationPanel
+                document={translationDocument}
+                currentIndex={currentParagraphIndex}
+                showTranslation={showTranslation}
+                isEditing={isEditing}
+                editingText={editingText}
+                onEditingTextChange={setEditingText}
+                onPrevious={handlePreviousParagraph}
+                onShowTranslation={handleShowTranslation}
+                onNext={handleNextParagraph}
+                onStartEdit={handleStartEdit}
+                onApplyEdit={handleApplyEdit}
+                onCancelEdit={() => {
+                  setIsEditing(false);
+                  setEditingText('');
+                }}
+                onCopyCurrentPrompt={handleCopyCurrentPrompt}
+                onCopyFullPrompt={handleCopyFullPrompt}
+              />
+            ) : (
+              <AiModePanel
+                document={translationDocument}
+                extractedBlocks={extractedPdfBlocks}
+                currentIndex={currentParagraphIndex}
+                aiSettings={aiSettings}
+                aiForm={aiForm}
+                isBusy={isAiBusy}
+                onProviderChange={handleProviderChange}
+                onAiFormChange={handleAiFormChange}
+                onSaveSettings={handleSaveAiSettings}
+                onBuildCache={handleBuildAiCacheDocument}
+                onSaveCache={handleSaveAiCache}
+                onTranslateCurrent={handleTranslateCurrentWithAi}
+                onTranslatePending={handleTranslatePendingWithAi}
+                onSelectItem={(index) => {
+                  setCurrentParagraphIndex(index);
+                  setShowTranslation(true);
+                  setIsEditing(false);
+                }}
+              />
+            )}
+          </div>
         </section>
       </main>
 

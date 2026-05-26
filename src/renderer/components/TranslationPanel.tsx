@@ -13,6 +13,8 @@ interface TranslationPanelProps {
   onStartEdit: () => void;
   onApplyEdit: () => void;
   onCancelEdit: () => void;
+  onCopyCurrentPrompt: () => void;
+  onCopyFullPrompt: () => void;
 }
 
 export function TranslationPanel(props: TranslationPanelProps) {
@@ -75,6 +77,22 @@ export function TranslationPanel(props: TranslationPanelProps) {
         ) : (
           <p className="translation-placeholder">点击“翻译当前段”显示中文译文。</p>
         )}
+      </article>
+
+      <article className="reader-card prompt-card">
+        <div className="card-header">AI 提示词</div>
+        <p className="subtle">
+          手动模式下可把提示词复制给其它 AI，让它按 section、original、translation
+          三字段生成 JSON 翻译文件。
+        </p>
+        <div className="panel-actions">
+          <button type="button" onClick={props.onCopyCurrentPrompt}>
+            复制当前段 JSON 提示词
+          </button>
+          <button type="button" onClick={props.onCopyFullPrompt}>
+            复制全文 JSON 提示词
+          </button>
+        </div>
       </article>
 
       <div className="paragraph-actions">

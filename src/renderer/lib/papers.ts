@@ -76,7 +76,15 @@ export function updatePaperRecord(
   updates: Partial<
     Pick<
       PaperRecord,
-      'chineseTitle' | 'englishTitle' | 'journal' | 'authors' | 'year' | 'lastOpenedAt' | 'lastPage'
+      | 'translationPath'
+      | 'translationName'
+      | 'chineseTitle'
+      | 'englishTitle'
+      | 'journal'
+      | 'authors'
+      | 'year'
+      | 'lastOpenedAt'
+      | 'lastPage'
     >
   >
 ): PaperRecord {
