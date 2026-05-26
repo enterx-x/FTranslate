@@ -1,9 +1,16 @@
 export type TranslationFileKind = 'json' | 'markdown';
 
 export interface TranslationItem {
+  id?: string;
   section: string;
   original: string;
   translation: string;
+  type?: 'heading' | 'paragraph' | 'formula' | 'caption';
+  page?: number;
+  sourceHash?: string;
+  translatedAt?: string;
+  provider?: string;
+  model?: string;
 }
 
 export interface TranslationMetadata {
@@ -90,9 +97,16 @@ export function parseJsonTranslation(
     const record = item as Record<string, unknown>;
 
     return {
+      id: toText(record.id) || undefined,
       section: toText(record.section, `Section ${index + 1}`),
       original: toText(record.original),
-      translation: toText(record.translation)
+      translation: toText(record.translation),
+      type: parseTranslationItemType(record.type),
+      page: typeof record.page === 'number' ? record.page : undefined,
+      sourceHash: toText(record.sourceHash) || undefined,
+      translatedAt: toText(record.translatedAt) || undefined,
+      provider: toText(record.provider) || undefined,
+      model: toText(record.model) || undefined
     };
   });
 
@@ -157,6 +171,12 @@ export function exportBilingualMarkdown(document: TranslationDocument): string {
 
 function toText(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
+}
+
+function parseTranslationItemType(value: unknown): TranslationItem['type'] {
+  return value === 'heading' || value === 'paragraph' || value === 'formula' || value === 'caption'
+    ? value
+    : undefined;
 }
 
 function stripMarkdownMetadata(content: string): { body: string; metadata: TranslationMetadata } {

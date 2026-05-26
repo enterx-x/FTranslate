@@ -1,6 +1,15 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu } from 'electron';
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, safeStorage } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {
+  AI_PROVIDER_PRESETS,
+  applyAiTranslationResult,
+  buildChatCompletionRequest,
+  shouldTranslateItem,
+  type AiProviderId,
+  type AiProviderSettings,
+  type AiTranslationItem
+} from '../shared/aiTranslation';
 
 interface PdfFilePayload {
   filePath: string;
@@ -24,6 +33,18 @@ interface SaveTextRequest {
 interface LoadProjectRequest {
   pdfPath?: string;
   translationPath?: string;
+}
+
+interface AiSettingsRequest extends AiProviderSettings {
+  apiKey?: string;
+}
+
+interface AiSettingsView extends AiProviderSettings {
+  apiKeyConfigured: boolean;
+}
+
+interface StoredAiSettings extends AiProviderSettings {
+  encryptedApiKey?: string;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -118,7 +139,147 @@ function getTextFilters(extension: SaveTextRequest['extension']): Electron.FileF
   return [{ name: 'Markdown', extensions: ['md', 'markdown'] }];
 }
 
+function getDefaultAiSettings(): AiProviderSettings {
+  return AI_PROVIDER_PRESETS.deepseek;
+}
+
+function getAiSettingsPath(): string {
+  return path.join(app.getPath('userData'), 'ai-settings.json');
+}
+
+async function loadStoredAiSettings(): Promise<StoredAiSettings> {
+  try {
+    const content = await fs.readFile(getAiSettingsPath(), 'utf8');
+    const parsed = JSON.parse(content) as Partial<StoredAiSettings>;
+    const fallback = getDefaultAiSettings();
+    return {
+      provider: parseProvider(parsed.provider) ?? fallback.provider,
+      baseURL: typeof parsed.baseURL === 'string' && parsed.baseURL ? parsed.baseURL : fallback.baseURL,
+      model: typeof parsed.model === 'string' && parsed.model ? parsed.model : fallback.model,
+      encryptedApiKey: typeof parsed.encryptedApiKey === 'string' ? parsed.encryptedApiKey : undefined
+    };
+  } catch {
+    return getDefaultAiSettings();
+  }
+}
+
+async function saveStoredAiSettings(request: AiSettingsRequest): Promise<StoredAiSettings> {
+  const existing = await loadStoredAiSettings();
+  const next: StoredAiSettings = {
+    provider: parseProvider(request.provider) ?? existing.provider,
+    baseURL: request.baseURL.trim() || existing.baseURL,
+    model: request.model.trim() || existing.model,
+    encryptedApiKey:
+      request.apiKey && request.apiKey.trim()
+        ? encryptApiKey(request.apiKey.trim())
+        : existing.encryptedApiKey
+  };
+
+  await fs.mkdir(path.dirname(getAiSettingsPath()), { recursive: true });
+  await fs.writeFile(getAiSettingsPath(), JSON.stringify(next, null, 2), 'utf8');
+  return next;
+}
+
+function toAiSettingsView(settings: StoredAiSettings): AiSettingsView {
+  return {
+    provider: settings.provider,
+    baseURL: settings.baseURL,
+    model: settings.model,
+    apiKeyConfigured: Boolean(settings.encryptedApiKey)
+  };
+}
+
+function parseProvider(value: unknown): AiProviderId | null {
+  return value === 'openai' || value === 'deepseek' || value === 'kimi' || value === 'custom'
+    ? value
+    : null;
+}
+
+function encryptApiKey(apiKey: string): string {
+  if (!safeStorage.isEncryptionAvailable()) {
+    return `plain:${Buffer.from(apiKey, 'utf8').toString('base64')}`;
+  }
+
+  return `safe:${safeStorage.encryptString(apiKey).toString('base64')}`;
+}
+
+function decryptApiKey(encryptedApiKey?: string): string {
+  if (!encryptedApiKey) {
+    return '';
+  }
+
+  if (encryptedApiKey.startsWith('plain:')) {
+    return Buffer.from(encryptedApiKey.slice('plain:'.length), 'base64').toString('utf8');
+  }
+
+  if (encryptedApiKey.startsWith('safe:')) {
+    return safeStorage.decryptString(Buffer.from(encryptedApiKey.slice('safe:'.length), 'base64'));
+  }
+
+  return '';
+}
+
+async function translateWithAi(request: AiTranslationItem & { force?: boolean }) {
+  const settings = await loadStoredAiSettings();
+  const apiKey = decryptApiKey(settings.encryptedApiKey);
+
+  if (!apiKey) {
+    throw new Error('请先在 AI 设置中保存 API Key。');
+  }
+
+  if (!shouldTranslateItem(request, request.force)) {
+    return {
+      translation: request.translation,
+      translatedAt: request.translatedAt ?? '',
+      provider: settings.provider,
+      model: settings.model,
+      skipped: true
+    };
+  }
+
+  const chatRequest = buildChatCompletionRequest(settings, request);
+  const response = await fetch(chatRequest.url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(chatRequest.body)
+  });
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(`AI 翻译请求失败：HTTP ${response.status} ${responseText}`);
+  }
+
+  const parsed = JSON.parse(responseText) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const translation = parsed.choices?.[0]?.message?.content?.trim();
+
+  if (!translation) {
+    throw new Error('AI 响应中没有可用译文。');
+  }
+
+  return {
+    ...applyAiTranslationResult(request, translation, settings),
+    skipped: false
+  };
+}
+
 function registerIpcHandlers(): void {
+  ipcMain.handle('ai-settings:load', async () => {
+    return toAiSettingsView(await loadStoredAiSettings());
+  });
+
+  ipcMain.handle('ai-settings:save', async (_event, request: AiSettingsRequest) => {
+    return toAiSettingsView(await saveStoredAiSettings(request));
+  });
+
+  ipcMain.handle('ai:translate', async (_event, request: AiTranslationItem & { force?: boolean }) => {
+    return translateWithAi(request);
+  });
+
   ipcMain.handle('dialog:open-pdf', async () => {
     const result = await dialog.showOpenDialog({
       title: '选择英文原文 PDF',
@@ -182,6 +343,30 @@ function registerIpcHandlers(): void {
         title: '保存翻译文件',
         defaultPath: request.defaultFileName,
         filters: getTextFilters(request.extension)
+      });
+
+      if (result.canceled || !result.filePath) {
+        return null;
+      }
+
+      targetPath = result.filePath;
+    }
+
+    await fs.writeFile(targetPath, request.content, 'utf8');
+    return {
+      filePath: targetPath,
+      fileName: path.basename(targetPath)
+    };
+  });
+
+  ipcMain.handle('file:save-translation-cache', async (_event, request: Omit<SaveTextRequest, 'extension'>) => {
+    let targetPath = request.filePath;
+
+    if (!targetPath) {
+      const result = await dialog.showSaveDialog({
+        title: '保存 AI 翻译缓存',
+        defaultPath: request.defaultFileName,
+        filters: [{ name: 'JSON Translation', extensions: ['json'] }]
       });
 
       if (result.canceled || !result.filePath) {
