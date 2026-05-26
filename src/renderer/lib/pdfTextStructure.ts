@@ -45,6 +45,8 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
   const metrics = buildPageTextMetrics(rawLines);
   const contentLines = rawLines.filter((line) => shouldKeepLayoutLine(line, metrics));
   const orderedLines = orderLinesForAcademicLayout(contentLines);
+  const firstInlineAbstractY =
+    orderedLines.find((line) => extractInlineSection(line.text)?.section.toLowerCase() === 'abstract')?.y ?? null;
   const medianLineHeight = median(contentLines.map((line) => line.height)) ?? PARAGRAPH_GAP_THRESHOLD / 2;
   const blocks: ExtractedPdfBlock[] = [];
   let currentParagraph: TextLine[] = [];
@@ -60,7 +62,10 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
     const section = inlineSection?.section ?? currentSection;
     original = inlineSection?.body ?? original;
 
-    if (shouldIncludeBlock('paragraph', original)) {
+    if (
+      shouldIncludeBlock('paragraph', original) &&
+      !looksLikePageOnePreAbstractFragment(page, currentSection, inlineSection, currentParagraph, firstInlineAbstractY)
+    ) {
       blocks.push(createBlock(page, 'paragraph', section, original));
     }
     currentParagraph = [];
@@ -71,13 +76,20 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
 
     if (type !== 'paragraph') {
       flushParagraph();
-      const block = createBlock(page, type, type === 'heading' ? line.text.trim() : currentSection, line.text.trim());
-      if (shouldIncludeBlock(type, block.original)) {
+      const original = type === 'heading' ? normalizeSectionHeading(line.text) : line.text.trim();
+      const block = createBlock(page, type, type === 'heading' ? original : currentSection, original);
+      const includeBlock = shouldIncludeBlock(type, block.original);
+      if (includeBlock) {
         blocks.push(block);
       }
-      if (type === 'heading') {
-        currentSection = line.text.trim();
+      if (type === 'heading' && includeBlock) {
+        currentSection = original;
       }
+      return;
+    }
+
+    if (shouldSkipStandaloneParagraphLine(line.text)) {
+      flushParagraph();
       return;
     }
 
@@ -89,7 +101,8 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
     if (
       previousLine &&
       (Math.abs(line.y - previousLine.y) > paragraphGapThreshold ||
-        Math.abs(line.x - previousLine.x) > COLUMN_SPLIT_THRESHOLD / 2)
+        Math.abs(line.x - previousLine.x) > COLUMN_SPLIT_THRESHOLD / 2 ||
+        startsIndentedParagraphAfterSentence(previousLine, line))
     ) {
       flushParagraph();
     }
@@ -102,7 +115,73 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
 }
 
 export function buildPdfDocumentOutline(pages: Array<{ page: number; items: PositionedPdfTextItem[] }>): ExtractedPdfBlock[] {
-  return pages.flatMap((page) => buildPdfPageOutline(page.page, page.items));
+  const pageBlocks = pages.flatMap((page) => buildPdfPageOutline(page.page, page.items));
+  return mergeDocumentParagraphContinuations(pageBlocks);
+}
+
+function mergeDocumentParagraphContinuations(blocks: ExtractedPdfBlock[]): ExtractedPdfBlock[] {
+  const merged: ExtractedPdfBlock[] = [];
+  let activeSection: string | null = null;
+
+  blocks.forEach((block) => {
+    if (block.type === 'heading') {
+      activeSection = block.section || block.original;
+      merged.push(block);
+      return;
+    }
+
+    if (block.type !== 'paragraph') {
+      merged.push(block);
+      return;
+    }
+
+    const inheritedSection = isDefaultPageSection(block.section) && activeSection ? activeSection : block.section;
+    const paragraphBlock =
+      inheritedSection === block.section ? block : createBlock(block.page, block.type, inheritedSection, block.original);
+    const previous = merged.at(-1);
+
+    if (previous && shouldMergeAdjacentParagraphs(previous, paragraphBlock)) {
+      const mergedOriginal = joinParagraphLines([previous.original, paragraphBlock.original]);
+      merged[merged.length - 1] = createBlock(previous.page, 'paragraph', previous.section, mergedOriginal);
+      return;
+    }
+
+    merged.push(paragraphBlock);
+    if (!isDefaultPageSection(paragraphBlock.section)) {
+      activeSection = paragraphBlock.section;
+    }
+  });
+
+  return merged;
+}
+
+function shouldMergeAdjacentParagraphs(previous: ExtractedPdfBlock, next: ExtractedPdfBlock): boolean {
+  if (previous.type !== 'paragraph' || next.type !== 'paragraph' || previous.section !== next.section) {
+    return false;
+  }
+
+  if (previous.page === next.page && !isDefaultPageSection(previous.section)) {
+    return !endsWithSentenceBoundary(previous.original);
+  }
+
+  return next.page === previous.page + 1 && startsWithLowercaseContinuation(next.original);
+}
+
+function endsWithSentenceBoundary(text: string): boolean {
+  return /[.!?。！？][)"'\]]*$/u.test(text.trim());
+}
+
+function startsIndentedParagraphAfterSentence(previousLine: TextLine, nextLine: TextLine): boolean {
+  return nextLine.x - previousLine.x > 6 && endsWithSentenceBoundary(previousLine.text);
+}
+
+function startsWithLowercaseContinuation(text: string): boolean {
+  const firstLetter = text.trim().match(/\p{L}/u)?.[0];
+  return Boolean(firstLetter && firstLetter === firstLetter.toLowerCase() && firstLetter !== firstLetter.toUpperCase());
+}
+
+function isDefaultPageSection(section: string): boolean {
+  return /^Page\s+\d+$/u.test(section);
 }
 
 export function orderPositionedTextItemsForReading<TItem extends PositionedPdfTextItem>(
@@ -142,8 +221,24 @@ function buildLines<TItem extends PositionedPdfTextItem>(items: TItem[]): Array<
       const currentSegment = segments.at(-1);
       const previousItem = currentSegment?.at(-1);
       const horizontalGap = previousItem ? item.x - (previousItem.x + previousItem.width) : 0;
+      const baselineDrift = previousItem ? Math.abs(previousItem.y - item.y) : 0;
+      const currentSegmentWidth =
+        currentSegment && previousItem ? previousItem.x + previousItem.width - currentSegment[0].x : 0;
+      const likelyDifferentBaselines =
+        previousItem &&
+        horizontalGap > 8 &&
+        baselineDrift > Math.max(2, Math.min(previousItem.height, item.height) * 0.3);
+      const likelyDifferentColumns =
+        previousItem &&
+        horizontalGap > 8 &&
+        (currentSegmentWidth > 200 || (currentSegmentWidth > 120 && item.width > 40));
 
-      if (!currentSegment || horizontalGap > LINE_SEGMENT_GAP_THRESHOLD) {
+      if (
+        !currentSegment ||
+        horizontalGap > LINE_SEGMENT_GAP_THRESHOLD ||
+        likelyDifferentBaselines ||
+        likelyDifferentColumns
+      ) {
         segments.push([item]);
       } else {
         currentSegment.push(item);
@@ -249,12 +344,17 @@ function looksLikeAcademicParagraph(text: string): boolean {
     looksLikeAppendixContributionList(text) ||
     looksLikeFrontMatterTitle(text) ||
     looksLikeAuthorList(text) ||
-    looksLikeShortFigureLabel(text)
+    looksLikeShortFigureLabel(text) ||
+    looksLikeShortEpigraphQuote(text)
   ) {
     return false;
   }
 
   if (sentenceMarks === 0 && looksLikeDiagramLabelVocabulary(text)) {
+    return false;
+  }
+
+  if (sentenceMarks === 0 && looksLikeFigureActionLabel(text)) {
     return false;
   }
 
@@ -265,6 +365,21 @@ function looksLikeAcademicParagraph(text: string): boolean {
   return words >= 6;
 }
 
+function looksLikePageOnePreAbstractFragment(
+  page: number,
+  currentSection: string,
+  inlineSection: { section: string; body: string } | null,
+  lines: TextLine[],
+  firstInlineAbstractY: number | null
+): boolean {
+  if (page !== 1 || inlineSection || currentSection !== 'Page 1' || lines.length === 0 || firstInlineAbstractY === null) {
+    return false;
+  }
+
+  const firstY = Math.min(...lines.map((line) => line.y));
+  return firstY < firstInlineAbstractY;
+}
+
 function looksLikeSectionHeading(text: string): boolean {
   const normalized = text.trim();
   return (
@@ -272,6 +387,18 @@ function looksLikeSectionHeading(text: string): boolean {
       normalized
     ) || /^([IVX]+|\d+)\.?\s+[A-Z][A-Z0-9 ,:;()/-]{3,}$/u.test(normalized)
   );
+}
+
+function normalizeSectionHeading(text: string): string {
+  let normalized = text.trim().replace(/\s*-\s*/gu, '-').replace(/\s+/gu, ' ');
+  let previous = '';
+
+  while (previous !== normalized) {
+    previous = normalized;
+    normalized = normalized.replace(/\b([A-Z])\s+(?=[A-Z][A-Z-]*\b)/gu, '$1');
+  }
+
+  return normalized;
 }
 
 function extractInlineSection(text: string): { section: string; body: string } | null {
@@ -469,6 +596,33 @@ function looksLikeShortFigureLabel(text: string): boolean {
   return titleCaseWords >= 2 || labelVocabulary >= 2;
 }
 
+function looksLikeShortEpigraphQuote(text: string): boolean {
+  const normalized = text.trim();
+  const words = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const academicWords = words.filter((word) =>
+    /^(model|models|data|training|learning|robot|robots|policy|method|experiment|performance|capabilities)$/iu.test(word)
+  ).length;
+
+  return words.length <= 14 && /^I\s+(am|have|was|will|shall|can|could|would|should)\b/u.test(normalized) && academicWords === 0;
+}
+
+function shouldSkipStandaloneParagraphLine(text: string): boolean {
+  return looksLikeShortEpigraphQuote(text) || looksLikeEpigraphAttribution(text);
+}
+
+function looksLikeEpigraphAttribution(text: string): boolean {
+  const normalized = text.trim();
+  const words = normalized.match(/[\p{L}\p{N}.]+/gu) ?? [];
+  const commaCount = (normalized.match(/,/gu) ?? []).length;
+
+  if (words.length < 3 || words.length > 8 || commaCount < 2) {
+    return false;
+  }
+
+  const nameLikeWords = words.filter((word) => /^(\p{Lu}\.|[\p{Lu}][\p{Ll}]+)$/u.test(word)).length;
+  return nameLikeWords >= words.length - 1;
+}
+
 function looksLikeDiagramLabelVocabulary(text: string): boolean {
   const words = text.match(/[\p{L}\p{N}]+/gu) ?? [];
   if (words.length === 0) {
@@ -482,6 +636,24 @@ function looksLikeDiagramLabelVocabulary(text: string): boolean {
   ).length;
 
   return labelVocabulary >= 3 && labelVocabulary / words.length >= 0.2;
+}
+
+function looksLikeFigureActionLabel(text: string): boolean {
+  const normalized = text.toLowerCase();
+  if (
+    /^(demonstration data|autonomous data|robot data|non-robot data|multimodal web data|egocentric human data)\b/u.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+
+  const words = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const actionWords = words.filter((word) =>
+    /^(open|close|pick|put|load|throw|fold|move|place|take|chop|pour|wipe|turn|press|push|pull)$/iu.test(word)
+  ).length;
+
+  return words.length >= 10 && actionWords >= 3;
 }
 
 function createBlock(

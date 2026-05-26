@@ -300,11 +300,17 @@ function validateAiQueueScenario(snapshot) {
   const joinedRows = snapshot.rows.join('\n');
   const forbiddenSnippets = [
     'World Model',
+    'Demonstration Data',
+    'Autonomous Data',
+    'Non-Robot Data',
+    'Multimodal Web Data',
     'Language Instructions',
     'Subgoal Images',
     'Robot Data',
     'Episode Metadata',
     'Physical Intelligence',
+    'I am a part of all that I have met',
+    'Alfred, Lord Tennyson',
     'Bo Ai',
     'Ali Amin',
     'Ashwin Balakrishna'
@@ -317,6 +323,31 @@ function validateAiQueueScenario(snapshot) {
 
   if (/[�\u25a0\u25a1]/u.test(joinedRows)) {
     throw new Error('ai-queue: leaked unreadable glyph noise into translation queue');
+  }
+  const firstRow = snapshot.rows[0] ?? '';
+  if (!firstRow.includes('Abstract') || !firstRow.includes('including demonstrations')) {
+    throw new Error(
+      `ai-queue: expected the cross-page Abstract continuation to stay in the first paragraph row: ${firstRow}`
+    );
+  }
+
+  const detachedAbstractContinuation = snapshot.rows
+    .slice(1)
+    .find((row) => /including demonstrations, potentially suboptimal/iu.test(row));
+  if (detachedAbstractContinuation) {
+    throw new Error(`ai-queue: detached Abstract continuation into a separate row: ${detachedAbstractContinuation}`);
+  }
+
+  const introRow = snapshot.rows.find((row) => row.includes('I. INTRODUCTION') && row.includes('Foundation models'));
+  if (!introRow || !introRow.includes('capabilities emerge from training')) {
+    throw new Error(
+      `ai-queue: expected first Introduction body row to contain the left-column paragraph continuation: ${snapshot.rows
+        .slice(0, 5)
+        .join(' | ')}`
+    );
+  }
+  if (introRow.includes('express with language alone')) {
+    throw new Error(`ai-queue: merged right-column text into first Introduction body row: ${introRow}`);
   }
 }
 

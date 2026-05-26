@@ -35,8 +35,15 @@ export function AiModePanel(props: AiModePanelProps) {
 
   return (
     <div className="ai-mode-panel">
-      <section className="reader-card compact-card">
-        <div className="card-header">AI 设置</div>
+      <details className="reader-card compact-card ai-settings-card" open={!props.aiSettings?.apiKeyConfigured}>
+        <summary>
+          <span className="card-header">AI 设置</span>
+          <span className="subtle">
+            {props.aiSettings?.apiKeyConfigured
+              ? `${props.aiForm.provider} / ${props.aiForm.model}，API Key 已保存`
+              : '展开填写 Provider、Base URL、Model 和 API Key'}
+          </span>
+        </summary>
         <div className="ai-settings-grid">
           <label>
             <span>Provider</span>
@@ -86,7 +93,7 @@ export function AiModePanel(props: AiModePanelProps) {
             {props.aiSettings?.apiKeyConfigured ? 'API Key 已加密保存到本机' : '尚未保存 API Key'}
           </span>
         </div>
-      </section>
+      </details>
 
       <section className="reader-card compact-card">
         <div className="card-header">PDF 提取与缓存</div>

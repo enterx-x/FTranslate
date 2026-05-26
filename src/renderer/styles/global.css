@@ -337,6 +337,39 @@ button:disabled {
   font-weight: 700;
 }
 
+.ai-settings-card summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.ai-settings-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.ai-settings-card summary::after {
+  content: "展开";
+  flex-shrink: 0;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-settings-card[open] summary {
+  margin-bottom: 12px;
+}
+
+.ai-settings-card[open] summary::after {
+  content: "收起";
+}
+
+.ai-settings-card summary .card-header {
+  margin-bottom: 0;
+}
+
 .original-card {
   color: #111827;
 }
