@@ -23,7 +23,8 @@ interface NormalizedToken {
 const HYPHEN_PATTERN = /[-\u00ad\u2010-\u2015]/u;
 const SEARCHABLE_CHARACTER_PATTERN = /[\p{L}\p{N}]/u;
 const MIN_SENTENCE_LENGTH = 36;
-const MIN_FUZZY_SCORE = 0.55;
+const MIN_PARTIAL_MATCH_SCORE = 0.75;
+const MIN_FUZZY_SCORE = 0.75;
 
 export function normalizePdfSearchText(text: string): string {
   return buildNormalizedCharacters([{ str: text }])
@@ -64,25 +65,41 @@ function findBestSentenceMatch(
   normalizedDocument: string,
   query: string
 ): PdfTextMatchResult {
+  const normalizedQuery = normalizePdfSearchText(query);
   const candidates = splitSentences(query)
     .map((sentence) => normalizePdfSearchText(sentence))
     .filter((sentence) => sentence.length >= MIN_SENTENCE_LENGTH);
 
-  let bestMatch = noMatch();
+  const matchedItemIndexes = new Set<number>();
+  const matchedSentences = new Set<string>();
+  let matchedLength = 0;
 
   for (const sentence of candidates) {
+    if (matchedSentences.has(sentence)) {
+      continue;
+    }
+
     const match = findCharacterRangeMatch(normalizedCharacters, normalizedDocument, sentence);
     if (match.itemIndexes.length === 0) {
       continue;
     }
 
-    const score = sentence.length / Math.max(normalizePdfSearchText(query).length, sentence.length);
-    if (score > bestMatch.score) {
-      bestMatch = { ...match, score, strategy: 'sentence' };
-    }
+    matchedSentences.add(sentence);
+    matchedLength += sentence.length;
+    match.itemIndexes.forEach((itemIndex) => matchedItemIndexes.add(itemIndex));
   }
 
-  return bestMatch;
+  const score = matchedLength / Math.max(normalizedQuery.length, matchedLength);
+
+  if (score < MIN_PARTIAL_MATCH_SCORE || matchedItemIndexes.size === 0) {
+    return noMatch();
+  }
+
+  return {
+    itemIndexes: Array.from(matchedItemIndexes).sort((left, right) => left - right),
+    score,
+    strategy: 'sentence'
+  };
 }
 
 function findBestFuzzyTokenMatch(items: PdfTextItemLike[], query: string): PdfTextMatchResult {

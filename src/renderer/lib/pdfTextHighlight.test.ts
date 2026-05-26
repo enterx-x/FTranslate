@@ -43,23 +43,43 @@ describe('PDF text highlight matching', () => {
     expect(matches).toEqual([]);
   });
 
-  it('falls back to a sentence-level partial match when the whole paragraph differs', () => {
+  it('falls back to a sentence-level partial match when enough sentences are present', () => {
     const result = findBestTextItemMatch(
       [
         { str: 'Foundation models work on the principle that generalist capabilities' },
         { str: ' emerge from training on large and diverse datasets.' },
+        { str: ' Large language models can recall facts and compose semantic knowledge.' },
         { str: ' Unrelated text in the same PDF column.' }
       ],
       [
         'Foundation models work on the principle that generalist capabilities',
         'emerge from training on large and diverse datasets.',
-        'This sentence is missing from the PDF extraction.'
+        'Large language models can recall facts and compose semantic knowledge.',
+        'This short tail is missing.'
       ].join(' ')
     );
 
     expect(result.strategy).toBe('sentence');
-    expect(result.itemIndexes).toEqual([0, 1]);
-    expect(result.score).toBeGreaterThan(0.4);
+    expect(result.itemIndexes).toEqual([0, 1, 2]);
+    expect(result.score).toBeGreaterThanOrEqual(0.75);
+  });
+
+  it('rejects a single low-coverage sentence fallback for a long paragraph', () => {
+    const result = findBestTextItemMatch(
+      [
+        { str: 'Foundation models work on the principle that generalist capabilities' },
+        { str: ' emerge from training on large and diverse datasets.' }
+      ],
+      [
+        'Foundation models work on the principle that generalist capabilities',
+        'emerge from training on large and diverse datasets.',
+        'For example, large language models can recall facts and semantic knowledge.',
+        'This kind of compositional generalization remains challenging in physical intelligence.'
+      ].join(' ')
+    );
+
+    expect(result.strategy).toBe('none');
+    expect(result.itemIndexes).toEqual([]);
   });
 
   it('uses token-overlap fuzzy matching when punctuation and several words differ', () => {
@@ -74,13 +94,49 @@ describe('PDF text highlight matching', () => {
 
     expect(result.strategy).toBe('fuzzy');
     expect(result.itemIndexes).toEqual([0, 1]);
-    expect(result.score).toBeGreaterThanOrEqual(0.55);
+    expect(result.score).toBeGreaterThanOrEqual(0.75);
+  });
+
+  it('rejects partial fuzzy matches below the display threshold for long paragraphs', () => {
+    const result = findBestTextItemMatch(
+      [
+        { str: 'Foundation models work on the principle that generalist capabilities emerge' },
+        { str: 'from training on large and diverse datasets in a robotics paper' }
+      ],
+      [
+        'Foundation models work on the principle that generalist capabilities emerge',
+        'from training on large and diverse datasets.',
+        'For example, large language models can recall facts and compose semantic knowledge.',
+        'This kind of compositional generalization remains challenging in physical intelligence.'
+      ].join(' ')
+    );
+
+    expect(result.strategy).toBe('none');
+    expect(result.itemIndexes).toEqual([]);
   });
 
   it('reports no useful match when token overlap is too low', () => {
     const result = findBestTextItemMatch(
       [{ str: 'The paper studies robot policies and manipulation.' }],
       'language model scaling law and dataset curation'
+    );
+
+    expect(result.strategy).toBe('none');
+    expect(result.itemIndexes).toEqual([]);
+  });
+
+  it('rejects weak fuzzy matches that only share figure-label vocabulary', () => {
+    const result = findBestTextItemMatch(
+      [
+        { str: 'Robot Data Demonstration Data Non-Robot Data Multimodal Web Data' },
+        { str: 'Language Instructions Subgoal Images Episode Metadata' },
+        { str: 'Fig. 1: We introduce π0.7, a steerable generalist robot foundation model.' }
+      ],
+      [
+        'We present a new robotic foundation model, called π0.7, that can enable strong',
+        'out-of-the-box performance in a wide range of scenarios. The main idea behind',
+        'π0.7 is to use diverse context conditioning during training.'
+      ].join(' ')
     );
 
     expect(result.strategy).toBe('none');

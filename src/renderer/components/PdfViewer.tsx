@@ -243,6 +243,11 @@ export function PdfViewer(props: PdfViewerProps) {
       return;
     }
 
+    if (isRendering) {
+      props.onHighlightStatusChange?.('PDF 文本层仍在渲染，稍后自动定位当前段。');
+      return;
+    }
+
     for (const pageNumber of pageNumbers) {
       const textItems = textItemsByPageRef.current.get(pageNumber) ?? [];
       const match = findBestTextItemMatch(textItems, props.highlightText);
@@ -267,7 +272,7 @@ export function PdfViewer(props: PdfViewerProps) {
     }
 
     props.onHighlightStatusChange?.('未在 PDF 中找到足够相似的当前段原文。');
-  }, [pageNumbers, props.highlightText, props.onHighlightStatusChange, textLayerVersion]);
+  }, [isRendering, pageNumbers, props.highlightText, props.onHighlightStatusChange, textLayerVersion]);
 
   useEffect(() => {
     if (pendingZoomAnchorRef.current) {
@@ -497,7 +502,10 @@ export function PdfViewer(props: PdfViewerProps) {
       };
     });
 
-    buildUnderlineRects(sourceRects, matchedIndexes).forEach((rect) => {
+    buildUnderlineRects(sourceRects, matchedIndexes, {
+      width: surface.offsetWidth,
+      height: surface.offsetHeight
+    }).forEach((rect) => {
       const underline = document.createElement('div');
       underline.className = 'pdf-highlight-underline';
       underline.style.left = `${rect.left}px`;
