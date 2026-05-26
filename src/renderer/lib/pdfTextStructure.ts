@@ -28,10 +28,12 @@ interface TextLine<TItem extends PositionedPdfTextItem = PositionedPdfTextItem> 
 
 const COLUMN_SPLIT_THRESHOLD = 220;
 const PARAGRAPH_GAP_THRESHOLD = 24;
+const LINE_SEGMENT_GAP_THRESHOLD = 36;
 
 export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]): ExtractedPdfBlock[] {
   const lines = buildLines(items);
   const orderedLines = orderLinesForAcademicLayout(lines);
+  const medianLineHeight = median(lines.map((line) => line.height)) ?? PARAGRAPH_GAP_THRESHOLD / 2;
   const blocks: ExtractedPdfBlock[] = [];
   let currentParagraph: TextLine[] = [];
   let currentSection = `Page ${page}`;
@@ -69,7 +71,7 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
 
     const previousLine = currentParagraph.at(-1);
     const paragraphGapThreshold = previousLine
-      ? Math.max(PARAGRAPH_GAP_THRESHOLD, previousLine.height * 1.75, line.height * 1.75)
+      ? Math.max(medianLineHeight * 2.4, previousLine.height * 1.75, line.height * 1.75)
       : PARAGRAPH_GAP_THRESHOLD;
     if (
       previousLine &&
@@ -124,7 +126,7 @@ function buildLines<TItem extends PositionedPdfTextItem>(items: TItem[]): Array<
       const previousItem = currentSegment?.at(-1);
       const horizontalGap = previousItem ? item.x - (previousItem.x + previousItem.width) : 0;
 
-      if (!currentSegment || horizontalGap > 100) {
+      if (!currentSegment || horizontalGap > LINE_SEGMENT_GAP_THRESHOLD) {
         segments.push([item]);
       } else {
         currentSegment.push(item);
@@ -283,6 +285,16 @@ function joinParagraphLines(lines: string[]): string {
 
 function countWords(text: string): number {
   return text.match(/[\p{L}\p{N}]+/gu)?.length ?? 0;
+}
+
+function median(values: number[]): number | null {
+  if (values.length === 0) {
+    return null;
+  }
+
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 }
 
 function looksLikeFrontMatterTitle(text: string): boolean {

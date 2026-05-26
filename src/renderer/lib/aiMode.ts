@@ -8,6 +8,7 @@ export function buildAiCacheDocument(
   existingDocument?: TranslationDocument | null
 ): TranslationDocument {
   const cachedItems = buildCachedItemMap(existingDocument?.items ?? []);
+  const translatableBlocks = getTranslatableExtractedBlocks(blocks);
 
   return {
     kind: 'json',
@@ -16,7 +17,7 @@ export function buildAiCacheDocument(
       existingDocument?.kind === 'json' && existingDocument.sourceName
         ? existingDocument.sourceName
         : getDefaultAiCacheFileName(pdfFileName),
-    items: blocks.map((block) => {
+    items: translatableBlocks.map((block) => {
       const cached = cachedItems.get(block.sourceHash) ?? cachedItems.get(normalizeOriginal(block.original));
 
       return {
@@ -28,6 +29,10 @@ export function buildAiCacheDocument(
       };
     })
   };
+}
+
+export function getTranslatableExtractedBlocks(blocks: ExtractedPdfBlock[]): ExtractedPdfBlock[] {
+  return blocks.filter((block) => block.type === 'paragraph' && looksTranslatableParagraph(block.original));
 }
 
 export function countPendingAiTranslations(items: TranslationItem[]): number {
@@ -60,4 +65,18 @@ function buildCachedItemMap(items: TranslationItem[]): Map<string, TranslationIt
 
 function normalizeOriginal(value: string): string {
   return value.toLowerCase().replace(/\s+/gu, ' ').trim();
+}
+
+function looksTranslatableParagraph(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized || /[□�]/u.test(normalized)) {
+    return false;
+  }
+
+  const words = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const letters = normalized.match(/\p{L}/gu) ?? [];
+  const readableCharacters = normalized.match(/[\p{L}\p{N}\p{P}\p{Zs}]/gu) ?? [];
+  const readableRatio = readableCharacters.length / Math.max(1, normalized.length);
+
+  return words.length >= 4 && letters.length >= 8 && readableRatio >= 0.85;
 }

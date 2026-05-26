@@ -1,5 +1,5 @@
 import { shouldTranslateItem, type AiProviderId } from '../../shared/aiTranslation';
-import { countPendingAiTranslations } from '../lib/aiMode';
+import { countPendingAiTranslations, getTranslatableExtractedBlocks } from '../lib/aiMode';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import type { TranslationDocument } from '../lib/translation';
 import type { AiSettingsView } from '../types/electron';
@@ -31,9 +31,7 @@ interface AiModePanelProps {
 export function AiModePanel(props: AiModePanelProps) {
   const jsonDocument = props.document?.kind === 'json' ? props.document : null;
   const pendingCount = countPendingAiTranslations(jsonDocument?.items ?? []);
-  const extractedTranslatableCount = props.extractedBlocks.filter(
-    (block) => block.type === 'heading' || block.type === 'paragraph'
-  ).length;
+  const extractedTranslatableCount = getTranslatableExtractedBlocks(props.extractedBlocks).length;
 
   return (
     <div className="ai-mode-panel">
@@ -94,7 +92,7 @@ export function AiModePanel(props: AiModePanelProps) {
         <div className="card-header">PDF 提取与缓存</div>
         <p className="subtle">
           已从 PDF 文本层提取 {props.extractedBlocks.length} 个块，其中 {extractedTranslatableCount}{' '}
-          个标题/正文块可作为 AI 翻译候选。公式和图注默认保留原文，不批量翻译。
+          个自然段可作为 AI 翻译候选。标题、公式、图注和图中标签不会进入批量翻译队列。
         </p>
         <div className="panel-actions">
           <button

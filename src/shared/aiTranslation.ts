@@ -80,7 +80,7 @@ export function buildChatCompletionsUrl(baseURL: string): string {
 }
 
 export function shouldTranslateItem(item: AiTranslationItem, force = false): boolean {
-  if (item.type === 'formula' || item.type === 'caption') {
+  if (item.type && item.type !== 'paragraph') {
     return false;
   }
 

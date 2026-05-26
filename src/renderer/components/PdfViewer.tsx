@@ -15,6 +15,10 @@ import {
   type ExtractedPdfBlock,
   type PositionedPdfTextItem
 } from '../lib/pdfTextStructure';
+import {
+  buildUnderlineRects,
+  type HighlightSourceRect
+} from '../lib/pdfHighlightUnderlines';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -41,6 +45,7 @@ export function PdfViewer(props: PdfViewerProps) {
   const pageRefs = useRef(new Map<number, HTMLDivElement>());
   const surfaceRefs = useRef(new Map<number, HTMLDivElement>());
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
+  const highlightLayerRefs = useRef(new Map<number, HTMLDivElement>());
   const textLayerRefs = useRef(new Map<number, HTMLDivElement>());
   const textDivsByPageRef = useRef(new Map<number, HTMLElement[]>());
   const textItemsByPageRef = useRef(new Map<number, HighlightTextItem[]>());
@@ -71,6 +76,7 @@ export function PdfViewer(props: PdfViewerProps) {
       pageRefs.current.clear();
       surfaceRefs.current.clear();
       canvasRefs.current.clear();
+      highlightLayerRefs.current.clear();
       textLayerRefs.current.clear();
       textDivsByPageRef.current.clear();
       textItemsByPageRef.current.clear();
@@ -129,8 +135,9 @@ export function PdfViewer(props: PdfViewerProps) {
 
           const canvas = canvasRefs.current.get(pageNumber);
           const pageSurface = surfaceRefs.current.get(pageNumber);
+          const highlightLayerContainer = highlightLayerRefs.current.get(pageNumber);
           const textLayerContainer = textLayerRefs.current.get(pageNumber);
-          if (!canvas || !pageSurface || !textLayerContainer) {
+          if (!canvas || !pageSurface || !highlightLayerContainer || !textLayerContainer) {
             continue;
           }
 
@@ -162,6 +169,9 @@ export function PdfViewer(props: PdfViewerProps) {
           context.setTransform(dimensions.outputScale, 0, 0, dimensions.outputScale, 0, 0);
 
           textLayerContainer.replaceChildren();
+          highlightLayerContainer.replaceChildren();
+          highlightLayerContainer.style.width = `${dimensions.cssWidth}px`;
+          highlightLayerContainer.style.height = `${dimensions.cssHeight}px`;
           textLayerContainer.style.width = `${dimensions.cssWidth}px`;
           textLayerContainer.style.height = `${dimensions.cssHeight}px`;
 
@@ -235,7 +245,6 @@ export function PdfViewer(props: PdfViewerProps) {
 
     for (const pageNumber of pageNumbers) {
       const textItems = textItemsByPageRef.current.get(pageNumber) ?? [];
-      const textDivs = textDivsByPageRef.current.get(pageNumber) ?? [];
       const match = findBestTextItemMatch(textItems, props.highlightText);
       const matchedIndexes = match.itemIndexes;
 
@@ -243,12 +252,7 @@ export function PdfViewer(props: PdfViewerProps) {
         continue;
       }
 
-      matchedIndexes.forEach((itemIndex) => {
-        const textDivIndex = textItems[itemIndex]?.textDivIndex;
-        if (textDivIndex !== undefined) {
-          textDivs[textDivIndex]?.classList.add('pdf-highlight-match');
-        }
-      });
+      paintHighlightUnderlines(pageNumber, matchedIndexes);
 
       const pageElement = pageRefs.current.get(pageNumber);
       pageElement?.scrollIntoView({ block: 'center' });
@@ -462,8 +466,45 @@ export function PdfViewer(props: PdfViewerProps) {
   }
 
   function clearPdfHighlights(): void {
-    textDivsByPageRef.current.forEach((textDivs) => {
-      textDivs.forEach((textDiv) => textDiv.classList.remove('pdf-highlight-match'));
+    highlightLayerRefs.current.forEach((highlightLayer) => {
+      highlightLayer.replaceChildren();
+    });
+  }
+
+  function paintHighlightUnderlines(pageNumber: number, matchedIndexes: number[]): void {
+    const surface = surfaceRefs.current.get(pageNumber);
+    const highlightLayer = highlightLayerRefs.current.get(pageNumber);
+    const textItems = textItemsByPageRef.current.get(pageNumber) ?? [];
+    const textDivs = textDivsByPageRef.current.get(pageNumber) ?? [];
+
+    if (!surface || !highlightLayer) {
+      return;
+    }
+
+    const surfaceRect = surface.getBoundingClientRect();
+    const sourceRects: Array<HighlightSourceRect | null> = textItems.map((textItem) => {
+      const textDiv = textDivs[textItem.textDivIndex];
+      if (!textDiv) {
+        return null;
+      }
+
+      const rect = textDiv.getBoundingClientRect();
+      return {
+        left: rect.left - surfaceRect.left,
+        top: rect.top - surfaceRect.top,
+        width: rect.width,
+        height: rect.height
+      };
+    });
+
+    buildUnderlineRects(sourceRects, matchedIndexes).forEach((rect) => {
+      const underline = document.createElement('div');
+      underline.className = 'pdf-highlight-underline';
+      underline.style.left = `${rect.left}px`;
+      underline.style.top = `${rect.top}px`;
+      underline.style.width = `${rect.width}px`;
+      underline.style.height = `${rect.height}px`;
+      highlightLayer.appendChild(underline);
     });
   }
 
@@ -526,6 +567,16 @@ export function PdfViewer(props: PdfViewerProps) {
                       canvasRefs.current.set(pageNumber, element);
                     } else {
                       canvasRefs.current.delete(pageNumber);
+                    }
+                  }}
+                />
+                <div
+                  className="pdf-highlight-layer"
+                  ref={(element) => {
+                    if (element) {
+                      highlightLayerRefs.current.set(pageNumber, element);
+                    } else {
+                      highlightLayerRefs.current.delete(pageNumber);
                     }
                   }}
                 />

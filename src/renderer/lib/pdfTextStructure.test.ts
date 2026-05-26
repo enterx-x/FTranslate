@@ -67,6 +67,20 @@ describe('PDF text structure extraction', () => {
     );
   });
 
+  it('does not merge body lines across columns', () => {
+    const outline = buildPdfPageOutline(5, [
+      item('Left column paragraph starts with enough academic content', 60, 100, 220, 12),
+      item('and finishes this sentence in the left column.', 60, 118, 220, 12),
+      item('Right column paragraph starts independently with enough content', 330, 100, 220, 12),
+      item('and finishes this separate sentence in the right column.', 330, 118, 220, 12)
+    ]);
+
+    expect(outline.map((block) => block.original)).toEqual([
+      'Left column paragraph starts with enough academic content and finishes this sentence in the left column.',
+      'Right column paragraph starts independently with enough content and finishes this separate sentence in the right column.'
+    ]);
+  });
+
   it('filters front matter, author lists, and figure labels from AI extraction', () => {
     const outline = buildPdfPageOutline(1, [
       item('π0.7: a Steerable Generalist Robotic Foundation', 120, 40, 360, 18),
@@ -84,6 +98,20 @@ describe('PDF text structure extraction', () => {
     });
     expect(outline[0].original).toBe(
       'We present a new robotic foundation model, called π0.7, that can enable strong out-of-the-box performance in a wide range of scenarios.'
+    );
+  });
+
+  it('filters placeholder glyph noise and formula-like fragments from paragraph candidates', () => {
+    const outline = buildPdfPageOutline(6, [
+      item('p4□□□ R□□t □□□□ □□□□□', 80, 120, 260, 10),
+      item('g_t = G_t,1, ..., G_t,k', 80, 150, 140, 10),
+      item('This section describes each part of the prompt contained in the context C_t used by π0.7.', 80, 190, 320, 10)
+    ]);
+
+    const paragraphs = outline.filter((block) => block.type === 'paragraph');
+    expect(paragraphs).toHaveLength(1);
+    expect(paragraphs[0].original).toBe(
+      'This section describes each part of the prompt contained in the context C_t used by π0.7.'
     );
   });
 

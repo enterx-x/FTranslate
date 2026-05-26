@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAiCacheDocument,
   countPendingAiTranslations,
-  getDefaultAiCacheFileName
+  getDefaultAiCacheFileName,
+  getTranslatableExtractedBlocks
 } from './aiMode';
 import type { ExtractedPdfBlock } from './pdfTextStructure';
 import type { TranslationDocument } from './translation';
@@ -30,6 +31,19 @@ describe('AI mode helpers', () => {
       page: 1,
       sourceHash: 'hash-a'
     });
+  });
+
+  it('keeps only translatable natural paragraphs in the AI cache document', () => {
+    const noisyBlocks: ExtractedPdfBlock[] = [
+      extractedBlock,
+      { ...extractedBlock, id: 'heading', type: 'heading', sourceHash: 'heading' },
+      { ...extractedBlock, id: 'formula', type: 'formula', sourceHash: 'formula', original: 'x_t = f(x, u)' },
+      { ...extractedBlock, id: 'caption', type: 'caption', sourceHash: 'caption', original: 'Fig. 2: Overview.' },
+      { ...extractedBlock, id: 'noise', sourceHash: 'noise', original: 'p4□□□ R□□t □□□□' }
+    ];
+
+    expect(getTranslatableExtractedBlocks(noisyBlocks)).toEqual([extractedBlock]);
+    expect(buildAiCacheDocument(noisyBlocks, 'paper.pdf').items).toEqual([extractedBlock]);
   });
 
   it('preserves cached translations by source hash when rebuilding from PDF extraction', () => {

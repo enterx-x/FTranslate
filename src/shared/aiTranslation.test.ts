@@ -51,6 +51,14 @@ describe('AI translation helpers', () => {
         type: 'formula'
       })
     ).toBe(false);
+    expect(
+      shouldTranslateItem({
+        section: 'Title',
+        original: 'A Robotic Foundation Model',
+        translation: '',
+        type: 'heading'
+      })
+    ).toBe(false);
   });
 
   it('allows forced retranslation of a cached paragraph', () => {
