@@ -366,6 +366,7 @@ export default function App() {
             fileName={pdf?.fileName}
             currentPage={currentPage}
             scale={scale}
+            highlightText={translationDocument?.kind === 'json' ? currentItem?.original ?? '' : ''}
             onDocumentLoad={(nextPageCount) => {
               setPageCount(nextPageCount);
               setCurrentPage((page) => Math.min(Math.max(1, page), nextPageCount));
@@ -373,6 +374,7 @@ export default function App() {
             onCurrentPageChange={(page) => {
               setCurrentPage((current) => (current === page ? current : page));
             }}
+            onHighlightStatusChange={setStatusMessage}
             onStatusChange={setStatusMessage}
           />
         </section>

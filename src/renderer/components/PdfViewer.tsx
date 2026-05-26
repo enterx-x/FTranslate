@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
+import { buildPdfCanvasDimensions } from '../lib/pdfRenderGeometry';
+import { findTextItemMatches, type PdfTextItemLike } from '../lib/pdfTextHighlight';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -10,19 +12,26 @@ interface PdfViewerProps {
   fileName?: string;
   currentPage: number;
   scale: number;
+  highlightText?: string;
   onDocumentLoad: (pageCount: number) => void;
   onCurrentPageChange: (pageNumber: number) => void;
+  onHighlightStatusChange?: (message: string) => void;
   onStatusChange: (message: string) => void;
 }
 
 export function PdfViewer(props: PdfViewerProps) {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef(new Map<number, HTMLDivElement>());
+  const surfaceRefs = useRef(new Map<number, HTMLDivElement>());
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
+  const textLayerRefs = useRef(new Map<number, HTMLDivElement>());
+  const textDivsByPageRef = useRef(new Map<number, HTMLElement[]>());
+  const textItemsByPageRef = useRef(new Map<number, PdfTextItemLike[]>());
   const currentPageRef = useRef(props.currentPage);
   const pageReportedByScrollRef = useRef<number | null>(null);
   const [documentProxy, setDocumentProxy] = useState<PDFDocumentProxy | null>(null);
   const [pageNumbers, setPageNumbers] = useState<number[]>([]);
+  const [textLayerVersion, setTextLayerVersion] = useState(0);
   const [isRendering, setIsRendering] = useState(false);
 
   useEffect(() => {
@@ -34,7 +43,11 @@ export function PdfViewer(props: PdfViewerProps) {
       setDocumentProxy(null);
       setPageNumbers([]);
       pageRefs.current.clear();
+      surfaceRefs.current.clear();
       canvasRefs.current.clear();
+      textLayerRefs.current.clear();
+      textDivsByPageRef.current.clear();
+      textItemsByPageRef.current.clear();
       return;
     }
 
@@ -73,9 +86,12 @@ export function PdfViewer(props: PdfViewerProps) {
     const activeDocument = documentProxy;
     let cancelled = false;
     const renderTasks: pdfjsLib.RenderTask[] = [];
+    const textLayers: Array<{ cancel: () => void }> = [];
 
     async function renderAllPages() {
       setIsRendering(true);
+      textDivsByPageRef.current.clear();
+      textItemsByPageRef.current.clear();
 
       try {
         // 第一版连续滚动先顺序渲染所有页面，逻辑简单稳定；超长 PDF 后续可再升级为懒加载。
@@ -85,7 +101,9 @@ export function PdfViewer(props: PdfViewerProps) {
           }
 
           const canvas = canvasRefs.current.get(pageNumber);
-          if (!canvas) {
+          const pageSurface = surfaceRefs.current.get(pageNumber);
+          const textLayerContainer = textLayerRefs.current.get(pageNumber);
+          if (!canvas || !pageSurface || !textLayerContainer) {
             continue;
           }
 
@@ -95,6 +113,11 @@ export function PdfViewer(props: PdfViewerProps) {
           }
 
           const viewport = page.getViewport({ scale: props.scale });
+          const dimensions = buildPdfCanvasDimensions(
+            viewport.width,
+            viewport.height,
+            window.devicePixelRatio
+          );
           const context = canvas.getContext('2d');
 
           if (!context) {
@@ -102,10 +125,18 @@ export function PdfViewer(props: PdfViewerProps) {
             return;
           }
 
-          canvas.width = Math.floor(viewport.width);
-          canvas.height = Math.floor(viewport.height);
-          canvas.style.width = `${Math.floor(viewport.width)}px`;
-          canvas.style.height = `${Math.floor(viewport.height)}px`;
+          pageSurface.style.width = `${dimensions.cssWidth}px`;
+          pageSurface.style.height = `${dimensions.cssHeight}px`;
+
+          canvas.width = dimensions.canvasWidth;
+          canvas.height = dimensions.canvasHeight;
+          canvas.style.width = `${dimensions.cssWidth}px`;
+          canvas.style.height = `${dimensions.cssHeight}px`;
+          context.setTransform(dimensions.outputScale, 0, 0, dimensions.outputScale, 0, 0);
+
+          textLayerContainer.replaceChildren();
+          textLayerContainer.style.width = `${dimensions.cssWidth}px`;
+          textLayerContainer.style.height = `${dimensions.cssHeight}px`;
 
           const renderTask = page.render({
             canvas,
@@ -115,6 +146,25 @@ export function PdfViewer(props: PdfViewerProps) {
           renderTasks.push(renderTask);
 
           await renderTask.promise;
+
+          const textContent = await page.getTextContent();
+          if (cancelled) {
+            return;
+          }
+
+          const textLayer = new pdfjsLib.TextLayer({
+            textContentSource: textContent,
+            container: textLayerContainer,
+            viewport
+          });
+          textLayers.push(textLayer);
+
+          await textLayer.render();
+          textDivsByPageRef.current.set(pageNumber, textLayer.textDivs);
+          textItemsByPageRef.current.set(
+            pageNumber,
+            textLayer.textContentItemsStr.map((str) => ({ str }))
+          );
         }
       } catch (error) {
         if (!cancelled && !String(error).includes('RenderingCancelledException')) {
@@ -122,6 +172,7 @@ export function PdfViewer(props: PdfViewerProps) {
         }
       } finally {
         if (!cancelled) {
+          setTextLayerVersion((value) => value + 1);
           setIsRendering(false);
         }
       }
@@ -138,8 +189,38 @@ export function PdfViewer(props: PdfViewerProps) {
           // 已完成的渲染任务再次 cancel 可能无事可做，清理阶段忽略即可。
         }
       });
+      textLayers.forEach((textLayer) => textLayer.cancel());
     };
   }, [documentProxy, pageNumbers, props.scale]);
+
+  useEffect(() => {
+    clearPdfHighlights();
+
+    if (!props.highlightText?.trim()) {
+      return;
+    }
+
+    for (const pageNumber of pageNumbers) {
+      const textItems = textItemsByPageRef.current.get(pageNumber) ?? [];
+      const textDivs = textDivsByPageRef.current.get(pageNumber) ?? [];
+      const matchedIndexes = findTextItemMatches(textItems, props.highlightText);
+
+      if (matchedIndexes.length === 0) {
+        continue;
+      }
+
+      matchedIndexes.forEach((itemIndex) => {
+        textDivs[itemIndex]?.classList.add('pdf-highlight-match');
+      });
+
+      const pageElement = pageRefs.current.get(pageNumber);
+      pageElement?.scrollIntoView({ block: 'center' });
+      props.onHighlightStatusChange?.(`已在 PDF 第 ${pageNumber} 页高亮当前段原文。`);
+      return;
+    }
+
+    props.onHighlightStatusChange?.('未在 PDF 中找到当前段原文，可尝试缩短 original 字段。');
+  }, [pageNumbers, props.highlightText, props.onHighlightStatusChange, textLayerVersion]);
 
   useEffect(() => {
     if (pageReportedByScrollRef.current === props.currentPage) {
@@ -188,6 +269,12 @@ export function PdfViewer(props: PdfViewerProps) {
     }
   }
 
+  function clearPdfHighlights(): void {
+    textDivsByPageRef.current.forEach((textDivs) => {
+      textDivs.forEach((textDiv) => textDiv.classList.remove('pdf-highlight-match'));
+    });
+  }
+
   if (!props.pdfData) {
     return (
       <div className="empty-state">
@@ -219,15 +306,37 @@ export function PdfViewer(props: PdfViewerProps) {
               }}
             >
               <div className="pdf-page-marker">第 {pageNumber} 页</div>
-              <canvas
+              <div
+                className="pdf-page-surface"
                 ref={(element) => {
                   if (element) {
-                    canvasRefs.current.set(pageNumber, element);
+                    surfaceRefs.current.set(pageNumber, element);
                   } else {
-                    canvasRefs.current.delete(pageNumber);
+                    surfaceRefs.current.delete(pageNumber);
                   }
                 }}
-              />
+              >
+                <canvas
+                  className="pdf-canvas-layer"
+                  ref={(element) => {
+                    if (element) {
+                      canvasRefs.current.set(pageNumber, element);
+                    } else {
+                      canvasRefs.current.delete(pageNumber);
+                    }
+                  }}
+                />
+                <div
+                  className="pdf-text-layer textLayer"
+                  ref={(element) => {
+                    if (element) {
+                      textLayerRefs.current.set(pageNumber, element);
+                    } else {
+                      textLayerRefs.current.delete(pageNumber);
+                    }
+                  }}
+                />
+              </div>
             </div>
           ))}
         </div>
