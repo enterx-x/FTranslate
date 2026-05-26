@@ -18,11 +18,12 @@ export interface ExtractedPdfBlock extends TranslationItem {
   sourceHash: string;
 }
 
-interface TextLine {
+interface TextLine<TItem extends PositionedPdfTextItem = PositionedPdfTextItem> {
   text: string;
   x: number;
   y: number;
   height: number;
+  items: TItem[];
 }
 
 const COLUMN_SPLIT_THRESHOLD = 220;
@@ -40,8 +41,14 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
       return;
     }
 
-    const original = joinParagraphLines(currentParagraph.map((line) => line.text));
-    blocks.push(createBlock(page, 'paragraph', currentSection, original));
+    let original = joinParagraphLines(currentParagraph.map((line) => line.text));
+    const inlineSection = extractInlineSection(original);
+    const section = inlineSection?.section ?? currentSection;
+    original = inlineSection?.body ?? original;
+
+    if (shouldIncludeBlock('paragraph', original)) {
+      blocks.push(createBlock(page, 'paragraph', section, original));
+    }
     currentParagraph = [];
   }
 
@@ -51,7 +58,9 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
     if (type !== 'paragraph') {
       flushParagraph();
       const block = createBlock(page, type, type === 'heading' ? line.text.trim() : currentSection, line.text.trim());
-      blocks.push(block);
+      if (shouldIncludeBlock(type, block.original)) {
+        blocks.push(block);
+      }
       if (type === 'heading') {
         currentSection = line.text.trim();
       }
@@ -59,9 +68,12 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
     }
 
     const previousLine = currentParagraph.at(-1);
+    const paragraphGapThreshold = previousLine
+      ? Math.max(PARAGRAPH_GAP_THRESHOLD, previousLine.height * 1.75, line.height * 1.75)
+      : PARAGRAPH_GAP_THRESHOLD;
     if (
       previousLine &&
-      (Math.abs(line.y - previousLine.y) > PARAGRAPH_GAP_THRESHOLD ||
+      (Math.abs(line.y - previousLine.y) > paragraphGapThreshold ||
         Math.abs(line.x - previousLine.x) > COLUMN_SPLIT_THRESHOLD / 2)
     ) {
       flushParagraph();
@@ -78,11 +90,17 @@ export function buildPdfDocumentOutline(pages: Array<{ page: number; items: Posi
   return pages.flatMap((page) => buildPdfPageOutline(page.page, page.items));
 }
 
-function buildLines(items: PositionedPdfTextItem[]): TextLine[] {
+export function orderPositionedTextItemsForReading<TItem extends PositionedPdfTextItem>(
+  items: TItem[]
+): TItem[] {
+  return orderLinesForAcademicLayout(buildLines(items)).flatMap((line) => line.items);
+}
+
+function buildLines<TItem extends PositionedPdfTextItem>(items: TItem[]): Array<TextLine<TItem>> {
   const sortedItems = items
     .filter((item) => item.str.trim())
     .sort((left, right) => left.y - right.y || left.x - right.x);
-  const lines: Array<PositionedPdfTextItem[]> = [];
+  const lines: TItem[][] = [];
 
   sortedItems.forEach((item) => {
     const line = lines.find((candidate) => {
@@ -99,7 +117,7 @@ function buildLines(items: PositionedPdfTextItem[]): TextLine[] {
 
   return lines.flatMap((lineItems) => {
     const orderedItems = lineItems.sort((left, right) => left.x - right.x);
-    const segments: Array<PositionedPdfTextItem[]> = [];
+    const segments: TItem[][] = [];
 
     orderedItems.forEach((item) => {
       const currentSegment = segments.at(-1);
@@ -117,12 +135,15 @@ function buildLines(items: PositionedPdfTextItem[]): TextLine[] {
       text: segmentItems.map((item) => item.str.trim()).join(' ').replace(/\s+/g, ' ').trim(),
       x: Math.min(...segmentItems.map((item) => item.x)),
       y: segmentItems.reduce((sum, item) => sum + item.y, 0) / segmentItems.length,
-      height: Math.max(...segmentItems.map((item) => item.height))
+      height: Math.max(...segmentItems.map((item) => item.height)),
+      items: segmentItems
     }));
   });
 }
 
-function orderLinesForAcademicLayout(lines: TextLine[]): TextLine[] {
+function orderLinesForAcademicLayout<TItem extends PositionedPdfTextItem>(
+  lines: Array<TextLine<TItem>>
+): Array<TextLine<TItem>> {
   if (lines.length < 2) {
     return lines;
   }
@@ -163,6 +184,79 @@ function classifyLine(text: string): ExtractedBlockType {
   return 'paragraph';
 }
 
+function shouldIncludeBlock(type: ExtractedBlockType, text: string): boolean {
+  const normalized = text.trim();
+
+  if (!normalized) {
+    return false;
+  }
+
+  if (type === 'paragraph') {
+    return looksLikeAcademicParagraph(normalized);
+  }
+
+  if (type === 'heading') {
+    return looksLikeSectionHeading(normalized);
+  }
+
+  if (type === 'caption') {
+    return /^((fig\.|figure|table)\s*\d+[:.])/iu.test(normalized);
+  }
+
+  return true;
+}
+
+function looksLikeAcademicParagraph(text: string): boolean {
+  const words = countWords(text);
+  const commaCount = (text.match(/,/gu) ?? []).length;
+  const sentenceMarks = (text.match(/[.;:!?。！？]/gu) ?? []).length;
+  const lowercaseLetters = (text.match(/\p{Ll}/gu) ?? []).length;
+
+  if (words < 4) {
+    return false;
+  }
+
+  if (commaCount >= 3 && sentenceMarks === 0) {
+    return false;
+  }
+
+  if (lowercaseLetters < 6) {
+    return false;
+  }
+
+  if (looksLikeFrontMatterTitle(text)) {
+    return false;
+  }
+
+  if (sentenceMarks > 0) {
+    return true;
+  }
+
+  // 没有句号的大段文本通常来自图中标签、作者单位或流程图节点，不作为正文段落送入 AI。
+  return words <= 10;
+}
+
+function looksLikeSectionHeading(text: string): boolean {
+  const normalized = text.trim();
+  return (
+    /^(abstract|introduction|related work|method|methods|experiments?|results?|discussion|conclusion)s?$/iu.test(
+      normalized
+    ) || /^([IVX]+|\d+)\.?\s+[A-Z][A-Z0-9 ,:;()/-]{3,}$/u.test(normalized)
+  );
+}
+
+function extractInlineSection(text: string): { section: string; body: string } | null {
+  const match = text.match(/^(abstract|introduction|conclusion|references)\s*[-—–:]\s*(.+)$/iu);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    section: match[1][0].toUpperCase() + match[1].slice(1).toLowerCase(),
+    body: match[2].trim()
+  };
+}
+
 function isFormulaLike(text: string): boolean {
   if (text.length > 120) {
     return false;
@@ -185,6 +279,16 @@ function joinParagraphLines(lines: string[]): string {
 
     return `${paragraph} ${line.trim()}`;
   }, '');
+}
+
+function countWords(text: string): number {
+  return text.match(/[\p{L}\p{N}]+/gu)?.length ?? 0;
+}
+
+function looksLikeFrontMatterTitle(text: string): boolean {
+  const words = text.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const titleCaseWords = words.filter((word) => /^\p{Lu}[\p{Ll}\p{L}\p{N}]*$/u.test(word)).length;
+  return words.length <= 12 && titleCaseWords >= Math.max(3, Math.floor(words.length * 0.45));
 }
 
 function createBlock(

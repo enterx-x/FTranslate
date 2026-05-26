@@ -11,11 +11,16 @@ import { buildPdfCanvasDimensions } from '../lib/pdfRenderGeometry';
 import { findBestTextItemMatch, type PdfTextItemLike } from '../lib/pdfTextHighlight';
 import {
   buildPdfDocumentOutline,
+  orderPositionedTextItemsForReading,
   type ExtractedPdfBlock,
   type PositionedPdfTextItem
 } from '../lib/pdfTextStructure';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+
+interface HighlightTextItem extends PositionedPdfTextItem, PdfTextItemLike {
+  textDivIndex: number;
+}
 
 interface PdfViewerProps {
   pdfData: Uint8Array | null;
@@ -38,7 +43,7 @@ export function PdfViewer(props: PdfViewerProps) {
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
   const textLayerRefs = useRef(new Map<number, HTMLDivElement>());
   const textDivsByPageRef = useRef(new Map<number, HTMLElement[]>());
-  const textItemsByPageRef = useRef(new Map<number, PdfTextItemLike[]>());
+  const textItemsByPageRef = useRef(new Map<number, HighlightTextItem[]>());
   const currentPageRef = useRef(props.currentPage);
   const pageReportedByScrollRef = useRef<number | null>(null);
   const pendingZoomAnchorRef = useRef<PdfZoomAnchor | null>(null);
@@ -182,14 +187,15 @@ export function PdfViewer(props: PdfViewerProps) {
           textLayers.push(textLayer);
 
           await textLayer.render();
+          const positionedItems = toPositionedTextItems(textContent.items, viewport, pageNumber);
           textDivsByPageRef.current.set(pageNumber, textLayer.textDivs);
           textItemsByPageRef.current.set(
             pageNumber,
-            textLayer.textContentItemsStr.map((str) => ({ str }))
+            orderPositionedTextItemsForReading(toHighlightTextItems(textContent.items, viewport, pageNumber))
           );
           outlinePages.push({
             page: pageNumber,
-            items: toPositionedTextItems(textContent.items, viewport, pageNumber)
+            items: positionedItems
           });
         }
       } catch (error) {
@@ -238,7 +244,10 @@ export function PdfViewer(props: PdfViewerProps) {
       }
 
       matchedIndexes.forEach((itemIndex) => {
-        textDivs[itemIndex]?.classList.add('pdf-highlight-match');
+        const textDivIndex = textItems[itemIndex]?.textDivIndex;
+        if (textDivIndex !== undefined) {
+          textDivs[textDivIndex]?.classList.add('pdf-highlight-match');
+        }
       });
 
       const pageElement = pageRefs.current.get(pageNumber);
@@ -572,4 +581,40 @@ function toPositionedTextItems(
       };
     })
     .filter((item): item is PositionedPdfTextItem => Boolean(item));
+}
+
+function toHighlightTextItems(
+  items: unknown[],
+  viewport: pdfjsLib.PageViewport,
+  pageNumber: number
+): HighlightTextItem[] {
+  let textDivIndex = 0;
+
+  return items
+    .map((item) => {
+      const record = item as {
+        str?: string;
+        transform?: number[];
+        width?: number;
+        height?: number;
+      };
+
+      if (!record.str?.trim() || !record.transform || record.transform.length < 6) {
+        return null;
+      }
+
+      const currentTextDivIndex = textDivIndex;
+      textDivIndex += 1;
+      const [x, y] = viewport.convertToViewportPoint(record.transform[4], record.transform[5]);
+      return {
+        str: record.str,
+        x,
+        y,
+        width: Math.max(1, (record.width ?? 1) * viewport.scale),
+        height: Math.max(1, (record.height ?? 1) * viewport.scale),
+        page: pageNumber,
+        textDivIndex: currentTextDivIndex
+      };
+    })
+    .filter((item): item is HighlightTextItem => Boolean(item));
 }
