@@ -11,7 +11,8 @@
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build": "npm run test && npm run typecheck && npm run build:renderer && npm run build:electron",
-    "dist": "npm run build && set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/&& electron-builder"
+    "dist": "npm run build && set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/&& electron-builder",
+    "visual:check": "node scripts/visual-check.mjs"
   },
   "dependencies": {},
   "devDependencies": {

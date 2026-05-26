@@ -26,14 +26,26 @@ interface TextLine<TItem extends PositionedPdfTextItem = PositionedPdfTextItem> 
   items: TItem[];
 }
 
+interface PageTextMetrics {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  width: number;
+  height: number;
+  medianLineHeight: number;
+}
+
 const COLUMN_SPLIT_THRESHOLD = 220;
 const PARAGRAPH_GAP_THRESHOLD = 24;
 const LINE_SEGMENT_GAP_THRESHOLD = 36;
 
 export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]): ExtractedPdfBlock[] {
-  const lines = buildLines(items);
-  const orderedLines = orderLinesForAcademicLayout(lines);
-  const medianLineHeight = median(lines.map((line) => line.height)) ?? PARAGRAPH_GAP_THRESHOLD / 2;
+  const rawLines = buildLines(items);
+  const metrics = buildPageTextMetrics(rawLines);
+  const contentLines = rawLines.filter((line) => shouldKeepLayoutLine(line, metrics));
+  const orderedLines = orderLinesForAcademicLayout(contentLines);
+  const medianLineHeight = median(contentLines.map((line) => line.height)) ?? PARAGRAPH_GAP_THRESHOLD / 2;
   const blocks: ExtractedPdfBlock[] = [];
   let currentParagraph: TextLine[] = [];
   let currentSection = `Page ${page}`;
@@ -73,6 +85,7 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
     const paragraphGapThreshold = previousLine
       ? Math.max(medianLineHeight * 2.4, previousLine.height * 1.75, line.height * 1.75)
       : PARAGRAPH_GAP_THRESHOLD;
+
     if (
       previousLine &&
       (Math.abs(line.y - previousLine.y) > paragraphGapThreshold ||
@@ -95,7 +108,11 @@ export function buildPdfDocumentOutline(pages: Array<{ page: number; items: Posi
 export function orderPositionedTextItemsForReading<TItem extends PositionedPdfTextItem>(
   items: TItem[]
 ): TItem[] {
-  return orderLinesForAcademicLayout(buildLines(items)).flatMap((line) => line.items);
+  const lines = buildLines(items);
+  const metrics = buildPageTextMetrics(lines);
+  return orderLinesForAcademicLayout(lines.filter((line) => shouldKeepLayoutLine(line, metrics))).flatMap(
+    (line) => line.items
+  );
 }
 
 function buildLines<TItem extends PositionedPdfTextItem>(items: TItem[]): Array<TextLine<TItem>> {
@@ -198,7 +215,7 @@ function shouldIncludeBlock(type: ExtractedBlockType, text: string): boolean {
   }
 
   if (type === 'heading') {
-    return looksLikeSectionHeading(normalized);
+    return !/^references$/iu.test(normalized) && looksLikeSectionHeading(normalized);
   }
 
   if (type === 'caption') {
@@ -226,7 +243,18 @@ function looksLikeAcademicParagraph(text: string): boolean {
     return false;
   }
 
-  if (looksLikeFrontMatterTitle(text)) {
+  if (
+    looksLikeReferenceEntry(text) ||
+    looksLikeBibliographyText(text) ||
+    looksLikeAppendixContributionList(text) ||
+    looksLikeFrontMatterTitle(text) ||
+    looksLikeAuthorList(text) ||
+    looksLikeShortFigureLabel(text)
+  ) {
+    return false;
+  }
+
+  if (sentenceMarks === 0 && looksLikeDiagramLabelVocabulary(text)) {
     return false;
   }
 
@@ -234,21 +262,20 @@ function looksLikeAcademicParagraph(text: string): boolean {
     return true;
   }
 
-  // 没有句号的大段文本通常来自图中标签、作者单位或流程图节点，不作为正文段落送入 AI。
-  return words <= 10;
+  return words >= 6;
 }
 
 function looksLikeSectionHeading(text: string): boolean {
   const normalized = text.trim();
   return (
-    /^(abstract|introduction|related work|method|methods|experiments?|results?|discussion|conclusion)s?$/iu.test(
+    /^(abstract|introduction|related work|method|methods|experiments?|results?|discussion|conclusion|references)s?$/iu.test(
       normalized
     ) || /^([IVX]+|\d+)\.?\s+[A-Z][A-Z0-9 ,:;()/-]{3,}$/u.test(normalized)
   );
 }
 
 function extractInlineSection(text: string): { section: string; body: string } | null {
-  const match = text.match(/^(abstract|introduction|conclusion|references)\s*[-—–:]\s*(.+)$/iu);
+  const match = text.match(/^(abstract|introduction|conclusion|references)\s*[-\u2013\u2014]\s*(.+)$/iu);
   if (!match) {
     return null;
   }
@@ -264,7 +291,7 @@ function isFormulaLike(text: string): boolean {
     return false;
   }
 
-  const mathSymbols = (text.match(/[=∑∫√≤≥≈≠±×÷→←+\-*/^_{}[\]()]/gu) ?? []).length;
+  const mathSymbols = (text.match(/[=∑∫√∞≤≥≠≈→+\-*/^_{}[\]()]/gu) ?? []).length;
   const letters = (text.match(/\p{L}/gu) ?? []).length;
   return mathSymbols >= 3 && mathSymbols >= letters * 0.35;
 }
@@ -297,10 +324,164 @@ function median(values: number[]): number | null {
   return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 }
 
+function buildPageTextMetrics(lines: Array<TextLine>): PageTextMetrics {
+  if (lines.length === 0) {
+    return {
+      minX: 0,
+      maxX: 0,
+      minY: 0,
+      maxY: 0,
+      width: 1,
+      height: 1,
+      medianLineHeight: PARAGRAPH_GAP_THRESHOLD / 2
+    };
+  }
+
+  const minX = Math.min(...lines.map((line) => line.x));
+  const maxX = Math.max(...lines.map((line) => Math.max(...line.items.map((item) => item.x + item.width))));
+  const minY = Math.min(...lines.map((line) => line.y));
+  const maxY = Math.max(...lines.map((line) => line.y + line.height));
+
+  return {
+    minX,
+    maxX,
+    minY,
+    maxY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+    medianLineHeight: median(lines.map((line) => line.height)) ?? PARAGRAPH_GAP_THRESHOLD / 2
+  };
+}
+
+function shouldKeepLayoutLine(line: TextLine, metrics: PageTextMetrics): boolean {
+  const normalized = line.text.trim();
+
+  if (!normalized) {
+    return false;
+  }
+
+  if (isLikelyPageChrome(line, metrics)) {
+    return false;
+  }
+
+  if (isLikelySidebarLine(line, metrics)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isLikelyPageChrome(line: TextLine, metrics: PageTextMetrics): boolean {
+  const normalized = line.text.trim();
+  const nearTop = line.y <= metrics.minY + metrics.height * 0.08;
+  const nearBottom = line.y >= metrics.maxY - metrics.height * 0.08;
+
+  if (/^\d{1,4}$/u.test(normalized) && (nearTop || nearBottom)) {
+    return true;
+  }
+
+  if (nearTop || nearBottom) {
+    return /^(doi:|https?:\/\/|www\.|[\w.-]+\.pdf$)/iu.test(normalized);
+  }
+
+  return false;
+}
+
+function isLikelySidebarLine(line: TextLine, metrics: PageTextMetrics): boolean {
+  const normalized = line.text.trim();
+  const nearLeftEdge = line.x <= metrics.minX + metrics.width * 0.08;
+  const veryTall = line.height >= metrics.medianLineHeight * 4;
+
+  return nearLeftEdge && (veryTall || /^arxiv:/iu.test(normalized) || /\[[a-z-]+\.[A-Z]{2}\]/u.test(normalized));
+}
+
 function looksLikeFrontMatterTitle(text: string): boolean {
   const words = text.match(/[\p{L}\p{N}]+/gu) ?? [];
   const titleCaseWords = words.filter((word) => /^\p{Lu}[\p{Ll}\p{L}\p{N}]*$/u.test(word)).length;
   return words.length <= 12 && titleCaseWords >= Math.max(3, Math.floor(words.length * 0.45));
+}
+
+function looksLikeAuthorList(text: string): boolean {
+  const words = text.match(/[\p{L}\p{N}.]+/gu) ?? [];
+  const commaCount = (text.match(/,/gu) ?? []).length;
+
+  if (words.length < 8 || commaCount < 3) {
+    return false;
+  }
+
+  const nameLikeWords = words.filter((word) => /^(\p{Lu}\.|[\p{Lu}][\p{Ll}]+)$/u.test(word)).length;
+  const proseWords = words.filter((word) =>
+    /^(the|and|that|this|with|from|for|into|using|used|can|are|is|be|has|have|model|models|data|training|tasks)$/iu.test(
+      word
+    )
+  ).length;
+
+  return nameLikeWords / words.length >= 0.65 && proseWords <= 2;
+}
+
+function looksLikeReferenceEntry(text: string): boolean {
+  const normalized = text.trim();
+  return /^\[\d+\]\s+/u.test(normalized) || /^\d+\.\s+\p{Lu}[\p{L}.-]+,\s+\p{Lu}/u.test(normalized);
+}
+
+function looksLikeBibliographyText(text: string): boolean {
+  const normalized = text.trim();
+  const commaCount = (normalized.match(/,/gu) ?? []).length;
+  if (commaCount < 4) {
+    return false;
+  }
+
+  return /\b(19|20)\d{2}\b/u.test(normalized) || /\b(arxiv|preprint|proceedings|conference|journal|transactions)\b/iu.test(normalized);
+}
+
+function looksLikeAppendixContributionList(text: string): boolean {
+  const normalized = text.toLowerCase();
+  const commaCount = (text.match(/,/gu) ?? []).length;
+  const contributionHeadings = [
+    'data collection and operations',
+    'annotation and supplemental data',
+    'policy training and research',
+    'policy infrastructure',
+    'robot hardware',
+    'robot infrastructure',
+    'writing and illustration'
+  ].filter((heading) => normalized.includes(heading)).length;
+
+  return commaCount >= 4 && contributionHeadings >= 1;
+}
+
+function looksLikeShortFigureLabel(text: string): boolean {
+  const normalized = text.trim();
+  const words = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const sentenceMarks = (normalized.match(/[.;:!?。！？]/gu) ?? []).length;
+
+  if (sentenceMarks > 0 || words.length > 8) {
+    return false;
+  }
+
+  const titleCaseWords = words.filter((word) => /^\p{Lu}[\p{Ll}\p{L}\p{N}]*$/u.test(word)).length;
+  const labelVocabulary = words.filter((word) =>
+    /^(data|model|prompt|metadata|subgoal|image|images|episode|policy|expert|instruction|instructions|robot|world|action)$/iu.test(
+      word
+    )
+  ).length;
+
+  return titleCaseWords >= 2 || labelVocabulary >= 2;
+}
+
+function looksLikeDiagramLabelVocabulary(text: string): boolean {
+  const words = text.match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (words.length === 0) {
+    return false;
+  }
+
+  const labelVocabulary = words.filter((word) =>
+    /^(autonomous|data|demonstration|model|prompt|metadata|subgoal|image|images|episode|policy|expert|instruction|instructions|robot|world|action|multimodal)$/iu.test(
+      word
+    )
+  ).length;
+
+  return labelVocabulary >= 3 && labelVocabulary / words.length >= 0.2;
 }
 
 function createBlock(

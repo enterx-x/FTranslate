@@ -39,6 +39,23 @@ export function countPendingAiTranslations(items: TranslationItem[]): number {
   return items.filter((item) => shouldTranslateItem(item)).length;
 }
 
+export function getAiQueueStats(items: TranslationItem[]): {
+  total: number;
+  cached: number;
+  pending: number;
+  skipped: number;
+} {
+  const pending = countPendingAiTranslations(items);
+  const cached = items.filter((item) => item.translation.trim()).length;
+
+  return {
+    total: items.length,
+    cached,
+    pending,
+    skipped: Math.max(0, items.length - cached - pending)
+  };
+}
+
 export function getDefaultAiCacheFileName(pdfFileName?: string): string {
   if (!pdfFileName) {
     return 'ai-translation-cache.json';

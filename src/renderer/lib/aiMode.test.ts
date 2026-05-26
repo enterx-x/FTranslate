@@ -3,6 +3,7 @@ import {
   buildAiCacheDocument,
   countPendingAiTranslations,
   getDefaultAiCacheFileName,
+  getAiQueueStats,
   getTranslatableExtractedBlocks
 } from './aiMode';
 import type { ExtractedPdfBlock } from './pdfTextStructure';
@@ -78,6 +79,21 @@ describe('AI mode helpers', () => {
         { ...extractedBlock, id: 'done', sourceHash: 'done', translation: '已翻译' }
       ])
     ).toBe(1);
+  });
+
+  it('summarizes AI queue totals, cached items, and pending items', () => {
+    expect(
+      getAiQueueStats([
+        extractedBlock,
+        { ...extractedBlock, id: 'done', sourceHash: 'done', translation: 'cached translation' },
+        { ...extractedBlock, id: 'skip', type: 'caption', sourceHash: 'skip', translation: '' }
+      ])
+    ).toEqual({
+      total: 3,
+      cached: 1,
+      pending: 1,
+      skipped: 1
+    });
   });
 
   it('builds a stable default cache file name', () => {

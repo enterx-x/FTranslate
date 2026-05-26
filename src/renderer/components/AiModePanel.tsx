@@ -1,5 +1,5 @@
 import { shouldTranslateItem, type AiProviderId } from '../../shared/aiTranslation';
-import { countPendingAiTranslations, getTranslatableExtractedBlocks } from '../lib/aiMode';
+import { getAiQueueStats, getTranslatableExtractedBlocks } from '../lib/aiMode';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import type { TranslationDocument } from '../lib/translation';
 import type { AiSettingsView } from '../types/electron';
@@ -30,7 +30,7 @@ interface AiModePanelProps {
 
 export function AiModePanel(props: AiModePanelProps) {
   const jsonDocument = props.document?.kind === 'json' ? props.document : null;
-  const pendingCount = countPendingAiTranslations(jsonDocument?.items ?? []);
+  const queueStats = getAiQueueStats(jsonDocument?.items ?? []);
   const extractedTranslatableCount = getTranslatableExtractedBlocks(props.extractedBlocks).length;
 
   return (
@@ -114,7 +114,8 @@ export function AiModePanel(props: AiModePanelProps) {
           <>
             <div className="ai-summary">
               <span>
-                当前缓存：{jsonDocument.sourceName ?? '未命名 JSON'}，待翻译 {pendingCount} 段
+                当前缓存：{jsonDocument.sourceName ?? '未命名 JSON'}，正文自然段 {queueStats.total} 段，
+                已缓存 {queueStats.cached} 段，待翻译 {queueStats.pending} 段，跳过 {queueStats.skipped} 段
               </span>
               <span className="subtle">
                 {props.currentIndex + 1} / {jsonDocument.items.length}
@@ -129,7 +130,7 @@ export function AiModePanel(props: AiModePanelProps) {
               </button>
               <button
                 type="button"
-                disabled={props.isBusy || pendingCount === 0}
+                disabled={props.isBusy || queueStats.pending === 0}
                 onClick={props.onTranslatePending}
               >
                 批量翻译未缓存段
