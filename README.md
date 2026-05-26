@@ -11,12 +11,13 @@
 - PDF.js
 - electron-builder
 
-第一版不接 OpenAI API，不自动翻译，不做 OCR，也不强制从 PDF 中提取段落。PDF 只负责原文阅读；段落数据来自用户导入的 JSON 或 Markdown 翻译文件。
+应用支持两种工作流：手动模式保持本地阅读和外部 AI 提示词复制；AI 模式可选接入 OpenAI-compatible API（OpenAI、DeepSeek、Kimi 或自定义地址）逐段翻译。PDF 文本提取只使用 PDF.js 文本层，不做 OCR；扫描版图片 PDF 无法自动提取正文。
 
 ## 功能
 
 - 打开本地英文 PDF。
-- PDF 左侧阅读，支持上一页、下一页、页码跳转、放大、缩小。
+- PDF 左侧连续滚动阅读，支持上一页、下一页、页码跳转、按钮缩放、`Ctrl + 鼠标滚轮` 按鼠标位置缩放、空格键拖拽或鼠标中键拖拽平移。
+- PDF 文本层支持鼠标选中复制；JSON 当前段会尽量在 PDF 内按完整段落、句子或模糊片段高亮。
 - 默认进入“论文库”主页，按表格管理看过的论文。
 - 论文库记录中文标题、英文标题、期刊、作者、年份、最近打开时间和上次阅读页码。
 - 打开本地翻译文件，支持 `.json`、`.md`、`.markdown`、`.txt`。
@@ -30,6 +31,14 @@
   - 按空行切分为多个中文段落；
   - 支持上一段/下一段切换；
   - 点击“保存翻译”写回 Markdown 文件。
+- 手动模式：
+  - 右侧提供“AI 提示词”区域；
+  - 可一键复制当前段或全文 JSON 生成提示词，拿去给外部 AI 使用。
+- AI 模式：
+  - 支持 OpenAI、DeepSeek、Kimi、Custom 四类 OpenAI-compatible 接口；
+  - API Key 通过 Electron `safeStorage` 优先加密保存到本机；
+  - 可从 PDF 文本层生成 JSON 缓存草稿；
+  - 翻译完成后逐段写回 JSON 缓存，避免重复消耗 token。
 - 新建翻译项目：
   - 依次选择 PDF 和翻译文件；
   - 自动加入论文库并保存到 `localStorage`；
@@ -130,6 +139,34 @@ dist/
 
 JSON 文件会保存为数组结构；Markdown 文件会按空行分隔段落保存。
 
+### PDF 阅读操作
+
+- 普通鼠标滚轮：上下连续滚动。
+- `Ctrl + 鼠标滚轮`：按鼠标所在位置放大或缩小。
+- 空格键按住后左键拖动：平移 PDF 视图。
+- 鼠标中键拖动：平移 PDF 视图。
+- 普通左键拖选：选中 PDF 文本并复制。
+
+### 手动模式提示词
+
+右侧切到“手动模式”后，在“AI 提示词”区域点击：
+
+- “复制当前段 JSON 提示词”：让外部 AI 只翻译当前段；
+- “复制全文 JSON 提示词”：让外部 AI 按数组输出整篇 JSON。
+
+提示词会要求外部 AI 只返回 JSON 数组，不要使用 Markdown 代码块，不要输出解释文字。
+
+### AI 模式
+
+1. 右侧切到“AI 模式”。
+2. 选择 Provider：OpenAI、DeepSeek、Kimi 或 Custom。
+3. 填写 `Base URL`、`Model` 和 `API Key`，点击“保存 AI 设置”。
+4. 打开 PDF 后等待文本层提取完成，点击“生成/刷新 JSON 缓存”。
+5. 点击“保存 AI JSON”选择缓存文件位置。
+6. 点击“AI 翻译当前段”或“批量翻译未缓存段”。
+
+AI 模式会跳过已有 `translation` 的段落；如果要重新调用 API，使用“重新翻译当前段”。
+
 ### 导出双语 Markdown
 
 当前翻译文件为 JSON 时，点击“导出双语 Markdown”。
@@ -215,14 +252,19 @@ src/
     main.tsx             React 入口
     components/
       HomePage.tsx       论文库主页和论文信息表格
+      AiModePanel.tsx    AI 设置、PDF 提取缓存、批量翻译队列
       PdfViewer.tsx      PDF.js canvas 渲染组件
       Toolbar.tsx        顶部工具栏
       TranslationPanel.tsx 右侧段落阅读和编辑组件
     lib/
+      aiMode.ts          PDF 提取块转换为 AI JSON 缓存的辅助逻辑
       papers.ts          论文库记录、元数据预填、localStorage 序列化辅助
       papers.test.ts     论文库数据处理测试
+      promptTemplates.ts 外部 AI JSON 提示词生成
       translation.ts     JSON/Markdown 解析、保存、双语 Markdown 导出
       translation.test.ts 翻译数据处理测试
+  shared/
+    aiTranslation.ts     OpenAI-compatible 请求构造、缓存跳过规则和 provider preset
     styles/
       global.css         全局样式
     types/
