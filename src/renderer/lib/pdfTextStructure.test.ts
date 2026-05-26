@@ -71,6 +71,19 @@ describe('PDF text structure extraction', () => {
     );
   });
 
+  it('cleans PDF item spacing around model version tokens', () => {
+    const outline = buildPdfPageOutline(2, [
+      item('The model', 60, 100, 55, 10),
+      item('π', 120, 100, 5, 10),
+      item('0', 127, 100, 4, 6),
+      item('.', 132, 100, 2, 6),
+      item('7', 136, 100, 4, 6),
+      item('can follow diverse language instructions.', 146, 100, 220, 10)
+    ]);
+
+    expect(outline[0].original).toBe('The model π0.7 can follow diverse language instructions.');
+  });
+
   it('keeps zoomed body lines from the same paragraph as one candidate block', () => {
     const outline = buildPdfPageOutline(4, [
       item('Foundation models work on the principle that generalist capabilities', 60, 100, 280, 22),

@@ -246,7 +246,7 @@ function buildLines<TItem extends PositionedPdfTextItem>(items: TItem[]): Array<
     });
 
     return segments.map((segmentItems) => ({
-      text: segmentItems.map((item) => item.str.trim()).join(' ').replace(/\s+/g, ' ').trim(),
+      text: normalizeExtractedText(segmentItems.map((item) => item.str.trim()).join(' ')),
       x: Math.min(...segmentItems.map((item) => item.x)),
       y: segmentItems.reduce((sum, item) => sum + item.y, 0) / segmentItems.length,
       height: Math.max(...segmentItems.map((item) => item.height)),
@@ -424,7 +424,7 @@ function isFormulaLike(text: string): boolean {
 }
 
 function joinParagraphLines(lines: string[]): string {
-  return lines.reduce((paragraph, line) => {
+  const joined = lines.reduce((paragraph, line) => {
     if (!paragraph) {
       return line.trim();
     }
@@ -435,6 +435,14 @@ function joinParagraphLines(lines: string[]): string {
 
     return `${paragraph} ${line.trim()}`;
   }, '');
+  return normalizeExtractedText(joined);
+}
+
+function normalizeExtractedText(text: string): string {
+  return text
+    .replace(/\s+/gu, ' ')
+    .replace(/([πΠ])\s+(\d)\s*\.\s*(\d)/gu, '$1$2.$3')
+    .trim();
 }
 
 function countWords(text: string): number {

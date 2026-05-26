@@ -324,6 +324,11 @@ function validateAiQueueScenario(snapshot) {
   if (/[�\u25a0\u25a1]/u.test(joinedRows)) {
     throw new Error('ai-queue: leaked unreadable glyph noise into translation queue');
   }
+
+  if (/π\s+0\s+\.\s+7/u.test(joinedRows)) {
+    throw new Error('ai-queue: leaked spaced model token "π 0 . 7" into translation queue');
+  }
+
   const firstRow = snapshot.rows[0] ?? '';
   if (!firstRow.includes('Abstract') || !firstRow.includes('including demonstrations')) {
     throw new Error(
