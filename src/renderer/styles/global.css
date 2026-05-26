@@ -456,10 +456,24 @@ button:disabled {
 
 .ai-summary {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   color: #334155;
   font-size: 13px;
+}
+
+.ai-summary > span:first-child {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+  word-break: keep-all;
+  overflow-wrap: normal;
+}
+
+.ai-summary > .subtle {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .ai-item-list {
