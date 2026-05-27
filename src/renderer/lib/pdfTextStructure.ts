@@ -116,7 +116,7 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
 
 export function buildPdfDocumentOutline(pages: Array<{ page: number; items: PositionedPdfTextItem[] }>): ExtractedPdfBlock[] {
   const pageBlocks = pages.flatMap((page) => buildPdfPageOutline(page.page, page.items));
-  return mergeDocumentParagraphContinuations(pageBlocks);
+  return addSectionGroupingMetadata(mergeDocumentParagraphContinuations(pageBlocks));
 }
 
 function mergeDocumentParagraphContinuations(blocks: ExtractedPdfBlock[]): ExtractedPdfBlock[] {
@@ -165,6 +165,40 @@ function shouldMergeAdjacentParagraphs(previous: ExtractedPdfBlock, next: Extrac
   }
 
   return next.page === previous.page + 1 && startsWithLowercaseContinuation(next.original);
+}
+
+function addSectionGroupingMetadata(blocks: ExtractedPdfBlock[]): ExtractedPdfBlock[] {
+  const sectionMap = new Map<string, { id: string; order: number; paragraphOrder: number }>();
+
+  function getSection(section: string): { id: string; order: number; paragraphOrder: number } {
+    const normalizedSection = section.trim() || 'Untitled';
+    const existing = sectionMap.get(normalizedSection);
+
+    if (existing) {
+      return existing;
+    }
+
+    const order = sectionMap.size + 1;
+    const entry = {
+      id: `section-${order}-${hashText(normalizedSection)}`,
+      order,
+      paragraphOrder: 0
+    };
+    sectionMap.set(normalizedSection, entry);
+    return entry;
+  }
+
+  return blocks.map((block) => {
+    const section = getSection(block.section || block.original || 'Untitled');
+    const paragraphOrder = block.type === 'paragraph' ? (section.paragraphOrder += 1) : undefined;
+
+    return {
+      ...block,
+      sectionId: section.id,
+      sectionOrder: section.order,
+      paragraphOrder
+    };
+  });
 }
 
 function endsWithSentenceBoundary(text: string): boolean {
@@ -295,6 +329,10 @@ function classifyLine(text: string): ExtractedBlockType {
     return 'heading';
   }
 
+  if (looksLikeSectionHeading(normalizeSectionHeading(normalized))) {
+    return 'heading';
+  }
+
   return 'paragraph';
 }
 
@@ -310,7 +348,7 @@ function shouldIncludeBlock(type: ExtractedBlockType, text: string): boolean {
   }
 
   if (type === 'heading') {
-    return !/^references$/iu.test(normalized) && looksLikeSectionHeading(normalized);
+    return !/^references$/iu.test(normalized) && !/^[A-Z]\.\s+Contributions$/u.test(normalized) && looksLikeSectionHeading(normalized);
   }
 
   if (type === 'caption') {
@@ -385,7 +423,9 @@ function looksLikeSectionHeading(text: string): boolean {
   return (
     /^(abstract|introduction|related work|method|methods|experiments?|results?|discussion|conclusion|references)s?$/iu.test(
       normalized
-    ) || /^([IVX]+|\d+)\.?\s+[A-Z][A-Z0-9 ,:;()/-]{3,}$/u.test(normalized)
+    ) ||
+    /^([IVX]+|\d+(?:\.\d+)*)\.?\s+\p{Lu}[\p{L}\p{N} ,:;()/-]{3,}$/u.test(normalized) ||
+    /^[A-Z]\.\s+\p{Lu}[\p{L}\p{N} ,:;()/-]{3,}$/u.test(normalized)
   );
 }
 

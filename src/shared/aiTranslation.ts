@@ -17,6 +17,9 @@ export interface AiTranslationItem {
   original: string;
   translation: string;
   type?: AiTranslatableBlockType;
+  sectionId?: string;
+  sectionOrder?: number;
+  paragraphOrder?: number;
   sourceHash?: string;
   translatedAt?: string;
   provider?: string;

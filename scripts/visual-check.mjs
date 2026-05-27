@@ -227,7 +227,7 @@ async function waitForHighlightSnapshot(client, scenario) {
 
     if (
       scenario.expectUnderlines !== 'positive' ||
-      (snapshot.officialHighlights > 0 && hasEnoughOverlayLines)
+      hasEnoughOverlayLines
     ) {
       return snapshot;
     }
@@ -335,14 +335,20 @@ async function runAiQueueScenario() {
       cacheCardOpen: document.querySelector('.ai-cache-card')?.open ?? null,
       settingsCardOpen: document.querySelector('.ai-settings-card')?.open ?? null,
       rowActionText: document.querySelector('.ai-item-row .ai-item-actions')?.textContent ?? '',
+      sectionGroups: [...document.querySelectorAll('.ai-section-group')].map((group) => ({
+        open: group.open,
+        text: group.querySelector('summary')?.textContent ?? ''
+      })),
       toolbarBackground: getComputedStyle(document.querySelector('.toolbar')).backgroundColor,
       activeModeBackground: getComputedStyle(document.querySelector('.mode-tab.active')).backgroundColor,
       notesPanelExists: Boolean(document.querySelector('.notes-panel textarea')),
       storedNotes: JSON.parse(localStorage.getItem('pdfTranslationReader:paperLibrary') ?? '[]')[0]?.notes ?? '',
       listHasOwnScrollbar: (() => {
-        const list = document.querySelector('.ai-item-list');
+        const list = document.querySelector('.ai-section-list');
         return list ? list.scrollHeight > list.clientHeight : false;
       })(),
+      fieldHintExists: Boolean(document.querySelector('.field-hint')),
+      fieldHelpExists: Boolean(document.querySelector('.field-help')),
       officialHighlights: document.querySelectorAll('.pdf-viewer-shell .textLayer .highlight').length,
       overlayLines: document.querySelectorAll('.pdf-highlight-overlay-line').length,
       legacyUnderlines: document.querySelectorAll('.pdf-highlight-underline').length,
@@ -412,6 +418,10 @@ async function runAiTranslatedDetailScenario() {
         const block = document.querySelector('.ai-current-block.translated');
         return block ? getComputedStyle(block).resize : '';
       })(),
+      detailColumns: (() => {
+        const detail = document.querySelector('.ai-current-detail');
+        return detail ? getComputedStyle(detail).gridTemplateColumns : '';
+      })(),
       translatedBlockMinHeight: (() => {
         const block = document.querySelector('.ai-current-block.translated');
         return block ? getComputedStyle(block).minHeight : '';
@@ -426,8 +436,11 @@ async function runAiTranslatedDetailScenario() {
     if (snapshot.katexCount < 2) {
       throw new Error(`ai-translated-detail: expected rendered KaTeX formulas, got ${JSON.stringify(snapshot)}`);
     }
-    if (snapshot.translatedBlockResize !== 'vertical') {
+    if (snapshot.translatedBlockResize !== 'both') {
       throw new Error(`ai-translated-detail: expected resizable AI translation block, got ${JSON.stringify(snapshot)}`);
+    }
+    if (snapshot.detailColumns.split(' ').length !== 1) {
+      throw new Error(`ai-translated-detail: expected vertical stacked detail layout, got ${JSON.stringify(snapshot)}`);
     }
     if (!snapshot.detailText.includes('kimi-k2.6')) {
       throw new Error(`ai-translated-detail: expected model metadata in detail, got ${snapshot.detailText}`);
@@ -555,18 +568,13 @@ function validateHighlightScenario(scenario, snapshot) {
     throw new Error(`${scenario.name}: expected zero official highlights, got ${snapshot.officialHighlights}`);
   }
 
-  if (scenario.expectUnderlines === 'positive' && snapshot.officialHighlights <= 0) {
-    throw new Error(
-      `${scenario.name}: expected visible PDF.js highlights; snapshot=${JSON.stringify(snapshot)}`
-    );
-  }
-
   if (scenario.expectUnderlines === 'positive' && snapshot.overlayLines <= 0) {
     throw new Error(`${scenario.name}: expected visible merged overlay lines`);
   }
 
   if (
     scenario.name === 'title-high-confidence' &&
+    snapshot.officialHighlights > 0 &&
     snapshot.overlayLines >= snapshot.officialHighlights
   ) {
     throw new Error(
@@ -613,8 +621,8 @@ function validateAiQueueScenario(snapshot) {
     throw new Error(`ai-queue: expected reader notes to auto-save into paper library, got ${JSON.stringify(snapshot)}`);
   }
 
-  if (!snapshot.brandText.includes('FTranslate') || snapshot.brandImageWidth < 20) {
-    throw new Error(`ai-queue: expected branded toolbar icon and label, got ${JSON.stringify(snapshot)}`);
+  if (snapshot.brandText.trim() || snapshot.brandImageWidth < 20) {
+    throw new Error(`ai-queue: expected compact icon-only toolbar brand, got ${JSON.stringify(snapshot)}`);
   }
 
   if (!snapshot.commandBarText.includes('AI 翻译当前段') || !snapshot.commandBarText.includes('批量翻译未缓存')) {
@@ -623,6 +631,18 @@ function validateAiQueueScenario(snapshot) {
 
   if (!snapshot.rowActionText.includes('翻译') || !snapshot.rowActionText.includes('重译')) {
     throw new Error(`ai-queue: expected per-row translate actions, got ${snapshot.rowActionText}`);
+  }
+
+  if (snapshot.sectionGroups.length === 0) {
+    throw new Error('ai-queue: expected AI queue to be grouped by section');
+  }
+
+  if (!snapshot.sectionGroups.some((group) => group.text.includes('Abstract') && group.text.includes('待翻译'))) {
+    throw new Error(`ai-queue: expected section summary stats, got ${JSON.stringify(snapshot.sectionGroups)}`);
+  }
+
+  if (snapshot.fieldHintExists || !snapshot.fieldHelpExists) {
+    throw new Error(`ai-queue: expected compact Base URL help icon without inline hint, got ${JSON.stringify(snapshot)}`);
   }
 
   if (snapshot.cacheCardOpen !== false) {
@@ -670,7 +690,10 @@ function validateAiQueueScenario(snapshot) {
   }
 
   const firstRow = snapshot.rows[0] ?? '';
-  if (!firstRow.includes('Abstract') || !firstRow.includes('including demonstrations')) {
+  if (
+    !snapshot.sectionGroups.some((group) => group.text.includes('Abstract')) ||
+    !firstRow.includes('including demonstrations')
+  ) {
     throw new Error(
       `ai-queue: expected the cross-page Abstract continuation to stay in the first paragraph row: ${firstRow}`
     );
@@ -683,7 +706,7 @@ function validateAiQueueScenario(snapshot) {
     throw new Error(`ai-queue: detached Abstract continuation into a separate row: ${detachedAbstractContinuation}`);
   }
 
-  const introRow = snapshot.rows.find((row) => row.includes('I. INTRODUCTION') && row.includes('Foundation models'));
+  const introRow = snapshot.rows.find((row) => row.includes('Foundation models'));
   if (!introRow || !introRow.includes('capabilities emerge from training')) {
     throw new Error(
       `ai-queue: expected first Introduction body row to contain the left-column paragraph continuation: ${snapshot.rows

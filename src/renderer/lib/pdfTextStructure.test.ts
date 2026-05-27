@@ -60,6 +60,36 @@ describe('PDF text structure extraction', () => {
     ]);
   });
 
+  it('adds stable section grouping metadata for headings and natural paragraphs', () => {
+    const outline = buildPdfDocumentOutline([
+      {
+        page: 1,
+        items: [
+          item('Abstract', 220, 80, 120, 14),
+          item('We present a model that follows diverse language instructions.', 70, 120, 260, 10),
+          item('I. INTRODUCTION', 220, 180, 160, 14),
+          item('Foundation models emerge from large and diverse datasets.', 70, 220, 260, 10),
+          item('A. Subgoal images', 70, 280, 150, 12),
+          item('Subgoal images provide additional context for robot policies.', 70, 320, 260, 10)
+        ]
+      }
+    ]);
+
+    const paragraphs = outline.filter((block) => block.type === 'paragraph');
+
+    expect(outline.map((block) => block.section)).toEqual([
+      'Abstract',
+      'Abstract',
+      'I. INTRODUCTION',
+      'I. INTRODUCTION',
+      'A. Subgoal images',
+      'A. Subgoal images'
+    ]);
+    expect(paragraphs.map((block) => block.sectionOrder)).toEqual([1, 2, 3]);
+    expect(paragraphs.map((block) => block.paragraphOrder)).toEqual([1, 1, 1]);
+    expect(new Set(paragraphs.map((block) => block.sectionId)).size).toBe(3);
+  });
+
   it('joins hyphenated line breaks within one paragraph', () => {
     const outline = buildPdfPageOutline(3, [
       item('Cross-embodiment generaliza-', 60, 100),

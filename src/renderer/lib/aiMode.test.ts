@@ -4,6 +4,7 @@ import {
   countPendingAiTranslations,
   getDefaultAiCacheFileName,
   getAiQueueStats,
+  getAiQueueSections,
   getTranslatableExtractedBlocks,
   getCurrentAiCacheItem,
   cloneJsonDocumentForAi,
@@ -97,6 +98,62 @@ describe('AI mode helpers', () => {
       pending: 1,
       skipped: 1
     });
+  });
+
+  it('groups AI queue items by section with per-section cache stats', () => {
+    const items = [
+      {
+        ...extractedBlock,
+        id: 'abstract-1',
+        sourceHash: 'abstract-1',
+        sectionId: 'section-abstract',
+        sectionOrder: 1,
+        paragraphOrder: 1,
+        translation: '已缓存摘要'
+      },
+      {
+        ...extractedBlock,
+        id: 'intro-1',
+        sourceHash: 'intro-1',
+        section: 'I. INTRODUCTION',
+        sectionId: 'section-introduction',
+        sectionOrder: 2,
+        paragraphOrder: 1,
+        translation: ''
+      },
+      {
+        ...extractedBlock,
+        id: 'intro-2',
+        sourceHash: 'intro-2',
+        section: 'I. INTRODUCTION',
+        sectionId: 'section-introduction',
+        sectionOrder: 2,
+        paragraphOrder: 2,
+        translation: '已缓存引言'
+      }
+    ];
+
+    expect(getAiQueueSections(items)).toEqual([
+      {
+        id: 'section-abstract',
+        section: 'Abstract',
+        sectionOrder: 1,
+        startIndex: 0,
+        items: [{ item: items[0], index: 0 }],
+        stats: { total: 1, cached: 1, pending: 0, skipped: 0 }
+      },
+      {
+        id: 'section-introduction',
+        section: 'I. INTRODUCTION',
+        sectionOrder: 2,
+        startIndex: 1,
+        items: [
+          { item: items[1], index: 1 },
+          { item: items[2], index: 2 }
+        ],
+        stats: { total: 2, cached: 1, pending: 1, skipped: 0 }
+      }
+    ]);
   });
 
   it('builds a stable default cache file name', () => {

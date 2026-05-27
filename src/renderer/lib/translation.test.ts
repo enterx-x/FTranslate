@@ -34,6 +34,9 @@ describe('translation file parsing', () => {
         translation: '我们提出一种新的机器人基础模型。',
         type: 'paragraph',
         page: 1,
+        sectionId: 'section-abstract',
+        sectionOrder: 1,
+        paragraphOrder: 1,
         sourceHash: 'abc',
         translatedAt: '2026-05-26T12:00:00.000Z',
         provider: 'deepseek',
@@ -51,6 +54,9 @@ describe('translation file parsing', () => {
     expect(document.items[0].id).toBe('p1');
     expect(document.items[0].type).toBe('paragraph');
     expect(document.items[0].page).toBe(1);
+    expect(document.items[0].sectionId).toBe('section-abstract');
+    expect(document.items[0].sectionOrder).toBe(1);
+    expect(document.items[0].paragraphOrder).toBe(1);
     expect(document.items[0].sourceHash).toBe('abc');
     expect(document.items[0].provider).toBe('deepseek');
   });

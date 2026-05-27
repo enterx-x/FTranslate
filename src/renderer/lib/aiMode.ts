@@ -9,6 +9,25 @@ interface AiCacheItemPatch {
   model?: string;
 }
 
+export interface AiQueueStats {
+  total: number;
+  cached: number;
+  pending: number;
+  skipped: number;
+}
+
+export interface AiQueueSection {
+  id: string;
+  section: string;
+  sectionOrder: number;
+  startIndex: number;
+  items: Array<{
+    item: TranslationItem;
+    index: number;
+  }>;
+  stats: AiQueueStats;
+}
+
 export function buildAiCacheDocument(
   blocks: ExtractedPdfBlock[],
   pdfFileName?: string,
@@ -108,6 +127,43 @@ export function getAiQueueStats(items: TranslationItem[]): {
     pending,
     skipped: Math.max(0, items.length - cached - pending)
   };
+}
+
+export function getAiQueueSections(items: TranslationItem[]): AiQueueSection[] {
+  const sections: AiQueueSection[] = [];
+  const sectionByKey = new Map<string, AiQueueSection>();
+
+  items.forEach((item, index) => {
+    const section = item.section?.trim() || 'Untitled';
+    const key = item.sectionId || section;
+    let group = sectionByKey.get(key);
+
+    if (!group) {
+      group = {
+        id: item.sectionId || `section-${sections.length + 1}`,
+        section,
+        sectionOrder: item.sectionOrder ?? sections.length + 1,
+        startIndex: index,
+        items: [],
+        stats: { total: 0, cached: 0, pending: 0, skipped: 0 }
+      };
+      sectionByKey.set(key, group);
+      sections.push(group);
+    }
+
+    group.items.push({ item, index });
+  });
+
+  sections.forEach((section) => {
+    section.items.sort((left, right) => {
+      const leftOrder = left.item.paragraphOrder ?? left.index;
+      const rightOrder = right.item.paragraphOrder ?? right.index;
+      return leftOrder - rightOrder || left.index - right.index;
+    });
+    section.stats = getAiQueueStats(section.items.map(({ item }) => item));
+  });
+
+  return sections.sort((left, right) => left.sectionOrder - right.sectionOrder || left.startIndex - right.startIndex);
 }
 
 export function getDefaultAiCacheFileName(pdfFileName?: string): string {

@@ -7,6 +7,9 @@ export interface TranslationItem {
   translation: string;
   type?: 'heading' | 'paragraph' | 'formula' | 'caption';
   page?: number;
+  sectionId?: string;
+  sectionOrder?: number;
+  paragraphOrder?: number;
   sourceHash?: string;
   translatedAt?: string;
   provider?: string;
@@ -103,6 +106,9 @@ export function parseJsonTranslation(
       translation: toText(record.translation),
       type: parseTranslationItemType(record.type),
       page: typeof record.page === 'number' ? record.page : undefined,
+      sectionId: toText(record.sectionId) || undefined,
+      sectionOrder: toNumber(record.sectionOrder),
+      paragraphOrder: toNumber(record.paragraphOrder),
       sourceHash: toText(record.sourceHash) || undefined,
       translatedAt: toText(record.translatedAt) || undefined,
       provider: toText(record.provider) || undefined,
@@ -171,6 +177,10 @@ export function exportBilingualMarkdown(document: TranslationDocument): string {
 
 function toText(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
+}
+
+function toNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function parseTranslationItemType(value: unknown): TranslationItem['type'] {

@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { shouldTranslateItem, type AiModelOption, type AiProviderId } from '../../shared/aiTranslation';
-import { getAiQueueStats, getCurrentAiCacheItem, getTranslatableExtractedBlocks } from '../lib/aiMode';
+import {
+  getAiQueueSections,
+  getAiQueueStats,
+  getCurrentAiCacheItem,
+  getTranslatableExtractedBlocks
+} from '../lib/aiMode';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import type { TranslationDocument } from '../lib/translation';
 import type { AiBalanceResult, AiSettingsView } from '../types/electron';
@@ -39,9 +44,11 @@ interface AiModePanelProps {
 export function AiModePanel(props: AiModePanelProps) {
   const jsonDocument = props.document?.kind === 'json' ? props.document : null;
   const queueStats = getAiQueueStats(jsonDocument?.items ?? []);
+  const queueSections = getAiQueueSections(jsonDocument?.items ?? []);
   const currentItem = getCurrentAiCacheItem(jsonDocument, props.currentIndex);
   const extractedTranslatableCount = getTranslatableExtractedBlocks(props.extractedBlocks).length;
   const [currentDetailOpen, setCurrentDetailOpen] = useState(true);
+  const [sectionOpenState, setSectionOpenState] = useState<Record<string, boolean>>({});
 
   return (
     <div className="ai-mode-panel">
@@ -130,15 +137,20 @@ export function AiModePanel(props: AiModePanelProps) {
             </select>
           </label>
           <label>
-            <span>Base URL</span>
+            <span className="field-label-with-help">
+              Base URL
+              <span
+                className="field-help"
+                title="Kimi 使用 https://api.moonshot.cn/v1；如果粘贴控制台网址，保存时会自动修正为 API 地址。"
+              >
+                ?
+              </span>
+            </span>
             <input
               value={props.aiForm.baseURL}
               disabled={props.isBusy}
               onChange={(event) => props.onAiFormChange({ baseURL: event.target.value })}
             />
-            {props.aiForm.provider === 'kimi' ? (
-              <span className="field-hint">Kimi 使用 https://api.moonshot.cn/v1，控制台网址会自动修正。</span>
-            ) : null}
           </label>
           <label>
             <span>Model</span>
@@ -269,44 +281,76 @@ export function AiModePanel(props: AiModePanelProps) {
                 </span>
               </span>
             </div>
-            <div className="ai-item-list">
-              {jsonDocument.items.map((item, index) => {
-                const isCurrent = index === props.currentIndex;
-                const pending = shouldTranslateItem(item);
+            <div className="ai-section-list">
+              {queueSections.map((section) => {
+                const containsCurrent = section.items.some(({ index }) => index === props.currentIndex);
                 return (
-                  <article
-                    key={item.sourceHash ?? item.id ?? `${item.section}-${index}`}
-                    className={isCurrent ? 'ai-item-row is-current' : 'ai-item-row'}
+                  <details
+                    key={section.id}
+                    className="ai-section-group"
+                    open={sectionOpenState[section.id] ?? (containsCurrent || section.startIndex === 0)}
+                    onToggle={(event) => {
+                      setSectionOpenState((value) => ({
+                        ...value,
+                        [section.id]: event.currentTarget.open
+                      }));
+                    }}
                   >
-                    <button type="button" className="ai-item-select" onClick={() => props.onSelectItem(index)}>
-                      <span className="ai-item-index">{index + 1}</span>
-                      <span className="ai-item-main">
-                        <strong>{item.section || 'Untitled'}</strong>
-                        <span>
-                          <MathText text={item.original || '无英文原文'} />
-                        </span>
+                    <summary>
+                      <span className="ai-section-title">
+                        <strong>{section.section}</strong>
+                        <small>从第 {section.startIndex + 1} 段开始</small>
                       </span>
-                    </button>
-                    <span className="ai-item-actions">
-                      <span className={pending ? 'status-pill pending' : 'status-pill cached'}>
-                        {pending ? '待翻译' : item.translation ? '已缓存' : '跳过'}
+                      <span className="ai-section-stats">
+                        <span>{section.stats.total} 段</span>
+                        <span>已缓存 {section.stats.cached}</span>
+                        <span>待翻译 {section.stats.pending}</span>
                       </span>
-                      <button
-                        type="button"
-                        disabled={props.isBusy || !pending}
-                        onClick={() => props.onTranslateItem(index, false)}
-                      >
-                        翻译
-                      </button>
-                      <button
-                        type="button"
-                        disabled={props.isBusy || item.type !== 'paragraph'}
-                        onClick={() => props.onTranslateItem(index, true)}
-                      >
-                        重译
-                      </button>
-                    </span>
-                  </article>
+                    </summary>
+                    <div className="ai-item-list">
+                      {section.items.map(({ item, index }) => {
+                        const isCurrent = index === props.currentIndex;
+                        const pending = shouldTranslateItem(item);
+                        return (
+                          <article
+                            key={item.sourceHash ?? item.id ?? `${item.section}-${index}`}
+                            className={isCurrent ? 'ai-item-row is-current' : 'ai-item-row'}
+                          >
+                            <button type="button" className="ai-item-select" onClick={() => props.onSelectItem(index)}>
+                              <span className="ai-item-index">{index + 1}</span>
+                              <span className="ai-item-main">
+                                <strong>
+                                  {item.paragraphOrder ? `自然段 ${item.paragraphOrder}` : item.section || 'Untitled'}
+                                </strong>
+                                <span>
+                                  <MathText text={item.original || '无英文原文'} />
+                                </span>
+                              </span>
+                            </button>
+                            <span className="ai-item-actions">
+                              <span className={pending ? 'status-pill pending' : 'status-pill cached'}>
+                                {pending ? '待翻译' : item.translation ? '已缓存' : '跳过'}
+                              </span>
+                              <button
+                                type="button"
+                                disabled={props.isBusy || !pending}
+                                onClick={() => props.onTranslateItem(index, false)}
+                              >
+                                翻译
+                              </button>
+                              <button
+                                type="button"
+                                disabled={props.isBusy || item.type !== 'paragraph'}
+                                onClick={() => props.onTranslateItem(index, true)}
+                              >
+                                重译
+                              </button>
+                            </span>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </details>
                 );
               })}
             </div>

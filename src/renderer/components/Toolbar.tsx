@@ -41,12 +41,8 @@ export function Toolbar(props: ToolbarProps) {
         </button>
       </div>
 
-      <div className="toolbar-brand" aria-label="PDF Translation Reader">
+      <div className="toolbar-brand" aria-label="PDF Translation Reader" title="PDF Translation Reader">
         <img src={brandMarkUrl} alt="" />
-        <span>
-          <strong>FTranslate</strong>
-          <small>PDF Translation Reader</small>
-        </span>
       </div>
 
       <div className="toolbar-group toolbar-group-right">
