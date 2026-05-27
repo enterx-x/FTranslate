@@ -25,12 +25,37 @@ const SEARCHABLE_CHARACTER_PATTERN = /[\p{L}\p{N}]/u;
 const MIN_SENTENCE_LENGTH = 36;
 const MIN_PARTIAL_MATCH_SCORE = 0.75;
 const MIN_FUZZY_SCORE = 0.75;
+const LONG_HIGHLIGHT_QUERY_LIMIT = 850;
+const LONG_HIGHLIGHT_TARGET_LENGTH = 280;
 
 export function normalizePdfSearchText(text: string): string {
   return buildNormalizedCharacters([{ str: text }])
     .map((character) => character.value)
     .join('')
     .trim();
+}
+
+export function buildPdfHighlightQuery(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= LONG_HIGHLIGHT_QUERY_LIMIT) {
+    return trimmed;
+  }
+
+  const sentences = splitSentences(trimmed);
+  let query = '';
+
+  for (const sentence of sentences) {
+    const nextQuery = query ? `${query} ${sentence}` : sentence;
+    if (query && nextQuery.length > LONG_HIGHLIGHT_TARGET_LENGTH) {
+      break;
+    }
+    if (!query && nextQuery.length > LONG_HIGHLIGHT_TARGET_LENGTH) {
+      return nextQuery.slice(0, LONG_HIGHLIGHT_TARGET_LENGTH).trim();
+    }
+    query = nextQuery;
+  }
+
+  return query || trimmed.slice(0, LONG_HIGHLIGHT_TARGET_LENGTH);
 }
 
 export function findTextItemMatches(items: PdfTextItemLike[], query: string): number[] {
@@ -185,7 +210,7 @@ function buildNormalizedCharacters(items: PdfTextItemLike[]): NormalizedCharacte
   let skipWhitespaceAfterHyphen = false;
 
   items.forEach((item, itemIndex) => {
-    for (const rawCharacter of item.str.normalize('NFKC')) {
+    for (const rawCharacter of normalizeSearchSource(item.str.normalize('NFKC'))) {
       const lowerCharacter = rawCharacter.toLocaleLowerCase();
 
       if (HYPHEN_PATTERN.test(lowerCharacter)) {
@@ -217,6 +242,10 @@ function buildNormalizedCharacters(items: PdfTextItemLike[]): NormalizedCharacte
   }
 
   return characters;
+}
+
+function normalizeSearchSource(text: string): string {
+  return text.replace(/([πΠ])\s+(\d)\s*\.\s*(\d)/gu, '$1$2.$3');
 }
 
 function buildNormalizedTokens(items: PdfTextItemLike[]): NormalizedToken[] {

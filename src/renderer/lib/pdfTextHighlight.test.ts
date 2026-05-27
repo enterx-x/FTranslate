@@ -1,15 +1,50 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildPdfHighlightQuery,
   findBestTextItemMatch,
   findTextItemMatches,
   normalizePdfSearchText
 } from './pdfTextHighlight';
 
 describe('PDF text highlight matching', () => {
+  it('keeps short highlight queries unchanged', () => {
+    expect(buildPdfHighlightQuery('Foundation models work on diverse datasets.')).toBe(
+      'Foundation models work on diverse datasets.'
+    );
+  });
+
+  it('uses leading sentences for very long highlight queries', () => {
+    const query = buildPdfHighlightQuery(
+      [
+        'First sentence explains the model and should stay in the PDF lookup query.',
+        'Second sentence gives enough context for matching and should also stay.',
+        'Third sentence belongs to another page and should not be needed for initial highlighting.',
+        'Fourth sentence makes the paragraph longer than the limit.'
+      ].join(' ').repeat(8)
+    );
+
+    expect(query).toContain('First sentence explains the model');
+    expect(query).toContain('Second sentence gives enough context');
+    expect(query.length).toBeLessThan(900);
+  });
+
+  it('truncates a single very long leading sentence for stable PDF lookup', () => {
+    const query = buildPdfHighlightQuery(
+      `${'A very long leading sentence keeps going with many descriptive clauses about the model '.repeat(12)}. Tail.`
+    );
+
+    expect(query.length).toBeLessThanOrEqual(280);
+    expect(query).toContain('A very long leading sentence');
+  });
+
   it('normalizes whitespace, casing, punctuation, and line-break hyphenation', () => {
     expect(normalizePdfSearchText('Zero-\nshot  Cross-Embodiment π0.7')).toBe(
       'zeroshot crossembodiment π0 7'
     );
+  });
+
+  it('normalizes compact and spaced model version tokens equivalently', () => {
+    expect(normalizePdfSearchText('π0.7')).toBe(normalizePdfSearchText('π 0 . 7'));
   });
 
   it('matches query text across multiple PDF text items', () => {

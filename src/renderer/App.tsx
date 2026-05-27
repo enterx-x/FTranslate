@@ -6,6 +6,7 @@ import { PdfViewer } from './components/PdfViewer';
 import { Toolbar } from './components/Toolbar';
 import { TranslationPanel } from './components/TranslationPanel';
 import { buildAiCacheDocument, getDefaultAiCacheFileName } from './lib/aiMode';
+import { buildPdfHighlightQuery } from './lib/pdfTextHighlight';
 import {
   exportBilingualMarkdown,
   parseTranslationFile,
@@ -702,7 +703,11 @@ export default function App() {
             fileName={pdf?.fileName}
             currentPage={currentPage}
             scale={scale}
-            highlightText={translationDocument?.kind === 'json' ? currentItem?.original ?? '' : ''}
+            highlightText={
+              readerMode === 'manual' && translationDocument?.kind === 'json'
+                ? buildPdfHighlightQuery(currentItem?.original ?? '')
+                : ''
+            }
             onScaleChange={(nextScale) => setScale(nextScale)}
             onDocumentLoad={(nextPageCount) => {
               setPageCount(nextPageCount);

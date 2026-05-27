@@ -231,7 +231,10 @@ async function runAiQueueScenario() {
 
     const snapshot = await evaluateJson(client, `() => ({
       rows: [...document.querySelectorAll('.ai-item-row')].map((row) => row.textContent ?? ''),
-      summary: document.querySelector('.ai-summary')?.textContent ?? ''
+      summary: document.querySelector('.ai-summary')?.textContent ?? '',
+      underlines: document.querySelectorAll('.pdf-highlight-underline').length,
+      redTextMatches: document.querySelectorAll('.pdf-highlight-match').length,
+      status: document.querySelector('.status-bar')?.textContent ?? ''
     })`);
     validateAiQueueScenario(snapshot);
 
@@ -353,6 +356,16 @@ function validateAiQueueScenario(snapshot) {
   }
   if (introRow.includes('express with language alone')) {
     throw new Error(`ai-queue: merged right-column text into first Introduction body row: ${introRow}`);
+  }
+
+  if (snapshot.underlines !== 0 || snapshot.redTextMatches !== 0) {
+    throw new Error(
+      `ai-queue: AI mode should not draw PDF highlights while reviewing extracted candidates, got ${snapshot.underlines} underlines and ${snapshot.redTextMatches} red text overlays`
+    );
+  }
+
+  if (snapshot.status.includes('\u9ad8\u4eae')) {
+    throw new Error(`ai-queue: AI mode leaked a highlight status message: ${snapshot.status}`);
   }
 }
 
