@@ -18,6 +18,8 @@
 - 打开本地英文 PDF。
 - PDF 左侧连续滚动阅读，支持上一页、下一页、页码跳转、按钮缩放、`Ctrl + 鼠标滚轮` 按鼠标位置缩放、空格键拖拽或鼠标中键拖拽平移。
 - PDF 文本层支持鼠标选中复制；JSON 当前段会尽量在 PDF 内按完整段落、句子或模糊片段高亮。
+- 右侧原文和译文支持 KaTeX 公式渲染，行内公式使用 `$...$`，独立公式使用 `$$...$$`。
+- AI 模式当前段译文框支持纵向拖拽调整高度，方便阅读长段落。
 - 默认进入“论文库”主页，按表格管理看过的论文。
 - 论文库记录中文标题、英文标题、期刊、作者、年份、最近打开时间和上次阅读页码。
 - 打开本地翻译文件，支持 `.json`、`.md`、`.markdown`、`.txt`。
@@ -38,7 +40,8 @@
   - 支持 OpenAI、DeepSeek、Kimi、Custom 四类 OpenAI-compatible 接口；
   - API Key 通过 Electron `safeStorage` 优先加密保存到本机；
   - 可从 PDF 文本层生成 JSON 缓存草稿；
-  - 翻译完成后逐段写回 JSON 缓存，避免重复消耗 token。
+  - 翻译完成后逐段写回 JSON 缓存，避免重复消耗 token；
+  - 提示词会要求模型保留 LaTeX 定界符，便于右侧公式排版。
 - 新建翻译项目：
   - 依次选择 PDF 和翻译文件；
   - 自动加入论文库并保存到 `localStorage`；
@@ -76,6 +79,41 @@ npm run build
 - TypeScript 类型检查
 - Vite 前端构建
 - Electron 主进程构建
+
+## 视觉检查
+
+```bash
+npm run visual:check
+```
+
+该命令会启动打包后的 `dist/win-unpacked/PDF Translation Reader.exe`，用真实论文做自动截图检查。
+
+默认测试文件路径为：
+
+```text
+D:\GPT浏览器下载\2604.15483v2.pdf
+```
+
+如需指定其它 PDF：
+
+```bash
+set VISUAL_CHECK_PDF=D:\path\to\paper.pdf
+npm run visual:check
+```
+
+截图输出到：
+
+```text
+.tmp-visual-check/
+```
+
+检查内容包括：
+
+- PDF 当前段高亮是否越界；
+- 高亮线是否保持细线；
+- AI 队列是否混入明显图中文字噪声；
+- AI 当前译文框是否可调整高度；
+- 右侧公式是否成功渲染为 KaTeX。
 
 ## 生成 Windows 安装包
 
@@ -167,6 +205,16 @@ JSON 文件会保存为数组结构；Markdown 文件会按空行分隔段落保
 
 AI 模式会跳过已有 `translation` 的段落；如果要重新调用 API，使用“重新翻译当前段”。
 
+### 公式显示
+
+右侧阅读区支持常见 LaTeX 定界符：
+
+- 行内公式：`$L=\sum_i x_i^2$`
+- 独立公式：`$$\max_\theta \mathbb{E}[R]$$`
+- 也支持 `\(...\)` 和 `\[...\]`
+
+JSON 或 Markdown 译文中保留这些定界符后，应用会自动渲染公式。AI 模式的系统提示词和手动模式复制提示词都已经加入“保留 LaTeX 定界符”的要求。
+
 ### 导出双语 Markdown
 
 当前翻译文件为 JSON 时，点击“导出双语 Markdown”。
@@ -205,7 +253,7 @@ JSON 文件必须是数组，每一项包含：
   {
     "section": "I. INTRODUCTION",
     "original": "Foundation models work on the principle that generalist capabilities emerge from training on large and diverse datasets.",
-    "translation": "基础模型的工作原理在于：通用能力会从大规模且多样化的数据集训练中涌现出来。"
+    "translation": "基础模型的工作原理在于：通用能力会从大规模且多样化的数据集训练中涌现出来。若包含公式，例如 $L=\\sum_i x_i^2$，会在右侧渲染。"
   }
 ]
 ```
@@ -253,22 +301,26 @@ src/
     components/
       HomePage.tsx       论文库主页和论文信息表格
       AiModePanel.tsx    AI 设置、PDF 提取缓存、批量翻译队列
-      PdfViewer.tsx      PDF.js canvas 渲染组件
+      MathText.tsx       KaTeX 公式渲染组件
+      PdfViewer.tsx      PDF.js 阅读器、文本层、搜索高亮和缩放交互
       Toolbar.tsx        顶部工具栏
       TranslationPanel.tsx 右侧段落阅读和编辑组件
     lib/
       aiMode.ts          PDF 提取块转换为 AI JSON 缓存的辅助逻辑
+      mathText.ts        解析普通文本和 LaTeX 公式并生成安全 HTML
       papers.ts          论文库记录、元数据预填、localStorage 序列化辅助
       papers.test.ts     论文库数据处理测试
       promptTemplates.ts 外部 AI JSON 提示词生成
       translation.ts     JSON/Markdown 解析、保存、双语 Markdown 导出
       translation.test.ts 翻译数据处理测试
-  shared/
-    aiTranslation.ts     OpenAI-compatible 请求构造、缓存跳过规则和 provider preset
     styles/
       global.css         全局样式
     types/
       electron.d.ts      preload API 类型声明
+  shared/
+    aiTranslation.ts     OpenAI-compatible 请求构造、缓存跳过规则和 provider preset
+scripts/
+  visual-check.mjs       打包后桌面端视觉回归检查
 assets/
   icon.ico               图标占位文件，后续可替换为正式图标
 ```
@@ -279,4 +331,5 @@ assets/
 - 增加段落搜索。
 - 增加双栏同步阅读进度。
 - 增加多项目列表。
-- 后续再接入本地模型或 OpenAI API 做半自动翻译，但第一版保持离线。
+- 增加本地模型或更细粒度 provider 配置。
+- 增加公式识别辅助，把纯文本公式半自动转换为 LaTeX。
