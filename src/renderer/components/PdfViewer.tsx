@@ -3,28 +3,26 @@ import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import {
+  EventBus,
+  FindState,
+  PDFFindController,
+  PDFLinkService,
+  PDFViewer as PdfJsViewer,
+  ScrollMode
+} from 'pdfjs-dist/legacy/web/pdf_viewer.mjs';
+import 'pdfjs-dist/legacy/web/pdf_viewer.css';
+import {
   buildAnchoredScrollPosition,
   getWheelZoomScale,
   type PdfZoomAnchor
 } from '../lib/pdfInteraction';
-import { buildPdfCanvasDimensions } from '../lib/pdfRenderGeometry';
-import { findBestTextItemMatch, type PdfTextItemLike } from '../lib/pdfTextHighlight';
 import {
   buildPdfDocumentOutline,
-  orderPositionedTextItemsForReading,
   type ExtractedPdfBlock,
   type PositionedPdfTextItem
 } from '../lib/pdfTextStructure';
-import {
-  buildUnderlineRects,
-  type HighlightSourceRect
-} from '../lib/pdfHighlightUnderlines';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
-
-interface HighlightTextItem extends PositionedPdfTextItem, PdfTextItemLike {
-  textDivIndex: number;
-}
 
 interface PdfViewerProps {
   pdfData: Uint8Array | null;
@@ -40,17 +38,31 @@ interface PdfViewerProps {
   onStatusChange: (message: string) => void;
 }
 
+type PdfViewerRuntime = InstanceType<typeof PdfJsViewer>;
+type PdfEventBusRuntime = InstanceType<typeof EventBus>;
+type PdfLinkServiceRuntime = InstanceType<typeof PDFLinkService>;
+type PdfFindControllerRuntime = InstanceType<typeof PDFFindController>;
+
+interface FindMatchesCountEvent {
+  matchesCount?: {
+    current?: number;
+    total?: number;
+  };
+}
+
+interface FindControlStateEvent extends FindMatchesCountEvent {
+  state?: number;
+}
+
 export function PdfViewer(props: PdfViewerProps) {
-  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-  const pageRefs = useRef(new Map<number, HTMLDivElement>());
-  const surfaceRefs = useRef(new Map<number, HTMLDivElement>());
-  const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
-  const highlightLayerRefs = useRef(new Map<number, HTMLDivElement>());
-  const textLayerRefs = useRef(new Map<number, HTMLDivElement>());
-  const textDivsByPageRef = useRef(new Map<number, HTMLElement[]>());
-  const textItemsByPageRef = useRef(new Map<number, HighlightTextItem[]>());
-  const currentPageRef = useRef(props.currentPage);
-  const pageReportedByScrollRef = useRef<number | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const viewerElementRef = useRef<HTMLDivElement | null>(null);
+  const eventBusRef = useRef<PdfEventBusRuntime | null>(null);
+  const linkServiceRef = useRef<PdfLinkServiceRuntime | null>(null);
+  const findControllerRef = useRef<PdfFindControllerRuntime | null>(null);
+  const pdfViewerRef = useRef<PdfViewerRuntime | null>(null);
+  const propsRef = useRef(props);
+  const currentFindQueryRef = useRef('');
   const pendingZoomAnchorRef = useRef<PdfZoomAnchor | null>(null);
   const isSpacePressedRef = useRef(false);
   const panStateRef = useRef<{
@@ -60,31 +72,144 @@ export function PdfViewer(props: PdfViewerProps) {
     scrollTop: number;
   } | null>(null);
   const [documentProxy, setDocumentProxy] = useState<PDFDocumentProxy | null>(null);
-  const [pageNumbers, setPageNumbers] = useState<number[]>([]);
-  const [textLayerVersion, setTextLayerVersion] = useState(0);
+  const [findReadyToken, setFindReadyToken] = useState(0);
   const [isRendering, setIsRendering] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
 
   useEffect(() => {
-    currentPageRef.current = props.currentPage;
-  }, [props.currentPage]);
+    propsRef.current = props;
+  }, [props]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const viewerElement = viewerElementRef.current;
+
+    if (!container || !viewerElement || pdfViewerRef.current) {
+      return;
+    }
+
+    // 使用 PDF.js 官方 web viewer 维护页面、文字层、搜索高亮和缩放坐标。
+    const eventBus = new EventBus();
+    const linkService = new PDFLinkService({ eventBus });
+    const findController = new PDFFindController({
+      eventBus,
+      linkService,
+      updateMatchesCountOnProgress: true
+    });
+    const pdfViewer = new PdfJsViewer({
+      container,
+      viewer: viewerElement,
+      eventBus,
+      linkService,
+      findController,
+      removePageBorders: true,
+      textLayerMode: 1,
+      maxCanvasPixels: -1,
+      maxCanvasDim: -1
+    });
+
+    pdfViewer.scrollMode = ScrollMode.VERTICAL;
+    linkService.setViewer(pdfViewer);
+
+    function handlePagesInit(): void {
+      const viewer = pdfViewerRef.current;
+      if (!viewer) {
+        return;
+      }
+
+      viewer.currentScale = propsRef.current.scale;
+      setIsRendering(false);
+      schedulePendingZoomAnchor();
+    }
+
+    function handlePageChanging(event: { pageNumber?: number }): void {
+      const pageNumber = Number(event.pageNumber);
+      if (Number.isInteger(pageNumber) && pageNumber > 0) {
+        propsRef.current.onCurrentPageChange(pageNumber);
+      }
+    }
+
+    function handleScaleChanging(event: { scale?: number }): void {
+      const nextScale = Number(event.scale);
+      if (Number.isFinite(nextScale) && Math.abs(nextScale - propsRef.current.scale) > 0.001) {
+        propsRef.current.onScaleChange(nextScale);
+      }
+    }
+
+    function handleFindMatchesCount(event: FindMatchesCountEvent): void {
+      const query = currentFindQueryRef.current;
+      const total = event.matchesCount?.total ?? 0;
+      if (query && total > 0) {
+        propsRef.current.onHighlightStatusChange?.(`PDF.js 官方搜索已高亮当前段原文，共 ${total} 处。`);
+      }
+    }
+
+    function handleFindControlState(event: FindControlStateEvent): void {
+      const query = currentFindQueryRef.current;
+      if (!query) {
+        return;
+      }
+
+      const total = event.matchesCount?.total ?? 0;
+      if (total > 0) {
+        propsRef.current.onHighlightStatusChange?.(`PDF.js 官方搜索已高亮当前段原文，共 ${total} 处。`);
+        return;
+      }
+
+      if (event.state === FindState.NOT_FOUND) {
+        propsRef.current.onHighlightStatusChange?.(
+          'PDF.js 官方搜索未找到当前段原文；请缩短 original 字段或检查 PDF 是否包含可复制文本。'
+        );
+      }
+    }
+
+    eventBus.on('pagesinit', handlePagesInit);
+    eventBus.on('pagechanging', handlePageChanging);
+    eventBus.on('scalechanging', handleScaleChanging);
+    eventBus.on('updatefindmatchescount', handleFindMatchesCount);
+    eventBus.on('updatefindcontrolstate', handleFindControlState);
+
+    eventBusRef.current = eventBus;
+    linkServiceRef.current = linkService;
+    findControllerRef.current = findController;
+    pdfViewerRef.current = pdfViewer;
+
+    return () => {
+      eventBus.off('pagesinit', handlePagesInit);
+      eventBus.off('pagechanging', handlePageChanging);
+      eventBus.off('scalechanging', handleScaleChanging);
+      eventBus.off('updatefindmatchescount', handleFindMatchesCount);
+      eventBus.off('updatefindcontrolstate', handleFindControlState);
+      pdfViewer.setDocument(null as unknown as PDFDocumentProxy);
+      linkService.setDocument(null);
+      findController.setDocument(null as unknown as PDFDocumentProxy);
+      pdfViewerRef.current = null;
+      eventBusRef.current = null;
+      linkServiceRef.current = null;
+      findControllerRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!props.pdfData) {
       setDocumentProxy(null);
-      setPageNumbers([]);
-      pageRefs.current.clear();
-      surfaceRefs.current.clear();
-      canvasRefs.current.clear();
-      highlightLayerRefs.current.clear();
-      textLayerRefs.current.clear();
-      textDivsByPageRef.current.clear();
-      textItemsByPageRef.current.clear();
+      setFindReadyToken(0);
+      setIsRendering(false);
+      props.onExtractedTextReady?.([]);
+      pdfViewerRef.current?.setDocument(null as unknown as PDFDocumentProxy);
+      linkServiceRef.current?.setDocument(null);
+      findControllerRef.current?.setDocument(null as unknown as PDFDocumentProxy);
       return;
     }
 
     let cancelled = false;
+    let loadedDocument: PDFDocumentProxy | null = null;
     const loadingTask = pdfjsLib.getDocument({ data: props.pdfData.slice() });
+    setIsRendering(true);
+    setDocumentProxy(null);
+    setFindReadyToken(0);
+    props.onExtractedTextReady?.([]);
+    props.onHighlightStatusChange?.('');
 
     loadingTask.promise
       .then((pdfDocument) => {
@@ -93,239 +218,95 @@ export function PdfViewer(props: PdfViewerProps) {
           return;
         }
 
+        const viewer = pdfViewerRef.current;
+        const linkService = linkServiceRef.current;
+        const findController = findControllerRef.current;
+        if (!viewer || !linkService || !findController) {
+          void pdfDocument.destroy();
+          return;
+        }
+
+        loadedDocument = pdfDocument;
+        linkService.setDocument(pdfDocument, null);
+        viewer.setDocument(pdfDocument);
         setDocumentProxy(pdfDocument);
-        setPageNumbers(Array.from({ length: pdfDocument.numPages }, (_, index) => index + 1));
-        props.onDocumentLoad(pdfDocument.numPages);
-        props.onStatusChange(`PDF 已载入，共 ${pdfDocument.numPages} 页。`);
+        propsRef.current.onDocumentLoad(pdfDocument.numPages);
+        propsRef.current.onStatusChange(`PDF 已加载，共 ${pdfDocument.numPages} 页。`);
+        void viewer.onePageRendered?.then(() => {
+          if (!cancelled) {
+            setFindReadyToken((value) => value + 1);
+          }
+        });
+        void extractPdfOutline(pdfDocument, () => cancelled).then((outline) => {
+          if (!cancelled) {
+            propsRef.current.onExtractedTextReady?.(outline);
+          }
+        });
       })
       .catch((error) => {
         if (!cancelled) {
-          props.onStatusChange(`PDF 加载失败：${String(error)}`);
+          setIsRendering(false);
+          propsRef.current.onStatusChange(`PDF 加载失败：${String(error)}`);
         }
       });
 
     return () => {
       cancelled = true;
-      void loadingTask.destroy();
+      currentFindQueryRef.current = '';
+      if (loadedDocument) {
+        pdfViewerRef.current?.setDocument(null as unknown as PDFDocumentProxy);
+        linkServiceRef.current?.setDocument(null);
+        findControllerRef.current?.setDocument(null as unknown as PDFDocumentProxy);
+        void loadedDocument.destroy();
+      } else {
+        void loadingTask.destroy();
+      }
     };
   }, [props.pdfData]);
 
   useEffect(() => {
-    if (!documentProxy || pageNumbers.length === 0) {
+    const viewer = pdfViewerRef.current;
+    if (!viewer || !documentProxy) {
       return;
     }
 
-    const activeDocument = documentProxy;
-    let cancelled = false;
-    const renderTasks: pdfjsLib.RenderTask[] = [];
-    const textLayers: Array<{ cancel: () => void }> = [];
-    const outlinePages: Array<{ page: number; items: PositionedPdfTextItem[] }> = [];
-
-    async function renderAllPages() {
-      setIsRendering(true);
-      textDivsByPageRef.current.clear();
-      textItemsByPageRef.current.clear();
-
-      try {
-        // 第一版连续滚动先顺序渲染所有页面，逻辑简单稳定；超长 PDF 后续可再升级为懒加载。
-        for (const pageNumber of pageNumbers) {
-          if (cancelled) {
-            return;
-          }
-
-          const canvas = canvasRefs.current.get(pageNumber);
-          const pageSurface = surfaceRefs.current.get(pageNumber);
-          const highlightLayerContainer = highlightLayerRefs.current.get(pageNumber);
-          const textLayerContainer = textLayerRefs.current.get(pageNumber);
-          if (!canvas || !pageSurface || !highlightLayerContainer || !textLayerContainer) {
-            continue;
-          }
-
-          const page = await activeDocument.getPage(pageNumber);
-          if (cancelled) {
-            return;
-          }
-
-          const viewport = page.getViewport({ scale: props.scale });
-          const dimensions = buildPdfCanvasDimensions(
-            viewport.width,
-            viewport.height,
-            window.devicePixelRatio
-          );
-          const context = canvas.getContext('2d');
-
-          if (!context) {
-            props.onStatusChange('无法创建 PDF canvas 渲染上下文。');
-            return;
-          }
-
-          pageSurface.style.width = `${dimensions.cssWidth}px`;
-          pageSurface.style.height = `${dimensions.cssHeight}px`;
-
-          canvas.width = dimensions.canvasWidth;
-          canvas.height = dimensions.canvasHeight;
-          canvas.style.width = `${dimensions.cssWidth}px`;
-          canvas.style.height = `${dimensions.cssHeight}px`;
-          context.setTransform(dimensions.outputScale, 0, 0, dimensions.outputScale, 0, 0);
-
-          textLayerContainer.replaceChildren();
-          highlightLayerContainer.replaceChildren();
-          highlightLayerContainer.style.width = `${dimensions.cssWidth}px`;
-          highlightLayerContainer.style.height = `${dimensions.cssHeight}px`;
-          textLayerContainer.style.width = `${dimensions.cssWidth}px`;
-          textLayerContainer.style.height = `${dimensions.cssHeight}px`;
-
-          const renderTask = page.render({
-            canvas,
-            canvasContext: context,
-            viewport
-          });
-          renderTasks.push(renderTask);
-
-          await renderTask.promise;
-
-          const textContent = await page.getTextContent();
-          if (cancelled) {
-            return;
-          }
-
-          const textLayer = new pdfjsLib.TextLayer({
-            textContentSource: textContent,
-            container: textLayerContainer,
-            viewport
-          });
-          textLayers.push(textLayer);
-
-          await textLayer.render();
-          const positionedItems = toPositionedTextItems(textContent.items, viewport, pageNumber);
-          textDivsByPageRef.current.set(pageNumber, textLayer.textDivs);
-          textItemsByPageRef.current.set(
-            pageNumber,
-            orderPositionedTextItemsForReading(toHighlightTextItems(textContent.items, viewport, pageNumber))
-          );
-          outlinePages.push({
-            page: pageNumber,
-            items: positionedItems
-          });
-        }
-      } catch (error) {
-        if (!cancelled && !String(error).includes('RenderingCancelledException')) {
-          props.onStatusChange(`PDF 渲染失败：${String(error)}`);
-        }
-      } finally {
-        if (!cancelled) {
-          props.onExtractedTextReady?.(buildPdfDocumentOutline(outlinePages));
-          setTextLayerVersion((value) => value + 1);
-          setIsRendering(false);
-        }
-      }
+    if (Math.abs(viewer.currentScale - props.scale) > 0.001) {
+      viewer.currentScale = props.scale;
     }
 
-    void renderAllPages();
-
-    return () => {
-      cancelled = true;
-      renderTasks.forEach((renderTask) => {
-        try {
-          renderTask.cancel();
-        } catch {
-          // 已完成的渲染任务再次 cancel 可能无事可做，清理阶段忽略即可。
-        }
-      });
-      textLayers.forEach((textLayer) => textLayer.cancel());
-    };
-  }, [documentProxy, pageNumbers, props.scale]);
+    schedulePendingZoomAnchor();
+  }, [documentProxy, props.scale]);
 
   useEffect(() => {
-    clearPdfHighlights();
-
-    if (!props.highlightText?.trim()) {
+    const viewer = pdfViewerRef.current;
+    if (!viewer || !documentProxy || props.currentPage < 1 || props.currentPage > viewer.pagesCount) {
       return;
     }
 
-    if (isRendering) {
-      props.onHighlightStatusChange?.('PDF 文本层仍在渲染，稍后自动定位当前段。');
-      return;
+    if (viewer.currentPageNumber !== props.currentPage) {
+      viewer.currentPageNumber = props.currentPage;
     }
-
-    for (const pageNumber of pageNumbers) {
-      const textItems = textItemsByPageRef.current.get(pageNumber) ?? [];
-      const match = findBestTextItemMatch(textItems, props.highlightText);
-      const matchedIndexes = match.itemIndexes;
-
-      if (matchedIndexes.length === 0) {
-        continue;
-      }
-
-      paintHighlightUnderlines(pageNumber, matchedIndexes);
-
-      const pageElement = pageRefs.current.get(pageNumber);
-      pageElement?.scrollIntoView({ block: 'center' });
-      const status =
-        match.strategy === 'full'
-          ? `已在 PDF 第 ${pageNumber} 页完整高亮当前段原文。`
-          : `已在 PDF 第 ${pageNumber} 页部分高亮当前段原文，匹配置信度 ${Math.round(
-              match.score * 100
-            )}%。`;
-      props.onHighlightStatusChange?.(status);
-      return;
-    }
-
-    props.onHighlightStatusChange?.('未在 PDF 中找到足够相似的当前段原文。');
-  }, [isRendering, pageNumbers, props.highlightText, props.onHighlightStatusChange, textLayerVersion]);
+  }, [documentProxy, props.currentPage]);
 
   useEffect(() => {
-    if (pendingZoomAnchorRef.current) {
+    const eventBus = eventBusRef.current;
+    const findController = findControllerRef.current;
+    if (!eventBus || !findController || !documentProxy || findReadyToken === 0) {
       return;
     }
 
-    if (pageReportedByScrollRef.current === props.currentPage) {
-      pageReportedByScrollRef.current = null;
+    const query = props.highlightText?.trim() ?? '';
+    currentFindQueryRef.current = query;
+
+    if (!query) {
+      eventBus.dispatch('find', buildFindRequest(findController, ''));
+      props.onHighlightStatusChange?.('');
       return;
     }
 
-    const pageElement = pageRefs.current.get(props.currentPage);
-
-    if (!pageElement) {
-      return;
-    }
-
-    // 页码输入、上一页/下一页、恢复上次阅读进度都会走这里，统一滚动到目标页。
-    window.requestAnimationFrame(() => {
-      pageElement.scrollIntoView({ block: 'start' });
-    });
-  }, [props.currentPage, props.scale, pageNumbers]);
-
-  useEffect(() => {
-    const anchor = pendingZoomAnchorRef.current;
-    const container = scrollContainerRef.current;
-
-    if (!anchor || !container) {
-      return;
-    }
-
-    const surface = surfaceRefs.current.get(anchor.pageNumber);
-    if (!surface) {
-      return;
-    }
-
-    window.requestAnimationFrame(() => {
-      const position = buildAnchoredScrollPosition({
-        pageOffsetTop: surface.offsetTop,
-        pageOffsetLeft: surface.offsetLeft,
-        pageWidth: surface.offsetWidth,
-        pageHeight: surface.offsetHeight,
-        ratioX: anchor.ratioX,
-        ratioY: anchor.ratioY,
-        pointerXInContainer: anchor.pointerXInContainer,
-        pointerYInContainer: anchor.pointerYInContainer
-      });
-
-      container.scrollLeft = position.scrollLeft;
-      container.scrollTop = position.scrollTop;
-      pendingZoomAnchorRef.current = null;
-    });
-  }, [props.scale, textLayerVersion]);
+    props.onHighlightStatusChange?.('正在使用 PDF.js 官方搜索定位当前段原文。');
+    eventBus.dispatch('find', buildFindRequest(findController, query));
+  }, [documentProxy, findReadyToken, props.highlightText]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
@@ -352,7 +333,7 @@ export function PdfViewer(props: PdfViewerProps) {
 
   useEffect(() => {
     function handleMouseMove(event: MouseEvent): void {
-      const container = scrollContainerRef.current;
+      const container = containerRef.current;
       const panState = panStateRef.current;
 
       if (!container || !panState) {
@@ -380,35 +361,6 @@ export function PdfViewer(props: PdfViewerProps) {
     };
   }, [isPanning]);
 
-  function handleScroll(): void {
-    const container = scrollContainerRef.current;
-    if (!container || pageNumbers.length === 0) {
-      return;
-    }
-
-    const readingLine = container.scrollTop + container.clientHeight * 0.28;
-    let visiblePage = pageNumbers[0];
-
-    for (const pageNumber of pageNumbers) {
-      const pageElement = pageRefs.current.get(pageNumber);
-      if (!pageElement) {
-        continue;
-      }
-
-      if (pageElement.offsetTop <= readingLine) {
-        visiblePage = pageNumber;
-      } else {
-        break;
-      }
-    }
-
-    if (visiblePage !== currentPageRef.current) {
-      currentPageRef.current = visiblePage;
-      pageReportedByScrollRef.current = visiblePage;
-      props.onCurrentPageChange(visiblePage);
-    }
-  }
-
   function handleWheel(event: React.WheelEvent<HTMLDivElement>): void {
     if (!event.ctrlKey) {
       return;
@@ -422,8 +374,9 @@ export function PdfViewer(props: PdfViewerProps) {
 
   function handleMouseDown(event: React.MouseEvent<HTMLDivElement>): void {
     const shouldPan = event.button === 1 || (event.button === 0 && isSpacePressedRef.current);
+    const container = containerRef.current;
 
-    if (!shouldPan || !scrollContainerRef.current) {
+    if (!shouldPan || !container) {
       return;
     }
 
@@ -431,28 +384,23 @@ export function PdfViewer(props: PdfViewerProps) {
     panStateRef.current = {
       startX: event.clientX,
       startY: event.clientY,
-      scrollLeft: scrollContainerRef.current.scrollLeft,
-      scrollTop: scrollContainerRef.current.scrollTop
+      scrollLeft: container.scrollLeft,
+      scrollTop: container.scrollTop
     };
     setIsPanning(true);
   }
 
   function buildZoomAnchor(clientX: number, clientY: number): PdfZoomAnchor {
-    const container = scrollContainerRef.current;
+    const container = containerRef.current;
     const containerRect = container?.getBoundingClientRect();
     const pointerXInContainer = containerRect ? clientX - containerRect.left : 0;
     const pointerYInContainer = containerRect ? clientY - containerRect.top : 0;
 
-    for (const pageNumber of pageNumbers) {
-      const surface = surfaceRefs.current.get(pageNumber);
-      if (!surface) {
-        continue;
-      }
-
-      const rect = surface.getBoundingClientRect();
+    for (const pageElement of getPdfPageElements()) {
+      const rect = pageElement.getBoundingClientRect();
       if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
         return {
-          pageNumber,
+          pageNumber: Number(pageElement.dataset.pageNumber ?? props.currentPage),
           ratioX: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
           ratioY: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
           pointerXInContainer,
@@ -470,50 +418,47 @@ export function PdfViewer(props: PdfViewerProps) {
     };
   }
 
-  function clearPdfHighlights(): void {
-    highlightLayerRefs.current.forEach((highlightLayer) => {
-      highlightLayer.replaceChildren();
-    });
-  }
-
-  function paintHighlightUnderlines(pageNumber: number, matchedIndexes: number[]): void {
-    const surface = surfaceRefs.current.get(pageNumber);
-    const highlightLayer = highlightLayerRefs.current.get(pageNumber);
-    const textItems = textItemsByPageRef.current.get(pageNumber) ?? [];
-    const textDivs = textDivsByPageRef.current.get(pageNumber) ?? [];
-
-    if (!surface || !highlightLayer) {
+  function schedulePendingZoomAnchor(): void {
+    if (!pendingZoomAnchorRef.current) {
       return;
     }
 
-    const surfaceRect = surface.getBoundingClientRect();
-    const sourceRects: Array<HighlightSourceRect | null> = textItems.map((textItem) => {
-      const textDiv = textDivs[textItem.textDivIndex];
-      if (!textDiv) {
-        return null;
-      }
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        applyPendingZoomAnchor();
+      });
+    });
+  }
 
-      const rect = textDiv.getBoundingClientRect();
-      return {
-        left: rect.left - surfaceRect.left,
-        top: rect.top - surfaceRect.top,
-        width: rect.width,
-        height: rect.height
-      };
+  function applyPendingZoomAnchor(): void {
+    const anchor = pendingZoomAnchorRef.current;
+    const container = containerRef.current;
+    const pageElement = anchor
+      ? viewerElementRef.current?.querySelector<HTMLElement>(`.page[data-page-number="${anchor.pageNumber}"]`)
+      : null;
+
+    if (!anchor || !container || !pageElement) {
+      return;
+    }
+
+    const position = buildAnchoredScrollPosition({
+      pageOffsetTop: pageElement.offsetTop,
+      pageOffsetLeft: pageElement.offsetLeft,
+      pageWidth: pageElement.offsetWidth,
+      pageHeight: pageElement.offsetHeight,
+      ratioX: anchor.ratioX,
+      ratioY: anchor.ratioY,
+      pointerXInContainer: anchor.pointerXInContainer,
+      pointerYInContainer: anchor.pointerYInContainer
     });
 
-    buildUnderlineRects(sourceRects, matchedIndexes, {
-      width: surface.offsetWidth,
-      height: surface.offsetHeight
-    }).forEach((rect) => {
-      const underline = document.createElement('div');
-      underline.className = 'pdf-highlight-underline';
-      underline.style.left = `${rect.left}px`;
-      underline.style.top = `${rect.top}px`;
-      underline.style.width = `${rect.width}px`;
-      underline.style.height = `${rect.height}px`;
-      highlightLayer.appendChild(underline);
-    });
+    container.scrollLeft = position.scrollLeft;
+    container.scrollTop = position.scrollTop;
+    pendingZoomAnchorRef.current = null;
+  }
+
+  function getPdfPageElements(): HTMLElement[] {
+    return Array.from(viewerElementRef.current?.querySelectorAll<HTMLElement>('.page') ?? []);
   }
 
   if (!props.pdfData) {
@@ -531,84 +476,85 @@ export function PdfViewer(props: PdfViewerProps) {
         <span>{props.fileName}</span>
         {isRendering ? <span className="subtle">正在渲染...</span> : null}
       </div>
-      <div
-        className={`pdf-canvas-wrap${isPanning ? ' is-panning' : ''}`}
-        ref={scrollContainerRef}
-        onAuxClick={(event) => {
-          if (event.button === 1) {
-            event.preventDefault();
-          }
-        }}
-        onMouseDown={handleMouseDown}
-        onScroll={handleScroll}
-        onWheel={handleWheel}
-      >
-        <div className="pdf-pages">
-          {pageNumbers.map((pageNumber) => (
-            <div
-              className="pdf-page"
-              data-page-number={pageNumber}
-              key={pageNumber}
-              ref={(element) => {
-                if (element) {
-                  pageRefs.current.set(pageNumber, element);
-                } else {
-                  pageRefs.current.delete(pageNumber);
-                }
-              }}
-            >
-              <div className="pdf-page-marker">第 {pageNumber} 页</div>
-              <div
-                className="pdf-page-surface"
-                ref={(element) => {
-                  if (element) {
-                    surfaceRefs.current.set(pageNumber, element);
-                  } else {
-                    surfaceRefs.current.delete(pageNumber);
-                  }
-                }}
-              >
-                <canvas
-                  className="pdf-canvas-layer"
-                  ref={(element) => {
-                    if (element) {
-                      canvasRefs.current.set(pageNumber, element);
-                    } else {
-                      canvasRefs.current.delete(pageNumber);
-                    }
-                  }}
-                />
-                <div
-                  className="pdf-highlight-layer"
-                  ref={(element) => {
-                    if (element) {
-                      highlightLayerRefs.current.set(pageNumber, element);
-                    } else {
-                      highlightLayerRefs.current.delete(pageNumber);
-                    }
-                  }}
-                />
-                <div
-                  className="pdf-text-layer textLayer"
-                  ref={(element) => {
-                    if (element) {
-                      textLayerRefs.current.set(pageNumber, element);
-                    } else {
-                      textLayerRefs.current.delete(pageNumber);
-                    }
-                  }}
-                />
-              </div>
-            </div>
-          ))}
+      <div className="pdf-viewer-shell">
+        <div
+          className={`pdf-js-viewer-container${isPanning ? ' is-panning' : ''}`}
+          ref={containerRef}
+          onAuxClick={(event) => {
+            if (event.button === 1) {
+              event.preventDefault();
+            }
+          }}
+          onMouseDown={handleMouseDown}
+          onWheel={handleWheel}
+        >
+          <div className="pdfViewer" ref={viewerElementRef} />
         </div>
       </div>
     </div>
   );
 }
 
-function isEditableTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+function buildFindRequest(source: PdfFindControllerRuntime, queryText: string): object {
+  const query = buildOfficialFindQuery(queryText);
+  return {
+    source,
+    type: '',
+    query,
+    phraseSearch: true,
+    caseSensitive: false,
+    entireWord: false,
+    highlightAll: Boolean(query),
+    findPrevious: false,
+    matchDiacritics: false
+  };
+}
+
+function buildOfficialFindQuery(queryText: string): string | string[] {
+  const trimmed = queryText.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const sentences = trimmed
+    .split(/(?<=[.!?])\s+/u)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length >= 32);
+
+  // PDF.js 原生 find 支持 string[]，会按多个候选片段搜索并使用官方 textLayer 坐标高亮。
+  // 这里把长段落拆成句子，避免整段因换行断词或一个字符差异而完全不命中。
+  if (sentences.length >= 2) {
+    return sentences.slice(0, 4);
+  }
+
+  if (trimmed.length > 320) {
+    return trimmed.slice(0, 320);
+  }
+
+  return trimmed;
+}
+
+async function extractPdfOutline(
+  pdfDocument: PDFDocumentProxy,
+  isCancelled: () => boolean
+): Promise<ExtractedPdfBlock[]> {
+  const outlinePages: Array<{ page: number; items: PositionedPdfTextItem[] }> = [];
+
+  for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+    if (isCancelled()) {
+      return [];
+    }
+
+    const page = await pdfDocument.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 1 });
+    const textContent = await page.getTextContent();
+    outlinePages.push({
+      page: pageNumber,
+      items: toPositionedTextItems(textContent.items, viewport, pageNumber)
+    });
+  }
+
+  return buildPdfDocumentOutline(outlinePages);
 }
 
 function toPositionedTextItems(
@@ -634,46 +580,14 @@ function toPositionedTextItems(
         str: record.str,
         x,
         y,
-        width: Math.max(1, (record.width ?? 1) * viewport.scale),
-        height: Math.max(1, (record.height ?? 1) * viewport.scale),
+        width: Math.max(1, record.width ?? 1),
+        height: Math.max(1, record.height ?? 1),
         page: pageNumber
       };
     })
     .filter((item): item is PositionedPdfTextItem => Boolean(item));
 }
 
-function toHighlightTextItems(
-  items: unknown[],
-  viewport: pdfjsLib.PageViewport,
-  pageNumber: number
-): HighlightTextItem[] {
-  let textDivIndex = 0;
-
-  return items
-    .map((item) => {
-      const record = item as {
-        str?: string;
-        transform?: number[];
-        width?: number;
-        height?: number;
-      };
-
-      if (!record.str?.trim() || !record.transform || record.transform.length < 6) {
-        return null;
-      }
-
-      const currentTextDivIndex = textDivIndex;
-      textDivIndex += 1;
-      const [x, y] = viewport.convertToViewportPoint(record.transform[4], record.transform[5]);
-      return {
-        str: record.str,
-        x,
-        y,
-        width: Math.max(1, (record.width ?? 1) * viewport.scale),
-        height: Math.max(1, (record.height ?? 1) * viewport.scale),
-        page: pageNumber,
-        textDivIndex: currentTextDivIndex
-      };
-    })
-    .filter((item): item is HighlightTextItem => Boolean(item));
+function isEditableTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
 }

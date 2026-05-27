@@ -16,20 +16,21 @@ const port = Number(process.env.VISUAL_CHECK_PORT ?? 9333);
 
 const scenarios = [
   {
-    name: 'intro-low-confidence',
+    name: 'intro-body-match',
     section: 'I. INTRODUCTION',
     original: [
       'Foundation models work on the principle that generalist capabilities emerge from training on large and diverse datasets.',
       'For example, large language models can not only recall facts and semantic knowledge, but they can also compose that knowledge in new ways, solving problems that require unlikely connections, applying user-defined formats (e.g., JSON), and performing chain-of-thought reasoning.',
       'This kind of compositional generalization is arguably the cornerstone of generalist capabilities, but it has proven elusive in the domain of physical intelligence.'
     ].join(' '),
-    expectUnderlines: 0
+    expectUnderlines: 'positive'
   },
   {
     name: 'title-high-confidence',
     section: 'Title',
     original: '\u03c00.7: a Steerable Generalist Robotic Foundation Model with Emergent Capabilities',
-    expectUnderlines: 'positive'
+    expectUnderlines: 'positive',
+    expectStatus: 'full'
   }
 ];
 
@@ -124,6 +125,27 @@ async function waitForButtonBox(client, label) {
   throw new Error(`Button not found: ${label}`);
 }
 
+async function waitForButtonEnabled(client, label) {
+  let snapshot = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    snapshot = await evaluateJson(client, `() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((entry) => entry.textContent.includes(${JSON.stringify(label)}));
+      if (!button) {
+        return { found: false, enabled: false };
+      }
+      return { found: true, enabled: !button.disabled, text: button.textContent };
+    }`);
+
+    if (snapshot.found && snapshot.enabled) {
+      return snapshot;
+    }
+    await wait(500);
+  }
+
+  throw new Error(`Button not enabled: ${label}; last=${JSON.stringify(snapshot)}`);
+}
+
 async function clickButton(client, label) {
   await waitForButtonBox(client, label);
   await client.send('Runtime.evaluate', {
@@ -158,20 +180,45 @@ async function waitForReaderSettled(client) {
 
 async function getHighlightSnapshot(client) {
   return evaluateJson(client, `() => ({
-    underlines: document.querySelectorAll('.pdf-highlight-underline').length,
+    officialHighlights: document.querySelectorAll('.pdf-viewer-shell .textLayer .highlight').length,
+    legacyUnderlines: document.querySelectorAll('.pdf-highlight-underline').length,
     redTextMatches: document.querySelectorAll('.pdf-highlight-match').length,
     status: document.querySelector('.status-bar')?.textContent ?? '',
-    underlinesDetail: [...document.querySelectorAll('.pdf-highlight-underline')].map((node) => {
+    highlightDetail: [...document.querySelectorAll('.pdf-viewer-shell .textLayer .highlight')].map((node) => {
       const rect = node.getBoundingClientRect();
-      const page = node.closest('.pdf-page-surface')?.getBoundingClientRect();
+      const page = node.closest('.page')?.getBoundingClientRect();
+      const style = getComputedStyle(node);
       return {
         width: rect.width,
         height: rect.height,
+        borderBottomWidth: parseFloat(style.borderBottomWidth || '0'),
+        backgroundColor: style.backgroundColor,
+        textDecorationLine: style.textDecorationLine,
+        textDecorationThickness: style.textDecorationThickness,
         outOfPage: page ? rect.left < page.left || rect.right > page.right || rect.top < page.top || rect.bottom > page.bottom : true,
         outOfViewport: rect.right < 0 || rect.left > window.innerWidth || rect.bottom < 0 || rect.top > window.innerHeight
       };
     })
   })`);
+}
+
+async function waitForHighlightSnapshot(client, scenario) {
+  let snapshot = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    snapshot = await getHighlightSnapshot(client);
+
+    if (snapshot.legacyUnderlines > 0) {
+      return snapshot;
+    }
+
+    if (scenario.expectUnderlines !== 'positive' || snapshot.officialHighlights > 0) {
+      return snapshot;
+    }
+
+    await wait(250);
+  }
+
+  return snapshot;
 }
 
 async function runScenario(scenario) {
@@ -200,13 +247,18 @@ async function runScenario(scenario) {
     await clickButton(client, '\u6253\u5f00\u9605\u8bfb');
     await waitForReaderSettled(client);
 
-    const snapshot = await getHighlightSnapshot(client);
+    const snapshot = await waitForHighlightSnapshot(client, scenario);
     validateHighlightScenario(scenario, snapshot);
 
     const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
     await writeFile(outputPath, Buffer.from(screenshot.data, 'base64'));
     client.close();
-    return { name: scenario.name, screenshot: outputPath, ...snapshot };
+    return {
+      name: scenario.name,
+      screenshot: outputPath,
+      officialHighlights: snapshot.officialHighlights,
+      status: snapshot.status
+    };
   } finally {
     appProcess.kill();
     await wait(500);
@@ -236,6 +288,7 @@ async function runAiQueueScenario() {
     await clickButton(client, '\u6253\u5f00\u9605\u8bfb');
     await waitForReaderSettled(client);
     await clickButton(client, 'AI \u6a21\u5f0f');
+    await waitForButtonEnabled(client, '\u751f\u6210/\u5237\u65b0 JSON \u7f13\u5b58');
     await clickButton(client, '\u751f\u6210/\u5237\u65b0 JSON \u7f13\u5b58');
     await wait(1000);
 
@@ -248,7 +301,8 @@ async function runAiQueueScenario() {
         const list = document.querySelector('.ai-item-list');
         return list ? list.scrollHeight > list.clientHeight : false;
       })(),
-      underlines: document.querySelectorAll('.pdf-highlight-underline').length,
+      officialHighlights: document.querySelectorAll('.pdf-viewer-shell .textLayer .highlight').length,
+      legacyUnderlines: document.querySelectorAll('.pdf-highlight-underline').length,
       redTextMatches: document.querySelectorAll('.pdf-highlight-match').length,
       status: document.querySelector('.status-bar')?.textContent ?? ''
     })`);
@@ -294,27 +348,41 @@ function validateHighlightScenario(scenario, snapshot) {
     throw new Error(`${scenario.name}: expected no red text overlay, got ${snapshot.redTextMatches}`);
   }
 
-  if (snapshot.underlinesDetail.some((line) => line.outOfPage)) {
-    throw new Error(`${scenario.name}: underline escaped page bounds`);
+  if (snapshot.legacyUnderlines !== 0) {
+    throw new Error(`${scenario.name}: expected no legacy custom underlines, got ${snapshot.legacyUnderlines}`);
   }
 
-  if (snapshot.underlinesDetail.some((line) => line.height > 1.5)) {
-    throw new Error(`${scenario.name}: underline thicker than 1px`);
+  if (snapshot.highlightDetail.some((line) => line.outOfPage)) {
+    throw new Error(`${scenario.name}: official highlight escaped page bounds`);
   }
 
-  if (scenario.expectUnderlines === 0 && snapshot.underlines !== 0) {
-    throw new Error(`${scenario.name}: expected zero underlines, got ${snapshot.underlines}`);
+  if (snapshot.highlightDetail.some((line) => line.borderBottomWidth > 0.1)) {
+    throw new Error(`${scenario.name}: official highlight should use text underline, not border-bottom`);
   }
 
-  if (scenario.expectUnderlines === 'positive' && snapshot.underlines <= 0) {
-    throw new Error(`${scenario.name}: expected visible underlines`);
+  if (snapshot.highlightDetail.some((line) => !line.textDecorationLine.includes('underline'))) {
+    throw new Error(`${scenario.name}: official highlight should use text-decoration underline`);
+  }
+
+  if (scenario.expectUnderlines === 0 && snapshot.officialHighlights !== 0) {
+    throw new Error(`${scenario.name}: expected zero official highlights, got ${snapshot.officialHighlights}`);
+  }
+
+  if (scenario.expectUnderlines === 'positive' && snapshot.officialHighlights <= 0) {
+    throw new Error(
+      `${scenario.name}: expected visible PDF.js highlights; snapshot=${JSON.stringify(snapshot)}`
+    );
   }
 
   if (
     scenario.expectUnderlines === 'positive' &&
-    !snapshot.underlinesDetail.some((line) => !line.outOfViewport)
+    !snapshot.highlightDetail.some((line) => !line.outOfViewport)
   ) {
-    throw new Error(`${scenario.name}: expected at least one underline inside the viewport`);
+    throw new Error(`${scenario.name}: expected at least one PDF.js highlight inside the viewport`);
+  }
+
+  if (scenario.expectStatus === 'full' && !snapshot.status.includes('PDF.js \u5b98\u65b9\u641c\u7d22')) {
+    throw new Error(`${scenario.name}: expected a full-highlight status, got "${snapshot.status}"`);
   }
 }
 
@@ -393,9 +461,9 @@ function validateAiQueueScenario(snapshot) {
     throw new Error(`ai-queue: merged right-column text into first Introduction body row: ${introRow}`);
   }
 
-  if (snapshot.underlines !== 0 || snapshot.redTextMatches !== 0) {
+  if (snapshot.officialHighlights !== 0 || snapshot.legacyUnderlines !== 0 || snapshot.redTextMatches !== 0) {
     throw new Error(
-      `ai-queue: AI mode should not draw PDF highlights while reviewing extracted candidates, got ${snapshot.underlines} underlines and ${snapshot.redTextMatches} red text overlays`
+      `ai-queue: AI mode should not draw PDF highlights while reviewing extracted candidates, got ${snapshot.officialHighlights} official highlights, ${snapshot.legacyUnderlines} legacy underlines and ${snapshot.redTextMatches} red text overlays`
     );
   }
 

@@ -170,119 +170,53 @@ button:disabled {
   font-weight: 600;
 }
 
-.pdf-canvas-wrap {
+.pdf-viewer-shell {
+  position: relative;
   min-height: 0;
-  overflow: auto;
-  padding: 22px;
+  overflow: hidden;
+  background: #dfe5ec;
 }
 
-.pdf-canvas-wrap.is-panning {
+.pdf-js-viewer-container {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+
+.pdf-js-viewer-container.is-panning {
   cursor: grabbing;
   user-select: none;
 }
 
-.pdf-pages {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 22px;
-  min-width: min-content;
+.pdf-viewer-shell .pdfViewer {
+  padding: 22px 0;
 }
 
-.pdf-page {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  scroll-margin-top: 16px;
-}
-
-.pdf-page-marker {
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1;
-}
-
-.pdf-page-surface {
-  position: relative;
-  overflow: hidden;
-  background: #ffffff;
+.pdf-viewer-shell .pdfViewer .page {
+  margin: 0 auto 22px;
+  border: 0;
+  border-radius: 0;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
 }
 
-.pdf-canvas-layer,
-.pdf-highlight-layer,
-.pdf-text-layer {
-  position: absolute;
-  inset: 0;
-}
-
-.pdf-canvas-layer {
-  z-index: 1;
-}
-
-.pdf-highlight-layer {
-  z-index: 2;
-  pointer-events: none;
-}
-
-.pdf-text-layer {
-  z-index: 3;
-}
-
-.textLayer {
-  position: absolute;
-  text-align: initial;
-  overflow: clip;
-  opacity: 1;
-  line-height: 1;
-  text-size-adjust: none;
-  forced-color-adjust: none;
-  transform-origin: 0 0;
-}
-
-.textLayer :is(span, br) {
-  position: absolute;
-  color: transparent;
-  white-space: pre;
-  cursor: text;
-  transform-origin: 0% 0%;
-}
-
-.textLayer > :not(.markedContent),
-.textLayer .markedContent span:not(.markedContent) {
-  z-index: 1;
-}
-
-.textLayer span[role="img"] {
-  user-select: none;
-  cursor: default;
-}
-
-.textLayer ::selection {
+.pdf-viewer-shell .textLayer ::selection {
   background: rgba(37, 99, 235, 0.28);
 }
 
-.textLayer br::selection {
-  background: transparent;
-}
-
-.textLayer .endOfContent {
-  position: absolute;
-  inset: 100% 0 0;
-  z-index: 0;
-  display: block;
-  user-select: none;
-  cursor: default;
-}
-
-.pdf-highlight-match {
-  outline: none;
-}
-
-.pdf-highlight-underline {
-  position: absolute;
-  border-radius: 999px;
-  background: #dc2626;
+.pdf-viewer-shell .textLayer .highlight,
+.pdf-viewer-shell .textLayer .highlight.appended,
+.pdf-viewer-shell .textLayer .highlight.selected {
+  margin: 0 !important;
+  padding: 0 !important;
+  border-bottom: 0 !important;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  text-decoration-line: underline;
+  text-decoration-color: #dc2626;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+  text-decoration-skip-ink: none;
 }
 
 .translation-panel {

@@ -20,8 +20,17 @@ interface NormalizedToken {
   itemIndex: number;
 }
 
+interface SourceCharacter {
+  value: string;
+  itemIndex: number;
+  isItemStart: boolean;
+  itemSearchableLength: number;
+}
+
 const HYPHEN_PATTERN = /[-\u00ad\u2010-\u2015]/u;
+const DECIMAL_SEPARATOR_PATTERN = /[.．]/u;
 const SEARCHABLE_CHARACTER_PATTERN = /[\p{L}\p{N}]/u;
+const DIGIT_PATTERN = /\p{N}/u;
 const MIN_SENTENCE_LENGTH = 36;
 const MIN_PARTIAL_MATCH_SCORE = 0.75;
 const MIN_FUZZY_SCORE = 0.75;
@@ -208,40 +217,111 @@ function buildNormalizedCharacters(items: PdfTextItemLike[]): NormalizedCharacte
   const characters: NormalizedCharacter[] = [];
   let previousWasSpace = false;
   let skipWhitespaceAfterHyphen = false;
-
-  items.forEach((item, itemIndex) => {
-    for (const rawCharacter of normalizeSearchSource(item.str.normalize('NFKC'))) {
-      const lowerCharacter = rawCharacter.toLocaleLowerCase();
-
-      if (HYPHEN_PATTERN.test(lowerCharacter)) {
-        // 论文 PDF 经常把换行处单词拆成 zero- / shot；去掉连字符能让这类片段继续匹配。
-        skipWhitespaceAfterHyphen = true;
-        continue;
-      }
-
-      if (!SEARCHABLE_CHARACTER_PATTERN.test(lowerCharacter)) {
-        if (skipWhitespaceAfterHyphen) {
-          continue;
-        }
-
-        if (characters.length > 0 && !previousWasSpace) {
-          characters.push({ value: ' ', itemIndex });
-          previousWasSpace = true;
-        }
-        continue;
-      }
-
-      characters.push({ value: lowerCharacter, itemIndex });
-      previousWasSpace = false;
-      skipWhitespaceAfterHyphen = false;
-    }
+  const sourceCharacters = items.flatMap((item, itemIndex) => {
+    const sourceText = Array.from(normalizeSearchSource(item.str.normalize('NFKC')));
+    const itemSearchableLength = sourceText.filter((value) =>
+      SEARCHABLE_CHARACTER_PATTERN.test(value.toLocaleLowerCase())
+    ).length;
+    return sourceText.map((value, characterIndex) => ({
+      value,
+      itemIndex,
+      isItemStart: characterIndex === 0,
+      itemSearchableLength
+    }));
   });
+
+  for (let sourceIndex = 0; sourceIndex < sourceCharacters.length; sourceIndex += 1) {
+    const { value: rawCharacter, itemIndex } = sourceCharacters[sourceIndex];
+    const lowerCharacter = rawCharacter.toLocaleLowerCase();
+
+    if (!skipWhitespaceAfterHyphen && shouldInsertItemBoundarySpace(sourceCharacters, sourceIndex, characters)) {
+      characters.push({ value: ' ', itemIndex });
+      previousWasSpace = true;
+    }
+
+    if (HYPHEN_PATTERN.test(lowerCharacter)) {
+      // 论文 PDF 经常把换行处单词拆成 zero- / shot；去掉连字符能让这类片段继续匹配。
+      skipWhitespaceAfterHyphen = true;
+      continue;
+    }
+
+    if (isDecimalSeparatorBetweenDigits(sourceCharacters, sourceIndex, characters)) {
+      continue;
+    }
+
+    if (!SEARCHABLE_CHARACTER_PATTERN.test(lowerCharacter)) {
+      if (skipWhitespaceAfterHyphen) {
+        continue;
+      }
+
+      if (characters.length > 0 && !previousWasSpace) {
+        characters.push({ value: ' ', itemIndex });
+        previousWasSpace = true;
+      }
+      continue;
+    }
+
+    characters.push({ value: lowerCharacter, itemIndex });
+    previousWasSpace = false;
+    skipWhitespaceAfterHyphen = false;
+  }
 
   if (characters.at(-1)?.value === ' ') {
     characters.pop();
   }
 
   return characters;
+}
+
+function isDecimalSeparatorBetweenDigits(
+  sourceCharacters: SourceCharacter[],
+  sourceIndex: number,
+  normalizedCharacters: NormalizedCharacter[]
+): boolean {
+  const sourceCharacter = sourceCharacters[sourceIndex]?.value;
+  const previousCharacter = [...normalizedCharacters].reverse().find((character) => character.value !== ' ')?.value;
+  const nextSourceCharacter = sourceCharacters
+    .slice(sourceIndex + 1)
+    .find((entry) => entry.value.trim() && !HYPHEN_PATTERN.test(entry.value))?.value;
+
+  return Boolean(
+    sourceCharacter &&
+      DECIMAL_SEPARATOR_PATTERN.test(sourceCharacter) &&
+      previousCharacter &&
+      DIGIT_PATTERN.test(previousCharacter) &&
+      nextSourceCharacter &&
+      DIGIT_PATTERN.test(nextSourceCharacter)
+  );
+}
+
+function shouldInsertItemBoundarySpace(
+  sourceCharacters: SourceCharacter[],
+  sourceIndex: number,
+  normalizedCharacters: NormalizedCharacter[]
+): boolean {
+  const sourceCharacter = sourceCharacters[sourceIndex];
+  const previousSourceCharacter = sourceCharacters[sourceIndex - 1];
+  const previousNormalizedCharacter = normalizedCharacters.at(-1)?.value;
+
+  if (
+    !sourceCharacter?.isItemStart ||
+    !previousSourceCharacter ||
+    previousSourceCharacter.itemIndex === sourceCharacter.itemIndex ||
+    !previousNormalizedCharacter ||
+    previousNormalizedCharacter === ' '
+  ) {
+    return false;
+  }
+
+  const currentCharacter = sourceCharacter.value.toLocaleLowerCase();
+  return (
+    SEARCHABLE_CHARACTER_PATTERN.test(currentCharacter) &&
+    SEARCHABLE_CHARACTER_PATTERN.test(previousNormalizedCharacter) &&
+    !DIGIT_PATTERN.test(currentCharacter) &&
+    !DIGIT_PATTERN.test(previousNormalizedCharacter) &&
+    sourceCharacter.itemSearchableLength > 1 &&
+    previousSourceCharacter.itemSearchableLength > 1
+  );
 }
 
 function normalizeSearchSource(text: string): string {

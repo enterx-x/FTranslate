@@ -39,12 +39,30 @@ describe('PDF text highlight matching', () => {
 
   it('normalizes whitespace, casing, punctuation, and line-break hyphenation', () => {
     expect(normalizePdfSearchText('Zero-\nshot  Cross-Embodiment π0.7')).toBe(
-      'zeroshot crossembodiment π0 7'
+      'zeroshot crossembodiment π07'
     );
   });
 
   it('normalizes compact and spaced model version tokens equivalently', () => {
     expect(normalizePdfSearchText('π0.7')).toBe(normalizePdfSearchText('π 0 . 7'));
+  });
+
+  it('fully matches a title when PDF.js splits a model version into separate glyph items', () => {
+    const result = findBestTextItemMatch(
+      [
+        { str: 'π' },
+        { str: '0' },
+        { str: '.' },
+        { str: '7' },
+        { str: ': a Steerable Generalist Robotic Foundation' },
+        { str: 'Model with Emergent Capabilities' }
+      ],
+      'π0.7: a Steerable Generalist Robotic Foundation Model with Emergent Capabilities'
+    );
+
+    expect(result.strategy).toBe('full');
+    expect(result.score).toBe(1);
+    expect(result.itemIndexes).toEqual([0, 1, 3, 4, 5]);
   });
 
   it('matches query text across multiple PDF text items', () => {
