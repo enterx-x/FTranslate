@@ -166,7 +166,8 @@ async function getHighlightSnapshot(client) {
       return {
         width: rect.width,
         height: rect.height,
-        outOfPage: page ? rect.left < page.left || rect.right > page.right || rect.top < page.top || rect.bottom > page.bottom : true
+        outOfPage: page ? rect.left < page.left || rect.right > page.right || rect.top < page.top || rect.bottom > page.bottom : true,
+        outOfViewport: rect.right < 0 || rect.left > window.innerWidth || rect.bottom < 0 || rect.top > window.innerHeight
       };
     })
   })`);
@@ -292,6 +293,13 @@ function validateHighlightScenario(scenario, snapshot) {
 
   if (scenario.expectUnderlines === 'positive' && snapshot.underlines <= 0) {
     throw new Error(`${scenario.name}: expected visible underlines`);
+  }
+
+  if (
+    scenario.expectUnderlines === 'positive' &&
+    !snapshot.underlinesDetail.some((line) => !line.outOfViewport)
+  ) {
+    throw new Error(`${scenario.name}: expected at least one underline inside the viewport`);
   }
 }
 
