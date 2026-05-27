@@ -3,6 +3,7 @@ import { getAiQueueStats, getCurrentAiCacheItem, getTranslatableExtractedBlocks 
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import type { TranslationDocument } from '../lib/translation';
 import type { AiBalanceResult, AiSettingsView } from '../types/electron';
+import { MathText } from './MathText';
 
 export interface AiFormState {
   provider: AiProviderId;
@@ -56,11 +57,15 @@ export function AiModePanel(props: AiModePanelProps) {
             </div>
             <div className="ai-current-block">
               <span>Original</span>
-              <p>{currentItem.original || '无英文原文'}</p>
+              <p>
+                <MathText text={currentItem.original || '无英文原文'} />
+              </p>
             </div>
             <div className={currentItem.translation.trim() ? 'ai-current-block translated' : 'ai-current-block empty'}>
               <span>AI Translation</span>
-              <p>{currentItem.translation.trim() || '当前段还没有 AI 译文，点击“AI 翻译当前段”后会显示在这里。'}</p>
+              <p>
+                <MathText text={currentItem.translation.trim() || '当前段还没有 AI 译文，点击“AI 翻译当前段”后会显示在这里。'} />
+              </p>
             </div>
           </div>
         </section>
@@ -248,7 +253,9 @@ export function AiModePanel(props: AiModePanelProps) {
                     <span className="ai-item-index">{index + 1}</span>
                     <span className="ai-item-main">
                       <strong>{item.section || 'Untitled'}</strong>
-                      <span>{item.original || '无英文原文'}</span>
+                      <span>
+                        <MathText text={item.original || '无英文原文'} />
+                      </span>
                     </span>
                     <span className={pending ? 'status-pill pending' : 'status-pill cached'}>
                       {pending ? '待翻译' : item.translation ? '已缓存' : '跳过'}

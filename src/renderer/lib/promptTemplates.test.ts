@@ -16,6 +16,8 @@ describe('prompt template helpers', () => {
     expect(prompt).toContain('"section": "Abstract"');
     expect(prompt).toContain('Foundation models emerge');
     expect(prompt).toContain('不要使用 Markdown');
+    expect(prompt).toContain('LaTeX');
+    expect(prompt).toContain('$...$');
   });
 
   it('builds a full-document JSON prompt from multiple paragraphs', () => {

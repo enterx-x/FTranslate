@@ -3,6 +3,7 @@ import type { TranslationItem } from './translation';
 const JSON_SCHEMA_TEXT = [
   '请把下面的英文学术论文段落翻译成中文，并只输出 JSON 数组。',
   '数组每一项必须包含 section、original、translation 三个字段。',
+  '如果原文包含数学表达式，请在 translation 中保留 LaTeX 定界符：行内公式使用 $...$，独立公式使用 $$...$$。',
   '不要使用 Markdown 代码块，不要输出解释文字，不要省略 original。'
 ].join('\n');
 

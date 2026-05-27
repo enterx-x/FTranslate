@@ -44,6 +44,8 @@ describe('AI translation helpers', () => {
     expect(request.url).toBe('https://api.deepseek.com/v1/chat/completions');
     expect(request.body.model).toBe('deepseek-chat');
     expect(request.body.messages[0].role).toBe('system');
+    expect(request.body.messages[0].content).toContain('LaTeX');
+    expect(request.body.messages[0].content).toContain('$...$');
     expect(request.body.messages[1].content).toContain('Foundation models');
     expect(request.body.temperature).toBe(0.2);
     expect(request.body.thinking).toBeUndefined();

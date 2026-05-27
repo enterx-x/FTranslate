@@ -1,4 +1,5 @@
 import type { TranslationDocument } from '../lib/translation';
+import { MathText } from './MathText';
 
 interface TranslationPanelProps {
   document: TranslationDocument | null;
@@ -48,7 +49,9 @@ export function TranslationPanel(props: TranslationPanelProps) {
       <article className="reader-card original-card">
         <div className="card-header">Original</div>
         {isJson ? (
-          <p>{item.original || '当前 JSON 段落没有 original 字段内容。'}</p>
+          <p>
+            <MathText text={item.original || '当前 JSON 段落没有 original 字段内容。'} />
+          </p>
         ) : (
           <p className="subtle">Markdown 模式不包含英文原文字段，右侧仅按中文段落阅读。</p>
         )}
@@ -73,7 +76,9 @@ export function TranslationPanel(props: TranslationPanelProps) {
             </div>
           </div>
         ) : shouldShowTranslation ? (
-          <p>{item.translation || '当前段落暂无中文译文。'}</p>
+          <p>
+            <MathText text={item.translation || '当前段落暂无中文译文。'} />
+          </p>
         ) : (
           <p className="translation-placeholder">点击“翻译当前段”显示中文译文。</p>
         )}

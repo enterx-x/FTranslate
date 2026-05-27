@@ -341,14 +341,15 @@ async function runAiTranslatedDetailScenario() {
   const scenarioName = 'ai-translated-detail';
   const translationPath = path.join(outputDir, `${scenarioName}.json`);
   const outputPath = path.join(outputDir, `${scenarioName}.png`);
-  const translatedText = '基础模型来自大规模且多样化的数据集。';
+  const translatedText = '基础模型最小化 $L=\\sum_i x_i^2$，并使用 $$\\max_\\theta \\mathbb{E}[R]$$ 表示目标。';
+  const expectedTranslationSnippet = '基础模型最小化';
   await writeFile(
     translationPath,
     `${JSON.stringify(
       [
         {
           section: 'Abstract',
-          original: 'Foundation models emerge from large and diverse datasets.',
+          original: 'Foundation models minimize $L=\\sum_i x_i^2$ and optimize $$\\max_\\theta \\mathbb{E}[R]$$.',
           translation: translatedText,
           translatedAt: '2026-05-27T08:00:00.000Z',
           provider: 'kimi',
@@ -382,12 +383,27 @@ async function runAiTranslatedDetailScenario() {
 
     const snapshot = await evaluateJson(client, `() => ({
       detailText: document.querySelector('.ai-current-detail')?.textContent ?? '',
+      katexCount: document.querySelectorAll('.ai-current-detail .katex').length,
+      translatedBlockResize: (() => {
+        const block = document.querySelector('.ai-current-block.translated');
+        return block ? getComputedStyle(block).resize : '';
+      })(),
+      translatedBlockMinHeight: (() => {
+        const block = document.querySelector('.ai-current-block.translated');
+        return block ? getComputedStyle(block).minHeight : '';
+      })(),
       translationText: [...document.querySelectorAll('.ai-current-block.translated p')]
         .map((node) => node.textContent ?? '')
         .join('\\n')
     })`);
-    if (!snapshot.translationText.includes(translatedText)) {
+    if (!snapshot.translationText.includes(expectedTranslationSnippet)) {
       throw new Error(`ai-translated-detail: expected AI translation detail, got ${JSON.stringify(snapshot)}`);
+    }
+    if (snapshot.katexCount < 2) {
+      throw new Error(`ai-translated-detail: expected rendered KaTeX formulas, got ${JSON.stringify(snapshot)}`);
+    }
+    if (snapshot.translatedBlockResize !== 'vertical') {
+      throw new Error(`ai-translated-detail: expected resizable AI translation block, got ${JSON.stringify(snapshot)}`);
     }
     if (!snapshot.detailText.includes('kimi-k2.6')) {
       throw new Error(`ai-translated-detail: expected model metadata in detail, got ${snapshot.detailText}`);

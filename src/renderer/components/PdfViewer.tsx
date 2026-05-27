@@ -253,6 +253,7 @@ export function PdfViewer(props: PdfViewerProps) {
         loadedDocument = pdfDocument;
         linkService.setDocument(pdfDocument, null);
         viewer.setDocument(pdfDocument);
+        findController.setDocument(pdfDocument);
         setDocumentProxy(pdfDocument);
         propsRef.current.onDocumentLoad(pdfDocument.numPages);
         propsRef.current.onStatusChange(`PDF 已加载，共 ${pdfDocument.numPages} 页。`);
