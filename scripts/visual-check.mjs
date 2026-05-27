@@ -234,6 +234,10 @@ async function runAiQueueScenario() {
       rows: [...document.querySelectorAll('.ai-item-row')].map((row) => row.textContent ?? ''),
       summary: document.querySelector('.ai-summary')?.textContent ?? '',
       summaryStats: [...document.querySelectorAll('.ai-summary-stat')].map((node) => node.textContent ?? ''),
+      listHasOwnScrollbar: (() => {
+        const list = document.querySelector('.ai-item-list');
+        return list ? list.scrollHeight > list.clientHeight : false;
+      })(),
       underlines: document.querySelectorAll('.pdf-highlight-underline').length,
       redTextMatches: document.querySelectorAll('.pdf-highlight-match').length,
       status: document.querySelector('.status-bar')?.textContent ?? ''
@@ -311,6 +315,10 @@ function validateAiQueueScenario(snapshot) {
 
   if (snapshot.summaryStats.length !== 4) {
     throw new Error(`ai-queue: expected 4 structured summary stats, got ${snapshot.summaryStats.length}`);
+  }
+
+  if (snapshot.listHasOwnScrollbar) {
+    throw new Error('ai-queue: expected the right pane to own vertical scrolling, not the candidate list');
   }
 
   const joinedRows = snapshot.rows.join('\n');
