@@ -5,6 +5,7 @@ import {
   AI_PROVIDER_PRESETS,
   applyAiTranslationResult,
   buildChatCompletionRequest,
+  normalizeAiProviderSettings,
   shouldTranslateItem,
   type AiProviderId,
   type AiProviderSettings,
@@ -193,14 +194,12 @@ async function saveStoredAiSettings(request: AiSettingsRequest): Promise<StoredA
 }
 
 function normalizeStoredAiSettings(settings: StoredAiSettings): StoredAiSettings {
-  if (settings.provider === 'kimi' && settings.model === 'kimi-k2') {
-    return {
-      ...settings,
-      model: AI_PROVIDER_PRESETS.kimi.model
-    };
-  }
+  const normalized = normalizeAiProviderSettings(settings);
 
-  return settings;
+  return {
+    ...settings,
+    ...normalized
+  };
 }
 
 function toAiSettingsView(settings: StoredAiSettings): AiSettingsView {

@@ -54,6 +54,46 @@ describe('AI translation helpers', () => {
     expect(request.body.thinking).toEqual({ type: 'disabled' });
   });
 
+  it('normalizes Kimi API host to include the required v1 path', () => {
+    const request = buildChatCompletionRequest(
+      {
+        provider: 'kimi',
+        baseURL: 'https://api.moonshot.cn',
+        model: 'kimi-k2'
+      },
+      {
+        section: 'Abstract',
+        original: 'Foundation models work on large and diverse datasets.',
+        translation: '',
+        type: 'paragraph'
+      }
+    );
+
+    expect(request.url).toBe('https://api.moonshot.cn/v1/chat/completions');
+    expect(request.body.model).toBe('kimi-k2.5');
+    expect(request.body.temperature).toBeUndefined();
+    expect(request.body.thinking).toEqual({ type: 'disabled' });
+  });
+
+  it('normalizes Kimi console URLs to the API endpoint', () => {
+    const request = buildChatCompletionRequest(
+      {
+        provider: 'kimi',
+        baseURL: 'https://platform.moonshot.cn/console/api-keys',
+        model: 'kimi-k2.5'
+      },
+      {
+        section: 'Abstract',
+        original: 'Foundation models work on large and diverse datasets.',
+        translation: '',
+        type: 'paragraph'
+      }
+    );
+
+    expect(request.url).toBe('https://api.moonshot.cn/v1/chat/completions');
+    expect(request.body.model).toBe('kimi-k2.5');
+  });
+
   it('skips cached translations and non-translatable formula blocks', () => {
     expect(
       shouldTranslateItem({

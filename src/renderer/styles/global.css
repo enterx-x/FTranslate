@@ -387,6 +387,13 @@ button:disabled {
   color: #0f172a;
 }
 
+.field-hint {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
 .ai-translation-workbench {
   display: grid;
   gap: 10px;

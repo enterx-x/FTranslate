@@ -66,6 +66,9 @@ export function AiModePanel(props: AiModePanelProps) {
               disabled={props.isBusy}
               onChange={(event) => props.onAiFormChange({ baseURL: event.target.value })}
             />
+            {props.aiForm.provider === 'kimi' ? (
+              <span className="field-hint">Kimi 使用 https://api.moonshot.cn/v1，控制台网址会自动修正。</span>
+            ) : null}
           </label>
           <label>
             <span>Model</span>

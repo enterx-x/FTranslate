@@ -55,8 +55,9 @@ export function buildChatCompletionRequest(
   settings: AiProviderSettings,
   item: AiTranslationItem
 ): ChatCompletionRequest {
+  const normalizedSettings = normalizeAiProviderSettings(settings);
   const body: ChatCompletionRequest['body'] = {
-    model: settings.model,
+    model: normalizedSettings.model,
     messages: [
       {
         role: 'system',
@@ -73,20 +74,95 @@ export function buildChatCompletionRequest(
     ]
   };
 
-  if (settings.provider === 'kimi' && settings.model.toLowerCase().startsWith('kimi-k2.5')) {
+  if (
+    normalizedSettings.provider === 'kimi' &&
+    normalizedSettings.model.toLowerCase().startsWith('kimi-k2.5')
+  ) {
     body.thinking = { type: 'disabled' };
   } else {
     body.temperature = 0.2;
   }
 
   return {
-    url: buildChatCompletionsUrl(settings.baseURL),
+    url: buildChatCompletionsUrl(normalizedSettings.baseURL),
     body
   };
 }
 
 export function buildChatCompletionsUrl(baseURL: string): string {
   return `${baseURL.replace(/\/+$/u, '')}/chat/completions`;
+}
+
+export function normalizeAiProviderSettings(settings: AiProviderSettings): AiProviderSettings {
+  const preset = settings.provider === 'custom' ? null : AI_PROVIDER_PRESETS[settings.provider];
+  const normalizedModel = normalizeAiModel(settings.provider, settings.model, preset?.model ?? settings.model);
+  const normalizedBaseURL = normalizeAiBaseURL(
+    settings.provider,
+    settings.baseURL,
+    preset?.baseURL ?? settings.baseURL
+  );
+
+  return {
+    provider: settings.provider,
+    baseURL: normalizedBaseURL,
+    model: normalizedModel
+  };
+}
+
+function normalizeAiBaseURL(provider: AiProviderId, baseURL: string, fallback: string): string {
+  const cleaned = (baseURL.trim() || fallback.trim())
+    .replace(/\/chat\/completions\/?$/iu, '')
+    .replace(/\/+$/u, '');
+
+  if (provider === 'kimi') {
+    return normalizeKimiBaseURL(cleaned);
+  }
+
+  return cleaned || fallback.trim();
+}
+
+function normalizeAiModel(provider: AiProviderId, model: string, fallback: string): string {
+  const trimmed = model.trim();
+
+  if (provider === 'kimi' && (!trimmed || trimmed === 'kimi-k2')) {
+    return AI_PROVIDER_PRESETS.kimi.model;
+  }
+
+  return trimmed || fallback.trim();
+}
+
+function normalizeKimiBaseURL(baseURL: string): string {
+  const fallback = AI_PROVIDER_PRESETS.kimi.baseURL;
+
+  if (!baseURL) {
+    return fallback;
+  }
+
+  try {
+    const url = new URL(baseURL);
+    const host = url.hostname.toLowerCase();
+    const lowerPath = url.pathname.toLowerCase();
+    const isConsoleHost =
+      host === 'platform.moonshot.cn' ||
+      host === 'platform.moonshot.ai' ||
+      host === 'platform.kimi.com' ||
+      host === 'kimi.moonshot.cn' ||
+      host === 'moonshot.cn' ||
+      host === 'www.moonshot.cn';
+
+    // Kimi 的控制台和官网不是 OpenAI-compatible API 入口，统一回落到官方 API baseURL。
+    if (isConsoleHost || lowerPath.includes('/console')) {
+      return fallback;
+    }
+
+    if (host === 'api.moonshot.cn' || host === 'api.moonshot.ai') {
+      return `${url.protocol}//${host}/v1`;
+    }
+
+    return baseURL;
+  } catch {
+    return fallback;
+  }
 }
 
 export function shouldTranslateItem(item: AiTranslationItem, force = false): boolean {
