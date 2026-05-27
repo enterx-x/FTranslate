@@ -394,6 +394,29 @@ button:disabled {
   line-height: 1.45;
 }
 
+.ai-balance-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 6px;
+  background: #f8fbff;
+  color: #334155;
+  font-size: 13px;
+}
+
+.ai-balance-line strong {
+  color: #0f172a;
+}
+
+.ai-balance-line time {
+  color: #64748b;
+  font-size: 12px;
+}
+
 .ai-translation-workbench {
   display: grid;
   gap: 10px;

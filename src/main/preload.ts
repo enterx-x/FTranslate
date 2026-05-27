@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     force?: boolean;
   }) => ipcRenderer.invoke('ai:translate', request),
   testAiConnection: () => ipcRenderer.invoke('ai:test-connection'),
+  getAiBalance: () => ipcRenderer.invoke('ai:balance'),
   saveTextFile: (request: {
     filePath?: string;
     content: string;

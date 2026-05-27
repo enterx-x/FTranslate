@@ -4,8 +4,10 @@ import path from 'node:path';
 import {
   AI_PROVIDER_PRESETS,
   applyAiTranslationResult,
+  buildAiBalanceRequest,
   buildChatCompletionRequest,
   normalizeAiProviderSettings,
+  parseAiBalanceResponse,
   shouldTranslateItem,
   type AiProviderId,
   type AiProviderSettings,
@@ -47,6 +49,13 @@ interface AiSettingsView extends AiProviderSettings {
 interface AiConnectionTestResult {
   ok: boolean;
   message: string;
+}
+
+interface AiBalanceView {
+  supported: boolean;
+  provider: AiProviderId;
+  message: string;
+  checkedAt?: string;
 }
 
 interface StoredAiSettings extends AiProviderSettings {
@@ -288,6 +297,43 @@ async function testAiConnection(): Promise<AiConnectionTestResult> {
   };
 }
 
+async function getAiBalance(): Promise<AiBalanceView> {
+  const settings = await loadStoredAiSettings();
+  const balanceRequest = buildAiBalanceRequest(settings);
+
+  if (!balanceRequest.supported || !balanceRequest.url) {
+    return {
+      supported: false,
+      provider: settings.provider,
+      message: balanceRequest.reason ?? '当前 Provider 不支持余额查询。'
+    };
+  }
+
+  const apiKey = decryptApiKey(settings.encryptedApiKey);
+  if (!apiKey) {
+    throw new Error('请先在 AI 设置中保存 API Key。');
+  }
+
+  const response = await fetch(balanceRequest.url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    }
+  });
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`余额查询失败：HTTP ${response.status} ${formatAiErrorBody(responseText)}`);
+  }
+
+  return {
+    supported: true,
+    provider: settings.provider,
+    message: parseAiBalanceResponse(settings.provider, responseText),
+    checkedAt: new Date().toISOString()
+  };
+}
+
 async function executeChatCompletion(
   url: string,
   body: ReturnType<typeof buildChatCompletionRequest>['body'],
@@ -356,6 +402,10 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('ai:test-connection', async () => {
     return testAiConnection();
+  });
+
+  ipcMain.handle('ai:balance', async () => {
+    return getAiBalance();
   });
 
   ipcMain.handle('dialog:open-pdf', async () => {

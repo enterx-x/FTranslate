@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   AI_PROVIDER_PRESETS,
+  AI_PROVIDER_MODEL_OPTIONS,
+  buildAiBalanceRequest,
   applyAiTranslationResult,
   buildChatCompletionRequest,
+  parseAiBalanceResponse,
   shouldTranslateItem
 } from './aiTranslation';
 
@@ -12,6 +15,12 @@ describe('AI translation helpers', () => {
     expect(AI_PROVIDER_PRESETS.deepseek.baseURL).toBe('https://api.deepseek.com/v1');
     expect(AI_PROVIDER_PRESETS.kimi.baseURL).toBe('https://api.moonshot.cn/v1');
     expect(AI_PROVIDER_PRESETS.kimi.model).toBe('kimi-k2.5');
+  });
+
+  it('exposes provider model options for quick model switching', () => {
+    expect(AI_PROVIDER_MODEL_OPTIONS.openai.map((option) => option.value)).toContain('gpt-5.2-chat-latest');
+    expect(AI_PROVIDER_MODEL_OPTIONS.deepseek.map((option) => option.value)).toContain('deepseek-chat');
+    expect(AI_PROVIDER_MODEL_OPTIONS.kimi.map((option) => option.value)).toContain('kimi-k2.5');
   });
 
   it('builds a chat completions request for an academic paragraph', () => {
@@ -92,6 +101,82 @@ describe('AI translation helpers', () => {
 
     expect(request.url).toBe('https://api.moonshot.cn/v1/chat/completions');
     expect(request.body.model).toBe('kimi-k2.5');
+  });
+
+  it('builds provider-specific balance requests where supported', () => {
+    expect(buildAiBalanceRequest(AI_PROVIDER_PRESETS.kimi)).toMatchObject({
+      supported: true,
+      url: 'https://api.moonshot.cn/v1/users/me/balance'
+    });
+    expect(buildAiBalanceRequest(AI_PROVIDER_PRESETS.deepseek)).toMatchObject({
+      supported: true,
+      url: 'https://api.deepseek.com/user/balance'
+    });
+    const openAiBalanceRequest = buildAiBalanceRequest(AI_PROVIDER_PRESETS.openai, 1_730_419_200);
+    expect(openAiBalanceRequest).toMatchObject({
+      supported: true,
+      url: 'https://api.openai.com/v1/organization/costs?start_time=1729814400&limit=7'
+    });
+  });
+
+  it('formats Kimi, DeepSeek, and OpenAI balance responses', () => {
+    expect(
+      parseAiBalanceResponse(
+        'kimi',
+        JSON.stringify({
+          data: {
+            available_balance: '12.50',
+            cash_balance: '10.00',
+            voucher_balance: '2.50'
+          }
+        })
+      )
+    ).toContain('可用余额 12.50');
+    expect(
+      parseAiBalanceResponse(
+        'deepseek',
+        JSON.stringify({
+          is_available: true,
+          balance_infos: [
+            {
+              currency: 'CNY',
+              total_balance: '88.00',
+              granted_balance: '8.00',
+              topped_up_balance: '80.00'
+            }
+          ]
+        })
+      )
+    ).toContain('CNY 88.00');
+    expect(
+      parseAiBalanceResponse(
+        'openai',
+        JSON.stringify({
+          data: [
+            {
+              results: [
+                {
+                  amount: {
+                    value: 0.06,
+                    currency: 'usd'
+                  }
+                }
+              ]
+            },
+            {
+              results: [
+                {
+                  amount: {
+                    value: 1.25,
+                    currency: 'usd'
+                  }
+                }
+              ]
+            }
+          ]
+        })
+      )
+    ).toBe('近 7 天成本 USD 1.31');
   });
 
   it('skips cached translations and non-translatable formula blocks', () => {

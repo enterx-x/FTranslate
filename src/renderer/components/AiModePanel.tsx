@@ -1,8 +1,8 @@
-import { shouldTranslateItem, type AiProviderId } from '../../shared/aiTranslation';
+import { shouldTranslateItem, type AiModelOption, type AiProviderId } from '../../shared/aiTranslation';
 import { getAiQueueStats, getTranslatableExtractedBlocks } from '../lib/aiMode';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import type { TranslationDocument } from '../lib/translation';
-import type { AiSettingsView } from '../types/electron';
+import type { AiBalanceResult, AiSettingsView } from '../types/electron';
 
 export interface AiFormState {
   provider: AiProviderId;
@@ -16,12 +16,15 @@ interface AiModePanelProps {
   extractedBlocks: ExtractedPdfBlock[];
   currentIndex: number;
   aiSettings: AiSettingsView | null;
+  aiBalance: AiBalanceResult | null;
   aiForm: AiFormState;
+  modelOptions: AiModelOption[];
   isBusy: boolean;
   onProviderChange: (provider: AiProviderId) => void;
   onAiFormChange: (patch: Partial<AiFormState>) => void;
   onSaveSettings: () => void;
   onTestConnection: () => void;
+  onRefreshBalance: () => void;
   onBuildCache: () => void;
   onSaveCache: () => void;
   onTranslateCurrent: (force?: boolean) => void;
@@ -72,11 +75,28 @@ export function AiModePanel(props: AiModePanelProps) {
           </label>
           <label>
             <span>Model</span>
-            <input
-              value={props.aiForm.model}
-              disabled={props.isBusy}
-              onChange={(event) => props.onAiFormChange({ model: event.target.value })}
-            />
+            {props.aiForm.provider === 'custom' ? (
+              <input
+                value={props.aiForm.model}
+                disabled={props.isBusy}
+                onChange={(event) => props.onAiFormChange({ model: event.target.value })}
+              />
+            ) : (
+              <select
+                value={props.aiForm.model}
+                disabled={props.isBusy}
+                onChange={(event) => props.onAiFormChange({ model: event.target.value })}
+              >
+                {props.modelOptions.some((option) => option.value === props.aiForm.model) ? null : (
+                  <option value={props.aiForm.model}>{props.aiForm.model}</option>
+                )}
+                {props.modelOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            )}
           </label>
           <label>
             <span>API Key</span>
@@ -100,9 +120,31 @@ export function AiModePanel(props: AiModePanelProps) {
           >
             测试 AI 连接
           </button>
+          <button
+            type="button"
+            disabled={props.isBusy || !props.aiSettings?.apiKeyConfigured}
+            onClick={props.onRefreshBalance}
+          >
+            刷新余额
+          </button>
           <span className="subtle">
             {props.aiSettings?.apiKeyConfigured ? 'API Key 已加密保存到本机' : '尚未保存 API Key'}
           </span>
+        </div>
+        <div className="ai-balance-line">
+          <strong>当前 API 余额</strong>
+          <span>
+            {props.aiBalance
+              ? props.aiBalance.message
+              : props.aiSettings?.apiKeyConfigured
+                ? '尚未查询'
+                : '保存 API Key 后可查询'}
+          </span>
+          {props.aiBalance?.checkedAt ? (
+            <time dateTime={props.aiBalance.checkedAt}>
+              {new Date(props.aiBalance.checkedAt).toLocaleString()}
+            </time>
+          ) : null}
         </div>
       </details>
 

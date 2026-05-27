@@ -2,6 +2,13 @@ import { shouldTranslateItem } from '../../shared/aiTranslation';
 import type { ExtractedPdfBlock } from './pdfTextStructure';
 import type { TranslationDocument, TranslationItem } from './translation';
 
+interface AiCacheItemPatch {
+  translation: string;
+  translatedAt: string;
+  provider?: string;
+  model?: string;
+}
+
 export function buildAiCacheDocument(
   blocks: ExtractedPdfBlock[],
   pdfFileName?: string,
@@ -28,6 +35,42 @@ export function buildAiCacheDocument(
         model: cached?.model
       };
     })
+  };
+}
+
+export function cloneJsonDocumentForAi(document: TranslationDocument | null): TranslationDocument | null {
+  if (document?.kind !== 'json') {
+    return null;
+  }
+
+  return {
+    ...document,
+    items: document.items.map((item) => ({ ...item }))
+  };
+}
+
+export function updateAiCacheItem(
+  document: TranslationDocument | null,
+  index: number,
+  patch: AiCacheItemPatch
+): TranslationDocument | null {
+  if (document?.kind !== 'json') {
+    return document;
+  }
+
+  return {
+    ...document,
+    items: document.items.map((item, itemIndex) =>
+      itemIndex === index
+        ? {
+            ...item,
+            translation: patch.translation,
+            translatedAt: patch.translatedAt,
+            provider: patch.provider,
+            model: patch.model
+          }
+        : item
+    )
   };
 }
 

@@ -4,7 +4,9 @@ import {
   countPendingAiTranslations,
   getDefaultAiCacheFileName,
   getAiQueueStats,
-  getTranslatableExtractedBlocks
+  getTranslatableExtractedBlocks,
+  cloneJsonDocumentForAi,
+  updateAiCacheItem
 } from './aiMode';
 import type { ExtractedPdfBlock } from './pdfTextStructure';
 import type { TranslationDocument } from './translation';
@@ -99,5 +101,33 @@ describe('AI mode helpers', () => {
   it('builds a stable default cache file name', () => {
     expect(getDefaultAiCacheFileName('2604.15483v2.pdf')).toBe('2604.15483v2-ai-cache.json');
     expect(getDefaultAiCacheFileName()).toBe('ai-translation-cache.json');
+  });
+
+  it('keeps AI cache updates isolated from the manual translation document', () => {
+    const manualDocument: TranslationDocument = {
+      kind: 'json',
+      sourceName: 'manual.json',
+      sourcePath: 'D:/manual.json',
+      items: [
+        {
+          section: 'Abstract',
+          original: extractedBlock.original,
+          translation: 'manual translation',
+          sourceHash: 'hash-a'
+        }
+      ]
+    };
+
+    const aiCache = cloneJsonDocumentForAi(manualDocument);
+    const updatedAiCache = updateAiCacheItem(aiCache, 0, {
+      translation: 'AI translation',
+      translatedAt: '2026-05-27T00:00:00.000Z',
+      provider: 'kimi',
+      model: 'kimi-k2.5'
+    });
+
+    expect(updatedAiCache?.items[0].translation).toBe('AI translation');
+    expect(manualDocument.items[0].translation).toBe('manual translation');
+    expect(updatedAiCache?.items[0]).not.toBe(manualDocument.items[0]);
   });
 });

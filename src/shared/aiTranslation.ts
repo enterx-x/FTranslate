@@ -7,6 +7,11 @@ export interface AiProviderSettings {
   model: string;
 }
 
+export interface AiModelOption {
+  value: string;
+  label: string;
+}
+
 export interface AiTranslationItem {
   section: string;
   original: string;
@@ -33,6 +38,12 @@ export interface ChatCompletionRequest {
   };
 }
 
+export interface AiBalanceRequest {
+  supported: boolean;
+  url?: string;
+  reason?: string;
+}
+
 export const AI_PROVIDER_PRESETS: Record<Exclude<AiProviderId, 'custom'>, AiProviderSettings> = {
   openai: {
     provider: 'openai',
@@ -49,6 +60,27 @@ export const AI_PROVIDER_PRESETS: Record<Exclude<AiProviderId, 'custom'>, AiProv
     baseURL: 'https://api.moonshot.cn/v1',
     model: 'kimi-k2.5'
   }
+};
+
+export const AI_PROVIDER_MODEL_OPTIONS: Record<Exclude<AiProviderId, 'custom'>, AiModelOption[]> = {
+  openai: [
+    { value: 'gpt-5.2-chat-latest', label: 'gpt-5.2-chat-latest' },
+    { value: 'gpt-5.1-chat-latest', label: 'gpt-5.1-chat-latest' },
+    { value: 'gpt-5-chat-latest', label: 'gpt-5-chat-latest' },
+    { value: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+    { value: 'gpt-4o-mini', label: 'gpt-4o-mini' },
+    { value: 'gpt-4o', label: 'gpt-4o' }
+  ],
+  deepseek: [
+    { value: 'deepseek-chat', label: 'deepseek-chat' },
+    { value: 'deepseek-reasoner', label: 'deepseek-reasoner' }
+  ],
+  kimi: [
+    { value: 'kimi-k2.5', label: 'kimi-k2.5' },
+    { value: 'moonshot-v1-8k', label: 'moonshot-v1-8k' },
+    { value: 'moonshot-v1-32k', label: 'moonshot-v1-32k' },
+    { value: 'moonshot-v1-128k', label: 'moonshot-v1-128k' }
+  ]
 };
 
 export function buildChatCompletionRequest(
@@ -91,6 +123,82 @@ export function buildChatCompletionRequest(
 
 export function buildChatCompletionsUrl(baseURL: string): string {
   return `${baseURL.replace(/\/+$/u, '')}/chat/completions`;
+}
+
+export function buildAiBalanceRequest(
+  settings: AiProviderSettings,
+  nowSeconds = Math.floor(Date.now() / 1000)
+): AiBalanceRequest {
+  const normalizedSettings = normalizeAiProviderSettings(settings);
+
+  if (normalizedSettings.provider === 'kimi') {
+    return {
+      supported: true,
+      url: `${normalizedSettings.baseURL.replace(/\/+$/u, '')}/users/me/balance`
+    };
+  }
+
+  if (normalizedSettings.provider === 'deepseek') {
+    return {
+      supported: true,
+      url: `${getUrlOrigin(normalizedSettings.baseURL)}/user/balance`
+    };
+  }
+
+  if (normalizedSettings.provider === 'openai') {
+    const sevenDaysAgo = Math.max(0, nowSeconds - 7 * 24 * 60 * 60);
+    return {
+      supported: true,
+      url: `${getUrlOrigin(normalizedSettings.baseURL)}/v1/organization/costs?start_time=${sevenDaysAgo}&limit=7`
+    };
+  }
+
+  return {
+    supported: false,
+    reason: 'Custom Provider 没有统一余额接口，请在对应服务商控制台查看。'
+  };
+}
+
+export function parseAiBalanceResponse(provider: AiProviderId, responseText: string): string {
+  const parsed = parseJsonObject(responseText);
+
+  if (provider === 'deepseek') {
+    const balanceInfos = Array.isArray(parsed.balance_infos) ? parsed.balance_infos : [];
+    const formattedInfos = balanceInfos
+      .map((info) => (isRecord(info) ? formatDeepSeekBalanceInfo(info) : ''))
+      .filter(Boolean);
+
+    if (formattedInfos.length > 0) {
+      return formattedInfos.join('；');
+    }
+  }
+
+  if (provider === 'kimi') {
+    const data = isRecord(parsed.data) ? parsed.data : parsed;
+    const available =
+      readString(data.available_balance) ?? readString(data.balance) ?? readString(data.total_balance);
+    const cash = readString(data.cash_balance);
+    const voucher = readString(data.voucher_balance);
+    const parts = [
+      available ? `可用余额 ${available}` : '',
+      cash ? `现金 ${cash}` : '',
+      voucher ? `赠金 ${voucher}` : ''
+    ].filter(Boolean);
+
+    if (parts.length > 0) {
+      return parts.join('，');
+    }
+  }
+
+  if (provider === 'openai') {
+    const summary = formatOpenAiCosts(parsed);
+
+    if (summary) {
+      return summary;
+    }
+  }
+
+  return responseText.slice(0, 400);
 }
 
 export function normalizeAiProviderSettings(settings: AiProviderSettings): AiProviderSettings {
@@ -163,6 +271,89 @@ function normalizeKimiBaseURL(baseURL: string): string {
   } catch {
     return fallback;
   }
+}
+
+function getUrlOrigin(value: string): string {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return value.replace(/\/+$/u, '');
+  }
+}
+
+function parseJsonObject(responseText: string): Record<string, unknown> {
+  const parsed = JSON.parse(responseText) as unknown;
+
+  if (!isRecord(parsed)) {
+    return {};
+  }
+
+  return parsed;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readString(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim();
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  return null;
+}
+
+function formatDeepSeekBalanceInfo(info: Record<string, unknown>): string {
+  const currency = readString(info.currency) ?? '余额';
+  const total = readString(info.total_balance) ?? readString(info.balance) ?? readString(info.available_balance);
+  const granted = readString(info.granted_balance);
+  const toppedUp = readString(info.topped_up_balance);
+  const details = [
+    total ? `${currency} ${total}` : '',
+    granted ? `赠金 ${granted}` : '',
+    toppedUp ? `充值 ${toppedUp}` : ''
+  ].filter(Boolean);
+
+  return details.join('，');
+}
+
+function formatOpenAiCosts(parsed: Record<string, unknown>): string | null {
+  const buckets = Array.isArray(parsed.data) ? parsed.data : [];
+  const totalsByCurrency = new Map<string, number>();
+
+  buckets.forEach((bucket) => {
+    if (!isRecord(bucket) || !Array.isArray(bucket.results)) {
+      return;
+    }
+
+    bucket.results.forEach((result) => {
+      if (!isRecord(result) || !isRecord(result.amount)) {
+        return;
+      }
+
+      const amount = typeof result.amount.value === 'number' ? result.amount.value : Number(result.amount.value);
+      if (!Number.isFinite(amount)) {
+        return;
+      }
+
+      const currency = (readString(result.amount.currency) ?? 'usd').toUpperCase();
+      totalsByCurrency.set(currency, (totalsByCurrency.get(currency) ?? 0) + amount);
+    });
+  });
+
+  if (totalsByCurrency.size === 0) {
+    return null;
+  }
+
+  const totals = [...totalsByCurrency.entries()]
+    .map(([currency, amount]) => `${currency} ${amount.toFixed(2)}`)
+    .join('，');
+
+  return `近 7 天成本 ${totals}`;
 }
 
 export function shouldTranslateItem(item: AiTranslationItem, force = false): boolean {

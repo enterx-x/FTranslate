@@ -43,6 +43,13 @@ export interface AiConnectionTestResult {
   message: string;
 }
 
+export interface AiBalanceResult {
+  supported: boolean;
+  provider: AiProviderId;
+  message: string;
+  checkedAt?: string;
+}
+
 export interface ElectronApi {
   openPdf: () => Promise<PdfFilePayload | null>;
   openTranslation: () => Promise<TextFilePayload | null>;
@@ -63,6 +70,7 @@ export interface ElectronApi {
     force?: boolean;
   }) => Promise<AiTranslateResult>;
   testAiConnection: () => Promise<AiConnectionTestResult>;
+  getAiBalance: () => Promise<AiBalanceResult>;
   saveTextFile: (request: {
     filePath?: string;
     content: string;
