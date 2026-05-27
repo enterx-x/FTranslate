@@ -417,6 +417,60 @@ button:disabled {
   font-size: 12px;
 }
 
+.ai-current-detail {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.ai-current-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.ai-current-meta strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.ai-current-block {
+  display: grid;
+  gap: 5px;
+  padding: 8px 9px;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.ai-current-block span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-current-block p {
+  margin: 0;
+  color: #0f172a;
+  font-size: 14px;
+  line-height: 1.7;
+  max-height: 92px;
+  overflow: auto;
+}
+
+.ai-current-block.translated {
+  background: #f0fdf4;
+}
+
+.ai-current-block.empty p {
+  color: #64748b;
+}
+
 .ai-translation-workbench {
   display: grid;
   gap: 10px;

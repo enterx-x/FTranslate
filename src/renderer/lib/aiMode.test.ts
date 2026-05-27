@@ -5,6 +5,7 @@ import {
   getDefaultAiCacheFileName,
   getAiQueueStats,
   getTranslatableExtractedBlocks,
+  getCurrentAiCacheItem,
   cloneJsonDocumentForAi,
   updateAiCacheItem
 } from './aiMode';
@@ -129,5 +130,26 @@ describe('AI mode helpers', () => {
     expect(updatedAiCache?.items[0].translation).toBe('AI translation');
     expect(manualDocument.items[0].translation).toBe('manual translation');
     expect(updatedAiCache?.items[0]).not.toBe(manualDocument.items[0]);
+  });
+
+  it('returns the current AI cache item with its translated text for detail display', () => {
+    const document: TranslationDocument = {
+      kind: 'json',
+      sourceName: 'paper-ai-cache.json',
+      items: [
+        {
+          section: 'Abstract',
+          original: extractedBlock.original,
+          translation: '基础模型来自大规模数据集。',
+          sourceHash: 'hash-a',
+          provider: 'kimi',
+          model: 'kimi-k2.6'
+        }
+      ]
+    };
+
+    expect(getCurrentAiCacheItem(document, 0)?.translation).toBe('基础模型来自大规模数据集。');
+    expect(getCurrentAiCacheItem(document, 1)).toBeNull();
+    expect(getCurrentAiCacheItem(null, 0)).toBeNull();
   });
 });

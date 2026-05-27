@@ -74,6 +74,17 @@ export function updateAiCacheItem(
   };
 }
 
+export function getCurrentAiCacheItem(
+  document: TranslationDocument | null,
+  index: number
+): TranslationItem | null {
+  if (document?.kind !== 'json') {
+    return null;
+  }
+
+  return document.items[index] ?? null;
+}
+
 export function getTranslatableExtractedBlocks(blocks: ExtractedPdfBlock[]): ExtractedPdfBlock[] {
   return blocks.filter((block) => block.type === 'paragraph' && looksTranslatableParagraph(block.original));
 }

@@ -337,6 +337,72 @@ async function runAiQueueScenario() {
   }
 }
 
+async function runAiTranslatedDetailScenario() {
+  const scenarioName = 'ai-translated-detail';
+  const translationPath = path.join(outputDir, `${scenarioName}.json`);
+  const outputPath = path.join(outputDir, `${scenarioName}.png`);
+  const translatedText = '基础模型来自大规模且多样化的数据集。';
+  await writeFile(
+    translationPath,
+    `${JSON.stringify(
+      [
+        {
+          section: 'Abstract',
+          original: 'Foundation models emerge from large and diverse datasets.',
+          translation: translatedText,
+          translatedAt: '2026-05-27T08:00:00.000Z',
+          provider: 'kimi',
+          model: 'kimi-k2.6'
+        }
+      ],
+      null,
+      2
+    )}\n`,
+    'utf8'
+  );
+
+  const appProcess = spawn(exe, [`--remote-debugging-port=${port}`], {
+    env: {
+      ...process.env,
+      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir
+    },
+    windowsHide: true,
+    stdio: 'ignore'
+  });
+
+  try {
+    const client = await createCdpClient(await waitForWebSocketUrl());
+    await client.send('Runtime.enable');
+    await client.send('Page.enable');
+    await loadPaperRecord(client, translationPath, `${scenarioName}.json`);
+    await clickButton(client, '\u6253\u5f00\u9605\u8bfb');
+    await waitForReaderSettled(client);
+    await clickButton(client, 'AI \u6a21\u5f0f');
+    await wait(600);
+
+    const snapshot = await evaluateJson(client, `() => ({
+      detailText: document.querySelector('.ai-current-detail')?.textContent ?? '',
+      translationText: [...document.querySelectorAll('.ai-current-block.translated p')]
+        .map((node) => node.textContent ?? '')
+        .join('\\n')
+    })`);
+    if (!snapshot.translationText.includes(translatedText)) {
+      throw new Error(`ai-translated-detail: expected AI translation detail, got ${JSON.stringify(snapshot)}`);
+    }
+    if (!snapshot.detailText.includes('kimi-k2.6')) {
+      throw new Error(`ai-translated-detail: expected model metadata in detail, got ${snapshot.detailText}`);
+    }
+
+    const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+    await writeFile(outputPath, Buffer.from(screenshot.data, 'base64'));
+    client.close();
+    return { name: scenarioName, screenshot: outputPath, detailText: snapshot.detailText };
+  } finally {
+    appProcess.kill();
+    await wait(500);
+  }
+}
+
 async function loadPaperRecord(client, translationPath, translationName) {
   const paper = {
     id: `visual-check-${Date.now()}`,
@@ -526,6 +592,7 @@ async function main() {
   for (const scenario of scenarios) {
     results.push(await runScenario(scenario));
   }
+  results.push(await runAiTranslatedDetailScenario());
   results.push(await runAiQueueScenario());
   console.log(JSON.stringify({ pdfPath, results }, null, 2));
 }

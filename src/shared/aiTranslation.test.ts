@@ -20,7 +20,10 @@ describe('AI translation helpers', () => {
   it('exposes provider model options for quick model switching', () => {
     expect(AI_PROVIDER_MODEL_OPTIONS.openai.map((option) => option.value)).toContain('gpt-5.2-chat-latest');
     expect(AI_PROVIDER_MODEL_OPTIONS.deepseek.map((option) => option.value)).toContain('deepseek-chat');
+    expect(AI_PROVIDER_MODEL_OPTIONS.deepseek.map((option) => option.value)).toContain('deepseek-v4-pro');
+    expect(AI_PROVIDER_MODEL_OPTIONS.deepseek.map((option) => option.value)).toContain('deepseek-v4-flash');
     expect(AI_PROVIDER_MODEL_OPTIONS.kimi.map((option) => option.value)).toContain('kimi-k2.5');
+    expect(AI_PROVIDER_MODEL_OPTIONS.kimi.map((option) => option.value)).toContain('kimi-k2.6');
   });
 
   it('builds a chat completions request for an academic paragraph', () => {
@@ -59,6 +62,26 @@ describe('AI translation helpers', () => {
 
     expect(request.url).toBe('https://api.moonshot.cn/v1/chat/completions');
     expect(request.body.model).toBe('kimi-k2.5');
+    expect(request.body.temperature).toBeUndefined();
+    expect(request.body.thinking).toEqual({ type: 'disabled' });
+  });
+
+  it('builds a Kimi K2.6 request with thinking disabled for translation', () => {
+    const request = buildChatCompletionRequest(
+      {
+        provider: 'kimi',
+        baseURL: 'https://api.moonshot.cn/v1',
+        model: 'kimi-k2.6'
+      },
+      {
+        section: 'Abstract',
+        original: 'Foundation models work on large and diverse datasets.',
+        translation: '',
+        type: 'paragraph'
+      }
+    );
+
+    expect(request.body.model).toBe('kimi-k2.6');
     expect(request.body.temperature).toBeUndefined();
     expect(request.body.thinking).toEqual({ type: 'disabled' });
   });

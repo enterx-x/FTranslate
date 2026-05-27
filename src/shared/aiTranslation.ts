@@ -73,10 +73,20 @@ export const AI_PROVIDER_MODEL_OPTIONS: Record<Exclude<AiProviderId, 'custom'>, 
   ],
   deepseek: [
     { value: 'deepseek-chat', label: 'deepseek-chat' },
-    { value: 'deepseek-reasoner', label: 'deepseek-reasoner' }
+    { value: 'deepseek-reasoner', label: 'deepseek-reasoner' },
+    { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro' },
+    { value: 'deepseek-v4', label: 'deepseek-v4' },
+    { value: 'deepseek-v4-flash', label: 'deepseek-v4-flash' },
+    { value: 'deepseek-v3.2-exp', label: 'deepseek-v3.2-exp' }
   ],
   kimi: [
+    { value: 'kimi-k2.6', label: 'kimi-k2.6' },
     { value: 'kimi-k2.5', label: 'kimi-k2.5' },
+    { value: 'kimi-k2-turbo-preview', label: 'kimi-k2-turbo-preview' },
+    { value: 'kimi-k2-0905-preview', label: 'kimi-k2-0905-preview' },
+    { value: 'kimi-k2-0711-preview', label: 'kimi-k2-0711-preview' },
+    { value: 'kimi-latest', label: 'kimi-latest' },
+    { value: 'kimi-thinking-preview', label: 'kimi-thinking-preview' },
     { value: 'moonshot-v1-8k', label: 'moonshot-v1-8k' },
     { value: 'moonshot-v1-32k', label: 'moonshot-v1-32k' },
     { value: 'moonshot-v1-128k', label: 'moonshot-v1-128k' }
@@ -108,7 +118,7 @@ export function buildChatCompletionRequest(
 
   if (
     normalizedSettings.provider === 'kimi' &&
-    normalizedSettings.model.toLowerCase().startsWith('kimi-k2.5')
+    normalizedSettings.model.toLowerCase().startsWith('kimi-k2')
   ) {
     body.thinking = { type: 'disabled' };
   } else {

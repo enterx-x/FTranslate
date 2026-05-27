@@ -1,5 +1,5 @@
 import { shouldTranslateItem, type AiModelOption, type AiProviderId } from '../../shared/aiTranslation';
-import { getAiQueueStats, getTranslatableExtractedBlocks } from '../lib/aiMode';
+import { getAiQueueStats, getCurrentAiCacheItem, getTranslatableExtractedBlocks } from '../lib/aiMode';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import type { TranslationDocument } from '../lib/translation';
 import type { AiBalanceResult, AiSettingsView } from '../types/electron';
@@ -35,10 +35,37 @@ interface AiModePanelProps {
 export function AiModePanel(props: AiModePanelProps) {
   const jsonDocument = props.document?.kind === 'json' ? props.document : null;
   const queueStats = getAiQueueStats(jsonDocument?.items ?? []);
+  const currentItem = getCurrentAiCacheItem(jsonDocument, props.currentIndex);
   const extractedTranslatableCount = getTranslatableExtractedBlocks(props.extractedBlocks).length;
 
   return (
     <div className="ai-mode-panel">
+      {currentItem ? (
+        <section className="reader-card compact-card ai-current-detail-card">
+          <div className="card-header">当前 AI 段译文</div>
+          <div className="ai-current-detail">
+            <div className="ai-current-meta">
+              <strong>{currentItem.section || 'Untitled'}</strong>
+              {currentItem.page ? <span>Page {currentItem.page}</span> : null}
+              {currentItem.model ? <span>{currentItem.provider ?? 'AI'} / {currentItem.model}</span> : null}
+              {currentItem.translatedAt ? (
+                <time dateTime={currentItem.translatedAt}>
+                  {new Date(currentItem.translatedAt).toLocaleString()}
+                </time>
+              ) : null}
+            </div>
+            <div className="ai-current-block">
+              <span>Original</span>
+              <p>{currentItem.original || '无英文原文'}</p>
+            </div>
+            <div className={currentItem.translation.trim() ? 'ai-current-block translated' : 'ai-current-block empty'}>
+              <span>AI Translation</span>
+              <p>{currentItem.translation.trim() || '当前段还没有 AI 译文，点击“AI 翻译当前段”后会显示在这里。'}</p>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       <details className="reader-card compact-card ai-settings-card" open={!props.aiSettings?.apiKeyConfigured}>
         <summary>
           <span className="card-header">AI 设置</span>
