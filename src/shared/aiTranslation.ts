@@ -41,6 +41,11 @@ export interface ChatCompletionRequest {
   };
 }
 
+export interface GenericChatCompletionInput {
+  systemPrompt: string;
+  userPrompt: string;
+}
+
 export interface AiBalanceRequest {
   supported: boolean;
   url?: string;
@@ -134,6 +139,40 @@ export function buildChatCompletionRequest(
       {
         role: 'user',
         content: [`Section: ${item.section || 'Untitled'}`, '', item.original].join('\n')
+      }
+    ]
+  };
+
+  if (
+    normalizedSettings.provider === 'kimi' &&
+    normalizedSettings.model.toLowerCase().startsWith('kimi-k2')
+  ) {
+    body.thinking = { type: 'disabled' };
+  } else {
+    body.temperature = 0.2;
+  }
+
+  return {
+    url: buildChatCompletionsUrl(normalizedSettings.baseURL),
+    body
+  };
+}
+
+export function buildGenericChatCompletionRequest(
+  settings: AiProviderSettings,
+  input: GenericChatCompletionInput
+): ChatCompletionRequest {
+  const normalizedSettings = normalizeAiProviderSettings(settings);
+  const body: ChatCompletionRequest['body'] = {
+    model: normalizedSettings.model,
+    messages: [
+      {
+        role: 'system',
+        content: input.systemPrompt
+      },
+      {
+        role: 'user',
+        content: input.userPrompt
       }
     ]
   };

@@ -7,7 +7,32 @@ export default defineConfig({
   root: '.',
   build: {
     outDir: 'dist-renderer',
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) {
+            return;
+          }
+
+          if (id.includes('pdfjs-dist')) {
+            return 'pdfjs';
+          }
+
+          if (id.includes('katex')) {
+            return 'katex';
+          }
+
+          if (id.includes('ag-grid')) {
+            return 'ag-grid';
+          }
+
+          if (id.includes('react')) {
+            return 'react-vendor';
+          }
+        }
+      }
+    }
   },
   server: {
     port: 5173,

@@ -5,6 +5,7 @@ import {
   buildAiBalanceRequest,
   buildAiModelsRequest,
   applyAiTranslationResult,
+  buildGenericChatCompletionRequest,
   buildChatCompletionRequest,
   mergeAiModelOptions,
   parseAiModelsResponse,
@@ -55,6 +56,21 @@ describe('AI translation helpers', () => {
     expect(request.body.messages[1].content).toContain('Foundation models');
     expect(request.body.temperature).toBe(0.2);
     expect(request.body.thinking).toBeUndefined();
+  });
+
+  it('builds a generic chat completions request for paper spreadsheet cells', () => {
+    const request = buildGenericChatCompletionRequest(AI_PROVIDER_PRESETS.kimi, {
+      systemPrompt: '你是科研表格助手。',
+      userPrompt: '填写创新点。'
+    });
+
+    expect(request.url).toBe('https://api.moonshot.cn/v1/chat/completions');
+    expect(request.body.model).toBe('kimi-k2.5');
+    expect(request.body.messages).toEqual([
+      { role: 'system', content: '你是科研表格助手。' },
+      { role: 'user', content: '填写创新点。' }
+    ]);
+    expect(request.body.thinking).toEqual({ type: 'disabled' });
   });
 
   it('builds a Kimi K2.5 request without unsupported temperature override', () => {

@@ -87,6 +87,10 @@ export interface ElectronApi {
     sourceHash?: string;
     force?: boolean;
   }) => Promise<AiTranslateResult>;
+  completeWithAi: (request: {
+    systemPrompt: string;
+    userPrompt: string;
+  }) => Promise<string>;
   testAiConnection: () => Promise<AiConnectionTestResult>;
   getAiBalance: () => Promise<AiBalanceResult>;
   getAiModels: () => Promise<AiModelsResult>;

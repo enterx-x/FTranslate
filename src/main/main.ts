@@ -6,6 +6,7 @@ import {
   applyAiTranslationResult,
   buildAiBalanceRequest,
   buildChatCompletionRequest,
+  buildGenericChatCompletionRequest,
   buildAiModelsRequest,
   mergeAiModelOptions,
   normalizeAiProviderSettings,
@@ -70,6 +71,11 @@ interface AiModelsView {
   options: AiModelOption[];
   message: string;
   checkedAt?: string;
+}
+
+interface AiCompleteRequest {
+  systemPrompt: string;
+  userPrompt: string;
 }
 
 interface StoredAiSettings extends AiProviderSettings {
@@ -290,6 +296,18 @@ async function translateWithAi(request: AiTranslationItem & { force?: boolean })
   };
 }
 
+async function completeWithAi(request: AiCompleteRequest): Promise<string> {
+  const settings = await loadStoredAiSettings();
+  const apiKey = decryptApiKey(settings.encryptedApiKey);
+
+  if (!apiKey) {
+    throw new Error('请先在 AI 设置中保存 API Key。');
+  }
+
+  const chatRequest = buildGenericChatCompletionRequest(settings, request);
+  return executeChatCompletion(chatRequest.url, chatRequest.body, apiKey);
+}
+
 async function testAiConnection(): Promise<AiConnectionTestResult> {
   const settings = await loadStoredAiSettings();
   const apiKey = decryptApiKey(settings.encryptedApiKey);
@@ -454,6 +472,10 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('ai:translate', async (_event, request: AiTranslationItem & { force?: boolean }) => {
     return translateWithAi(request);
+  });
+
+  ipcMain.handle('ai:complete', async (_event, request: AiCompleteRequest) => {
+    return completeWithAi(request);
   });
 
   ipcMain.handle('ai:test-connection', async () => {

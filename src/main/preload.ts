@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sourceHash?: string;
     force?: boolean;
   }) => ipcRenderer.invoke('ai:translate', request),
+  completeWithAi: (request: { systemPrompt: string; userPrompt: string }) =>
+    ipcRenderer.invoke('ai:complete', request),
   testAiConnection: () => ipcRenderer.invoke('ai:test-connection'),
   getAiBalance: () => ipcRenderer.invoke('ai:balance'),
   getAiModels: () => ipcRenderer.invoke('ai:models'),

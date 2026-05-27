@@ -1041,6 +1041,26 @@ button:disabled {
   box-shadow: var(--shadow-md);
 }
 
+.home-header-mark {
+  width: 58px;
+  height: 58px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 18px;
+  object-fit: cover;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 10px 28px rgba(0, 0, 0, 0.34);
+}
+
+.home-header-actions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .home-header h1 {
   margin: 0 0 6px;
   color: #ffffff;
@@ -1085,6 +1105,100 @@ button:disabled {
   border-radius: 8px;
   background: var(--surface);
   box-shadow: var(--shadow-md);
+}
+
+.paper-grid-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: calc(100vh - 178px);
+  min-height: 520px;
+  overflow: hidden;
+}
+
+.paper-grid-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+  background: #fbfbf9;
+  color: #4f4c47;
+  font-size: 13px;
+}
+
+.paper-grid-toolbar strong {
+  color: #111111;
+}
+
+.paper-grid {
+  min-height: 0;
+  height: 100%;
+  --ag-font-family: Inter, "Segoe UI", "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+  --ag-font-size: 13px;
+  --ag-background-color: #ffffff;
+  --ag-foreground-color: #111111;
+  --ag-header-background-color: #111111;
+  --ag-header-foreground-color: #ffffff;
+  --ag-border-color: #d8d5ce;
+  --ag-row-border-color: #e4e1da;
+  --ag-odd-row-background-color: #fbfbf9;
+  --ag-selected-row-background-color: #f0f0ec;
+  --ag-range-selection-border-color: #111111;
+  --ag-wrapper-border-radius: 0;
+}
+
+.paper-grid .ag-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.paper-grid .ag-cell {
+  line-height: 1.55;
+}
+
+.paper-grid-cell-text,
+.paper-grid-title-cell {
+  display: grid;
+  align-content: center;
+  min-height: 100%;
+  padding: 6px 0;
+  white-space: normal;
+}
+
+.paper-grid-cell-text .math-text {
+  overflow-wrap: anywhere;
+}
+
+.paper-grid-title-cell {
+  gap: 3px;
+}
+
+.paper-grid-title-cell strong {
+  color: #111111;
+  font-size: 13px;
+}
+
+.paper-grid-title-cell small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paper-grid-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 100%;
+}
+
+.paper-grid-actions button {
+  height: 27px;
+  padding: 0 9px;
+  font-size: 12px;
 }
 
 .paper-table {

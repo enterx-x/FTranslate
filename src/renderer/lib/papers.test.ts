@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { buildPaperRecord, parsePaperLibrary, updatePaperRecord, upsertPaperRecord } from './papers';
+import {
+  PAPER_RESEARCH_COLUMNS,
+  buildPaperRecord,
+  getPaperSheetCell,
+  parsePaperLibrary,
+  updatePaperRecord,
+  updatePaperSheetCell,
+  upsertPaperRecord
+} from './papers';
 import { parseTranslationFile } from './translation';
 
 describe('paper library metadata', () => {
@@ -126,5 +134,40 @@ describe('paper library metadata', () => {
     expect(updated.aiCachePath).toBe('D:/new-cache.json');
     expect(updated.aiCacheName).toBe('new-cache.json');
     expect(updated.notes).toBe('新的阅读笔记。');
+  });
+
+  it('persists editable research spreadsheet cells while keeping old records compatible', () => {
+    const parsed = parsePaperLibrary(
+      JSON.stringify([
+        {
+          id: 'paper-1',
+          pdfPath: 'D:/paper.pdf',
+          pdfName: 'paper.pdf',
+          translationPath: 'D:/translation.md',
+          translationName: 'translation.md',
+          chineseTitle: '中文标题',
+          englishTitle: 'English Title',
+          journal: 'arXiv',
+          authors: 'Author A',
+          year: '2026',
+          notes: '',
+          sheetCells: {
+            innovation: '提出 $L=\\sum_i x_i^2$ 约束。',
+            limitations: '需要更多真实机器人实验。'
+          },
+          lastOpenedAt: '2026-05-27T10:00:00.000Z',
+          lastPage: 3
+        }
+      ])
+    );
+
+    expect(PAPER_RESEARCH_COLUMNS.map((column) => column.key)).toContain('innovation');
+    expect(getPaperSheetCell(parsed[0], 'innovation')).toBe('提出 $L=\\sum_i x_i^2$ 约束。');
+    expect(getPaperSheetCell(parsed[0], 'futureIdeas')).toBe('');
+
+    const updated = updatePaperSheetCell(parsed[0], 'futureIdeas', '可以加入 CBF 安全约束。');
+
+    expect(updated.sheetCells.futureIdeas).toBe('可以加入 CBF 安全约束。');
+    expect(parsed[0].sheetCells.futureIdeas).toBeUndefined();
   });
 });

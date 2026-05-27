@@ -520,6 +520,70 @@ async function runAiCacheAutoloadScenario() {
   }
 }
 
+async function runPaperGridScenario() {
+  const scenarioName = 'paper-grid';
+  const translationPath = path.join(outputDir, `${scenarioName}.json`);
+  const outputPath = path.join(outputDir, `${scenarioName}.png`);
+  await writeFile(translationPath, '[]\n', 'utf8');
+
+  const appProcess = spawn(exe, [`--remote-debugging-port=${port}`], {
+    env: {
+      ...process.env,
+      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir
+    },
+    windowsHide: true,
+    stdio: 'ignore'
+  });
+
+  try {
+    const client = await createCdpClient(await waitForWebSocketUrl());
+    await client.send('Runtime.enable');
+    await client.send('Page.enable');
+    await loadPaperRecord(client, translationPath, `${scenarioName}.json`, {
+      chineseTitle: '公式化论文笔记',
+      englishTitle: 'Spreadsheet Notes',
+      notes: '关键目标 $L=\\sum_i x_i^2$',
+      sheetCells: {
+        innovation: '提出 $L=\\sum_i x_i^2$ 形式的约束。',
+        limitations: '需要更多真实机器人实验。'
+      }
+    });
+    await wait(1500);
+
+    const snapshot = await evaluateJson(client, `() => ({
+      hasGrid: Boolean(document.querySelector('.paper-grid .ag-root')),
+      headerText: document.querySelector('.paper-grid .ag-header')?.textContent ?? '',
+      toolbarText: document.querySelector('.paper-grid-toolbar')?.textContent ?? '',
+      aiButtonText: [...document.querySelectorAll('.home-header-actions button')].map((button) => button.textContent ?? '').join('|'),
+      pinnedLeftWidth: document.querySelector('.ag-pinned-left-cols-container')?.getBoundingClientRect().width ?? 0,
+      katexCount: document.querySelectorAll('.home-page .katex').length
+    })`);
+    if (!snapshot.hasGrid) {
+      throw new Error(`paper-grid: expected AG Grid paper library, got ${JSON.stringify(snapshot)}`);
+    }
+    if (!snapshot.headerText.includes('创新点') || !snapshot.headerText.includes('局限点')) {
+      throw new Error(`paper-grid: expected research spreadsheet columns, got ${snapshot.headerText}`);
+    }
+    if (!snapshot.toolbarText.includes('表头固定') || snapshot.pinnedLeftWidth <= 0) {
+      throw new Error(`paper-grid: expected frozen header and pinned title column, got ${JSON.stringify(snapshot)}`);
+    }
+    if (!snapshot.aiButtonText.includes('AI 填当前单元格')) {
+      throw new Error(`paper-grid: expected AI fill-cell action, got ${snapshot.aiButtonText}`);
+    }
+    if (snapshot.katexCount <= 0) {
+      throw new Error(`paper-grid: expected formula rendering inside grid cells, got ${JSON.stringify(snapshot)}`);
+    }
+
+    const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+    await writeFile(outputPath, Buffer.from(screenshot.data, 'base64'));
+    client.close();
+    return { name: scenarioName, screenshot: outputPath, headerText: snapshot.headerText };
+  } finally {
+    appProcess.kill();
+    await wait(500);
+  }
+}
+
 async function loadPaperRecord(client, translationPath, translationName, extraPaperFields = {}) {
   const paper = {
     id: `visual-check-${Date.now()}`,
@@ -746,6 +810,7 @@ async function main() {
   await rm(visualUserDataDir, { recursive: true, force: true });
   await mkdir(visualUserDataDir, { recursive: true });
   const results = [];
+  results.push(await runPaperGridScenario());
   for (const scenario of scenarios) {
     results.push(await runScenario(scenario));
   }

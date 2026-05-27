@@ -19,6 +19,7 @@ import {
   getDefaultAiCacheFileName,
   updateAiCacheItem
 } from './lib/aiMode';
+import { buildPaperCellPrompt } from './lib/paperCellAi';
 import { buildPdfHighlightQuery } from './lib/pdfTextHighlight';
 import {
   exportBilingualMarkdown,
@@ -33,10 +34,13 @@ import {
   buildPaperRecord,
   PAPER_LIBRARY_KEY,
   parsePaperLibrary,
+  PAPER_RESEARCH_COLUMNS,
   serializePaperLibrary,
   updatePaperRecord,
+  updatePaperSheetCell,
   upsertPaperRecord,
-  type PaperRecord
+  type PaperRecord,
+  type PaperResearchColumnKey
 } from './lib/papers';
 import { buildCurrentJsonPrompt, buildFullJsonPrompt } from './lib/promptTemplates';
 import type {
@@ -748,6 +752,51 @@ export default function App() {
     );
   }
 
+  async function handleFillPaperCellWithAi(
+    paper: PaperRecord,
+    field: PaperResearchColumnKey
+  ): Promise<void> {
+    const column = PAPER_RESEARCH_COLUMNS.find((entry) => entry.key === field);
+    if (!column) {
+      setStatusMessage('无法识别当前研究表格列。');
+      return;
+    }
+
+    if (!aiSettings?.apiKeyConfigured) {
+      setStatusMessage('请先在阅读器右侧 AI 设置中保存 API Key，再回到论文库使用 AI 填表。');
+      return;
+    }
+
+    try {
+      setIsAiBusy(true);
+      setStatusMessage(`AI 正在填写“${column.label}”单元格...`);
+      const project = await window.electronAPI.loadProject({
+        translationPath: paper.translationPath,
+        aiCachePath: paper.aiCachePath
+      });
+      const contextText = [
+        project.aiCache?.content ?? '',
+        project.translation?.content ?? '',
+        paper.notes
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+      const prompt = buildPaperCellPrompt({ paper, field, contextText });
+      const cellValue = await window.electronAPI.completeWithAi(prompt);
+
+      setPaperLibrary((library) =>
+        library.map((item) =>
+          item.id === paper.id ? updatePaperSheetCell(item, field, cleanAiCellText(cellValue)) : item
+        )
+      );
+      setStatusMessage(`AI 已填写“${column.label}”单元格。`);
+    } catch (error) {
+      setStatusMessage(`AI 填写单元格失败：${String(error)}`);
+    } finally {
+      setIsAiBusy(false);
+    }
+  }
+
   function applySavedAiCachePath(
     document: TranslationDocument,
     result: SaveTextResult
@@ -780,8 +829,10 @@ export default function App() {
       <div className="app-shell home-shell">
         <HomePage
           papers={paperLibrary}
+          isAiBusy={isAiBusy}
           onNewProject={handleNewProject}
           onOpenPaper={handleOpenPaper}
+          onFillPaperCellWithAi={handleFillPaperCellWithAi}
           onUpdatePaper={(paper) =>
             setPaperLibrary((library) => library.map((item) => (item.id === paper.id ? paper : item)))
           }
@@ -939,4 +990,11 @@ function buildExportFileName(sourceName?: string): string {
   }
 
   return sourceName.replace(/\.[^.]+$/, '') + '-bilingual.md';
+}
+
+function cleanAiCellText(value: string): string {
+  return value
+    .replace(/^```(?:markdown|text)?\s*/iu, '')
+    .replace(/```$/u, '')
+    .trim();
 }
