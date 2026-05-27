@@ -305,6 +305,20 @@ async function runAiQueueScenario() {
     await loadPaperRecord(client, translationPath, `${scenarioName}.json`);
     await clickButton(client, '\u6253\u5f00\u9605\u8bfb');
     await waitForReaderSettled(client);
+    await client.send('Runtime.evaluate', {
+      expression: `
+        (() => {
+          const textarea = document.querySelector('.notes-panel textarea');
+          if (!textarea) return;
+          const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+          setter?.call(textarea, 'visual check note');
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        })()
+      `,
+      returnByValue: true
+    });
+    await wait(300);
     await clickButton(client, 'AI \u6a21\u5f0f');
     await waitForButtonEnabled(client, '\u751f\u6210/\u5237\u65b0 JSON \u7f13\u5b58');
     await clickButton(client, '\u751f\u6210/\u5237\u65b0 JSON \u7f13\u5b58');
@@ -315,6 +329,10 @@ async function runAiQueueScenario() {
       summary: document.querySelector('.ai-summary')?.textContent ?? '',
       summaryStats: [...document.querySelectorAll('.ai-summary-stat')].map((node) => node.textContent ?? ''),
       settingsText: document.querySelector('.ai-settings-card')?.textContent ?? '',
+      toolbarBackground: getComputedStyle(document.querySelector('.toolbar')).backgroundColor,
+      activeModeBackground: getComputedStyle(document.querySelector('.mode-tab.active')).backgroundColor,
+      notesPanelExists: Boolean(document.querySelector('.notes-panel textarea')),
+      storedNotes: JSON.parse(localStorage.getItem('pdfTranslationReader:paperLibrary') ?? '[]')[0]?.notes ?? '',
       listHasOwnScrollbar: (() => {
         const list = document.querySelector('.ai-item-list');
         return list ? list.scrollHeight > list.clientHeight : false;
@@ -419,7 +437,71 @@ async function runAiTranslatedDetailScenario() {
   }
 }
 
-async function loadPaperRecord(client, translationPath, translationName) {
+async function runAiCacheAutoloadScenario() {
+  const scenarioName = 'ai-cache-autoload';
+  const translationPath = path.join(outputDir, `${scenarioName}.md`);
+  const aiCachePath = path.join(outputDir, `${scenarioName}.json`);
+  const outputPath = path.join(outputDir, `${scenarioName}.png`);
+  await writeFile(translationPath, '手动译文占位。\n', 'utf8');
+  await writeFile(
+    aiCachePath,
+    `${JSON.stringify(
+      [
+        {
+          section: 'Autoload',
+          original: 'Cached AI translation should load automatically.',
+          translation: '自动导入的 AI 缓存译文。',
+          translatedAt: '2026-05-27T08:00:00.000Z',
+          provider: 'openai',
+          model: 'gpt-5.5'
+        }
+      ],
+      null,
+      2
+    )}\n`,
+    'utf8'
+  );
+
+  const appProcess = spawn(exe, [`--remote-debugging-port=${port}`], {
+    env: {
+      ...process.env,
+      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir
+    },
+    windowsHide: true,
+    stdio: 'ignore'
+  });
+
+  try {
+    const client = await createCdpClient(await waitForWebSocketUrl());
+    await client.send('Runtime.enable');
+    await client.send('Page.enable');
+    await loadPaperRecord(client, translationPath, `${scenarioName}.md`, {
+      aiCachePath,
+      aiCacheName: `${scenarioName}.json`
+    });
+    await clickButton(client, '\u6253\u5f00\u9605\u8bfb');
+    await waitForReaderSettled(client);
+    await clickButton(client, 'AI \u6a21\u5f0f');
+    await wait(600);
+
+    const snapshot = await evaluateJson(client, `() => ({
+      detailText: document.querySelector('.ai-current-detail')?.textContent ?? '',
+      status: document.querySelector('.status-bar')?.textContent ?? ''
+    })`);
+    if (!snapshot.detailText.includes('自动导入的 AI 缓存译文')) {
+      throw new Error(`ai-cache-autoload: expected saved AI cache in AI mode detail, got ${JSON.stringify(snapshot)}`);
+    }
+    const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+    await writeFile(outputPath, Buffer.from(screenshot.data, 'base64'));
+    client.close();
+    return { name: scenarioName, screenshot: outputPath, detailText: snapshot.detailText };
+  } finally {
+    appProcess.kill();
+    await wait(500);
+  }
+}
+
+async function loadPaperRecord(client, translationPath, translationName, extraPaperFields = {}) {
   const paper = {
     id: `visual-check-${Date.now()}`,
     pdfPath,
@@ -431,8 +513,10 @@ async function loadPaperRecord(client, translationPath, translationName) {
     journal: '',
     authors: '',
     year: '',
+    notes: '',
     lastOpenedAt: new Date().toISOString(),
-    lastPage: 1
+    lastPage: 1,
+    ...extraPaperFields
   };
 
   await client.send('Runtime.evaluate', {
@@ -517,6 +601,14 @@ function validateAiQueueScenario(snapshot) {
 
   if (snapshot.settingsText.includes('API Key \u5df2\u4fdd\u5b58')) {
     throw new Error('ai-queue: visual check leaked real AI settings instead of isolated test user data');
+  }
+
+  if (!snapshot.notesPanelExists || snapshot.storedNotes !== 'visual check note') {
+    throw new Error(`ai-queue: expected reader notes to auto-save into paper library, got ${JSON.stringify(snapshot)}`);
+  }
+
+  if (snapshot.toolbarBackground !== 'rgb(8, 8, 8)' || snapshot.activeModeBackground !== 'rgb(17, 17, 17)') {
+    throw new Error(`ai-queue: expected monochrome premium UI colors, got ${JSON.stringify(snapshot)}`);
   }
 
   const joinedRows = snapshot.rows.join('\n');
@@ -609,6 +701,7 @@ async function main() {
     results.push(await runScenario(scenario));
   }
   results.push(await runAiTranslatedDetailScenario());
+  results.push(await runAiCacheAutoloadScenario());
   results.push(await runAiQueueScenario());
   console.log(JSON.stringify({ pdfPath, results }, null, 2));
 }

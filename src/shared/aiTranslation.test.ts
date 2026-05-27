@@ -12,13 +12,16 @@ import {
 describe('AI translation helpers', () => {
   it('uses OpenAI-compatible provider presets', () => {
     expect(AI_PROVIDER_PRESETS.openai.baseURL).toBe('https://api.openai.com/v1');
+    expect(AI_PROVIDER_PRESETS.openai.model).toBe('gpt-5.5');
     expect(AI_PROVIDER_PRESETS.deepseek.baseURL).toBe('https://api.deepseek.com/v1');
     expect(AI_PROVIDER_PRESETS.kimi.baseURL).toBe('https://api.moonshot.cn/v1');
     expect(AI_PROVIDER_PRESETS.kimi.model).toBe('kimi-k2.5');
   });
 
   it('exposes provider model options for quick model switching', () => {
-    expect(AI_PROVIDER_MODEL_OPTIONS.openai.map((option) => option.value)).toContain('gpt-5.2-chat-latest');
+    expect(AI_PROVIDER_MODEL_OPTIONS.openai.map((option) => option.value)).toEqual(
+      expect.arrayContaining(['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'])
+    );
     expect(AI_PROVIDER_MODEL_OPTIONS.deepseek.map((option) => option.value)).toContain('deepseek-chat');
     expect(AI_PROVIDER_MODEL_OPTIONS.deepseek.map((option) => option.value)).toContain('deepseek-v4-pro');
     expect(AI_PROVIDER_MODEL_OPTIONS.deepseek.map((option) => option.value)).toContain('deepseek-v4-flash');

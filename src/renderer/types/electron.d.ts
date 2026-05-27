@@ -18,6 +18,7 @@ export interface SaveTextResult {
 export interface ProjectLoadResult {
   pdf: PdfFilePayload | null;
   translation: TextFilePayload | null;
+  aiCache: TextFilePayload | null;
   errors: string[];
 }
 
@@ -53,7 +54,11 @@ export interface AiBalanceResult {
 export interface ElectronApi {
   openPdf: () => Promise<PdfFilePayload | null>;
   openTranslation: () => Promise<TextFilePayload | null>;
-  loadProject: (request: { pdfPath?: string; translationPath?: string }) => Promise<ProjectLoadResult>;
+  loadProject: (request: {
+    pdfPath?: string;
+    translationPath?: string;
+    aiCachePath?: string;
+  }) => Promise<ProjectLoadResult>;
   loadAiSettings: () => Promise<AiSettingsView>;
   saveAiSettings: (request: {
     provider: AiProviderId;

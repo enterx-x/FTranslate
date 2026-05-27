@@ -36,6 +36,7 @@ interface SaveTextRequest {
 interface LoadProjectRequest {
   pdfPath?: string;
   translationPath?: string;
+  aiCachePath?: string;
 }
 
 interface AiSettingsRequest extends AiProviderSettings {
@@ -443,6 +444,7 @@ function registerIpcHandlers(): void {
     const errors: string[] = [];
     let pdf: PdfFilePayload | null = null;
     let translation: TextFilePayload | null = null;
+    let aiCache: TextFilePayload | null = null;
 
     if (request.pdfPath) {
       try {
@@ -460,7 +462,15 @@ function registerIpcHandlers(): void {
       }
     }
 
-    return { pdf, translation, errors };
+    if (request.aiCachePath) {
+      try {
+        aiCache = await readTextFile(request.aiCachePath);
+      } catch (error) {
+        errors.push(`无法读取 AI 缓存：${request.aiCachePath}，${String(error)}`);
+      }
+    }
+
+    return { pdf, translation, aiCache, errors };
   });
 
   ipcMain.handle('file:save-text', async (_event, request: SaveTextRequest) => {

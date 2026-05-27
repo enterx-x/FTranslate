@@ -94,6 +94,8 @@ export function HomePage(props: HomePageProps) {
                         <strong>{paper.chineseTitle || '未填写'}</strong>
                       )}
                       <div className="path-hint">{paper.translationName}</div>
+                      {paper.aiCacheName ? <div className="path-hint">AI 缓存：{paper.aiCacheName}</div> : null}
+                      {paper.notes.trim() ? <div className="path-hint">已记录阅读笔记</div> : null}
                     </td>
                     <td>
                       {isEditing ? (

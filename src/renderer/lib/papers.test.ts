@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPaperRecord, updatePaperRecord, upsertPaperRecord } from './papers';
+import { buildPaperRecord, parsePaperLibrary, updatePaperRecord, upsertPaperRecord } from './papers';
 import { parseTranslationFile } from './translation';
 
 describe('paper library metadata', () => {
@@ -88,5 +88,43 @@ describe('paper library metadata', () => {
     expect(nextLibrary[0].journal).toBe('Science Robotics');
     expect(nextLibrary[0].lastPage).toBe(7);
     expect(nextLibrary[0].lastOpenedAt).toBe('2026-05-26T11:00:00.000Z');
+  });
+
+  it('persists AI cache paths and paper notes in the paper library', () => {
+    const parsed = parsePaperLibrary(
+      JSON.stringify([
+        {
+          id: 'paper-1',
+          pdfPath: 'D:/paper.pdf',
+          pdfName: 'paper.pdf',
+          translationPath: 'D:/translation.md',
+          translationName: 'translation.md',
+          aiCachePath: 'D:/paper-ai-cache.json',
+          aiCacheName: 'paper-ai-cache.json',
+          chineseTitle: '中文标题',
+          englishTitle: 'English Title',
+          journal: 'arXiv',
+          authors: 'Author A',
+          year: '2026',
+          notes: '这里是阅读笔记。',
+          lastOpenedAt: '2026-05-27T10:00:00.000Z',
+          lastPage: 3
+        }
+      ])
+    );
+
+    expect(parsed[0].aiCachePath).toBe('D:/paper-ai-cache.json');
+    expect(parsed[0].aiCacheName).toBe('paper-ai-cache.json');
+    expect(parsed[0].notes).toBe('这里是阅读笔记。');
+
+    const updated = updatePaperRecord(parsed[0], {
+      aiCachePath: 'D:/new-cache.json',
+      aiCacheName: 'new-cache.json',
+      notes: '新的阅读笔记。'
+    });
+
+    expect(updated.aiCachePath).toBe('D:/new-cache.json');
+    expect(updated.aiCacheName).toBe('new-cache.json');
+    expect(updated.notes).toBe('新的阅读笔记。');
   });
 });

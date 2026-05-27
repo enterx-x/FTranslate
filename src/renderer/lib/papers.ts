@@ -8,11 +8,14 @@ export interface PaperRecord {
   pdfName: string;
   translationPath: string;
   translationName: string;
+  aiCachePath?: string;
+  aiCacheName?: string;
   chineseTitle: string;
   englishTitle: string;
   journal: string;
   authors: string;
   year: string;
+  notes: string;
   lastOpenedAt: string;
   lastPage: number;
 }
@@ -37,11 +40,14 @@ export function buildPaperRecord(input: BuildPaperRecordInput): PaperRecord {
     pdfName: input.pdfName,
     translationPath: input.translationPath,
     translationName: input.translationName,
+    aiCachePath: undefined,
+    aiCacheName: undefined,
     chineseTitle: metadata.chineseTitle || truncateText(firstTranslation, 40) || input.translationName,
     englishTitle: metadata.englishTitle || stripExtension(input.pdfName),
     journal: metadata.journal || '',
     authors: metadata.authors || '',
     year: metadata.year || '',
+    notes: '',
     lastOpenedAt: input.now ?? new Date().toISOString(),
     lastPage: input.lastPage ?? 1
   };
@@ -65,6 +71,9 @@ export function upsertPaperRecord(library: PaperRecord[], incoming: PaperRecord)
     journal: existing.journal || incoming.journal,
     authors: existing.authors || incoming.authors,
     year: existing.year || incoming.year,
+    aiCachePath: existing.aiCachePath || incoming.aiCachePath,
+    aiCacheName: existing.aiCacheName || incoming.aiCacheName,
+    notes: existing.notes || incoming.notes,
     lastPage: existing.lastPage || incoming.lastPage
   };
 
@@ -78,11 +87,14 @@ export function updatePaperRecord(
       PaperRecord,
       | 'translationPath'
       | 'translationName'
+      | 'aiCachePath'
+      | 'aiCacheName'
       | 'chineseTitle'
       | 'englishTitle'
       | 'journal'
       | 'authors'
       | 'year'
+      | 'notes'
       | 'lastOpenedAt'
       | 'lastPage'
     >
@@ -137,11 +149,14 @@ function normalizePaperRecord(value: unknown): PaperRecord | null {
     pdfName: toText(record.pdfName) || stripExtension(pdfPath),
     translationPath,
     translationName: toText(record.translationName) || stripExtension(translationPath),
+    aiCachePath: toText(record.aiCachePath) || undefined,
+    aiCacheName: toText(record.aiCacheName) || undefined,
     chineseTitle: toText(record.chineseTitle),
     englishTitle: toText(record.englishTitle) || stripExtension(toText(record.pdfName) || pdfPath),
     journal: toText(record.journal),
     authors: toText(record.authors),
     year: toText(record.year),
+    notes: toText(record.notes),
     lastOpenedAt: toText(record.lastOpenedAt) || new Date().toISOString(),
     lastPage: Math.max(1, Number(record.lastPage) || 1)
   };

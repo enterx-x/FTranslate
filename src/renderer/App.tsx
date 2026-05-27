@@ -7,6 +7,7 @@ import {
 } from '../shared/aiTranslation';
 import { AiModePanel, type AiFormState } from './components/AiModePanel';
 import { HomePage } from './components/HomePage';
+import { NotesPanel } from './components/NotesPanel';
 import { PdfViewer } from './components/PdfViewer';
 import { Toolbar } from './components/Toolbar';
 import { TranslationPanel } from './components/TranslationPanel';
@@ -53,6 +54,7 @@ interface PdfState {
 interface RecentProject {
   pdfPath?: string;
   translationPath?: string;
+  aiCachePath?: string;
 }
 
 type AppView = 'home' | 'reader';
@@ -76,6 +78,7 @@ export default function App() {
   const [scale, setScale] = useState(1.15);
   const [currentParagraphIndex, setCurrentParagraphIndex] = useState(0);
   const [aiParagraphIndex, setAiParagraphIndex] = useState(0);
+  const [activeNotes, setActiveNotes] = useState('');
   const [showTranslation, setShowTranslation] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editingText, setEditingText] = useState('');
@@ -113,9 +116,10 @@ export default function App() {
   const recentProject = useMemo<RecentProject>(() => {
     return {
       pdfPath: pdf?.filePath,
-      translationPath: translationDocument?.sourcePath
+      translationPath: translationDocument?.sourcePath,
+      aiCachePath: aiCacheDocument?.sourcePath
     };
-  }, [pdf?.filePath, translationDocument?.sourcePath]);
+  }, [aiCacheDocument?.sourcePath, pdf?.filePath, translationDocument?.sourcePath]);
 
   useEffect(() => {
     localStorage.setItem(PAPER_LIBRARY_KEY, serializePaperLibrary(paperLibrary));
@@ -169,6 +173,18 @@ export default function App() {
     return document;
   }
 
+  function applyAiCachePayload(payload: TextFilePayload): TranslationDocument | null {
+    const document = parseTranslationFile(payload.content, payload.fileName, payload.filePath);
+    const aiDocument = cloneJsonDocumentForAi(document);
+    if (!aiDocument) {
+      return null;
+    }
+
+    setAiCacheDocument(aiDocument);
+    setAiParagraphIndex(0);
+    return aiDocument;
+  }
+
   function rememberPaper(record: PaperRecord): PaperRecord {
     let nextRecord = record;
     setPaperLibrary((library) => {
@@ -184,7 +200,8 @@ export default function App() {
     try {
       const result = await window.electronAPI.loadProject({
         pdfPath: paper.pdfPath,
-        translationPath: paper.translationPath
+        translationPath: paper.translationPath,
+        aiCachePath: paper.aiCachePath
       });
 
       if (!result.pdf || !result.translation) {
@@ -198,6 +215,12 @@ export default function App() {
 
       applyPdfPayload(result.pdf, paper.lastPage);
       applyTranslationPayload(result.translation);
+      if (result.aiCache) {
+        const aiDocument = applyAiCachePayload(result.aiCache);
+        if (!aiDocument) {
+          setStatusMessage('AI 缓存不是 JSON 翻译数组，已只打开手动翻译文件。');
+        }
+      }
       const updated = updatePaperRecord(paper, {
         lastOpenedAt: new Date().toISOString()
       });
@@ -205,8 +228,13 @@ export default function App() {
         library.map((item) => (item.id === paper.id ? updated : item))
       );
       setActivePaperId(paper.id);
+      setActiveNotes(paper.notes ?? '');
       setView('reader');
-      setStatusMessage(`已打开论文：${paper.chineseTitle || paper.englishTitle}`);
+      setStatusMessage(
+        result.aiCache
+          ? `已打开论文并自动导入 AI 缓存：${paper.chineseTitle || paper.englishTitle}`
+          : `已打开论文：${paper.chineseTitle || paper.englishTitle}`
+      );
     } catch (error) {
       setStatusMessage(`打开论文记录失败：${String(error)}`);
     }
@@ -263,6 +291,7 @@ export default function App() {
       });
       const storedRecord = rememberPaper(record);
 
+      setActiveNotes(storedRecord.notes);
       setView('reader');
       setStatusMessage(`新建翻译项目完成：${storedRecord.chineseTitle || storedRecord.englishTitle}`);
     } catch (error) {
@@ -631,6 +660,7 @@ export default function App() {
 
     const savedDocument = applySavedAiCachePath(document, result);
     setAiCacheDocument(savedDocument);
+    rememberAiCachePath(result);
     setStatusMessage(`AI JSON 已保存：${result.fileName}`);
     return savedDocument;
   }
@@ -648,7 +678,38 @@ export default function App() {
 
     if (result) {
       setAiCacheDocument(applySavedAiCachePath(document, result));
+      rememberAiCachePath(result);
     }
+  }
+
+  function rememberAiCachePath(result: SaveTextResult): void {
+    if (!activePaperId) {
+      return;
+    }
+
+    setPaperLibrary((library) =>
+      library.map((paper) =>
+        paper.id === activePaperId
+          ? updatePaperRecord(paper, {
+              aiCachePath: result.filePath,
+              aiCacheName: result.fileName
+            })
+          : paper
+      )
+    );
+  }
+
+  function handleNotesChange(nextNotes: string): void {
+    setActiveNotes(nextNotes);
+    if (!activePaperId) {
+      return;
+    }
+
+    setPaperLibrary((library) =>
+      library.map((paper) =>
+        paper.id === activePaperId ? updatePaperRecord(paper, { notes: nextNotes }) : paper
+      )
+    );
   }
 
   function applySavedAiCachePath(
@@ -763,6 +824,7 @@ export default function App() {
                 AI 模式
               </button>
             </div>
+            <NotesPanel notes={activeNotes} onChange={handleNotesChange} />
             {readerMode === 'manual' ? (
               <TranslationPanel
                 document={translationDocument}

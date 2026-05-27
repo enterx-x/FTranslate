@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('electronAPI', {
   openPdf: () => ipcRenderer.invoke('dialog:open-pdf'),
   openTranslation: () => ipcRenderer.invoke('dialog:open-translation'),
-  loadProject: (request: { pdfPath?: string; translationPath?: string }) =>
+  loadProject: (request: { pdfPath?: string; translationPath?: string; aiCachePath?: string }) =>
     ipcRenderer.invoke('project:load', request),
   loadAiSettings: () => ipcRenderer.invoke('ai-settings:load'),
   saveAiSettings: (request: {
