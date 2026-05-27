@@ -329,6 +329,12 @@ async function runAiQueueScenario() {
       summary: document.querySelector('.ai-summary')?.textContent ?? '',
       summaryStats: [...document.querySelectorAll('.ai-summary-stat')].map((node) => node.textContent ?? ''),
       settingsText: document.querySelector('.ai-settings-card')?.textContent ?? '',
+      commandBarText: document.querySelector('.ai-command-bar')?.textContent ?? '',
+      brandText: document.querySelector('.toolbar-brand')?.textContent ?? '',
+      brandImageWidth: document.querySelector('.toolbar-brand img')?.getBoundingClientRect().width ?? 0,
+      cacheCardOpen: document.querySelector('.ai-cache-card')?.open ?? null,
+      settingsCardOpen: document.querySelector('.ai-settings-card')?.open ?? null,
+      rowActionText: document.querySelector('.ai-item-row .ai-item-actions')?.textContent ?? '',
       toolbarBackground: getComputedStyle(document.querySelector('.toolbar')).backgroundColor,
       activeModeBackground: getComputedStyle(document.querySelector('.mode-tab.active')).backgroundColor,
       notesPanelExists: Boolean(document.querySelector('.notes-panel textarea')),
@@ -605,6 +611,26 @@ function validateAiQueueScenario(snapshot) {
 
   if (!snapshot.notesPanelExists || snapshot.storedNotes !== 'visual check note') {
     throw new Error(`ai-queue: expected reader notes to auto-save into paper library, got ${JSON.stringify(snapshot)}`);
+  }
+
+  if (!snapshot.brandText.includes('FTranslate') || snapshot.brandImageWidth < 20) {
+    throw new Error(`ai-queue: expected branded toolbar icon and label, got ${JSON.stringify(snapshot)}`);
+  }
+
+  if (!snapshot.commandBarText.includes('AI 翻译当前段') || !snapshot.commandBarText.includes('批量翻译未缓存')) {
+    throw new Error(`ai-queue: expected sticky AI command bar actions, got ${snapshot.commandBarText}`);
+  }
+
+  if (!snapshot.rowActionText.includes('翻译') || !snapshot.rowActionText.includes('重译')) {
+    throw new Error(`ai-queue: expected per-row translate actions, got ${snapshot.rowActionText}`);
+  }
+
+  if (snapshot.cacheCardOpen !== false) {
+    throw new Error(`ai-queue: expected PDF cache panel to be collapsed by default, got ${snapshot.cacheCardOpen}`);
+  }
+
+  if (snapshot.settingsCardOpen !== false) {
+    throw new Error(`ai-queue: expected AI settings panel to be collapsed by default, got ${snapshot.settingsCardOpen}`);
   }
 
   if (snapshot.toolbarBackground !== 'rgb(8, 8, 8)' || snapshot.activeModeBackground !== 'rgb(17, 17, 17)') {

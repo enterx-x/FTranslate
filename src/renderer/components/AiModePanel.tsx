@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { shouldTranslateItem, type AiModelOption, type AiProviderId } from '../../shared/aiTranslation';
 import { getAiQueueStats, getCurrentAiCacheItem, getTranslatableExtractedBlocks } from '../lib/aiMode';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
@@ -26,9 +27,11 @@ interface AiModePanelProps {
   onSaveSettings: () => void;
   onTestConnection: () => void;
   onRefreshBalance: () => void;
+  onRefreshModels: () => void;
   onBuildCache: () => void;
   onSaveCache: () => void;
   onTranslateCurrent: (force?: boolean) => void;
+  onTranslateItem: (index: number, force?: boolean) => void;
   onTranslatePending: () => void;
   onSelectItem: (index: number) => void;
 }
@@ -38,12 +41,44 @@ export function AiModePanel(props: AiModePanelProps) {
   const queueStats = getAiQueueStats(jsonDocument?.items ?? []);
   const currentItem = getCurrentAiCacheItem(jsonDocument, props.currentIndex);
   const extractedTranslatableCount = getTranslatableExtractedBlocks(props.extractedBlocks).length;
+  const [currentDetailOpen, setCurrentDetailOpen] = useState(true);
 
   return (
     <div className="ai-mode-panel">
+      {jsonDocument ? (
+        <div className="ai-command-bar" aria-label="AI 当前段快捷操作">
+          <span>
+            当前 {props.currentIndex + 1} / {jsonDocument.items.length}
+            {currentItem?.section ? ` · ${currentItem.section}` : ''}
+          </span>
+          <button type="button" disabled={props.isBusy} onClick={() => props.onTranslateCurrent(false)}>
+            AI 翻译当前段
+          </button>
+          <button type="button" disabled={props.isBusy} onClick={() => props.onTranslateCurrent(true)}>
+            重新翻译
+          </button>
+          <button
+            type="button"
+            disabled={props.isBusy || queueStats.pending === 0}
+            onClick={props.onTranslatePending}
+          >
+            批量翻译未缓存
+          </button>
+        </div>
+      ) : null}
+
       {currentItem ? (
-        <section className="reader-card compact-card ai-current-detail-card">
-          <div className="card-header">当前 AI 段译文</div>
+        <details
+          className="reader-card compact-card ai-current-detail-card"
+          open={currentDetailOpen}
+          onToggle={(event) => setCurrentDetailOpen(event.currentTarget.open)}
+        >
+          <summary>
+            <span className="card-header">当前 AI 段译文</span>
+            <span className="ai-current-summary">
+              {currentItem.translation.trim() ? '已缓存译文' : '待翻译'} · {currentItem.section || 'Untitled'}
+            </span>
+          </summary>
           <div className="ai-current-detail">
             <div className="ai-current-meta">
               <strong>{currentItem.section || 'Untitled'}</strong>
@@ -68,10 +103,10 @@ export function AiModePanel(props: AiModePanelProps) {
               </p>
             </div>
           </div>
-        </section>
+        </details>
       ) : null}
 
-      <details className="reader-card compact-card ai-settings-card" open={!props.aiSettings?.apiKeyConfigured}>
+      <details className="reader-card compact-card ai-settings-card">
         <summary>
           <span className="card-header">AI 设置</span>
           <span className="subtle">
@@ -159,6 +194,13 @@ export function AiModePanel(props: AiModePanelProps) {
           >
             刷新余额
           </button>
+          <button
+            type="button"
+            disabled={props.isBusy || !props.aiSettings?.apiKeyConfigured || props.aiForm.provider === 'custom'}
+            onClick={props.onRefreshModels}
+          >
+            刷新模型
+          </button>
           <span className="subtle">
             {props.aiSettings?.apiKeyConfigured ? 'API Key 已加密保存到本机' : '尚未保存 API Key'}
           </span>
@@ -180,8 +222,11 @@ export function AiModePanel(props: AiModePanelProps) {
         </div>
       </details>
 
-      <section className="reader-card compact-card">
-        <div className="card-header">PDF 提取与缓存</div>
+      <details className="reader-card compact-card ai-cache-card">
+        <summary>
+          <span className="card-header">PDF 提取与缓存</span>
+          <span className="subtle">正文候选 {extractedTranslatableCount} 段</span>
+        </summary>
         <p className="subtle">
           已从 PDF 文本层提取 {props.extractedBlocks.length} 个块，其中 {extractedTranslatableCount}{' '}
           个自然段可作为 AI 翻译候选。标题、公式、图注和图中标签不会进入批量翻译队列。
@@ -198,7 +243,7 @@ export function AiModePanel(props: AiModePanelProps) {
             保存 AI JSON
           </button>
         </div>
-      </section>
+      </details>
 
       <section className="reader-card compact-card ai-translation-workbench">
         <div className="card-header">AI 翻译队列</div>
@@ -224,43 +269,44 @@ export function AiModePanel(props: AiModePanelProps) {
                 </span>
               </span>
             </div>
-            <div className="panel-actions">
-              <button type="button" disabled={props.isBusy} onClick={() => props.onTranslateCurrent(false)}>
-                AI 翻译当前段
-              </button>
-              <button type="button" disabled={props.isBusy} onClick={() => props.onTranslateCurrent(true)}>
-                重新翻译当前段
-              </button>
-              <button
-                type="button"
-                disabled={props.isBusy || queueStats.pending === 0}
-                onClick={props.onTranslatePending}
-              >
-                批量翻译未缓存段
-              </button>
-            </div>
             <div className="ai-item-list">
               {jsonDocument.items.map((item, index) => {
                 const isCurrent = index === props.currentIndex;
                 const pending = shouldTranslateItem(item);
                 return (
-                  <button
+                  <article
                     key={item.sourceHash ?? item.id ?? `${item.section}-${index}`}
-                    type="button"
                     className={isCurrent ? 'ai-item-row is-current' : 'ai-item-row'}
-                    onClick={() => props.onSelectItem(index)}
                   >
-                    <span className="ai-item-index">{index + 1}</span>
-                    <span className="ai-item-main">
-                      <strong>{item.section || 'Untitled'}</strong>
-                      <span>
-                        <MathText text={item.original || '无英文原文'} />
+                    <button type="button" className="ai-item-select" onClick={() => props.onSelectItem(index)}>
+                      <span className="ai-item-index">{index + 1}</span>
+                      <span className="ai-item-main">
+                        <strong>{item.section || 'Untitled'}</strong>
+                        <span>
+                          <MathText text={item.original || '无英文原文'} />
+                        </span>
                       </span>
+                    </button>
+                    <span className="ai-item-actions">
+                      <span className={pending ? 'status-pill pending' : 'status-pill cached'}>
+                        {pending ? '待翻译' : item.translation ? '已缓存' : '跳过'}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={props.isBusy || !pending}
+                        onClick={() => props.onTranslateItem(index, false)}
+                      >
+                        翻译
+                      </button>
+                      <button
+                        type="button"
+                        disabled={props.isBusy || item.type !== 'paragraph'}
+                        onClick={() => props.onTranslateItem(index, true)}
+                      >
+                        重译
+                      </button>
                     </span>
-                    <span className={pending ? 'status-pill pending' : 'status-pill cached'}>
-                      {pending ? '待翻译' : item.translation ? '已缓存' : '跳过'}
-                    </span>
-                  </button>
+                  </article>
                 );
               })}
             </div>

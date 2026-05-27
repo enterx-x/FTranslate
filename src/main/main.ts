@@ -6,11 +6,16 @@ import {
   applyAiTranslationResult,
   buildAiBalanceRequest,
   buildChatCompletionRequest,
+  buildAiModelsRequest,
+  mergeAiModelOptions,
   normalizeAiProviderSettings,
+  parseAiModelsResponse,
   parseAiBalanceResponse,
   shouldTranslateItem,
+  AI_PROVIDER_MODEL_OPTIONS,
   type AiProviderId,
   type AiProviderSettings,
+  type AiModelOption,
   type AiTranslationItem
 } from '../shared/aiTranslation';
 
@@ -55,6 +60,14 @@ interface AiConnectionTestResult {
 interface AiBalanceView {
   supported: boolean;
   provider: AiProviderId;
+  message: string;
+  checkedAt?: string;
+}
+
+interface AiModelsView {
+  supported: boolean;
+  provider: AiProviderId;
+  options: AiModelOption[];
   message: string;
   checkedAt?: string;
 }
@@ -335,6 +348,48 @@ async function getAiBalance(): Promise<AiBalanceView> {
   };
 }
 
+async function getAiModels(): Promise<AiModelsView> {
+  const settings = await loadStoredAiSettings();
+  const modelsRequest = buildAiModelsRequest(settings);
+
+  if (!modelsRequest.supported || !modelsRequest.url) {
+    return {
+      supported: false,
+      provider: settings.provider,
+      options: [],
+      message: modelsRequest.reason ?? '当前 Provider 不支持模型列表刷新。'
+    };
+  }
+
+  const apiKey = decryptApiKey(settings.encryptedApiKey);
+  if (!apiKey) {
+    throw new Error('请先在 AI 设置中保存 API Key。');
+  }
+
+  const response = await fetch(modelsRequest.url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    }
+  });
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`模型列表刷新失败：HTTP ${response.status} ${formatAiErrorBody(responseText)}`);
+  }
+
+  const fallbackOptions = settings.provider === 'custom' ? [] : AI_PROVIDER_MODEL_OPTIONS[settings.provider];
+  const options = mergeAiModelOptions(fallbackOptions, parseAiModelsResponse(responseText), settings.model);
+
+  return {
+    supported: true,
+    provider: settings.provider,
+    options,
+    message: `已刷新 ${options.length} 个模型`,
+    checkedAt: new Date().toISOString()
+  };
+}
+
 async function executeChatCompletion(
   url: string,
   body: ReturnType<typeof buildChatCompletionRequest>['body'],
@@ -407,6 +462,10 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('ai:balance', async () => {
     return getAiBalance();
+  });
+
+  ipcMain.handle('ai:models', async () => {
+    return getAiModels();
   });
 
   ipcMain.handle('dialog:open-pdf', async () => {

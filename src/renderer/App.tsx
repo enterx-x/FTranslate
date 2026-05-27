@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AI_PROVIDER_PRESETS,
   AI_PROVIDER_MODEL_OPTIONS,
+  mergeAiModelOptions,
   shouldTranslateItem,
+  type AiModelOption,
   type AiProviderId
 } from '../shared/aiTranslation';
 import { AiModePanel, type AiFormState } from './components/AiModePanel';
@@ -59,6 +61,7 @@ interface RecentProject {
 
 type AppView = 'home' | 'reader';
 type ReaderMode = 'manual' | 'ai';
+type BuiltInProviderId = Exclude<AiProviderId, 'custom'>;
 
 const RECENT_PROJECT_KEY = 'pdfTranslationReader:lastProject';
 
@@ -84,6 +87,9 @@ export default function App() {
   const [editingText, setEditingText] = useState('');
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null);
   const [aiBalance, setAiBalance] = useState<AiBalanceResult | null>(null);
+  const [runtimeModelOptions, setRuntimeModelOptions] = useState<
+    Partial<Record<BuiltInProviderId, AiModelOption[]>>
+  >({});
   const [aiForm, setAiForm] = useState<AiFormState>({
     provider: AI_PROVIDER_PRESETS.deepseek.provider,
     baseURL: AI_PROVIDER_PRESETS.deepseek.baseURL,
@@ -426,6 +432,30 @@ export default function App() {
     }
   }
 
+  async function handleRefreshAiModels(): Promise<void> {
+    try {
+      setIsAiBusy(true);
+      setStatusMessage('正在刷新当前 Provider 的模型列表...');
+      const result = await window.electronAPI.getAiModels();
+      if (result.supported && result.provider !== 'custom') {
+        const provider = result.provider as BuiltInProviderId;
+        setRuntimeModelOptions((value) => ({
+          ...value,
+          [provider]: mergeAiModelOptions(
+            AI_PROVIDER_MODEL_OPTIONS[provider],
+            result.options,
+            aiForm.model
+          )
+        }));
+      }
+      setStatusMessage(result.message);
+    } catch (error) {
+      setStatusMessage(`模型列表刷新失败：${String(error)}`);
+    } finally {
+      setIsAiBusy(false);
+    }
+  }
+
   function handleBuildAiCacheDocument(): void {
     if (extractedPdfBlocks.length === 0) {
       setStatusMessage('还没有可用的 PDF 文本提取结果，请先等待 PDF 渲染完成。');
@@ -457,12 +487,16 @@ export default function App() {
   }
 
   async function handleTranslateCurrentWithAi(force = false): Promise<void> {
+    await translateAiItemWithAi(aiParagraphIndex, force);
+  }
+
+  async function translateAiItemWithAi(targetIndex: number, force = false): Promise<void> {
     const document = ensureJsonDocumentForAi();
     if (!document) {
       return;
     }
 
-    const index = Math.min(aiParagraphIndex, document.items.length - 1);
+    const index = Math.min(Math.max(0, targetIndex), document.items.length - 1);
     const item = document.items[index];
     if (!item) {
       setStatusMessage('当前没有可翻译的段落。');
@@ -471,23 +505,25 @@ export default function App() {
 
     try {
       setIsAiBusy(true);
+      setAiParagraphIndex(index);
       let workingDocument = await ensureAiCacheSaved(document);
       if (!workingDocument) {
         return;
       }
 
-      if (!force && !shouldTranslateItem(item)) {
+      const workingItem = workingDocument.items[index] ?? item;
+      if (!force && !shouldTranslateItem(workingItem)) {
         setStatusMessage('当前段已有缓存译文，未重复调用 API。');
         return;
       }
 
       setStatusMessage(`AI 正在翻译第 ${index + 1} 段...`);
       const result = await window.electronAPI.translateWithAi({
-        section: item.section,
-        original: item.original,
-        translation: item.translation,
-        type: item.type,
-        sourceHash: item.sourceHash,
+        section: workingItem.section,
+        original: workingItem.original,
+        translation: workingItem.translation,
+        type: workingItem.type,
+        sourceHash: workingItem.sourceHash,
         force
       });
 
@@ -854,7 +890,9 @@ export default function App() {
                 aiBalance={aiBalance}
                 aiForm={aiForm}
                 modelOptions={
-                  aiForm.provider === 'custom' ? [] : AI_PROVIDER_MODEL_OPTIONS[aiForm.provider]
+                  aiForm.provider === 'custom'
+                    ? []
+                    : runtimeModelOptions[aiForm.provider] ?? AI_PROVIDER_MODEL_OPTIONS[aiForm.provider]
                 }
                 isBusy={isAiBusy}
                 onProviderChange={handleProviderChange}
@@ -862,9 +900,11 @@ export default function App() {
                 onSaveSettings={handleSaveAiSettings}
                 onTestConnection={handleTestAiConnection}
                 onRefreshBalance={handleRefreshAiBalance}
+                onRefreshModels={handleRefreshAiModels}
                 onBuildCache={handleBuildAiCacheDocument}
                 onSaveCache={handleSaveAiCache}
                 onTranslateCurrent={handleTranslateCurrentWithAi}
+                onTranslateItem={translateAiItemWithAi}
                 onTranslatePending={handleTranslatePendingWithAi}
                 onSelectItem={(index) => {
                   setAiParagraphIndex(index);

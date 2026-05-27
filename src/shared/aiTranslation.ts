@@ -44,6 +44,12 @@ export interface AiBalanceRequest {
   reason?: string;
 }
 
+export interface AiModelsRequest {
+  supported: boolean;
+  url?: string;
+  reason?: string;
+}
+
 export const AI_PROVIDER_PRESETS: Record<Exclude<AiProviderId, 'custom'>, AiProviderSettings> = {
   openai: {
     provider: 'openai',
@@ -180,6 +186,64 @@ export function buildAiBalanceRequest(
     supported: false,
     reason: 'Custom Provider 没有统一余额接口，请在对应服务商控制台查看。'
   };
+}
+
+export function buildAiModelsRequest(settings: AiProviderSettings): AiModelsRequest {
+  const normalizedSettings = normalizeAiProviderSettings(settings);
+
+  if (normalizedSettings.provider === 'custom') {
+    return {
+      supported: false,
+      reason: 'Custom Provider 没有统一模型列表接口，请手动填写模型名。'
+    };
+  }
+
+  return {
+    supported: true,
+    url: `${normalizedSettings.baseURL.replace(/\/+$/u, '')}/models`
+  };
+}
+
+export function parseAiModelsResponse(responseText: string): AiModelOption[] {
+  const parsed = parseJsonObject(responseText);
+  const data = Array.isArray(parsed.data) ? parsed.data : [];
+
+  return data
+    .map((entry) => {
+      if (!isRecord(entry)) {
+        return null;
+      }
+
+      const id = readString(entry.id);
+      return id ? { value: id, label: id } : null;
+    })
+    .filter((option): option is AiModelOption => Boolean(option));
+}
+
+export function mergeAiModelOptions(
+  fallbackOptions: AiModelOption[],
+  apiOptions: AiModelOption[],
+  currentModel?: string
+): AiModelOption[] {
+  const merged: AiModelOption[] = [];
+  const seen = new Set<string>();
+
+  const addOption = (option: AiModelOption | null): void => {
+    if (!option || !option.value || seen.has(option.value)) {
+      return;
+    }
+
+    seen.add(option.value);
+    merged.push(option);
+  };
+
+  if (currentModel?.trim()) {
+    addOption({ value: currentModel.trim(), label: currentModel.trim() });
+  }
+
+  apiOptions.forEach(addOption);
+  fallbackOptions.forEach(addOption);
+  return merged;
 }
 
 export function parseAiBalanceResponse(provider: AiProviderId, responseText: string): string {

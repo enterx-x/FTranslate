@@ -51,6 +51,19 @@ export interface AiBalanceResult {
   checkedAt?: string;
 }
 
+export interface AiModelOptionResult {
+  value: string;
+  label: string;
+}
+
+export interface AiModelsResult {
+  supported: boolean;
+  provider: AiProviderId;
+  options: AiModelOptionResult[];
+  message: string;
+  checkedAt?: string;
+}
+
 export interface ElectronApi {
   openPdf: () => Promise<PdfFilePayload | null>;
   openTranslation: () => Promise<TextFilePayload | null>;
@@ -76,6 +89,7 @@ export interface ElectronApi {
   }) => Promise<AiTranslateResult>;
   testAiConnection: () => Promise<AiConnectionTestResult>;
   getAiBalance: () => Promise<AiBalanceResult>;
+  getAiModels: () => Promise<AiModelsResult>;
   saveTextFile: (request: {
     filePath?: string;
     content: string;

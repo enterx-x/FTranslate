@@ -21,6 +21,17 @@ describe('math text rendering', () => {
     expect(html).toContain('t');
   });
 
+  it('renders loose formula lines from extracted PDF text without requiring delimiters', () => {
+    const html = renderMathTextToHtml(
+      '5: a_{t+H} \\sim \\pi_\\theta(a|o_{t-T:t}, C)\n6: for t = 0, 1, 2, ... do'
+    );
+
+    expect(html).toContain('math-line');
+    expect(html).toContain('katex');
+    expect(html).toContain('line-prefix');
+    expect(html).toContain('5:');
+  });
+
   it('falls back to escaped source when latex is invalid', () => {
     const html = renderMathTextToHtml('Broken $\\frac{$ stays readable.');
 

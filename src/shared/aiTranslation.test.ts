@@ -3,8 +3,11 @@ import {
   AI_PROVIDER_PRESETS,
   AI_PROVIDER_MODEL_OPTIONS,
   buildAiBalanceRequest,
+  buildAiModelsRequest,
   applyAiTranslationResult,
   buildChatCompletionRequest,
+  mergeAiModelOptions,
+  parseAiModelsResponse,
   parseAiBalanceResponse,
   shouldTranslateItem
 } from './aiTranslation';
@@ -145,6 +148,37 @@ describe('AI translation helpers', () => {
       supported: true,
       url: 'https://api.openai.com/v1/organization/costs?start_time=1729814400&limit=7'
     });
+  });
+
+  it('builds OpenAI-compatible model list requests for saved providers', () => {
+    expect(buildAiModelsRequest(AI_PROVIDER_PRESETS.openai)).toMatchObject({
+      supported: true,
+      url: 'https://api.openai.com/v1/models'
+    });
+    expect(buildAiModelsRequest(AI_PROVIDER_PRESETS.kimi)).toMatchObject({
+      supported: true,
+      url: 'https://api.moonshot.cn/v1/models'
+    });
+  });
+
+  it('parses and merges provider model options returned by the API', () => {
+    const apiOptions = parseAiModelsResponse(
+      JSON.stringify({
+        data: [{ id: 'kimi-k2.6' }, { id: 'kimi-k2.5' }, { id: 'moonshot-v1-128k' }]
+      })
+    );
+    const merged = mergeAiModelOptions(
+      [{ value: 'kimi-k2.5', label: 'kimi-k2.5' }],
+      apiOptions,
+      'kimi-k2-pro-preview'
+    );
+
+    expect(merged.map((option) => option.value)).toEqual([
+      'kimi-k2-pro-preview',
+      'kimi-k2.6',
+      'kimi-k2.5',
+      'moonshot-v1-128k'
+    ]);
   });
 
   it('formats Kimi, DeepSeek, and OpenAI balance responses', () => {

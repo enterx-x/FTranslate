@@ -129,7 +129,15 @@ export function PdfViewer(props: PdfViewerProps) {
 
       viewer.currentScale = propsRef.current.scale;
       setIsRendering(false);
+      window.requestAnimationFrame(() => {
+        setFindReadyToken((value) => (value === 0 ? 1 : value));
+      });
       schedulePendingZoomAnchor();
+    }
+
+    function handleTextLayerRendered(): void {
+      setFindReadyToken((value) => (value === 0 ? 1 : value));
+      scheduleHighlightOverlayPaint();
     }
 
     function handlePageChanging(event: { pageNumber?: number }): void {
@@ -189,7 +197,7 @@ export function PdfViewer(props: PdfViewerProps) {
     eventBus.on('updatefindmatchescount', handleFindMatchesCount);
     eventBus.on('updatefindcontrolstate', handleFindControlState);
     eventBus.on('updatetextlayermatches', scheduleHighlightOverlayPaint);
-    eventBus.on('textlayerrendered', scheduleHighlightOverlayPaint);
+    eventBus.on('textlayerrendered', handleTextLayerRendered);
 
     eventBusRef.current = eventBus;
     linkServiceRef.current = linkService;
@@ -203,7 +211,7 @@ export function PdfViewer(props: PdfViewerProps) {
       eventBus.off('updatefindmatchescount', handleFindMatchesCount);
       eventBus.off('updatefindcontrolstate', handleFindControlState);
       eventBus.off('updatetextlayermatches', scheduleHighlightOverlayPaint);
-      eventBus.off('textlayerrendered', scheduleHighlightOverlayPaint);
+      eventBus.off('textlayerrendered', handleTextLayerRendered);
       pdfViewer.setDocument(null as unknown as PDFDocumentProxy);
       linkService.setDocument(null);
       findController.setDocument(null as unknown as PDFDocumentProxy);

@@ -1,3 +1,5 @@
+import brandMarkUrl from '../assets/brand-mark.png';
+
 interface ToolbarProps {
   currentPage: number;
   pageCount: number;
@@ -37,6 +39,14 @@ export function Toolbar(props: ToolbarProps) {
         <button type="button" onClick={props.onExportBilingualMarkdown}>
           导出双语 Markdown
         </button>
+      </div>
+
+      <div className="toolbar-brand" aria-label="PDF Translation Reader">
+        <img src={brandMarkUrl} alt="" />
+        <span>
+          <strong>FTranslate</strong>
+          <small>PDF Translation Reader</small>
+        </span>
       </div>
 
       <div className="toolbar-group toolbar-group-right">
