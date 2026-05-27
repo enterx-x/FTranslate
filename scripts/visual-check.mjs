@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -11,6 +11,7 @@ const pdfPath =
   process.env.VISUAL_CHECK_PDF ??
   path.join('D:\\', 'GPT\u6d4f\u89c8\u5668\u4e0b\u8f7d', '2604.15483v2.pdf');
 const outputDir = path.join(root, '.tmp-visual-check');
+const visualUserDataDir = path.join(outputDir, 'user-data');
 const port = Number(process.env.VISUAL_CHECK_PORT ?? 9333);
 
 const scenarios = [
@@ -183,6 +184,10 @@ async function runScenario(scenario) {
   );
 
   const appProcess = spawn(exe, [`--remote-debugging-port=${port}`], {
+    env: {
+      ...process.env,
+      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir
+    },
     windowsHide: true,
     stdio: 'ignore'
   });
@@ -215,6 +220,10 @@ async function runAiQueueScenario() {
   await writeFile(translationPath, '[]\n', 'utf8');
 
   const appProcess = spawn(exe, [`--remote-debugging-port=${port}`], {
+    env: {
+      ...process.env,
+      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir
+    },
     windowsHide: true,
     stdio: 'ignore'
   });
@@ -234,6 +243,7 @@ async function runAiQueueScenario() {
       rows: [...document.querySelectorAll('.ai-item-row')].map((row) => row.textContent ?? ''),
       summary: document.querySelector('.ai-summary')?.textContent ?? '',
       summaryStats: [...document.querySelectorAll('.ai-summary-stat')].map((node) => node.textContent ?? ''),
+      settingsText: document.querySelector('.ai-settings-card')?.textContent ?? '',
       listHasOwnScrollbar: (() => {
         const list = document.querySelector('.ai-item-list');
         return list ? list.scrollHeight > list.clientHeight : false;
@@ -321,6 +331,10 @@ function validateAiQueueScenario(snapshot) {
     throw new Error('ai-queue: expected the right pane to own vertical scrolling, not the candidate list');
   }
 
+  if (snapshot.settingsText.includes('API Key \u5df2\u4fdd\u5b58')) {
+    throw new Error('ai-queue: visual check leaked real AI settings instead of isolated test user data');
+  }
+
   const joinedRows = snapshot.rows.join('\n');
   const forbiddenSnippets = [
     'World Model',
@@ -399,6 +413,8 @@ async function main() {
   }
 
   await mkdir(outputDir, { recursive: true });
+  await rm(visualUserDataDir, { recursive: true, force: true });
+  await mkdir(visualUserDataDir, { recursive: true });
   const results = [];
   for (const scenario of scenarios) {
     results.push(await runScenario(scenario));

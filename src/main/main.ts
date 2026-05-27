@@ -49,6 +49,12 @@ interface StoredAiSettings extends AiProviderSettings {
 
 let mainWindow: BrowserWindow | null = null;
 
+const userDataDirOverride = process.env.PDF_TRANSLATION_READER_USER_DATA_DIR;
+if (userDataDirOverride) {
+  // 自动视觉验收会启动真实安装版；这里允许测试进程使用隔离 userData，避免污染用户的论文库和 AI 设置。
+  app.setPath('userData', userDataDirOverride);
+}
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!gotSingleInstanceLock) {
