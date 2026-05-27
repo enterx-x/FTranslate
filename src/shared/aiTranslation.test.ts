@@ -11,6 +11,7 @@ describe('AI translation helpers', () => {
     expect(AI_PROVIDER_PRESETS.openai.baseURL).toBe('https://api.openai.com/v1');
     expect(AI_PROVIDER_PRESETS.deepseek.baseURL).toBe('https://api.deepseek.com/v1');
     expect(AI_PROVIDER_PRESETS.kimi.baseURL).toBe('https://api.moonshot.cn/v1');
+    expect(AI_PROVIDER_PRESETS.kimi.model).toBe('kimi-k2.5');
   });
 
   it('builds a chat completions request for an academic paragraph', () => {
@@ -32,6 +33,25 @@ describe('AI translation helpers', () => {
     expect(request.body.model).toBe('deepseek-chat');
     expect(request.body.messages[0].role).toBe('system');
     expect(request.body.messages[1].content).toContain('Foundation models');
+    expect(request.body.temperature).toBe(0.2);
+    expect(request.body.thinking).toBeUndefined();
+  });
+
+  it('builds a Kimi K2.5 request without unsupported temperature override', () => {
+    const request = buildChatCompletionRequest(
+      AI_PROVIDER_PRESETS.kimi,
+      {
+        section: 'Abstract',
+        original: 'Foundation models work on large and diverse datasets.',
+        translation: '',
+        type: 'paragraph'
+      }
+    );
+
+    expect(request.url).toBe('https://api.moonshot.cn/v1/chat/completions');
+    expect(request.body.model).toBe('kimi-k2.5');
+    expect(request.body.temperature).toBeUndefined();
+    expect(request.body.thinking).toEqual({ type: 'disabled' });
   });
 
   it('skips cached translations and non-translatable formula blocks', () => {
@@ -87,14 +107,14 @@ describe('AI translation helpers', () => {
       {
         provider: 'kimi',
         baseURL: 'https://api.moonshot.cn/v1',
-        model: 'kimi-k2'
+        model: 'kimi-k2.5'
       },
       '2026-05-26T12:00:00.000Z'
     );
 
     expect(updated.translation).toBe('中文译文');
     expect(updated.provider).toBe('kimi');
-    expect(updated.model).toBe('kimi-k2');
+    expect(updated.model).toBe('kimi-k2.5');
     expect(updated.translatedAt).toBe('2026-05-26T12:00:00.000Z');
   });
 });

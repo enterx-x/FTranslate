@@ -212,11 +212,15 @@ button:disabled {
   border-radius: 0;
   background: transparent !important;
   box-shadow: none !important;
-  text-decoration-line: underline;
-  text-decoration-color: #dc2626;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 0.12em;
-  text-decoration-skip-ink: none;
+  text-decoration: none !important;
+}
+
+.pdf-highlight-overlay-line {
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+  border-radius: 999px;
+  background: #dc2626;
 }
 
 .translation-panel {

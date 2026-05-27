@@ -34,9 +34,6 @@ const DIGIT_PATTERN = /\p{N}/u;
 const MIN_SENTENCE_LENGTH = 36;
 const MIN_PARTIAL_MATCH_SCORE = 0.75;
 const MIN_FUZZY_SCORE = 0.75;
-const LONG_HIGHLIGHT_QUERY_LIMIT = 850;
-const LONG_HIGHLIGHT_TARGET_LENGTH = 280;
-
 export function normalizePdfSearchText(text: string): string {
   return buildNormalizedCharacters([{ str: text }])
     .map((character) => character.value)
@@ -45,26 +42,8 @@ export function normalizePdfSearchText(text: string): string {
 }
 
 export function buildPdfHighlightQuery(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed.length <= LONG_HIGHLIGHT_QUERY_LIMIT) {
-    return trimmed;
-  }
-
-  const sentences = splitSentences(trimmed);
-  let query = '';
-
-  for (const sentence of sentences) {
-    const nextQuery = query ? `${query} ${sentence}` : sentence;
-    if (query && nextQuery.length > LONG_HIGHLIGHT_TARGET_LENGTH) {
-      break;
-    }
-    if (!query && nextQuery.length > LONG_HIGHLIGHT_TARGET_LENGTH) {
-      return nextQuery.slice(0, LONG_HIGHLIGHT_TARGET_LENGTH).trim();
-    }
-    query = nextQuery;
-  }
-
-  return query || trimmed.slice(0, LONG_HIGHLIGHT_TARGET_LENGTH);
+  // 保留完整原文；PdfViewer 会把长段拆成多个 PDF.js 官方 find 查询，避免只命中前几句。
+  return text.trim();
 }
 
 export function findTextItemMatches(items: PdfTextItemLike[], query: string): number[] {

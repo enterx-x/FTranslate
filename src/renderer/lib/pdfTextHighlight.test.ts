@@ -13,28 +13,26 @@ describe('PDF text highlight matching', () => {
     );
   });
 
-  it('uses leading sentences for very long highlight queries', () => {
-    const query = buildPdfHighlightQuery(
-      [
-        'First sentence explains the model and should stay in the PDF lookup query.',
-        'Second sentence gives enough context for matching and should also stay.',
-        'Third sentence belongs to another page and should not be needed for initial highlighting.',
-        'Fourth sentence makes the paragraph longer than the limit.'
-      ].join(' ').repeat(8)
-    );
+  it('keeps very long highlight queries intact for the PDF viewer fragment search', () => {
+    const text = [
+      'First sentence explains the model and should stay in the PDF lookup query.',
+      'Second sentence gives enough context for matching and should also stay.',
+      'Third sentence belongs to another page and should not be needed for initial highlighting.',
+      'Fourth sentence makes the paragraph longer than the limit.'
+    ].join(' ').repeat(8);
+    const query = buildPdfHighlightQuery(text);
 
-    expect(query).toContain('First sentence explains the model');
-    expect(query).toContain('Second sentence gives enough context');
-    expect(query.length).toBeLessThan(900);
+    expect(query).toBe(text);
+    expect(query).toContain('Fourth sentence makes the paragraph longer than the limit.');
   });
 
-  it('truncates a single very long leading sentence for stable PDF lookup', () => {
-    const query = buildPdfHighlightQuery(
-      `${'A very long leading sentence keeps going with many descriptive clauses about the model '.repeat(12)}. Tail.`
-    );
+  it('does not truncate a single very long leading sentence', () => {
+    const text =
+      `${'A very long leading sentence keeps going with many descriptive clauses about the model '.repeat(12)}. Tail.`;
+    const query = buildPdfHighlightQuery(text);
 
-    expect(query.length).toBeLessThanOrEqual(280);
-    expect(query).toContain('A very long leading sentence');
+    expect(query).toBe(text);
+    expect(query).toContain('Tail.');
   });
 
   it('normalizes whitespace, casing, punctuation, and line-break hyphenation', () => {

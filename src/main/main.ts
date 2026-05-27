@@ -43,6 +43,11 @@ interface AiSettingsView extends AiProviderSettings {
   apiKeyConfigured: boolean;
 }
 
+interface AiConnectionTestResult {
+  ok: boolean;
+  message: string;
+}
+
 interface StoredAiSettings extends AiProviderSettings {
   encryptedApiKey?: string;
 }
@@ -158,12 +163,12 @@ async function loadStoredAiSettings(): Promise<StoredAiSettings> {
     const content = await fs.readFile(getAiSettingsPath(), 'utf8');
     const parsed = JSON.parse(content) as Partial<StoredAiSettings>;
     const fallback = getDefaultAiSettings();
-    return {
+    return normalizeStoredAiSettings({
       provider: parseProvider(parsed.provider) ?? fallback.provider,
       baseURL: typeof parsed.baseURL === 'string' && parsed.baseURL ? parsed.baseURL : fallback.baseURL,
       model: typeof parsed.model === 'string' && parsed.model ? parsed.model : fallback.model,
       encryptedApiKey: typeof parsed.encryptedApiKey === 'string' ? parsed.encryptedApiKey : undefined
-    };
+    });
   } catch {
     return getDefaultAiSettings();
   }
@@ -180,10 +185,22 @@ async function saveStoredAiSettings(request: AiSettingsRequest): Promise<StoredA
         ? encryptApiKey(request.apiKey.trim())
         : existing.encryptedApiKey
   };
+  const normalizedNext = normalizeStoredAiSettings(next);
 
   await fs.mkdir(path.dirname(getAiSettingsPath()), { recursive: true });
-  await fs.writeFile(getAiSettingsPath(), JSON.stringify(next, null, 2), 'utf8');
-  return next;
+  await fs.writeFile(getAiSettingsPath(), JSON.stringify(normalizedNext, null, 2), 'utf8');
+  return normalizedNext;
+}
+
+function normalizeStoredAiSettings(settings: StoredAiSettings): StoredAiSettings {
+  if (settings.provider === 'kimi' && settings.model === 'kimi-k2') {
+    return {
+      ...settings,
+      model: AI_PROVIDER_PRESETS.kimi.model
+    };
+  }
+
+  return settings;
 }
 
 function toAiSettingsView(settings: StoredAiSettings): AiSettingsView {
@@ -244,33 +261,85 @@ async function translateWithAi(request: AiTranslationItem & { force?: boolean })
   }
 
   const chatRequest = buildChatCompletionRequest(settings, request);
-  const response = await fetch(chatRequest.url, {
+  const aiTranslation = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey);
+  return {
+    ...applyAiTranslationResult(request, aiTranslation, settings),
+    skipped: false
+  };
+}
+
+async function testAiConnection(): Promise<AiConnectionTestResult> {
+  const settings = await loadStoredAiSettings();
+  const apiKey = decryptApiKey(settings.encryptedApiKey);
+
+  if (!apiKey) {
+    throw new Error('请先在 AI 设置中保存 API Key。');
+  }
+
+  const chatRequest = buildChatCompletionRequest(settings, {
+    section: 'Connection Test',
+    original: 'Please reply with exactly: 连接成功',
+    translation: '',
+    type: 'paragraph'
+  });
+  const message = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey);
+  return {
+    ok: true,
+    message: message || '连接成功'
+  };
+}
+
+async function executeChatCompletion(
+  url: string,
+  body: ReturnType<typeof buildChatCompletionRequest>['body'],
+  apiKey: string
+): Promise<string> {
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`
     },
-    body: JSON.stringify(chatRequest.body)
+    body: JSON.stringify(body)
   });
 
   const responseText = await response.text();
   if (!response.ok) {
-    throw new Error(`AI 翻译请求失败：HTTP ${response.status} ${responseText}`);
+    throw new Error(`AI 请求失败：HTTP ${response.status} ${formatAiErrorBody(responseText)}`);
   }
 
   const parsed = JSON.parse(responseText) as {
     choices?: Array<{ message?: { content?: string } }>;
   };
-  const translation = parsed.choices?.[0]?.message?.content?.trim();
+  const content = parsed.choices?.[0]?.message?.content?.trim();
 
-  if (!translation) {
-    throw new Error('AI 响应中没有可用译文。');
+  if (!content) {
+    throw new Error('AI 响应中没有可用文本。');
   }
 
-  return {
-    ...applyAiTranslationResult(request, translation, settings),
-    skipped: false
-  };
+  return content;
+}
+
+function formatAiErrorBody(responseText: string): string {
+  try {
+    const parsed = JSON.parse(responseText) as {
+      error?: {
+        message?: string;
+        type?: string;
+        code?: string | number;
+      };
+    };
+    const parts = [parsed.error?.message, parsed.error?.type, parsed.error?.code]
+      .filter(Boolean)
+      .map((part) => String(part));
+    if (parts.length > 0) {
+      return parts.join(' / ');
+    }
+  } catch {
+    // 响应不是 JSON 时保留原始短文本，方便排查 provider 返回的错误。
+  }
+
+  return responseText.slice(0, 800);
 }
 
 function registerIpcHandlers(): void {
@@ -284,6 +353,10 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('ai:translate', async (_event, request: AiTranslationItem & { force?: boolean }) => {
     return translateWithAi(request);
+  });
+
+  ipcMain.handle('ai:test-connection', async () => {
+    return testAiConnection();
   });
 
   ipcMain.handle('dialog:open-pdf', async () => {

@@ -347,6 +347,19 @@ export default function App() {
     }
   }
 
+  async function handleTestAiConnection(): Promise<void> {
+    try {
+      setIsAiBusy(true);
+      setStatusMessage('正在测试 AI 连接...');
+      const result = await window.electronAPI.testAiConnection();
+      setStatusMessage(result.ok ? `AI 连接成功：${result.message}` : `AI 连接失败：${result.message}`);
+    } catch (error) {
+      setStatusMessage(`AI 连接测试失败：${String(error)}`);
+    } finally {
+      setIsAiBusy(false);
+    }
+  }
+
   function handleBuildAiCacheDocument(): void {
     if (extractedPdfBlocks.length === 0) {
       setStatusMessage('还没有可用的 PDF 文本提取结果，请先等待 PDF 渲染完成。');
@@ -771,6 +784,7 @@ export default function App() {
                 onProviderChange={handleProviderChange}
                 onAiFormChange={handleAiFormChange}
                 onSaveSettings={handleSaveAiSettings}
+                onTestConnection={handleTestAiConnection}
                 onBuildCache={handleBuildAiCacheDocument}
                 onSaveCache={handleSaveAiCache}
                 onTranslateCurrent={handleTranslateCurrentWithAi}

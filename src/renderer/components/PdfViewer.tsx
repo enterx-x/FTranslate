@@ -21,6 +21,8 @@ import {
   type ExtractedPdfBlock,
   type PositionedPdfTextItem
 } from '../lib/pdfTextStructure';
+import { buildHighlightOverlayLines, type HighlightRectLike } from '../lib/pdfHighlightOverlay';
+import { buildOfficialFindFragments } from '../lib/pdfFindQuery';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -54,6 +56,11 @@ interface FindControlStateEvent extends FindMatchesCountEvent {
   state?: number;
 }
 
+interface HighlightSequenceResult {
+  totalMatches: number;
+  matchedFragments: number;
+}
+
 export function PdfViewer(props: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerElementRef = useRef<HTMLDivElement | null>(null);
@@ -63,6 +70,9 @@ export function PdfViewer(props: PdfViewerProps) {
   const pdfViewerRef = useRef<PdfViewerRuntime | null>(null);
   const propsRef = useRef(props);
   const currentFindQueryRef = useRef('');
+  const activeHighlightRunIdRef = useRef(0);
+  const highlightRectStoreRef = useRef<Map<number, HighlightRectLike[]>>(new Map());
+  const isHighlightSequenceRunningRef = useRef(false);
   const pendingZoomAnchorRef = useRef<PdfZoomAnchor | null>(null);
   const isSpacePressedRef = useRef(false);
   const panStateRef = useRef<{
@@ -137,14 +147,23 @@ export function PdfViewer(props: PdfViewerProps) {
     }
 
     function handleFindMatchesCount(event: FindMatchesCountEvent): void {
+      if (isHighlightSequenceRunningRef.current) {
+        return;
+      }
+
       const query = currentFindQueryRef.current;
       const total = event.matchesCount?.total ?? 0;
       if (query && total > 0) {
         propsRef.current.onHighlightStatusChange?.(`PDF.js 官方搜索已高亮当前段原文，共 ${total} 处。`);
+        scheduleHighlightOverlayPaint();
       }
     }
 
     function handleFindControlState(event: FindControlStateEvent): void {
+      if (isHighlightSequenceRunningRef.current) {
+        return;
+      }
+
       const query = currentFindQueryRef.current;
       if (!query) {
         return;
@@ -153,6 +172,7 @@ export function PdfViewer(props: PdfViewerProps) {
       const total = event.matchesCount?.total ?? 0;
       if (total > 0) {
         propsRef.current.onHighlightStatusChange?.(`PDF.js 官方搜索已高亮当前段原文，共 ${total} 处。`);
+        scheduleHighlightOverlayPaint();
         return;
       }
 
@@ -168,6 +188,8 @@ export function PdfViewer(props: PdfViewerProps) {
     eventBus.on('scalechanging', handleScaleChanging);
     eventBus.on('updatefindmatchescount', handleFindMatchesCount);
     eventBus.on('updatefindcontrolstate', handleFindControlState);
+    eventBus.on('updatetextlayermatches', scheduleHighlightOverlayPaint);
+    eventBus.on('textlayerrendered', scheduleHighlightOverlayPaint);
 
     eventBusRef.current = eventBus;
     linkServiceRef.current = linkService;
@@ -180,6 +202,8 @@ export function PdfViewer(props: PdfViewerProps) {
       eventBus.off('scalechanging', handleScaleChanging);
       eventBus.off('updatefindmatchescount', handleFindMatchesCount);
       eventBus.off('updatefindcontrolstate', handleFindControlState);
+      eventBus.off('updatetextlayermatches', scheduleHighlightOverlayPaint);
+      eventBus.off('textlayerrendered', scheduleHighlightOverlayPaint);
       pdfViewer.setDocument(null as unknown as PDFDocumentProxy);
       linkService.setDocument(null);
       findController.setDocument(null as unknown as PDFDocumentProxy);
@@ -253,6 +277,10 @@ export function PdfViewer(props: PdfViewerProps) {
     return () => {
       cancelled = true;
       currentFindQueryRef.current = '';
+      activeHighlightRunIdRef.current += 1;
+      isHighlightSequenceRunningRef.current = false;
+      clearHighlightRectStore();
+      clearHighlightOverlay();
       if (loadedDocument) {
         pdfViewerRef.current?.setDocument(null as unknown as PDFDocumentProxy);
         linkServiceRef.current?.setDocument(null);
@@ -297,16 +325,28 @@ export function PdfViewer(props: PdfViewerProps) {
 
     const query = props.highlightText?.trim() ?? '';
     currentFindQueryRef.current = query;
+    const runId = activeHighlightRunIdRef.current + 1;
+    activeHighlightRunIdRef.current = runId;
+    isHighlightSequenceRunningRef.current = false;
+    clearHighlightRectStore();
 
     if (!query) {
       eventBus.dispatch('find', buildFindRequest(findController, ''));
       props.onHighlightStatusChange?.('');
+      clearHighlightOverlay();
       return;
     }
 
     props.onHighlightStatusChange?.('正在使用 PDF.js 官方搜索定位当前段原文。');
-    eventBus.dispatch('find', buildFindRequest(findController, query));
-  }, [documentProxy, findReadyToken, props.highlightText]);
+    clearHighlightOverlay();
+    const fragments = buildOfficialFindFragments(query);
+    void runHighlightSequence(runId, fragments, eventBus, findController);
+
+    return () => {
+      activeHighlightRunIdRef.current += 1;
+      isHighlightSequenceRunningRef.current = false;
+    };
+  }, [documentProxy, findReadyToken, props.highlightText, props.scale]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
@@ -461,6 +501,267 @@ export function PdfViewer(props: PdfViewerProps) {
     return Array.from(viewerElementRef.current?.querySelectorAll<HTMLElement>('.page') ?? []);
   }
 
+  async function runHighlightSequence(
+    runId: number,
+    fragments: string[],
+    eventBus: PdfEventBusRuntime,
+    findController: PdfFindControllerRuntime
+  ): Promise<void> {
+    if (fragments.length === 0) {
+      return;
+    }
+
+    isHighlightSequenceRunningRef.current = true;
+    let totalMatches = 0;
+    let matchedFragments = 0;
+
+    for (const fragment of fragments) {
+      if (activeHighlightRunIdRef.current !== runId) {
+        return;
+      }
+
+      eventBus.dispatch('find', buildFindRequest(findController, fragment));
+      const findMatches = await waitForFindResult(eventBus, runId);
+      await waitForAnimationFrames(3);
+
+      if (activeHighlightRunIdRef.current !== runId) {
+        return;
+      }
+
+      const addedRects = collectCurrentOfficialHighlightRects();
+      if (findMatches > 0 || addedRects > 0) {
+        matchedFragments += 1;
+        totalMatches += Math.max(findMatches, 1);
+      }
+      repaintStoredHighlightOverlay();
+    }
+
+    if (activeHighlightRunIdRef.current !== runId) {
+      return;
+    }
+
+    isHighlightSequenceRunningRef.current = false;
+    if (matchedFragments > 0) {
+      propsRef.current.onHighlightStatusChange?.(
+        `PDF.js 官方搜索已高亮当前段原文，共 ${matchedFragments} 个片段 / ${totalMatches} 处。`
+      );
+      return;
+    }
+
+    propsRef.current.onHighlightStatusChange?.(
+      'PDF.js 官方搜索未找到当前段原文；请缩短 original 字段或检查 PDF 是否包含可复制文本。'
+    );
+  }
+
+  function waitForFindResult(eventBus: PdfEventBusRuntime, runId: number): Promise<number> {
+    return new Promise((resolve) => {
+      let bestTotal = 0;
+      let finishTimer: number | null = null;
+      let timeoutTimer: number | null = null;
+
+      const cleanup = (): void => {
+        eventBus.off('updatefindmatchescount', handleMatchesCount);
+        eventBus.off('updatefindcontrolstate', handleControlState);
+        if (finishTimer !== null) {
+          window.clearTimeout(finishTimer);
+        }
+        if (timeoutTimer !== null) {
+          window.clearTimeout(timeoutTimer);
+        }
+      };
+
+      const finish = (): void => {
+        cleanup();
+        resolve(bestTotal);
+      };
+
+      const scheduleFinish = (delay: number): void => {
+        if (finishTimer !== null) {
+          window.clearTimeout(finishTimer);
+        }
+        finishTimer = window.setTimeout(finish, delay);
+      };
+
+      function handleMatchesCount(event: FindMatchesCountEvent): void {
+        if (activeHighlightRunIdRef.current !== runId) {
+          finish();
+          return;
+        }
+
+        bestTotal = Math.max(bestTotal, event.matchesCount?.total ?? 0);
+        if (bestTotal > 0) {
+          scheduleFinish(450);
+        }
+      }
+
+      function handleControlState(event: FindControlStateEvent): void {
+        if (activeHighlightRunIdRef.current !== runId) {
+          finish();
+          return;
+        }
+
+        bestTotal = Math.max(bestTotal, event.matchesCount?.total ?? 0);
+        if (bestTotal > 0) {
+          scheduleFinish(450);
+          return;
+        }
+
+        if (event.state === FindState.NOT_FOUND) {
+          scheduleFinish(650);
+        }
+      }
+
+      eventBus.on('updatefindmatchescount', handleMatchesCount);
+      eventBus.on('updatefindcontrolstate', handleControlState);
+      timeoutTimer = window.setTimeout(finish, 3800);
+    });
+  }
+
+  function waitForAnimationFrames(frameCount: number): Promise<void> {
+    return new Promise((resolve) => {
+      function step(remainingFrames: number): void {
+        if (remainingFrames <= 0) {
+          resolve();
+          return;
+        }
+
+        window.requestAnimationFrame(() => step(remainingFrames - 1));
+      }
+
+      step(frameCount);
+    });
+  }
+
+  function scheduleHighlightOverlayPaint(): void {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (highlightRectStoreRef.current.size > 0) {
+          repaintStoredHighlightOverlay();
+          return;
+        }
+
+        paintHighlightOverlay();
+      });
+    });
+  }
+
+  function clearHighlightOverlay(): void {
+    viewerElementRef.current
+      ?.querySelectorAll('.pdf-highlight-overlay-line')
+      .forEach((element) => element.remove());
+  }
+
+  function clearHighlightRectStore(): void {
+    highlightRectStoreRef.current.clear();
+  }
+
+  function collectCurrentOfficialHighlightRects(): number {
+    let addedCount = 0;
+
+    getPdfPageElements().forEach((pageElement) => {
+      const pageNumber = Number(pageElement.dataset.pageNumber);
+      if (!Number.isInteger(pageNumber)) {
+        return;
+      }
+
+      const pageRect = pageElement.getBoundingClientRect();
+      const highlightRects = Array.from(pageElement.querySelectorAll<HTMLElement>('.textLayer .highlight')).map<
+        HighlightRectLike
+      >((highlightElement) => {
+        const rect = highlightElement.getBoundingClientRect();
+        return {
+          left: rect.left - pageRect.left,
+          top: rect.top - pageRect.top,
+          right: rect.right - pageRect.left,
+          bottom: rect.bottom - pageRect.top,
+          width: rect.width,
+          height: rect.height
+        };
+      });
+
+      addedCount += addHighlightRectsToStore(pageNumber, highlightRects);
+    });
+
+    return addedCount;
+  }
+
+  function addHighlightRectsToStore(pageNumber: number, rects: HighlightRectLike[]): number {
+    const existingRects = highlightRectStoreRef.current.get(pageNumber) ?? [];
+    const existingKeys = new Set(existingRects.map(getHighlightRectKey));
+    let addedCount = 0;
+
+    rects.forEach((rect) => {
+      const key = getHighlightRectKey(rect);
+      if (existingKeys.has(key)) {
+        return;
+      }
+
+      existingKeys.add(key);
+      existingRects.push(rect);
+      addedCount += 1;
+    });
+
+    highlightRectStoreRef.current.set(pageNumber, existingRects);
+    return addedCount;
+  }
+
+  function repaintStoredHighlightOverlay(): void {
+    clearHighlightOverlay();
+    getPdfPageElements().forEach((pageElement) => {
+      const pageNumber = Number(pageElement.dataset.pageNumber);
+      const storedRects = highlightRectStoreRef.current.get(pageNumber);
+      if (!Number.isInteger(pageNumber) || !storedRects?.length) {
+        return;
+      }
+
+      drawHighlightLines(pageElement, storedRects);
+    });
+  }
+
+  function paintHighlightOverlay(): void {
+    const viewerElement = viewerElementRef.current;
+    if (!viewerElement || !currentFindQueryRef.current) {
+      clearHighlightOverlay();
+      return;
+    }
+
+    clearHighlightOverlay();
+    getPdfPageElements().forEach((pageElement) => {
+      const pageRect = pageElement.getBoundingClientRect();
+      const highlightRects = Array.from(pageElement.querySelectorAll<HTMLElement>('.textLayer .highlight')).map<
+        HighlightRectLike
+      >((highlightElement) => {
+        const rect = highlightElement.getBoundingClientRect();
+        return {
+          left: rect.left - pageRect.left,
+          top: rect.top - pageRect.top,
+          right: rect.right - pageRect.left,
+          bottom: rect.bottom - pageRect.top,
+          width: rect.width,
+          height: rect.height
+        };
+      });
+      drawHighlightLines(pageElement, highlightRects);
+    });
+  }
+
+  function drawHighlightLines(pageElement: HTMLElement, highlightRects: HighlightRectLike[]): void {
+    const lines = buildHighlightOverlayLines(highlightRects, {
+      width: pageElement.clientWidth,
+      height: pageElement.clientHeight
+    });
+
+    lines.forEach((line) => {
+      const element = document.createElement('div');
+      element.className = 'pdf-highlight-overlay-line';
+      element.style.left = `${line.left}px`;
+      element.style.top = `${line.top}px`;
+      element.style.width = `${line.width}px`;
+      element.style.height = `${line.height}px`;
+      pageElement.append(element);
+    });
+  }
+
   if (!props.pdfData) {
     return (
       <div className="empty-state">
@@ -496,7 +797,7 @@ export function PdfViewer(props: PdfViewerProps) {
 }
 
 function buildFindRequest(source: PdfFindControllerRuntime, queryText: string): object {
-  const query = buildOfficialFindQuery(queryText);
+  const query = queryText.trim();
   return {
     source,
     type: '',
@@ -510,28 +811,10 @@ function buildFindRequest(source: PdfFindControllerRuntime, queryText: string): 
   };
 }
 
-function buildOfficialFindQuery(queryText: string): string | string[] {
-  const trimmed = queryText.trim();
-  if (!trimmed) {
-    return '';
-  }
-
-  const sentences = trimmed
-    .split(/(?<=[.!?])\s+/u)
-    .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence.length >= 32);
-
-  // PDF.js 原生 find 支持 string[]，会按多个候选片段搜索并使用官方 textLayer 坐标高亮。
-  // 这里把长段落拆成句子，避免整段因换行断词或一个字符差异而完全不命中。
-  if (sentences.length >= 2) {
-    return sentences.slice(0, 4);
-  }
-
-  if (trimmed.length > 320) {
-    return trimmed.slice(0, 320);
-  }
-
-  return trimmed;
+function getHighlightRectKey(rect: HighlightRectLike): string {
+  return [rect.left, rect.top, rect.right, rect.bottom]
+    .map((value) => Math.round(value * 2) / 2)
+    .join(':');
 }
 
 async function extractPdfOutline(

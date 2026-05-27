@@ -38,6 +38,11 @@ export interface AiTranslateResult {
   skipped: boolean;
 }
 
+export interface AiConnectionTestResult {
+  ok: boolean;
+  message: string;
+}
+
 export interface ElectronApi {
   openPdf: () => Promise<PdfFilePayload | null>;
   openTranslation: () => Promise<TextFilePayload | null>;
@@ -57,6 +62,7 @@ export interface ElectronApi {
     sourceHash?: string;
     force?: boolean;
   }) => Promise<AiTranslateResult>;
+  testAiConnection: () => Promise<AiConnectionTestResult>;
   saveTextFile: (request: {
     filePath?: string;
     content: string;

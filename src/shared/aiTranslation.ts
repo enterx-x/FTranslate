@@ -22,11 +22,14 @@ export interface ChatCompletionRequest {
   url: string;
   body: {
     model: string;
-    temperature: number;
     messages: Array<{
       role: 'system' | 'user';
       content: string;
     }>;
+    temperature?: number;
+    thinking?: {
+      type: 'disabled';
+    };
   };
 }
 
@@ -44,7 +47,7 @@ export const AI_PROVIDER_PRESETS: Record<Exclude<AiProviderId, 'custom'>, AiProv
   kimi: {
     provider: 'kimi',
     baseURL: 'https://api.moonshot.cn/v1',
-    model: 'kimi-k2'
+    model: 'kimi-k2.5'
   }
 };
 
@@ -52,26 +55,33 @@ export function buildChatCompletionRequest(
   settings: AiProviderSettings,
   item: AiTranslationItem
 ): ChatCompletionRequest {
+  const body: ChatCompletionRequest['body'] = {
+    model: settings.model,
+    messages: [
+      {
+        role: 'system',
+        content: [
+          '你是严谨的学术论文英译中助手。',
+          '请忠实翻译英文论文段落为中文，保留术语、变量名、公式符号、引用编号和模型名称。',
+          '只输出中文译文，不要解释，不要添加 Markdown 代码块。'
+        ].join('\n')
+      },
+      {
+        role: 'user',
+        content: [`Section: ${item.section || 'Untitled'}`, '', item.original].join('\n')
+      }
+    ]
+  };
+
+  if (settings.provider === 'kimi' && settings.model.toLowerCase().startsWith('kimi-k2.5')) {
+    body.thinking = { type: 'disabled' };
+  } else {
+    body.temperature = 0.2;
+  }
+
   return {
     url: buildChatCompletionsUrl(settings.baseURL),
-    body: {
-      model: settings.model,
-      temperature: 0.2,
-      messages: [
-        {
-          role: 'system',
-          content: [
-            '你是严谨的学术论文英译中助手。',
-            '请忠实翻译英文论文段落为中文，保留术语、变量名、公式符号、引用编号和模型名称。',
-            '只输出中文译文，不要解释，不要添加 Markdown 代码块。'
-          ].join('\n')
-        },
-        {
-          role: 'user',
-          content: [`Section: ${item.section || 'Untitled'}`, '', item.original].join('\n')
-        }
-      ]
-    }
+    body
   };
 }
 

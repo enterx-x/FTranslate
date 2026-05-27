@@ -21,6 +21,7 @@ interface AiModePanelProps {
   onProviderChange: (provider: AiProviderId) => void;
   onAiFormChange: (patch: Partial<AiFormState>) => void;
   onSaveSettings: () => void;
+  onTestConnection: () => void;
   onBuildCache: () => void;
   onSaveCache: () => void;
   onTranslateCurrent: (force?: boolean) => void;
@@ -88,6 +89,13 @@ export function AiModePanel(props: AiModePanelProps) {
         <div className="panel-actions">
           <button type="button" disabled={props.isBusy} onClick={props.onSaveSettings}>
             保存 AI 设置
+          </button>
+          <button
+            type="button"
+            disabled={props.isBusy || !props.aiSettings?.apiKeyConfigured}
+            onClick={props.onTestConnection}
+          >
+            测试 AI 连接
           </button>
           <span className="subtle">
             {props.aiSettings?.apiKeyConfigured ? 'API Key 已加密保存到本机' : '尚未保存 API Key'}

@@ -26,6 +26,19 @@ const scenarios = [
     expectUnderlines: 'positive'
   },
   {
+    name: 'intro-full-paragraph-match',
+    section: 'I. INTRODUCTION',
+    original: [
+      'Foundation models work on the principle that generalist capabilities emerge from training on large and diverse datasets.',
+      'For example, large language models can not only recall facts and semantic knowledge, but they can also compose that knowledge in new ways, solving problems that require unlikely connections, applying user-defined formats (e.g., JSON), and performing chain-of-thought reasoning.',
+      'This kind of compositional generalization is arguably the cornerstone of generalist capabilities, but it has proven elusive in the domain of physical intelligence.',
+      'While robotic foundation models such as vision-language-action models (VLAs) have advanced significantly in size and capability, their ability to generalize to new tasks or recombine skills in new ways has so far been limited.',
+      'Unlike language models, which can compose different capabilities from their training data to solve new problems, prior VLAs not only lack the ability to solve new tasks, but often struggle to fluently perform all of the instructions they were trained on without task-specific fine-tuning.'
+    ].join(' '),
+    expectUnderlines: 'positive',
+    minOverlayLines: 14
+  },
+  {
     name: 'title-high-confidence',
     section: 'Title',
     original: '\u03c00.7: a Steerable Generalist Robotic Foundation Model with Emergent Capabilities',
@@ -181,20 +194,18 @@ async function waitForReaderSettled(client) {
 async function getHighlightSnapshot(client) {
   return evaluateJson(client, `() => ({
     officialHighlights: document.querySelectorAll('.pdf-viewer-shell .textLayer .highlight').length,
+    overlayLines: document.querySelectorAll('.pdf-highlight-overlay-line').length,
     legacyUnderlines: document.querySelectorAll('.pdf-highlight-underline').length,
     redTextMatches: document.querySelectorAll('.pdf-highlight-match').length,
     status: document.querySelector('.status-bar')?.textContent ?? '',
-    highlightDetail: [...document.querySelectorAll('.pdf-viewer-shell .textLayer .highlight')].map((node) => {
+    overlayDetail: [...document.querySelectorAll('.pdf-highlight-overlay-line')].map((node) => {
       const rect = node.getBoundingClientRect();
       const page = node.closest('.page')?.getBoundingClientRect();
       const style = getComputedStyle(node);
       return {
         width: rect.width,
         height: rect.height,
-        borderBottomWidth: parseFloat(style.borderBottomWidth || '0'),
         backgroundColor: style.backgroundColor,
-        textDecorationLine: style.textDecorationLine,
-        textDecorationThickness: style.textDecorationThickness,
         outOfPage: page ? rect.left < page.left || rect.right > page.right || rect.top < page.top || rect.bottom > page.bottom : true,
         outOfViewport: rect.right < 0 || rect.left > window.innerWidth || rect.bottom < 0 || rect.top > window.innerHeight
       };
@@ -211,7 +222,13 @@ async function waitForHighlightSnapshot(client, scenario) {
       return snapshot;
     }
 
-    if (scenario.expectUnderlines !== 'positive' || snapshot.officialHighlights > 0) {
+    const hasEnoughOverlayLines =
+      snapshot.overlayLines >= (scenario.minOverlayLines ?? (scenario.expectUnderlines === 'positive' ? 1 : 0));
+
+    if (
+      scenario.expectUnderlines !== 'positive' ||
+      (snapshot.officialHighlights > 0 && hasEnoughOverlayLines)
+    ) {
       return snapshot;
     }
 
@@ -248,15 +265,16 @@ async function runScenario(scenario) {
     await waitForReaderSettled(client);
 
     const snapshot = await waitForHighlightSnapshot(client, scenario);
-    validateHighlightScenario(scenario, snapshot);
-
     const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
     await writeFile(outputPath, Buffer.from(screenshot.data, 'base64'));
+    validateHighlightScenario(scenario, snapshot);
+
     client.close();
     return {
       name: scenario.name,
       screenshot: outputPath,
       officialHighlights: snapshot.officialHighlights,
+      overlayLines: snapshot.overlayLines,
       status: snapshot.status
     };
   } finally {
@@ -302,6 +320,7 @@ async function runAiQueueScenario() {
         return list ? list.scrollHeight > list.clientHeight : false;
       })(),
       officialHighlights: document.querySelectorAll('.pdf-viewer-shell .textLayer .highlight').length,
+      overlayLines: document.querySelectorAll('.pdf-highlight-overlay-line').length,
       legacyUnderlines: document.querySelectorAll('.pdf-highlight-underline').length,
       redTextMatches: document.querySelectorAll('.pdf-highlight-match').length,
       status: document.querySelector('.status-bar')?.textContent ?? ''
@@ -352,16 +371,12 @@ function validateHighlightScenario(scenario, snapshot) {
     throw new Error(`${scenario.name}: expected no legacy custom underlines, got ${snapshot.legacyUnderlines}`);
   }
 
-  if (snapshot.highlightDetail.some((line) => line.outOfPage)) {
-    throw new Error(`${scenario.name}: official highlight escaped page bounds`);
+  if (snapshot.overlayDetail.some((line) => line.outOfPage)) {
+    throw new Error(`${scenario.name}: overlay highlight escaped page bounds`);
   }
 
-  if (snapshot.highlightDetail.some((line) => line.borderBottomWidth > 0.1)) {
-    throw new Error(`${scenario.name}: official highlight should use text underline, not border-bottom`);
-  }
-
-  if (snapshot.highlightDetail.some((line) => !line.textDecorationLine.includes('underline'))) {
-    throw new Error(`${scenario.name}: official highlight should use text-decoration underline`);
+  if (snapshot.overlayDetail.some((line) => line.height > 1.5)) {
+    throw new Error(`${scenario.name}: overlay highlight line should be 1px`);
   }
 
   if (scenario.expectUnderlines === 0 && snapshot.officialHighlights !== 0) {
@@ -374,11 +389,30 @@ function validateHighlightScenario(scenario, snapshot) {
     );
   }
 
+  if (scenario.expectUnderlines === 'positive' && snapshot.overlayLines <= 0) {
+    throw new Error(`${scenario.name}: expected visible merged overlay lines`);
+  }
+
+  if (
+    scenario.name === 'title-high-confidence' &&
+    snapshot.overlayLines >= snapshot.officialHighlights
+  ) {
+    throw new Error(
+      `${scenario.name}: expected merged overlay lines, got ${snapshot.overlayLines} overlay lines for ${snapshot.officialHighlights} PDF.js spans`
+    );
+  }
+
+  if (scenario.minOverlayLines && snapshot.overlayLines < scenario.minOverlayLines) {
+    throw new Error(
+      `${scenario.name}: expected at least ${scenario.minOverlayLines} merged overlay lines for a full paragraph, got ${snapshot.overlayLines}`
+    );
+  }
+
   if (
     scenario.expectUnderlines === 'positive' &&
-    !snapshot.highlightDetail.some((line) => !line.outOfViewport)
+    !snapshot.overlayDetail.some((line) => !line.outOfViewport)
   ) {
-    throw new Error(`${scenario.name}: expected at least one PDF.js highlight inside the viewport`);
+    throw new Error(`${scenario.name}: expected at least one merged overlay line inside the viewport`);
   }
 
   if (scenario.expectStatus === 'full' && !snapshot.status.includes('PDF.js \u5b98\u65b9\u641c\u7d22')) {
@@ -461,9 +495,14 @@ function validateAiQueueScenario(snapshot) {
     throw new Error(`ai-queue: merged right-column text into first Introduction body row: ${introRow}`);
   }
 
-  if (snapshot.officialHighlights !== 0 || snapshot.legacyUnderlines !== 0 || snapshot.redTextMatches !== 0) {
+  if (
+    snapshot.officialHighlights !== 0 ||
+    snapshot.overlayLines !== 0 ||
+    snapshot.legacyUnderlines !== 0 ||
+    snapshot.redTextMatches !== 0
+  ) {
     throw new Error(
-      `ai-queue: AI mode should not draw PDF highlights while reviewing extracted candidates, got ${snapshot.officialHighlights} official highlights, ${snapshot.legacyUnderlines} legacy underlines and ${snapshot.redTextMatches} red text overlays`
+      `ai-queue: AI mode should not draw PDF highlights while reviewing extracted candidates, got ${snapshot.officialHighlights} official highlights, ${snapshot.overlayLines} overlay lines, ${snapshot.legacyUnderlines} legacy underlines and ${snapshot.redTextMatches} red text overlays`
     );
   }
 
