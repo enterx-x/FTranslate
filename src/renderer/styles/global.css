@@ -455,25 +455,52 @@ button:disabled {
 }
 
 .ai-summary {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 14px;
+  align-items: start;
   color: #334155;
   font-size: 13px;
 }
 
-.ai-summary > span:first-child {
-  flex: 1;
+.ai-summary-file {
   min-width: 0;
   line-height: 1.5;
-  word-break: keep-all;
-  overflow-wrap: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.ai-summary > .subtle {
-  flex-shrink: 0;
+.ai-summary-page {
+  justify-self: end;
+  color: #475569;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.ai-summary-stats {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-summary-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #dbeafe;
+  border-radius: 6px;
+  padding: 4px 8px;
+  background: #f8fafc;
+  color: #475569;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.ai-summary-stat strong {
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
 }
 
 .ai-item-list {

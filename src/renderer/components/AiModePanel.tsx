@@ -120,12 +120,23 @@ export function AiModePanel(props: AiModePanelProps) {
         {jsonDocument ? (
           <>
             <div className="ai-summary">
-              <span>
-                当前缓存：{jsonDocument.sourceName ?? '未命名 JSON'}，正文自然段 {queueStats.total} 段，
-                已缓存 {queueStats.cached} 段，待翻译 {queueStats.pending} 段，跳过 {queueStats.skipped} 段
-              </span>
-              <span className="subtle">
+              <span className="ai-summary-file">当前缓存：{jsonDocument.sourceName ?? '未命名 JSON'}</span>
+              <span className="ai-summary-page">
                 {props.currentIndex + 1} / {jsonDocument.items.length}
+              </span>
+              <span className="ai-summary-stats" aria-label="AI 翻译队列统计">
+                <span className="ai-summary-stat">
+                  正文自然段 <strong>{queueStats.total}</strong>
+                </span>
+                <span className="ai-summary-stat">
+                  已缓存 <strong>{queueStats.cached}</strong>
+                </span>
+                <span className="ai-summary-stat">
+                  待翻译 <strong>{queueStats.pending}</strong>
+                </span>
+                <span className="ai-summary-stat">
+                  跳过 <strong>{queueStats.skipped}</strong>
+                </span>
               </span>
             </div>
             <div className="panel-actions">

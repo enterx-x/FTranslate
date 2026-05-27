@@ -233,6 +233,7 @@ async function runAiQueueScenario() {
     const snapshot = await evaluateJson(client, `() => ({
       rows: [...document.querySelectorAll('.ai-item-row')].map((row) => row.textContent ?? ''),
       summary: document.querySelector('.ai-summary')?.textContent ?? '',
+      summaryStats: [...document.querySelectorAll('.ai-summary-stat')].map((node) => node.textContent ?? ''),
       underlines: document.querySelectorAll('.pdf-highlight-underline').length,
       redTextMatches: document.querySelectorAll('.pdf-highlight-match').length,
       status: document.querySelector('.status-bar')?.textContent ?? ''
@@ -306,6 +307,10 @@ function validateHighlightScenario(scenario, snapshot) {
 function validateAiQueueScenario(snapshot) {
   if (snapshot.rows.length === 0) {
     throw new Error('ai-queue: expected extracted paragraph rows');
+  }
+
+  if (snapshot.summaryStats.length !== 4) {
+    throw new Error(`ai-queue: expected 4 structured summary stats, got ${snapshot.summaryStats.length}`);
   }
 
   const joinedRows = snapshot.rows.join('\n');
