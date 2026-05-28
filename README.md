@@ -1,11 +1,12 @@
 # PDF Translation Reader
 
-本项目是一个本地 Windows 桌面端论文阅读工具，用于“PDF 原文 + 中文翻译”交互阅读，并提供 AI 翻译缓存、阅读笔记、论文库和独立研究表格。
+本项目是一个本地 Windows 桌面端论文阅读工具，用于论文 PDF 阅读、整本双语 PDF 翻译、AI 翻译缓存、阅读笔记、论文库和独立研究表格。
 
 技术栈：
 
 - Electron + React + TypeScript + Vite
 - PDF.js，本地渲染 PDF，不依赖在线 PDF 服务
+- PDFMathTranslate sidecar，用于生成保留论文排版的整本双语 PDF
 - KaTeX，用于右侧译文、笔记和表格内公式显示
 - Univer `0.24.0`，用于独立研究表格模块
 - electron-builder，生成 Windows NSIS 安装包
@@ -57,6 +58,7 @@ npm run dist
 - 主页工作台：启动后先显示“研究表格”和“论文库”两个同级模块，后续可以继续扩展新的研究工具入口。
 - 论文库：只保留论文主要信息，包括中文标题、英文标题、期刊、作者、年份、最近打开时间、上次页码、PDF/翻译/AI 缓存状态；默认是只读展示，点击“编辑信息”后才进入输入框编辑。
 - 阅读器：左侧连续滚动 PDF，支持页码跳转、上一页/下一页、按钮缩放、`Ctrl + 鼠标滚轮` 缩放、文本选择复制。
+- 整体双语 PDF：右侧提供“原文 PDF / 双语 PDF”切换，可以调用 PDFMathTranslate 生成整本双语 PDF，也可以导入已有中文/双语 PDF；生成或导入后左侧直接显示整本 PDF，不再依赖右侧段落卡片作为主阅读面。
 - 手动模式：导入 JSON/Markdown/TXT 翻译文件，逐段显示原文和译文，并提供外部 AI JSON 提示词复制。
 - AI 模式：支持 OpenAI、DeepSeek、Kimi 和 Custom OpenAI-compatible API；翻译后逐段保存 JSON 缓存，避免重复消耗 token。
 - 阅读笔记：按论文自动保存到本机论文库记录。
@@ -111,6 +113,30 @@ Provider 策略：
 - DeepSeek/Custom：使用本地 PDF.js 文本提取作为上下文兜底，因为 DeepSeek 官方 chat completions 没有等价 PDF 上传接口。
 
 PDF 上下文会按 provider、PDF 路径、文件大小和修改时间做本地缓存。多选单元格填充会按绑定论文分组，一篇论文的一组选区只构造一次上下文请求，减少重复消耗。
+
+## 整本双语 PDF 翻译
+
+整本双语 PDF 翻译采用开源 PDFMathTranslate 作为 sidecar。应用不会把 Python 运行时塞进安装包，第一版会在本机检测 `pdf2zh` 命令：
+
+```bash
+uv tool install pdf2zh
+```
+
+使用方式：
+
+1. 在阅读器中打开 PDF，或从论文库打开已有论文。
+2. 在右侧“整体 PDF 阅读”区域点击“生成双语 PDF”。
+3. 应用会复用当前 AI 设置里的 Provider、Base URL、Model 和 API Key，把 API Key 只传给主进程子进程环境变量，不写入命令参数和日志。
+4. 生成完成后，左侧 PDF 阅读器自动切换到“双语 PDF”。
+5. 再次打开同一篇论文时，如果 PDF 文件大小和修改时间未变化，会复用本机缓存的双语 PDF，避免重复翻译。
+
+缓存位置在 Electron 用户数据目录：
+
+```text
+%APPDATA%\PDF Translation Reader\translations\<paperId>\
+```
+
+如果你已经用其它工具生成了中文或双语 PDF，可以点击“导入中文/双语 PDF”，导入后同样会作为整本 PDF 在左侧显示，并绑定到当前论文记录。
 
 ## 翻译文件格式
 
@@ -167,6 +193,7 @@ npm run visual:check
 - 主页默认是模块工作台，进入“论文库”后才显示论文表。
 - 论文库只显示主要论文信息，不再混入研究表格列，且默认不出现输入框。
 - 研究表格作为独立页面打开，能看到 Univer 表格 surface、合并后的绑定/解除按钮、格式工具栏，以及原生右键菜单中的 AI 填表和格式刷命令。
+- 已绑定双语 PDF 的论文打开后默认显示“双语 PDF”，右侧能看到“整体 PDF 阅读”控制区。
 - AI 模式队列空白区域点击后不会白屏，仍保持左右分栏和 AI 面板可见。
 
 ## 项目结构
@@ -192,6 +219,7 @@ src/
   shared/
     aiTranslation.ts     OpenAI-compatible chat completions 请求
     aiPaperContext.ts    PDF 上下文 provider 策略
+    pdfTranslation.ts    PDFMathTranslate 命令构造、输出路径和缓存 hash
 scripts/
   visual-check.mjs       打包后视觉验收脚本
 assets/

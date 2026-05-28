@@ -150,6 +150,34 @@ async function waitForResearchSheetCanvas(client) {
   throw new Error(`Research sheet canvas did not paint visible grid content: ${JSON.stringify(snapshot)}`);
 }
 
+async function waitForPdfCanvas(client) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const snapshot = await evaluateJson(client, `() => ({
+      hasCanvas: [...document.querySelectorAll('.pdf-js-viewer-container canvas')]
+        .some((canvas) => canvas.width > 0 && canvas.height > 0),
+      canvasCount: document.querySelectorAll('.pdf-js-viewer-container canvas').length,
+      text: document.querySelector('.whole-pdf-panel')?.textContent ?? ''
+    })`);
+
+    if (snapshot.hasCanvas) {
+      return snapshot;
+    }
+
+    await wait(250);
+  }
+
+  const snapshot = await evaluateJson(client, `() => ({
+    hasCanvas: Boolean(document.querySelector('.pdf-js-viewer-container canvas')),
+    canvasCount: document.querySelectorAll('.pdf-js-viewer-container canvas').length,
+    pdfText: document.querySelector('.pdf-pane')?.textContent?.slice(0, 500) ?? '',
+    panelText: document.querySelector('.whole-pdf-panel')?.textContent ?? ''
+  })`);
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'whole-pdf-canvas-timeout.png'), Buffer.from(shot.data, 'base64'))
+  );
+  throw new Error(`wholePdf: PDF canvas did not render: ${JSON.stringify(snapshot)}`);
+}
+
 async function clickButtonByText(client, text) {
   const clicked = await evaluateJson(client, `() => {
     const needle = ${JSON.stringify(text)};
@@ -386,6 +414,29 @@ async function runAiQueueClickScenario(client) {
   await clickButtonByText(client, '进入论文库');
   await clickButtonByText(client, '打开阅读');
   await waitForAppReady(client);
+  const pdfCanvasStatus = await waitForPdfCanvas(client);
+
+  const wholePdf = await evaluateJson(client, `() => ({
+    hasPanel: Boolean(document.querySelector('.whole-pdf-panel')),
+    panelText: document.querySelector('.whole-pdf-panel')?.textContent ?? '',
+    activeToggle: [...document.querySelectorAll('.pdf-view-toggle button')]
+      .find((button) => button.classList.contains('active'))?.textContent?.trim() ?? '',
+    hasPdfCanvas: ${JSON.stringify(pdfCanvasStatus.hasCanvas)},
+    pdfCanvasCount: ${JSON.stringify(pdfCanvasStatus.canvasCount)},
+    hasGenerateButton: [...document.querySelectorAll('.whole-pdf-panel button')]
+      .some((button) => /生成双语 PDF/.test(button.textContent ?? '')),
+    hasImportButton: [...document.querySelectorAll('.whole-pdf-panel button')]
+      .some((button) => /导入中文\\/双语 PDF/.test(button.textContent ?? ''))
+  })`);
+
+  if (!wholePdf.hasPanel || wholePdf.activeToggle !== '双语 PDF' || !wholePdf.hasPdfCanvas || !wholePdf.hasGenerateButton || !wholePdf.hasImportButton) {
+    throw new Error(`wholePdf: expected translated PDF as primary reading surface, got ${JSON.stringify(wholePdf)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'whole-pdf-reader.png'), Buffer.from(shot.data, 'base64'))
+  );
+
   await clickButtonByText(client, 'AI 模式');
   await client.send('Runtime.evaluate', {
     expression: `
@@ -454,7 +505,7 @@ async function runAiQueueClickScenario(client) {
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'ai-queue-click.png'), Buffer.from(shot.data, 'base64'))
   );
-  return snapshot;
+  return { ...snapshot, wholePdf };
 }
 
 async function main() {
@@ -499,7 +550,16 @@ async function main() {
     const client = await createCdpClient(await waitForWebSocketUrl());
     await client.send('Runtime.enable');
     await client.send('Page.enable');
-    await loadPaperRecord(client, translationPath);
+    await loadPaperRecord(client, translationPath, {
+      translatedPdfPath: pdfPath,
+      translatedPdfName: 'visual-check-dual.pdf',
+      translatedPdfMode: 'dual',
+      translationEngine: 'pdfmathtranslate',
+      translationSourceHash: 'visual-check-source',
+      translatedAt: new Date().toISOString(),
+      translatedProvider: 'kimi',
+      translatedModel: 'kimi-k2.5'
+    });
     await waitForAppReady(client);
 
     const home = await runHomeScenario(client);
