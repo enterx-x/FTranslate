@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import ExcelJS from 'exceljs';
 import {
   AI_PROVIDER_PRESETS,
   applyAiTranslationResult,
@@ -54,6 +55,53 @@ interface SaveTextRequest {
   content: string;
   defaultFileName: string;
   extension: 'json' | 'md';
+}
+
+interface ResearchWorkbookExcelRequest {
+  workbook: ResearchWorkbookExcelPayload;
+}
+
+interface ResearchWorkbookExcelResult {
+  filePath: string;
+  fileName: string;
+}
+
+interface ResearchWorkbookExcelPayload {
+  id: string;
+  sheetName: string;
+  freeze: {
+    ySplit: number;
+    xSplit: number;
+  };
+  columns: ResearchWorkbookExcelColumn[];
+  rows: ResearchWorkbookExcelRow[];
+}
+
+interface ResearchWorkbookExcelColumn {
+  key: string;
+  label: string;
+  width: number;
+}
+
+interface ResearchWorkbookExcelRow {
+  id: string;
+  height?: number;
+  cells: ResearchWorkbookExcelCell[];
+}
+
+interface ResearchWorkbookExcelCell {
+  value: string;
+  style?: ResearchWorkbookExcelCellStyle;
+}
+
+interface ResearchWorkbookExcelCellStyle {
+  fontSize?: number;
+  color?: string;
+  backgroundColor?: string;
+  bold?: boolean;
+  italic?: boolean;
+  align?: 'left' | 'center' | 'right';
+  univerStyle?: unknown;
 }
 
 interface LoadProjectRequest {
@@ -311,7 +359,7 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
   }
 
   await fs.mkdir(outputDir, { recursive: true });
-  const engine = await ensurePdfTranslationRuntime(request.paperId);
+  const engine = await ensurePdfTranslationRuntime(request.paperId, settings);
   sendPdfTranslationProgress({
     paperId: request.paperId,
     status: 'running',
@@ -402,9 +450,14 @@ function checkPdfTranslationEngine(): PdfTranslationEngineView {
   };
 }
 
-async function ensurePdfTranslationRuntime(paperId: string): Promise<PdfTranslationRuntime> {
-  const existing = inspectPdfTranslationRuntime();
+async function ensurePdfTranslationRuntime(
+  paperId: string,
+  settings?: AiProviderSettings
+): Promise<PdfTranslationRuntime> {
+  const preferPrivateRuntime = settings?.provider === 'kimi';
+  const existing = preferPrivateRuntime ? inspectPrivatePdfTranslationRuntime() : inspectPdfTranslationRuntime();
   if (existing) {
+    await patchPrivatePdf2zhTemperatureOption(settings, paperId);
     return existing;
   }
 
@@ -453,7 +506,9 @@ async function ensurePdfTranslationRuntime(paperId: string): Promise<PdfTranslat
     paperId
   });
 
-  const installed = inspectPdfTranslationRuntime();
+  await patchPrivatePdf2zhTemperatureOption(settings, paperId);
+
+  const installed = inspectPrivatePdfTranslationRuntime() ?? inspectPdfTranslationRuntime();
   if (!installed) {
     throw new Error('PDFMathTranslate 安装完成后仍无法启动，请查看安装日志。');
   }
@@ -474,6 +529,11 @@ function inspectPdfTranslationRuntime(): PdfTranslationRuntime | null {
     };
   }
 
+  return inspectPrivatePdfTranslationRuntime();
+}
+
+function inspectPrivatePdfTranslationRuntime(): PdfTranslationRuntime | null {
+  const installCommand = getPdfTranslationInstallCommand();
   const venvCli = getPdf2zhVenvCliPath();
   if (fsSync.existsSync(venvCli)) {
     return {
@@ -497,6 +557,41 @@ function inspectPdfTranslationRuntime(): PdfTranslationRuntime | null {
   return null;
 }
 
+async function patchPrivatePdf2zhTemperatureOption(
+  settings: AiProviderSettings | undefined,
+  paperId: string
+): Promise<void> {
+  if (!settings || !fsSync.existsSync(getPdf2zhVenvPythonPath())) {
+    return;
+  }
+
+  const translatorPath = getPrivatePdf2zhTranslatorPath();
+  if (!fsSync.existsSync(translatorPath)) {
+    return;
+  }
+
+  const content = await fs.readFile(translatorPath, 'utf8');
+  if (content.includes('PDF_TRANSLATION_READER_OPENAI_TEMPERATURE')) {
+    return;
+  }
+
+  const patched = content.replace(
+    'self.options = {"temperature": 0}  # 随机采样可能会打断公式标记',
+    'self.options = {"temperature": float(os.environ.get("PDF_TRANSLATION_READER_OPENAI_TEMPERATURE", "0"))}  # App runtime patch: Kimi K2 requires temperature=1'
+  );
+
+  if (patched === content) {
+    return;
+  }
+
+  sendPdfTranslationProgress({
+    paperId,
+    status: 'running',
+    message: '正在修正 PDFMathTranslate 的 OpenAI-compatible temperature 兼容性。'
+  });
+  await fs.writeFile(translatorPath, patched, 'utf8');
+}
+
 function getPdfTranslationInstallCommand(): string {
   return 'uv tool install pdf2zh 或 py -3.12 -m pip install pdf2zh';
 }
@@ -515,6 +610,10 @@ function getPdf2zhVenvCliPath(): string {
   return process.platform === 'win32'
     ? path.join(getPdf2zhVenvDir(), 'Scripts', 'pdf2zh.exe')
     : path.join(getPdf2zhVenvDir(), 'bin', 'pdf2zh');
+}
+
+function getPrivatePdf2zhTranslatorPath(): string {
+  return path.join(getPdf2zhVenvDir(), 'Lib', 'site-packages', 'pdf2zh', 'translator.py');
 }
 
 function isPdf2zhModuleAvailable(pythonPath: string): boolean {
@@ -728,6 +827,310 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 function sanitizeFileName(value: string): string {
   return value.replace(/[<>:"/\\|?*\u0000-\u001f]+/gu, '_').slice(0, 120) || 'paper';
+}
+
+async function exportResearchWorkbookToExcel(
+  request: ResearchWorkbookExcelRequest
+): Promise<ResearchWorkbookExcelResult | null> {
+  const workbookPayload = normalizeResearchWorkbookExcelPayload(request.workbook);
+  const result = await dialog.showSaveDialog({
+    title: '导出研究表格 Excel',
+    defaultPath: `${sanitizeFileName(workbookPayload.sheetName || 'research-workbook')}.xlsx`,
+    filters: [{ name: 'Excel Workbook', extensions: ['xlsx'] }]
+  });
+
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'PDF Translation Reader';
+  workbook.created = new Date();
+  const worksheet = workbook.addWorksheet(workbookPayload.sheetName || '论文研究表', {
+    views: [{
+      state: 'frozen',
+      xSplit: workbookPayload.freeze.xSplit,
+      ySplit: workbookPayload.freeze.ySplit
+    }]
+  });
+
+  workbookPayload.columns.forEach((column, index) => {
+    worksheet.getColumn(index + 1).width = Math.max(8, Math.round(column.width / 7));
+  });
+
+  workbookPayload.rows.forEach((sourceRow, rowIndex) => {
+    const row = worksheet.getRow(rowIndex + 1);
+    if (sourceRow.height) {
+      row.height = pxToExcelRowHeight(sourceRow.height);
+    }
+
+    sourceRow.cells.forEach((sourceCell, columnIndex) => {
+      const cell = row.getCell(columnIndex + 1);
+      const value = sourceCell.value ?? '';
+      cell.value = value.trim().startsWith('=')
+        ? { formula: value.trim().slice(1) }
+        : value;
+      applyExcelCellStyle(cell, sourceCell.style, rowIndex === 0);
+    });
+    row.commit();
+  });
+
+  await workbook.xlsx.writeFile(result.filePath);
+  return {
+    filePath: result.filePath,
+    fileName: path.basename(result.filePath)
+  };
+}
+
+async function importResearchWorkbookFromExcel(): Promise<{
+  filePath: string;
+  fileName: string;
+  workbook: ResearchWorkbookExcelPayload;
+} | null> {
+  const result = await dialog.showOpenDialog({
+    title: '导入外部 Excel 研究表格',
+    properties: ['openFile'],
+    filters: [{ name: 'Excel Workbook', extensions: ['xlsx'] }]
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  const filePath = result.filePaths[0];
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(filePath);
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
+    throw new Error('Excel 文件中没有可导入的工作表。');
+  }
+
+  const columnCount = Math.max(1, worksheet.actualColumnCount || worksheet.columnCount || 1);
+  const rowCount = Math.max(1, worksheet.actualRowCount || worksheet.rowCount || 1);
+  const columns: ResearchWorkbookExcelColumn[] = Array.from({ length: columnCount }, (_, index) => {
+    const header = readExcelCellText(worksheet.getRow(1).getCell(index + 1)) || `列 ${index + 1}`;
+    return {
+      key: getDefaultResearchColumnKey(index),
+      label: header,
+      width: Math.max(80, Math.round((worksheet.getColumn(index + 1).width || 16) * 7))
+    };
+  });
+  const rows: ResearchWorkbookExcelRow[] = [];
+
+  for (let rowIndex = 1; rowIndex <= rowCount; rowIndex += 1) {
+    const sourceRow = worksheet.getRow(rowIndex);
+    rows.push({
+      id: rowIndex === 1 ? 'header' : `row-${rowIndex - 1}`,
+      height: sourceRow.height ? excelRowHeightToPx(sourceRow.height) : undefined,
+      cells: columns.map((_, columnIndex) => {
+        const sourceCell = sourceRow.getCell(columnIndex + 1);
+        return {
+          value: readExcelCellText(sourceCell),
+          style: readExcelCellStyle(sourceCell)
+        };
+      })
+    });
+  }
+
+  return {
+    filePath,
+    fileName: path.basename(filePath),
+    workbook: {
+      id: 'research-workbook',
+      sheetName: worksheet.name || '论文研究表',
+      freeze: {
+        ySplit: 1,
+        xSplit: 0
+      },
+      columns,
+      rows
+    }
+  };
+}
+
+function normalizeResearchWorkbookExcelPayload(
+  workbook: ResearchWorkbookExcelPayload
+): ResearchWorkbookExcelPayload {
+  const columns = Array.isArray(workbook.columns) && workbook.columns.length > 0
+    ? workbook.columns
+    : [{ key: 'paper', label: '论文', width: 180 }];
+  const rows: ResearchWorkbookExcelRow[] = Array.isArray(workbook.rows) && workbook.rows.length > 0
+    ? workbook.rows
+    : [{ id: 'header', cells: columns.map((column) => ({ value: column.label })) }];
+
+  return {
+    id: workbook.id || 'research-workbook',
+    sheetName: workbook.sheetName || '论文研究表',
+    freeze: {
+      ySplit: Math.max(0, Number(workbook.freeze?.ySplit) || 0),
+      xSplit: Math.max(0, Number(workbook.freeze?.xSplit) || 0)
+    },
+    columns: columns.map((column, index) => ({
+      key: column.key || `custom-${index}`,
+      label: column.label || `列 ${index + 1}`,
+      width: Math.max(60, Number(column.width) || 140)
+    })),
+    rows: rows.map((row, index) => ({
+      id: row.id || (index === 0 ? 'header' : `row-${index}`),
+      height: typeof row.height === 'number' && Number.isFinite(row.height) ? row.height : undefined,
+      cells: columns.map((_, columnIndex) => ({
+        value: row.cells?.[columnIndex]?.value ?? '',
+        style: row.cells?.[columnIndex]?.style
+      }))
+    }))
+  };
+}
+
+function applyExcelCellStyle(
+  cell: ExcelJS.Cell,
+  style: ResearchWorkbookExcelCellStyle | undefined,
+  isHeader: boolean
+): void {
+  const univerStyle = isRecord(style?.univerStyle) ? style.univerStyle : {};
+  const fontSize = readNumberLike(style?.fontSize, readNumberLike(univerStyle.fs, isHeader ? 13 : 12));
+  const fontColor = style?.color ?? readRgb(univerStyle.cl) ?? (isHeader ? '#ffffff' : '#111111');
+  const fillColor = style?.backgroundColor ?? readRgb(univerStyle.bg) ?? (isHeader ? '#111111' : undefined);
+  const bold = style?.bold ?? readBooleanNumber(univerStyle.bl) ?? isHeader;
+  const italic = style?.italic ?? readBooleanNumber(univerStyle.it) ?? false;
+  const align = style?.align ?? readHorizontalAlign(univerStyle.ht) ?? (isHeader ? 'center' : 'left');
+
+  cell.font = {
+    size: fontSize,
+    bold,
+    italic,
+    color: { argb: toExcelArgb(fontColor) }
+  };
+  cell.alignment = {
+    horizontal: align,
+    vertical: 'middle',
+    wrapText: true
+  };
+  if (fillColor) {
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: toExcelArgb(fillColor) }
+    };
+  }
+}
+
+function readExcelCellText(cell: ExcelJS.Cell): string {
+  const value = cell.value;
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (isRecord(value) && typeof value.formula === 'string') {
+    return `=${value.formula}`;
+  }
+  if (isRecord(value) && Array.isArray(value.richText)) {
+    return value.richText.map((part) => isRecord(part) ? String(part.text ?? '') : '').join('');
+  }
+  if (isRecord(value) && 'text' in value) {
+    return String(value.text ?? '');
+  }
+  return String(value);
+}
+
+function readExcelCellStyle(cell: ExcelJS.Cell): ResearchWorkbookExcelCellStyle | undefined {
+  const style: ResearchWorkbookExcelCellStyle = {};
+  if (typeof cell.font?.size === 'number') {
+    style.fontSize = cell.font.size;
+  }
+  if (cell.font?.bold !== undefined) {
+    style.bold = Boolean(cell.font.bold);
+  }
+  if (cell.font?.italic !== undefined) {
+    style.italic = Boolean(cell.font.italic);
+  }
+  const fontColor = fromExcelArgb(cell.font?.color?.argb);
+  if (fontColor) {
+    style.color = fontColor;
+  }
+  const fill = cell.fill;
+  if (fill && fill.type === 'pattern' && 'fgColor' in fill) {
+    const fillColor = fromExcelArgb(fill.fgColor?.argb);
+    if (fillColor) {
+      style.backgroundColor = fillColor;
+    }
+  }
+  if (
+    cell.alignment?.horizontal === 'left' ||
+    cell.alignment?.horizontal === 'center' ||
+    cell.alignment?.horizontal === 'right'
+  ) {
+    style.align = cell.alignment.horizontal;
+  }
+  return Object.keys(style).length > 0 ? style : undefined;
+}
+
+function getDefaultResearchColumnKey(index: number): string {
+  return [
+    'paper',
+    'chineseTitle',
+    'englishTitle',
+    'innovation',
+    'limitations',
+    'method',
+    'dataset',
+    'metrics',
+    'reproducePlan',
+    'futureIdeas',
+    'notes'
+  ][index] ?? `custom-${index}`;
+}
+
+function pxToExcelRowHeight(px: number): number {
+  return Math.max(8, Math.round((px * 0.75) * 100) / 100);
+}
+
+function excelRowHeightToPx(height: number): number {
+  return Math.max(12, Math.round(height / 0.75));
+}
+
+function toExcelArgb(color: string): string {
+  return `FF${color.replace('#', '').padStart(6, '0').slice(0, 6).toUpperCase()}`;
+}
+
+function fromExcelArgb(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const hex = value.length === 8 ? value.slice(2) : value;
+  return `#${hex.slice(0, 6).toLowerCase()}`;
+}
+
+function readRgb(value: unknown): string | undefined {
+  return isRecord(value) && typeof value.rgb === 'string' ? value.rgb : undefined;
+}
+
+function readBooleanNumber(value: unknown): boolean | undefined {
+  if (value === 1) {
+    return true;
+  }
+  if (value === 0) {
+    return false;
+  }
+  return undefined;
+}
+
+function readNumberLike(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function readHorizontalAlign(value: unknown): 'left' | 'center' | 'right' | undefined {
+  if (value === 1) {
+    return 'left';
+  }
+  if (value === 2) {
+    return 'center';
+  }
+  if (value === 3) {
+    return 'right';
+  }
+  return undefined;
 }
 
 async function readTextFile(filePath: string): Promise<TextFilePayload> {
@@ -1640,6 +2043,14 @@ function registerIpcHandlers(): void {
       filePath: result.filePath,
       fileName: path.basename(result.filePath)
     };
+  });
+
+  ipcMain.handle('research-workbook:export-excel', async (_event, request: ResearchWorkbookExcelRequest) => {
+    return exportResearchWorkbookToExcel(request);
+  });
+
+  ipcMain.handle('research-workbook:import-excel', async () => {
+    return importResearchWorkbookFromExcel();
   });
 }
 

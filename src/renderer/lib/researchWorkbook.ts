@@ -47,6 +47,7 @@ export interface ResearchCell {
 
 export interface ResearchRow {
   id: string;
+  height?: number;
   cells: ResearchCell[];
 }
 
@@ -134,6 +135,11 @@ export function parseResearchWorkbook(value: string | null): ResearchWorkbook {
       ? parsed.rows.map(parseRow).filter((row): row is ResearchRow => Boolean(row))
       : fallback.rows;
 
+    const parsedColumns = Array.isArray(parsed.columns)
+      ? parsed.columns.map(parseColumn).filter((column): column is ResearchSheetColumn => Boolean(column))
+      : [];
+    const columns = parsedColumns.length > 0 ? parsedColumns : fallback.columns;
+
     return {
       id: readString(parsed.id) || fallback.id,
       sheetName: readString(parsed.sheetName) || fallback.sheetName,
@@ -142,8 +148,8 @@ export function parseResearchWorkbook(value: string | null): ResearchWorkbook {
         ySplit: Math.max(1, Number(isRecord(parsed.freeze) ? parsed.freeze.ySplit : 1) || 1),
         xSplit: Math.max(0, Number(isRecord(parsed.freeze) ? parsed.freeze.xSplit : 0) || 0)
       },
-      columns: fallback.columns,
-      rows: normalizeRows(rows.length > 0 ? rows : fallback.rows, fallback.columns)
+      columns,
+      rows: normalizeRows(rows.length > 0 ? rows : fallback.rows, columns)
     };
   } catch {
     return buildDefaultResearchWorkbook();
@@ -272,6 +278,59 @@ export function setResearchCellText(
   };
 }
 
+export function setResearchCellStyle(
+  workbook: ResearchWorkbook,
+  rowIndex: number,
+  columnIndex: number,
+  stylePatch: IStyleData
+): ResearchWorkbook {
+  const sourceRows = ensureRows(workbook.rows, workbook.columns, rowIndex);
+  const rows = sourceRows.map((row, currentRowIndex) => {
+    if (currentRowIndex !== rowIndex) {
+      return row;
+    }
+
+    const cells = normalizeCells(row.cells, workbook.columns).map((cell, currentColumnIndex) => {
+      if (currentColumnIndex !== columnIndex) {
+        return cell;
+      }
+
+      return {
+        ...cell,
+        style: {
+          ...(cell.style ?? {}),
+          // BooleanNumber.FALSE 是 0，不能用 truthy 判断丢掉，否则取消后无法再次切回。
+          univerStyle: {
+            ...getResearchCellUniverStyle(workbook, rowIndex, columnIndex),
+            ...stylePatch
+          }
+        }
+      };
+    });
+
+    return { ...row, cells };
+  });
+
+  return {
+    ...workbook,
+    rows
+  };
+}
+
+export function getResearchCellUniverStyle(
+  workbook: ResearchWorkbook,
+  rowIndex: number,
+  columnIndex: number
+): IStyleData {
+  const rawStyle = workbook.rows[rowIndex]?.cells[columnIndex]?.style?.univerStyle;
+  if (typeof rawStyle === 'string') {
+    const style = workbook.styles?.[rawStyle];
+    return isRecord(style) ? cloneUniverStyle(style as IStyleData) : {};
+  }
+
+  return isRecord(rawStyle) ? cloneUniverStyle(rawStyle as IStyleData) : {};
+}
+
 export function getResearchRowValues(
   workbook: ResearchWorkbook,
   rowIndex: number
@@ -345,9 +404,13 @@ export function toUniverWorkbookData(workbook: ResearchWorkbook): IWorkbookData 
         defaultRowHeight: 28,
         mergeData: [],
         cellData,
-        rowData: {
-          0: { h: 34 }
-        },
+        rowData: workbook.rows.reduce<Record<number, { h: number }>>((rows, row, index) => {
+          const height = row.height ?? (index === 0 ? 34 : undefined);
+          if (typeof height === 'number' && Number.isFinite(height) && height > 0) {
+            rows[index] = { h: height };
+          }
+          return rows;
+        }, {}),
         columnData: workbook.columns.reduce<Record<number, { w: number }>>((columns, column, index) => {
           columns[index] = { w: column.width };
           return columns;
@@ -369,7 +432,7 @@ export function fromUniverWorkbookData(snapshot: IWorkbookData): ResearchWorkboo
   }
 
   const rowCount = Math.max(1, Number(sheet.rowCount) || 1);
-  const columnCount = Math.max(RESEARCH_SHEET_COLUMNS.length, Number(sheet.columnCount) || 0);
+  const columnCount = getMeaningfulColumnCount(sheet);
   const columns = Array.from({ length: columnCount }, (_, index) => {
     const fallback = RESEARCH_SHEET_COLUMNS[index];
     const header = readCellText(sheet.cellData?.[0]?.[index]) || fallback?.label || `列 ${index + 1}`;
@@ -381,6 +444,7 @@ export function fromUniverWorkbookData(snapshot: IWorkbookData): ResearchWorkboo
   });
   const allRows = Array.from({ length: rowCount }, (_, rowIndex) => ({
     id: rowIndex === 0 ? 'header' : `row-${rowIndex}`,
+    height: Number(sheet.rowData?.[rowIndex]?.h) || undefined,
     cells: columns.map((_, columnIndex) => ({
       value: readCellText(sheet.cellData?.[rowIndex]?.[columnIndex]),
       style: readCellStyle(sheet.cellData?.[rowIndex]?.[columnIndex])
@@ -426,6 +490,7 @@ function buildPaperRow(rowId: string, paper: PaperRecord, columns: ResearchSheet
 function normalizeRows(rows: ResearchRow[], columns: ResearchSheetColumn[]): ResearchRow[] {
   const normalized = rows.map((row, index) => ({
     id: row.id || (index === 0 ? 'header' : `row-${index}`),
+    height: row.height,
     cells: normalizeCells(row.cells, columns)
   }));
 
@@ -459,6 +524,34 @@ function ensureRows(rows: ResearchRow[], columns: ResearchSheetColumn[], rowInde
   return nextRows;
 }
 
+function getMeaningfulColumnCount(sheet: IWorkbookData['sheets'][string]): number {
+  const usedIndexes = new Set<number>();
+
+  Object.keys(sheet.columnData ?? {}).forEach((key) => {
+    const index = Number(key);
+    if (Number.isInteger(index) && index >= 0) {
+      usedIndexes.add(index);
+    }
+  });
+
+  Object.values(sheet.cellData ?? {}).forEach((row) => {
+    Object.entries(row ?? {}).forEach(([key, cell]) => {
+      const index = Number(key);
+      if (!Number.isInteger(index) || index < 0) {
+        return;
+      }
+
+      const typedCell = cell as ICellData | undefined;
+      if (readCellText(typedCell).trim() || typedCell?.s) {
+        usedIndexes.add(index);
+      }
+    });
+  });
+
+  const highestUsedIndex = usedIndexes.size > 0 ? Math.max(...usedIndexes) : -1;
+  return Math.max(RESEARCH_SHEET_COLUMNS.length, highestUsedIndex + 1);
+}
+
 function parseRow(value: unknown): ResearchRow | null {
   if (!isRecord(value)) {
     return null;
@@ -480,7 +573,28 @@ function parseRow(value: unknown): ResearchRow | null {
       )
     : [];
 
-  return { id, cells };
+  return {
+    id,
+    height: typeof value.height === 'number' && Number.isFinite(value.height) ? value.height : undefined,
+    cells
+  };
+}
+
+function parseColumn(value: unknown): ResearchSheetColumn | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const label = readString(value.label);
+  if (!label) {
+    return null;
+  }
+
+  return {
+    key: readString(value.key) || label,
+    label,
+    width: Math.max(60, Number(value.width) || 140)
+  };
 }
 
 function getCellUniverStyle(cell: ResearchCell, rowIndex: number): ICellData['s'] {
@@ -575,6 +689,10 @@ function readCellText(cell: ICellData | undefined): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function cloneUniverStyle(style: IStyleData): IStyleData {
+  return JSON.parse(JSON.stringify(style)) as IStyleData;
 }
 
 function readString(value: unknown): string {

@@ -38,7 +38,24 @@ describe('PDFMathTranslate command helpers', () => {
     expect(command.args).not.toContain('--no-dual');
     expect(command.env.OPENAI_BASE_URL).toBe('https://api.moonshot.cn/v1');
     expect(command.env.OPENAI_MODEL).toBe('kimi-k2.5');
+    expect(command.env.PDF_TRANSLATION_READER_OPENAI_TEMPERATURE).toBe('1');
     expect(command.args.join(' ')).not.toContain('sk-');
+  });
+
+  it('keeps non-Kimi pdf2zh translations deterministic when the runtime patch is available', () => {
+    const command = buildPdf2zhCommand({
+      executable: 'pdf2zh',
+      pdfPath: 'D:/papers/robot paper.pdf',
+      outputDir: 'C:/cache',
+      mode: 'dual',
+      settings: {
+        provider: 'openai',
+        baseURL: 'https://api.openai.com/v1',
+        model: 'gpt-5'
+      }
+    });
+
+    expect(command.env.PDF_TRANSLATION_READER_OPENAI_TEMPERATURE).toBe('0');
   });
 
   it('can invoke pdf2zh as a Python module from the app private venv', () => {
@@ -56,7 +73,7 @@ describe('PDFMathTranslate command helpers', () => {
     });
 
     expect(command.command).toBe('C:/app/sidecars/pdf2zh-venv/Scripts/python.exe');
-    expect(command.args.slice(0, 2)).toEqual(['-m', 'pdf2zh']);
+    expect(command.args.slice(0, 2)).toEqual(['-m', 'pdf2zh.pdf2zh']);
     expect(command.args).toContain('D:/papers/robot paper.pdf');
   });
 

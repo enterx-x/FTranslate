@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BooleanNumber,
   createUniver,
   defaultTheme,
   LocaleType,
@@ -12,10 +13,16 @@ import zhCN from '@univerjs/preset-sheets-core/locales/zh-CN';
 import '@univerjs/preset-sheets-core/lib/index.css';
 import brandMark from '../assets/brand-mark.png';
 import {
+  RESEARCH_SHEET_LINKS_KEY,
+  RESEARCH_WORKBOOK_KEY,
   fromUniverWorkbookData,
+  getResearchCellUniverStyle,
   getResearchCellText,
   getResearchColumnHeader,
   getResearchRowValues,
+  parseResearchWorkbook,
+  serializeResearchWorkbook,
+  setResearchCellStyle,
   setResearchCellText,
   toUniverWorkbookData,
   type ResearchSheetLink,
@@ -363,6 +370,65 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     scheduleWorkbookSave();
   }
 
+  function applyStylePatchToSelection(stylePatch: IStyleData, message: string): void {
+    const worksheet = workbookHandleRef.current?.getActiveSheet();
+    if (!worksheet) {
+      return;
+    }
+
+    let nextWorkbook = flushWorkbookFromUniver() ?? workbookModelRef.current;
+    const seen = new Set<string>();
+
+    selectedRanges.forEach((range) => {
+      for (let rowIndex = range.startRow; rowIndex <= range.endRow; rowIndex += 1) {
+        for (let columnIndex = range.startColumn; columnIndex <= range.endColumn; columnIndex += 1) {
+          const address = toA1(rowIndex, columnIndex);
+          if (seen.has(address)) {
+            continue;
+          }
+
+          seen.add(address);
+          nextWorkbook = setResearchCellStyle(nextWorkbook, rowIndex, columnIndex, stylePatch);
+          const text = getResearchCellText(nextWorkbook, rowIndex, columnIndex);
+          const style = getResearchCellUniverStyle(nextWorkbook, rowIndex, columnIndex);
+          const cellValue: ICellData = text.trim().startsWith('=')
+            ? { f: text, s: style }
+            : { v: text, s: style };
+          (worksheet.getRange(rowIndex, columnIndex) as UniverRange).setValue?.(cellValue);
+        }
+      }
+    });
+
+    workbookModelRef.current = nextWorkbook;
+    props.onWorkbookChange(nextWorkbook);
+    setLocalMessage(message);
+    scheduleWorkbookSave();
+  }
+
+  async function handleExportExcel(): Promise<void> {
+    const workbook = flushWorkbookFromUniver() ?? workbookModelRef.current;
+    const result = await window.electronAPI.exportResearchWorkbookExcel({ workbook });
+    if (result) {
+      setLocalMessage(`已导出 Excel：${result.fileName}`);
+    }
+  }
+
+  async function handleImportExcel(): Promise<void> {
+    const result = await window.electronAPI.importResearchWorkbookExcel();
+    if (!result) {
+      return;
+    }
+
+    const nextWorkbook = parseResearchWorkbook(JSON.stringify(result.workbook));
+    workbookModelRef.current = nextWorkbook;
+    props.onWorkbookChange(nextWorkbook);
+    props.onLinksChange([]);
+    localStorage.setItem(RESEARCH_WORKBOOK_KEY, serializeResearchWorkbook(nextWorkbook));
+    localStorage.setItem(RESEARCH_SHEET_LINKS_KEY, '[]');
+    setLocalMessage(`已导入 Excel：${result.fileName}。论文绑定已清空，请按行重新绑定。`);
+    window.location.reload();
+  }
+
   function handleCopyFormat(): void {
     updateSelectionFromUniver();
     const worksheet = workbookHandleRef.current?.getActiveSheet();
@@ -384,13 +450,14 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
       setLocalMessage('还没有复制格式；请先选择一个源单元格并点击“复制格式”。');
       return;
     }
+    const copiedStyle = copiedFormatRef.current;
 
     const worksheet = workbookHandleRef.current?.getActiveSheet();
     if (!worksheet) {
       return;
     }
 
-    const workbook = flushWorkbookFromUniver() ?? workbookModelRef.current;
+    let nextWorkbook = flushWorkbookFromUniver() ?? workbookModelRef.current;
     const seen = new Set<string>();
 
     selectedRanges.forEach((range) => {
@@ -402,15 +469,19 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
           }
 
           seen.add(address);
-          const text = getResearchCellText(workbook, rowIndex, columnIndex);
+          nextWorkbook = setResearchCellStyle(nextWorkbook, rowIndex, columnIndex, copiedStyle);
+          const text = getResearchCellText(nextWorkbook, rowIndex, columnIndex);
+          const style = getResearchCellUniverStyle(nextWorkbook, rowIndex, columnIndex);
           const cellValue: ICellData = text.trim().startsWith('=')
-            ? { f: text, s: cloneStyle(copiedFormatRef.current) ?? copiedFormatRef.current }
-            : { v: text, s: cloneStyle(copiedFormatRef.current) ?? copiedFormatRef.current };
+            ? { f: text, s: style }
+            : { v: text, s: style };
           (worksheet.getRange(rowIndex, columnIndex) as UniverRange).setValue?.(cellValue);
         }
       }
     });
 
+    workbookModelRef.current = nextWorkbook;
+    props.onWorkbookChange(nextWorkbook);
     setLocalMessage(`已把复制的格式粘贴到 ${selectedRangeLabel}。`);
     scheduleWorkbookSave();
   }
@@ -582,6 +653,12 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
           </div>
         </div>
         <div className="research-sheet-actions">
+          <button type="button" onClick={handleImportExcel}>
+            导入 Excel
+          </button>
+          <button type="button" onClick={handleExportExcel}>
+            导出 Excel
+          </button>
           <button type="button" onClick={props.onBackHome}>
             返回主页
           </button>
@@ -640,7 +717,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
               onChange={(event) => {
                 const size = Number(event.target.value);
                 setFontSize(size);
-                applyFormatToSelection((range) => range.setFontSize?.(size), `已将选区字号设为 ${size}。`);
+                applyStylePatchToSelection({ fs: size }, `已将选区字号设为 ${size}。`);
               }}
             >
               {[10, 11, 12, 13, 14, 16, 18, 20, 24].map((size) => (
@@ -654,14 +731,17 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
           <button type="button" onClick={handlePasteCopiedFormat} disabled={!hasCopiedFormat}>
             粘贴格式
           </button>
-          <button type="button" onClick={() => applyFormatToSelection((range) => range.setFontWeight?.('bold'), '已加粗选区。')}>
+          <button type="button" onClick={() => applyStylePatchToSelection({ bl: BooleanNumber.TRUE }, '已加粗选区。')}>
             B
           </button>
-          <button type="button" onClick={() => applyFormatToSelection((range) => range.setFontWeight?.('normal'), '已取消选区加粗。')}>
-            常规
+          <button type="button" onClick={() => applyStylePatchToSelection({ bl: BooleanNumber.FALSE }, '已取消选区加粗。')}>
+            取消 B
           </button>
-          <button type="button" onClick={() => applyFormatToSelection((range) => range.setFontStyle?.('italic'), '已将选区设为斜体。')}>
+          <button type="button" onClick={() => applyStylePatchToSelection({ it: BooleanNumber.TRUE }, '已将选区设为斜体。')}>
             I
+          </button>
+          <button type="button" onClick={() => applyStylePatchToSelection({ it: BooleanNumber.FALSE }, '已取消选区斜体。')}>
+            取消 I
           </button>
           <label>
             字色
@@ -670,7 +750,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
               value={fontColor}
               onChange={(event) => {
                 setFontColor(event.target.value);
-                applyFormatToSelection((range) => range.setFontColor?.(event.target.value), '已更新选区文字颜色。');
+                applyStylePatchToSelection({ cl: { rgb: event.target.value } }, '已更新选区文字颜色。');
               }}
             />
           </label>
@@ -681,20 +761,20 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
               value={fillColor}
               onChange={(event) => {
                 setFillColor(event.target.value);
-                applyFormatToSelection((range) => range.setBackground?.(event.target.value), '已更新选区底色。');
+                applyStylePatchToSelection({ bg: { rgb: event.target.value } }, '已更新选区底色。');
               }}
             />
           </label>
-          <button type="button" onClick={() => applyFormatToSelection((range) => range.setHorizontalAlignment?.('left'), '已左对齐选区。')}>
+          <button type="button" onClick={() => applyStylePatchToSelection({ ht: 1 }, '已左对齐选区。')}>
             左
           </button>
-          <button type="button" onClick={() => applyFormatToSelection((range) => range.setHorizontalAlignment?.('center'), '已居中选区。')}>
+          <button type="button" onClick={() => applyStylePatchToSelection({ ht: 2 }, '已居中选区。')}>
             中
           </button>
-          <button type="button" onClick={() => applyFormatToSelection((range) => range.setHorizontalAlignment?.('right'), '已右对齐选区。')}>
+          <button type="button" onClick={() => applyStylePatchToSelection({ ht: 3 }, '已右对齐选区。')}>
             右
           </button>
-          <button type="button" onClick={() => applyFormatToSelection((range) => range.setVerticalAlignment?.('middle'), '已垂直居中选区。')}>
+          <button type="button" onClick={() => applyStylePatchToSelection({ vt: 2 }, '已垂直居中选区。')}>
             垂直居中
           </button>
           <button type="button" onClick={() => applyFormatToSelection((range) => range.setWrap?.(true), '已开启选区自动换行。')}>
@@ -716,6 +796,10 @@ function cloneStyle(style: IStyleData | null): IStyleData | null {
   }
 
   return JSON.parse(JSON.stringify(style)) as IStyleData;
+}
+
+function isStyleObject(value: unknown): value is IStyleData {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function normalizeUniverRange(

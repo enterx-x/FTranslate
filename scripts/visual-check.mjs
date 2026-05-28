@@ -449,7 +449,14 @@ async function runResearchSheetScenario(client) {
   if (!snapshot.hasResearchSheet || !snapshot.hasUniver || !snapshot.hasAiButton) {
     throw new Error(`researchSheet: expected Univer surface and cell AI action, got ${JSON.stringify(snapshot)}`);
   }
-  if (!snapshot.hasBindingToggle || !/字号/.test(snapshot.formatToolbarText) || !/居中/.test(snapshot.formatToolbarText) || !/复制格式/.test(snapshot.formatToolbarText)) {
+  if (
+    !snapshot.hasBindingToggle ||
+    !/字号/.test(snapshot.formatToolbarText) ||
+    !/居中/.test(snapshot.formatToolbarText) ||
+    !/复制格式/.test(snapshot.formatToolbarText) ||
+    !/取消 B/.test(snapshot.formatToolbarText) ||
+    !/取消 I/.test(snapshot.formatToolbarText)
+  ) {
     throw new Error(`researchSheet: expected binding and formatting toolbar controls, got ${JSON.stringify(snapshot)}`);
   }
   if (!/AI 填充选区/.test(snapshot.contextMenuText) || !/绑定\/解除当前行论文/.test(snapshot.contextMenuText) || !/粘贴格式到选区/.test(snapshot.contextMenuText)) {
@@ -460,7 +467,12 @@ async function runResearchSheetScenario(client) {
       `researchSheet: expected FTranslate actions inside native Univer context menu, got text: ${snapshot.contextMenuText.slice(0, 1000)}`
     );
   }
-  if (!snapshot.commandText.includes('绑定论文到当前行') || !snapshot.titleText.includes('研究表格')) {
+  if (
+    !snapshot.commandText.includes('绑定论文到当前行') ||
+    !snapshot.titleText.includes('研究表格') ||
+    !snapshot.titleText.includes('导入 Excel') ||
+    !snapshot.titleText.includes('导出 Excel')
+  ) {
     throw new Error(`researchSheet: expected independent sheet controls, got ${JSON.stringify(snapshot)}`);
   }
   if (snapshot.markStyle?.background !== 'rgba(0, 0, 0, 0)' || snapshot.markStyle?.border !== '0px') {

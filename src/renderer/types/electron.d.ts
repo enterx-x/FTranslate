@@ -175,6 +175,14 @@ export interface ElectronApi {
     content: string;
     defaultFileName: string;
   }) => Promise<SaveTextResult | null>;
+  exportResearchWorkbookExcel: (request: {
+    workbook: unknown;
+  }) => Promise<SaveTextResult | null>;
+  importResearchWorkbookExcel: () => Promise<{
+    filePath: string;
+    fileName: string;
+    workbook: unknown;
+  } | null>;
 }
 
 declare global {

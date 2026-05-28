@@ -45,7 +45,7 @@ export interface PdfTranslationRecordFields {
 export function buildPdf2zhCommand(input: PdfTranslationCommandInput): PdfTranslationCommand {
   const args =
     input.invocation === 'python-module'
-      ? ['-m', 'pdf2zh']
+      ? ['-m', 'pdf2zh.pdf2zh']
       : [];
 
   args.push(
@@ -65,7 +65,10 @@ export function buildPdf2zhCommand(input: PdfTranslationCommandInput): PdfTransl
     args,
     env: {
       OPENAI_BASE_URL: input.settings.baseURL.replace(/\/+$/u, ''),
-      OPENAI_MODEL: input.settings.model
+      OPENAI_MODEL: input.settings.model,
+      // PDFMathTranslate 1.9.x 内部把 OpenAI-compatible translator 的 temperature 固定为 0。
+      // Kimi K2.5/K2.6 只允许 temperature=1，因此主进程会给私有 sidecar 打补丁读取此环境变量。
+      PDF_TRANSLATION_READER_OPENAI_TEMPERATURE: input.settings.provider === 'kimi' ? '1' : '0'
     }
   };
 }

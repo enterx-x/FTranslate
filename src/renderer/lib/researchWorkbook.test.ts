@@ -8,8 +8,10 @@ import {
   fromUniverWorkbookData,
   getResearchCellText,
   migrateLegacyPaperSheetCells,
+  parseResearchWorkbook,
   parseResearchSheetLinks,
   serializeResearchSheetLinks,
+  setResearchCellStyle,
   setResearchCellText,
   toUniverWorkbookData
 } from './researchWorkbook';
@@ -113,5 +115,69 @@ describe('research workbook model', () => {
     expect(getResearchCellText(restored, 8, 3)).toBe('远端行内容');
     expect(restored.styles?.['custom-style']).toEqual({ fs: 16, cl: { rgb: '#ff0000' }, ht: 2 });
     expect(restored.rows[8].cells[3].style?.univerStyle).toBe('custom-style');
+  });
+
+  it('preserves row heights after saving a Univer workbook snapshot', () => {
+    const workbook = setResearchCellText(buildDefaultResearchWorkbook(), 2, 3, 'custom row height');
+    const univerData = toUniverWorkbookData(workbook);
+    const sheet = univerData.sheets[univerData.sheetOrder[0]];
+    sheet.rowData = {
+      ...(sheet.rowData ?? {}),
+      2: { h: 72 }
+    };
+
+    const restored = fromUniverWorkbookData(univerData);
+    const roundTrip = toUniverWorkbookData(restored);
+    const roundTripSheet = roundTrip.sheets[roundTrip.sheetOrder[0]];
+
+    expect(restored.rows[2].height).toBe(72);
+    expect(roundTripSheet.rowData?.[2]?.h).toBe(72);
+  });
+
+  it('preserves user-created columns when loading the local research workbook', () => {
+    const workbook = buildDefaultResearchWorkbook();
+    const parsed = parseResearchWorkbook(JSON.stringify({
+      ...workbook,
+      columns: [
+        ...workbook.columns,
+        { key: 'custom-11', label: 'My Custom Column', width: 210 }
+      ],
+      rows: workbook.rows.map((row) => ({
+        ...row,
+        cells: [...row.cells, { value: row.id === 'header' ? 'My Custom Column' : 'custom value' }]
+      }))
+    }));
+
+    expect(parsed.columns.at(-1)).toEqual({
+      key: 'custom-11',
+      label: 'My Custom Column',
+      width: 210
+    });
+    expect(parsed.rows[0].cells.at(-1)?.value).toBe('My Custom Column');
+  });
+
+  it('can toggle bold and italic off and back on without losing the cell value', () => {
+    const seeded = setResearchCellText(buildDefaultResearchWorkbook(), 1, 3, '格式测试');
+    const boldItalic = setResearchCellStyle(seeded, 1, 3, { bl: 1, it: 1 });
+    const disabled = setResearchCellStyle(boldItalic, 1, 3, { bl: 0, it: 0 });
+    const enabledAgain = setResearchCellStyle(disabled, 1, 3, { bl: 1, it: 1 });
+
+    expect(getResearchCellText(enabledAgain, 1, 3)).toBe('格式测试');
+    expect(enabledAgain.rows[1].cells[3].style?.univerStyle).toMatchObject({
+      bl: 1,
+      it: 1
+    });
+  });
+
+  it('does not persist Univer padding columns as real workbook columns', () => {
+    const workbook = setResearchCellText(buildDefaultResearchWorkbook(), 1, 3, 'kept value');
+    const univerData = toUniverWorkbookData(workbook);
+
+    const restored = fromUniverWorkbookData(univerData);
+
+    expect(restored.columns).toHaveLength(workbook.columns.length);
+    expect(restored.rows[0].cells).toHaveLength(workbook.columns.length);
+    expect(restored.rows[1].cells).toHaveLength(workbook.columns.length);
+    expect(getResearchCellText(restored, 1, 3)).toBe('kept value');
   });
 });
