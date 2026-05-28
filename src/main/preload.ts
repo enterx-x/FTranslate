@@ -29,6 +29,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     systemPrompt: string;
     userPrompt: string;
   }) => ipcRenderer.invoke('ai:fill-sheet-cell', request),
+  fillSheetCellsWithAi: (request: {
+    paperId: string;
+    pdfPath: string;
+    fallbackContextText: string;
+    cellCount: number;
+    systemPrompt: string;
+    userPrompt: string;
+  }) => ipcRenderer.invoke('ai:fill-sheet-cells', request),
   testAiConnection: () => ipcRenderer.invoke('ai:test-connection'),
   getAiBalance: () => ipcRenderer.invoke('ai:balance'),
   getAiModels: () => ipcRenderer.invoke('ai:models'),

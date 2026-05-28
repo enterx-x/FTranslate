@@ -183,6 +183,7 @@ async function runHomeScenario(client) {
     hasHome: Boolean(document.querySelector('.home-page')),
     hasAgGrid: Boolean(document.querySelector('.ag-root, .paper-grid')),
     hasPaperTable: Boolean(document.querySelector('.paper-table')),
+    visibleInputs: document.querySelectorAll('.paper-table tbody input').length,
     headerText: document.querySelector('.paper-table thead')?.textContent ?? '',
     headerActions: [...document.querySelectorAll('.home-header-actions button')].map((button) => button.textContent?.trim()),
     markStyle: (() => {
@@ -211,6 +212,9 @@ async function runHomeScenario(client) {
   if (!snapshot.hasHome || !snapshot.hasPaperTable) {
     throw new Error(`home: expected lightweight paper table, got ${JSON.stringify(snapshot)}`);
   }
+  if (snapshot.visibleInputs !== 0) {
+    throw new Error(`home: expected read-only table outside edit mode, got ${snapshot.visibleInputs} visible inputs`);
+  }
   if (snapshot.hasAgGrid || /创新点|局限点|复现计划|后续/.test(snapshot.headerText)) {
     throw new Error(`home: paper library should not contain research spreadsheet columns, got ${snapshot.headerText}`);
   }
@@ -238,12 +242,29 @@ async function runResearchSheetScenario(client) {
   await clickSelector(client, '.home-header-actions button:first-child');
   await waitForAppReady(client);
   const canvasStatus = await waitForResearchSheetCanvas(client);
+  await client.send('Runtime.evaluate', {
+    expression: `
+      const surface = document.querySelector('.research-sheet-surface');
+      const rect = surface.getBoundingClientRect();
+      surface.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: rect.left + 80,
+        clientY: rect.top + 80
+      }));
+    `,
+    returnByValue: true
+  });
+  await wait(300);
 
   const snapshot = await evaluateJson(client, `() => ({
     hasResearchSheet: Boolean(document.querySelector('.research-sheet-page')),
     hasUniver: Boolean(document.querySelector('.univer-container')),
     commandText: document.querySelector('.research-command-bar')?.textContent ?? '',
-    hasAiButton: [...document.querySelectorAll('button')].some((button) => button.textContent?.includes('AI 填此单元格')),
+    hasAiButton: [...document.querySelectorAll('button')].some((button) => /AI 填(此单元格|选区)/.test(button.textContent ?? '')),
+    hasUnbindButton: [...document.querySelectorAll('button')].some((button) => button.textContent?.includes('解除绑定')),
+    formatToolbarText: document.querySelector('.research-format-toolbar')?.textContent ?? '',
+    contextMenuText: document.querySelector('.sheet-context-menu')?.textContent ?? '',
     titleText: document.querySelector('.research-sheet-header')?.textContent ?? '',
     markStyle: (() => {
       const mark = document.querySelector('.research-sheet-title img');
@@ -256,6 +277,12 @@ async function runResearchSheetScenario(client) {
 
   if (!snapshot.hasResearchSheet || !snapshot.hasUniver || !snapshot.hasAiButton) {
     throw new Error(`researchSheet: expected Univer surface and cell AI action, got ${JSON.stringify(snapshot)}`);
+  }
+  if (!snapshot.hasUnbindButton || !/字号/.test(snapshot.formatToolbarText) || !/居中/.test(snapshot.formatToolbarText)) {
+    throw new Error(`researchSheet: expected binding and formatting toolbar controls, got ${JSON.stringify(snapshot)}`);
+  }
+  if (!/AI 填充选区/.test(snapshot.contextMenuText)) {
+    throw new Error(`researchSheet: expected right click AI fill menu, got ${JSON.stringify(snapshot.contextMenuText)}`);
   }
   if (!snapshot.commandText.includes('绑定论文到当前行') || !snapshot.titleText.includes('研究表格')) {
     throw new Error(`researchSheet: expected independent sheet controls, got ${JSON.stringify(snapshot)}`);

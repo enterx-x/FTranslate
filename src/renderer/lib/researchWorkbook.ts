@@ -4,6 +4,7 @@ import {
   CellValueType,
   LocaleType,
   type ICellData,
+  type IStyleData,
   type IWorkbookData
 } from '@univerjs/presets';
 
@@ -36,6 +37,7 @@ export interface ResearchCellStyle {
   bold?: boolean;
   italic?: boolean;
   align?: 'left' | 'center' | 'right';
+  univerStyle?: ICellData['s'];
 }
 
 export interface ResearchCell {
@@ -51,6 +53,7 @@ export interface ResearchRow {
 export interface ResearchWorkbook {
   id: string;
   sheetName: string;
+  styles?: IWorkbookData['styles'];
   freeze: {
     ySplit: number;
     xSplit: number;
@@ -134,6 +137,7 @@ export function parseResearchWorkbook(value: string | null): ResearchWorkbook {
     return {
       id: readString(parsed.id) || fallback.id,
       sheetName: readString(parsed.sheetName) || fallback.sheetName,
+      styles: isRecord(parsed.styles) ? (parsed.styles as IWorkbookData['styles']) : fallback.styles,
       freeze: {
         ySplit: Math.max(1, Number(isRecord(parsed.freeze) ? parsed.freeze.ySplit : 1) || 1),
         xSplit: Math.max(0, Number(isRecord(parsed.freeze) ? parsed.freeze.xSplit : 0) || 0)
@@ -249,7 +253,8 @@ export function setResearchCellText(
   columnIndex: number,
   value: string
 ): ResearchWorkbook {
-  const rows = workbook.rows.map((row, currentRowIndex) => {
+  const sourceRows = ensureRows(workbook.rows, workbook.columns, rowIndex);
+  const rows = sourceRows.map((row, currentRowIndex) => {
     if (currentRowIndex !== rowIndex) {
       return row;
     }
@@ -284,6 +289,7 @@ export function getResearchColumnHeader(workbook: ResearchWorkbook, columnIndex:
 export function toUniverWorkbookData(workbook: ResearchWorkbook): IWorkbookData {
   const sheetId = 'research-sheet';
   const styles: IWorkbookData['styles'] = {
+    ...(workbook.styles ?? {}),
     header: {
       bg: { rgb: '#111111' },
       cl: { rgb: '#ffffff' },
@@ -303,10 +309,11 @@ export function toUniverWorkbookData(workbook: ResearchWorkbook): IWorkbookData 
     cellData[rowIndex] = {};
     row.cells.forEach((cell, columnIndex) => {
       const value = cell.value ?? '';
+      const style = getCellUniverStyle(cell, rowIndex);
       cellData[rowIndex][columnIndex] =
         value.trim().startsWith('=')
-          ? { f: value, s: rowIndex === 0 ? 'header' : 'normal' }
-          : { v: value, t: CellValueType.STRING, s: rowIndex === 0 ? 'header' : 'normal' };
+          ? { f: value, s: style }
+          : { v: value, t: CellValueType.STRING, s: style };
     });
   });
 
@@ -372,16 +379,25 @@ export function fromUniverWorkbookData(snapshot: IWorkbookData): ResearchWorkboo
       width: Number(sheet.columnData?.[index]?.w) || fallback?.width || 140
     };
   });
-  const rows = Array.from({ length: rowCount }, (_, rowIndex) => ({
+  const allRows = Array.from({ length: rowCount }, (_, rowIndex) => ({
     id: rowIndex === 0 ? 'header' : `row-${rowIndex}`,
     cells: columns.map((_, columnIndex) => ({
-      value: readCellText(sheet.cellData?.[rowIndex]?.[columnIndex])
+      value: readCellText(sheet.cellData?.[rowIndex]?.[columnIndex]),
+      style: readCellStyle(sheet.cellData?.[rowIndex]?.[columnIndex])
     }))
-  })).filter((row, index) => index === 0 || row.cells.some((cell) => cell.value.trim()));
+  }));
+  let lastUsedRowIndex = 0;
+  allRows.forEach((row, index) => {
+    if (index === 0 || row.cells.some((cell) => cell.value.trim() || cell.style?.univerStyle)) {
+      lastUsedRowIndex = index;
+    }
+  });
+  const rows = allRows.slice(0, lastUsedRowIndex + 1);
 
   return {
     id: snapshot.id || 'research-workbook',
     sheetName: snapshot.name || sheet.name || '论文研究表',
+    styles: snapshot.styles,
     freeze: {
       ySplit: Math.max(1, Number(sheet.freeze?.ySplit) || 1),
       xSplit: Math.max(0, Number(sheet.freeze?.xSplit) || 0)
@@ -427,6 +443,22 @@ function normalizeCells(cells: ResearchCell[], columns: ResearchSheetColumn[]): 
   }));
 }
 
+function ensureRows(rows: ResearchRow[], columns: ResearchSheetColumn[], rowIndex: number): ResearchRow[] {
+  if (rowIndex < rows.length) {
+    return rows;
+  }
+
+  const nextRows = [...rows];
+  for (let index = nextRows.length; index <= rowIndex; index += 1) {
+    nextRows.push({
+      id: `row-${index}`,
+      cells: columns.map(() => ({ value: '' }))
+    });
+  }
+
+  return nextRows;
+}
+
 function parseRow(value: unknown): ResearchRow | null {
   if (!isRecord(value)) {
     return null;
@@ -438,10 +470,87 @@ function parseRow(value: unknown): ResearchRow | null {
   }
 
   const cells = Array.isArray(value.cells)
-    ? value.cells.map((cell) => (isRecord(cell) ? { value: readString(cell.value) } : { value: '' }))
+    ? value.cells.map((cell) =>
+        isRecord(cell)
+          ? {
+              value: readString(cell.value),
+              style: parseCellStyle(cell.style)
+            }
+          : { value: '' }
+      )
     : [];
 
   return { id, cells };
+}
+
+function getCellUniverStyle(cell: ResearchCell, rowIndex: number): ICellData['s'] {
+  if (cell.style?.univerStyle) {
+    return cell.style.univerStyle;
+  }
+
+  const style = toUniverStyle(cell.style);
+  if (style) {
+    return style;
+  }
+
+  return rowIndex === 0 ? 'header' : 'normal';
+}
+
+function toUniverStyle(style: ResearchCellStyle | undefined): IStyleData | null {
+  if (!style) {
+    return null;
+  }
+
+  return {
+    fs: style.fontSize,
+    bl: style.bold === undefined ? undefined : style.bold ? BooleanNumber.TRUE : BooleanNumber.FALSE,
+    it: style.italic === undefined ? undefined : style.italic ? BooleanNumber.TRUE : BooleanNumber.FALSE,
+    cl: style.color ? { rgb: style.color } : undefined,
+    bg: style.backgroundColor ? { rgb: style.backgroundColor } : undefined,
+    ht: style.align === 'left' ? 1 : style.align === 'center' ? 2 : style.align === 'right' ? 3 : undefined,
+    vt: 2
+  };
+}
+
+function readCellStyle(cell: ICellData | undefined): ResearchCellStyle | undefined {
+  if (!cell?.s) {
+    return undefined;
+  }
+
+  return {
+    univerStyle: cell.s
+  };
+}
+
+function parseCellStyle(value: unknown): ResearchCellStyle | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const style: ResearchCellStyle = {};
+  if (typeof value.fontSize === 'number') {
+    style.fontSize = value.fontSize;
+  }
+  if (typeof value.color === 'string') {
+    style.color = value.color;
+  }
+  if (typeof value.backgroundColor === 'string') {
+    style.backgroundColor = value.backgroundColor;
+  }
+  if (typeof value.bold === 'boolean') {
+    style.bold = value.bold;
+  }
+  if (typeof value.italic === 'boolean') {
+    style.italic = value.italic;
+  }
+  if (value.align === 'left' || value.align === 'center' || value.align === 'right') {
+    style.align = value.align;
+  }
+  if (typeof value.univerStyle === 'string' || isRecord(value.univerStyle)) {
+    style.univerStyle = value.univerStyle as ICellData['s'];
+  }
+
+  return Object.keys(style).length > 0 ? style : undefined;
 }
 
 function readCellText(cell: ICellData | undefined): string {

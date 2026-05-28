@@ -33,7 +33,7 @@ import {
   type ResearchSheetLink,
   type ResearchWorkbook
 } from './lib/researchWorkbook';
-import { buildSheetCellPrompt } from './lib/sheetCellAi';
+import { buildSheetCellsPrompt, parseSheetCellsAiResponse } from './lib/sheetCellAi';
 import {
   exportBilingualMarkdown,
   parseTranslationFile,
@@ -63,7 +63,10 @@ import type {
   SaveTextResult,
   TextFilePayload
 } from './types/electron';
-import type { FillResearchCellRequest } from './components/ResearchSheetPage';
+import type {
+  FillResearchCellResult,
+  FillResearchCellsRequest
+} from './components/ResearchSheetPage';
 
 interface PdfState {
   filePath: string;
@@ -864,17 +867,20 @@ export default function App() {
     }
   }
 
-  async function handleFillResearchCellWithAi(
-    request: FillResearchCellRequest
-  ): Promise<string | null> {
+  async function handleFillResearchCellsWithAi(
+    request: FillResearchCellsRequest
+  ): Promise<FillResearchCellResult[]> {
     if (!aiSettings?.apiKeyConfigured) {
       setStatusMessage('请先在阅读器右侧 AI 设置中保存 API Key，再使用研究表格 AI 填写。');
-      return null;
+      return [];
     }
 
     try {
       setIsAiBusy(true);
-      setStatusMessage(`AI 正在填写 ${request.cellAddress} / ${request.columnHeader}...`);
+      const cellLabel = request.cells.length === 1
+        ? `${request.cells[0].cellAddress} / ${request.cells[0].columnHeader}`
+        : `${request.cells.length} 个选中单元格`;
+      setStatusMessage(`AI 正在填写 ${cellLabel}...`);
       const project = await window.electronAPI.loadProject({
         pdfPath: request.paper.pdfPath,
         translationPath: request.paper.translationPath,
@@ -892,30 +898,30 @@ export default function App() {
       ]
         .filter(Boolean)
         .join('\n\n');
-      const prompt = buildSheetCellPrompt({
+      const prompt = buildSheetCellsPrompt({
         paper: request.paper,
-        columnHeader: request.columnHeader,
-        cellAddress: request.cellAddress,
-        currentCellText: request.currentCellText,
-        neighborRowValues: request.neighborRowValues,
-        paperContext: fallbackContextText
+        cells: request.cells
       });
-      const result = await window.electronAPI.fillSheetCellWithAi({
+      const result = await window.electronAPI.fillSheetCellsWithAi({
         paperId: request.paper.id,
         pdfPath: request.paper.pdfPath,
         fallbackContextText,
+        cellCount: request.cells.length,
         systemPrompt: prompt.systemPrompt,
         userPrompt: prompt.userPrompt
       });
-      const cellValue = cleanAiCellText(result.text);
+      const filledCells = parseSheetCellsAiResponse(result.text, request.cells).map((item) => ({
+        ...item,
+        value: cleanAiCellText(item.value)
+      }));
 
       setStatusMessage(
-        `AI 已填写 ${request.cellAddress}（${result.provider} / ${result.model} / ${result.mode}）。`
+        `AI 已填写 ${filledCells.filter((item) => item.value.trim()).length} 个单元格（${result.provider} / ${result.model} / ${result.mode}${result.cached ? ' / 已复用论文缓存' : ''}）。`
       );
-      return cellValue;
+      return filledCells;
     } catch (error) {
       setStatusMessage(`AI 填写单元格失败：${String(error)}`);
-      return null;
+      return [];
     } finally {
       setIsAiBusy(false);
     }
@@ -982,7 +988,7 @@ export default function App() {
             onOpenPaper={handleOpenPaper}
             onWorkbookChange={setResearchWorkbook}
             onLinksChange={setResearchSheetLinks}
-            onFillCellWithAi={handleFillResearchCellWithAi}
+            onFillCellsWithAi={handleFillResearchCellsWithAi}
           />
         </Suspense>
         <footer className="status-bar">{statusMessage}</footer>

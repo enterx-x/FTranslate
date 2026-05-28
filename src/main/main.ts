@@ -22,6 +22,7 @@ import {
 import {
   buildKimiFileExtractRequest,
   buildOpenAiPdfDataResponseRequest,
+  buildOpenAiPdfResponseRequest,
   getPaperContextStrategy,
   type PaperContextStrategyMode
 } from '../shared/aiPaperContext';
@@ -88,6 +89,13 @@ interface AiFillSheetCellRequest extends AiCompleteRequest {
   paperId: string;
   pdfPath: string;
   fallbackContextText: string;
+}
+
+interface AiFillSheetCellsRequest extends AiCompleteRequest {
+  paperId: string;
+  pdfPath: string;
+  fallbackContextText: string;
+  cellCount: number;
 }
 
 interface AiFillSheetCellResult {
@@ -343,6 +351,12 @@ async function completeWithAi(request: AiCompleteRequest): Promise<string> {
 async function fillSheetCellWithAi(
   request: AiFillSheetCellRequest
 ): Promise<AiFillSheetCellResult> {
+  return fillSheetCellsWithAi({ ...request, cellCount: 1 });
+}
+
+async function fillSheetCellsWithAi(
+  request: AiFillSheetCellsRequest
+): Promise<AiFillSheetCellResult> {
   const settings = await loadStoredAiSettings();
   const apiKey = decryptApiKey(settings.encryptedApiKey);
 
@@ -354,13 +368,11 @@ async function fillSheetCellWithAi(
   const normalizedSettings = normalizeAiProviderSettings(settings);
 
   if (strategy.mode === 'openai-pdf-input') {
-    const pdfBuffer = await fs.readFile(request.pdfPath);
-    const pdfFileData = `data:application/pdf;base64,${pdfBuffer.toString('base64')}`;
+    const contextResult = await getOpenAiPaperFileContext(normalizedSettings, apiKey, request.pdfPath);
     const prompt = mergeSheetCellPrompt(request, '');
-    const responseRequest = buildOpenAiPdfDataResponseRequest(
+    const responseRequest = buildOpenAiPdfResponseRequest(
       normalizedSettings,
-      path.basename(request.pdfPath),
-      pdfFileData,
+      contextResult.fileId,
       prompt
     );
     const text = await executeOpenAiResponses(responseRequest.url, responseRequest.body, apiKey);
@@ -370,7 +382,7 @@ async function fillSheetCellWithAi(
       provider: normalizedSettings.provider,
       model: normalizedSettings.model,
       mode: strategy.mode,
-      cached: false
+      cached: contextResult.cached
     };
   }
 
@@ -587,6 +599,69 @@ function mergeSheetCellPrompt(request: AiFillSheetCellRequest, paperContext: str
     '补充论文全文/提取上下文：',
     paperContext.slice(0, 60000)
   ].join('\n');
+}
+
+async function getOpenAiPaperFileContext(
+  settings: AiProviderSettings,
+  apiKey: string,
+  pdfPath: string
+): Promise<{ fileId: string; cached: boolean }> {
+  const stats = await fs.stat(pdfPath);
+  const cacheKey = buildPaperContextCacheKey(settings.provider, pdfPath, stats);
+  const cached = await readPaperContextCache(cacheKey);
+
+  if (cached?.fileId) {
+    return { fileId: cached.fileId, cached: true };
+  }
+
+  const fileId = await uploadOpenAiPdf(settings, apiKey, pdfPath);
+  await writePaperContextCache({
+    key: cacheKey,
+    provider: settings.provider,
+    pdfPath,
+    fileSize: stats.size,
+    mtimeMs: stats.mtimeMs,
+    fileId,
+    cachedAt: new Date().toISOString()
+  });
+
+  return { fileId, cached: false };
+}
+
+async function uploadOpenAiPdf(
+  settings: AiProviderSettings,
+  apiKey: string,
+  pdfPath: string
+): Promise<string> {
+  const formData = new FormData();
+  const buffer = await fs.readFile(pdfPath);
+
+  formData.append('purpose', 'user_data');
+  formData.append(
+    'file',
+    new Blob([buffer], { type: 'application/pdf' }),
+    path.basename(pdfPath)
+  );
+
+  const response = await fetch(`${settings.baseURL.replace(/\/+$/u, '')}/files`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: formData
+  });
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`OpenAI PDF 上传失败：HTTP ${response.status} ${formatAiErrorBody(responseText)}`);
+  }
+
+  const parsed = JSON.parse(responseText) as { id?: string };
+  if (!parsed.id) {
+    throw new Error('OpenAI 文件上传响应中没有 file id。');
+  }
+
+  return parsed.id;
 }
 
 async function getKimiPaperContext(
@@ -851,6 +926,10 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('ai:fill-sheet-cell', async (_event, request: AiFillSheetCellRequest) => {
     return fillSheetCellWithAi(request);
+  });
+
+  ipcMain.handle('ai:fill-sheet-cells', async (_event, request: AiFillSheetCellsRequest) => {
+    return fillSheetCellsWithAi(request);
   });
 
   ipcMain.handle('ai:test-connection', async () => {

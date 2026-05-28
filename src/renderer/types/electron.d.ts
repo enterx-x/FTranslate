@@ -106,6 +106,14 @@ export interface ElectronApi {
     systemPrompt: string;
     userPrompt: string;
   }) => Promise<AiFillSheetCellResult>;
+  fillSheetCellsWithAi: (request: {
+    paperId: string;
+    pdfPath: string;
+    fallbackContextText: string;
+    cellCount: number;
+    systemPrompt: string;
+    userPrompt: string;
+  }) => Promise<AiFillSheetCellResult>;
   testAiConnection: () => Promise<AiConnectionTestResult>;
   getAiBalance: () => Promise<AiBalanceResult>;
   getAiModels: () => Promise<AiModelsResult>;

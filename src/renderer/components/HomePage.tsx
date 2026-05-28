@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import brandMark from '../assets/brand-mark.png';
 import type { PaperRecord } from '../lib/papers';
 
@@ -30,6 +31,32 @@ const editableFields: Array<{
 ];
 
 export function HomePage(props: HomePageProps) {
+  const [editingPaperId, setEditingPaperId] = useState<string | null>(null);
+  const [draftPaper, setDraftPaper] = useState<PaperRecord | null>(null);
+
+  function startEdit(paper: PaperRecord): void {
+    setEditingPaperId(paper.id);
+    setDraftPaper({ ...paper });
+  }
+
+  function cancelEdit(): void {
+    setEditingPaperId(null);
+    setDraftPaper(null);
+  }
+
+  function saveEdit(): void {
+    if (!draftPaper) {
+      return;
+    }
+
+    props.onUpdatePaper(draftPaper);
+    cancelEdit();
+  }
+
+  function updateDraft(field: EditablePaperField, value: string): void {
+    setDraftPaper((paper) => (paper ? { ...paper, [field]: value } : paper));
+  }
+
   return (
     <main className="home-page">
       <header className="home-header">
@@ -76,48 +103,68 @@ export function HomePage(props: HomePageProps) {
               </tr>
             </thead>
             <tbody>
-              {props.papers.map((paper) => (
-                <tr key={paper.id}>
-                  {editableFields.map((field) => (
-                    <td key={field.key}>
-                      <input
-                        value={paper[field.key]}
-                        onChange={(event) =>
-                          props.onUpdatePaper({
-                            ...paper,
-                            [field.key]: event.target.value
-                          })
-                        }
-                      />
+              {props.papers.map((paper) => {
+                const isEditing = editingPaperId === paper.id && draftPaper;
+                const visiblePaper = isEditing ? draftPaper : paper;
+
+                return (
+                  <tr key={paper.id}>
+                    {editableFields.map((field) => (
+                      <td key={field.key}>
+                        {isEditing ? (
+                          <input
+                            value={visiblePaper[field.key]}
+                            onChange={(event) => updateDraft(field.key, event.target.value)}
+                          />
+                        ) : (
+                          <span className="paper-cell-text">{visiblePaper[field.key] || '-'}</span>
+                        )}
+                      </td>
+                    ))}
+                    <td>
+                      <div className="path-hint">PDF：{paper.pdfName}</div>
+                      <div className="path-hint">翻译：{paper.translationName}</div>
+                      {paper.aiCacheName ? <div className="path-hint">AI 缓存：{paper.aiCacheName}</div> : null}
+                      {paper.notes.trim() ? <div className="path-hint">已记录阅读笔记</div> : null}
                     </td>
-                  ))}
-                  <td>
-                    <div className="path-hint">PDF：{paper.pdfName}</div>
-                    <div className="path-hint">翻译：{paper.translationName}</div>
-                    {paper.aiCacheName ? <div className="path-hint">AI 缓存：{paper.aiCacheName}</div> : null}
-                    {paper.notes.trim() ? <div className="path-hint">已记录阅读笔记</div> : null}
-                  </td>
-                  <td>{formatDateTime(paper.lastOpenedAt)}</td>
-                  <td>第 {paper.lastPage || 1} 页</td>
-                  <td>
-                    <div className="table-actions">
-                      <button type="button" onClick={() => props.onOpenPaper(paper)}>
-                        打开阅读
-                      </button>
-                      <button type="button" onClick={() => props.onOpenResearchSheet(paper)}>
-                        表格定位
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => props.onRemovePaper(paper)}
-                      >
-                        移除
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    <td>{formatDateTime(paper.lastOpenedAt)}</td>
+                    <td>第 {paper.lastPage || 1} 页</td>
+                    <td>
+                      <div className="table-actions">
+                        {isEditing ? (
+                          <>
+                            <button type="button" className="primary-button" onClick={saveEdit}>
+                              保存
+                            </button>
+                            <button type="button" className="secondary-button" onClick={cancelEdit}>
+                              取消
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button type="button" onClick={() => props.onOpenPaper(paper)}>
+                              打开阅读
+                            </button>
+                            <button type="button" onClick={() => props.onOpenResearchSheet(paper)}>
+                              表格定位
+                            </button>
+                            <button type="button" onClick={() => startEdit(paper)}>
+                              编辑信息
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() => props.onRemovePaper(paper)}
+                            >
+                              移除
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </section>

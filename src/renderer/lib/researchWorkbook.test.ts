@@ -5,11 +5,13 @@ import {
   RESEARCH_WORKBOOK_KEY,
   buildDefaultResearchWorkbook,
   ensurePaperRow,
+  fromUniverWorkbookData,
   getResearchCellText,
   migrateLegacyPaperSheetCells,
   parseResearchSheetLinks,
   serializeResearchSheetLinks,
-  setResearchCellText
+  setResearchCellText,
+  toUniverWorkbookData
 } from './researchWorkbook';
 import type { PaperRecord } from './papers';
 
@@ -92,5 +94,24 @@ describe('research workbook model', () => {
 
     expect(getResearchCellText(updated, seeded.rowIndex, 10)).toBe('加入 CBF 对照实验');
     expect(getResearchCellText(seeded.workbook, seeded.rowIndex, 10)).toBe('阅读笔记');
+  });
+
+  it('creates blank rows on demand and preserves Univer style ids after snapshots', () => {
+    const workbook = setResearchCellText(buildDefaultResearchWorkbook(), 8, 3, '远端行内容');
+    const univerData = toUniverWorkbookData(workbook);
+    const sheetId = univerData.sheetOrder[0];
+    const sheet = univerData.sheets[sheetId];
+    expect(sheet.cellData?.[8]?.[3]).toBeTruthy();
+    sheet.cellData![8][3].s = 'custom-style';
+    univerData.styles = {
+      ...univerData.styles,
+      'custom-style': { fs: 16, cl: { rgb: '#ff0000' }, ht: 2 }
+    };
+
+    const restored = fromUniverWorkbookData(univerData);
+
+    expect(getResearchCellText(restored, 8, 3)).toBe('远端行内容');
+    expect(restored.styles?.['custom-style']).toEqual({ fs: 16, cl: { rgb: '#ff0000' }, ht: 2 });
+    expect(restored.rows[8].cells[3].style?.univerStyle).toBe('custom-style');
   });
 });
