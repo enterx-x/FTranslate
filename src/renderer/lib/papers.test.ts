@@ -133,6 +133,60 @@ describe('paper library metadata', () => {
     expect(updated.notes).toBe('新的阅读笔记。');
   });
 
+  it('persists generated bilingual PDF metadata without losing legacy translation paths', () => {
+    const parsed = parsePaperLibrary(
+      JSON.stringify([
+        {
+          id: 'paper-1',
+          pdfPath: 'D:/paper.pdf',
+          pdfName: 'paper.pdf',
+          translationPath: 'D:/translation.md',
+          translationName: 'translation.md',
+          aiCachePath: 'D:/paper-ai-cache.json',
+          aiCacheName: 'paper-ai-cache.json',
+          translatedPdfPath: 'C:/Users/me/AppData/Roaming/PDF Translation Reader/translations/paper-1/paper-dual.pdf',
+          translatedPdfName: 'paper-dual.pdf',
+          translatedPdfMode: 'dual',
+          translationEngine: 'pdfmathtranslate',
+          translationSourceHash: 'hash-1',
+          translatedAt: '2026-05-28T08:00:00.000Z',
+          translatedProvider: 'kimi',
+          translatedModel: 'kimi-k2.5',
+          chineseTitle: '中文标题',
+          englishTitle: 'English Title',
+          journal: 'arXiv',
+          authors: 'Author A',
+          year: '2026',
+          notes: '这里是阅读笔记。',
+          lastOpenedAt: '2026-05-28T10:00:00.000Z',
+          lastPage: 4
+        }
+      ])
+    );
+
+    expect(parsed[0].translationPath).toBe('D:/translation.md');
+    expect(parsed[0].aiCachePath).toBe('D:/paper-ai-cache.json');
+    expect(parsed[0].translatedPdfPath).toContain('paper-dual.pdf');
+    expect(parsed[0].translatedPdfMode).toBe('dual');
+    expect(parsed[0].translationEngine).toBe('pdfmathtranslate');
+    expect(parsed[0].translatedProvider).toBe('kimi');
+
+    const updated = updatePaperRecord(parsed[0], {
+      translatedPdfPath: 'D:/cache/new-paper-dual.pdf',
+      translatedPdfName: 'new-paper-dual.pdf',
+      translatedPdfMode: 'dual',
+      translationEngine: 'pdfmathtranslate',
+      translationSourceHash: 'hash-2',
+      translatedAt: '2026-05-28T09:00:00.000Z',
+      translatedProvider: 'openai',
+      translatedModel: 'gpt-5.5'
+    });
+
+    expect(updated.translatedPdfPath).toBe('D:/cache/new-paper-dual.pdf');
+    expect(updated.translationPath).toBe('D:/translation.md');
+    expect(updated.translatedProvider).toBe('openai');
+  });
+
   it('keeps paper records focused on metadata and ignores legacy spreadsheet cells', () => {
     const parsed = parsePaperLibrary(
       JSON.stringify([

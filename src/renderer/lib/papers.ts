@@ -1,4 +1,9 @@
 import type { TranslationDocument } from './translation';
+import type {
+  PdfTranslationEngine,
+  PdfTranslationOutputMode,
+  PdfTranslationRecordFields
+} from '../../shared/pdfTranslation';
 
 export const PAPER_LIBRARY_KEY = 'pdfTranslationReader:paperLibrary';
 
@@ -29,7 +34,7 @@ export const PAPER_RESEARCH_COLUMNS: PaperResearchColumn[] = [
 
 export type PaperSheetCells = Partial<Record<PaperResearchColumnKey, string>>;
 
-export interface PaperRecord {
+export interface PaperRecord extends PdfTranslationRecordFields {
   id: string;
   pdfPath: string;
   pdfName: string;
@@ -37,6 +42,14 @@ export interface PaperRecord {
   translationName: string;
   aiCachePath?: string;
   aiCacheName?: string;
+  translatedPdfPath?: string;
+  translatedPdfName?: string;
+  translatedPdfMode?: PdfTranslationOutputMode;
+  translationEngine?: PdfTranslationEngine;
+  translationSourceHash?: string;
+  translatedAt?: string;
+  translatedProvider?: string;
+  translatedModel?: string;
   chineseTitle: string;
   englishTitle: string;
   journal: string;
@@ -69,6 +82,14 @@ export function buildPaperRecord(input: BuildPaperRecordInput): PaperRecord {
     translationName: input.translationName,
     aiCachePath: undefined,
     aiCacheName: undefined,
+    translatedPdfPath: undefined,
+    translatedPdfName: undefined,
+    translatedPdfMode: undefined,
+    translationEngine: undefined,
+    translationSourceHash: undefined,
+    translatedAt: undefined,
+    translatedProvider: undefined,
+    translatedModel: undefined,
     chineseTitle: metadata.chineseTitle || truncateText(firstTranslation, 40) || input.translationName,
     englishTitle: metadata.englishTitle || stripExtension(input.pdfName),
     journal: metadata.journal || '',
@@ -100,6 +121,14 @@ export function upsertPaperRecord(library: PaperRecord[], incoming: PaperRecord)
     year: existing.year || incoming.year,
     aiCachePath: existing.aiCachePath || incoming.aiCachePath,
     aiCacheName: existing.aiCacheName || incoming.aiCacheName,
+    translatedPdfPath: existing.translatedPdfPath || incoming.translatedPdfPath,
+    translatedPdfName: existing.translatedPdfName || incoming.translatedPdfName,
+    translatedPdfMode: existing.translatedPdfMode || incoming.translatedPdfMode,
+    translationEngine: existing.translationEngine || incoming.translationEngine,
+    translationSourceHash: existing.translationSourceHash || incoming.translationSourceHash,
+    translatedAt: existing.translatedAt || incoming.translatedAt,
+    translatedProvider: existing.translatedProvider || incoming.translatedProvider,
+    translatedModel: existing.translatedModel || incoming.translatedModel,
     notes: existing.notes || incoming.notes,
     lastPage: existing.lastPage || incoming.lastPage
   };
@@ -116,6 +145,14 @@ export function updatePaperRecord(
       | 'translationName'
       | 'aiCachePath'
       | 'aiCacheName'
+      | 'translatedPdfPath'
+      | 'translatedPdfName'
+      | 'translatedPdfMode'
+      | 'translationEngine'
+      | 'translationSourceHash'
+      | 'translatedAt'
+      | 'translatedProvider'
+      | 'translatedModel'
       | 'chineseTitle'
       | 'englishTitle'
       | 'journal'
@@ -199,6 +236,14 @@ function normalizePaperRecord(value: unknown): PaperRecord | null {
     translationName: toText(record.translationName) || stripExtension(translationPath),
     aiCachePath: toText(record.aiCachePath) || undefined,
     aiCacheName: toText(record.aiCacheName) || undefined,
+    translatedPdfPath: toText(record.translatedPdfPath) || undefined,
+    translatedPdfName: toText(record.translatedPdfName) || undefined,
+    translatedPdfMode: parseTranslatedPdfMode(record.translatedPdfMode),
+    translationEngine: parseTranslationEngine(record.translationEngine),
+    translationSourceHash: toText(record.translationSourceHash) || undefined,
+    translatedAt: toText(record.translatedAt) || undefined,
+    translatedProvider: toText(record.translatedProvider) || undefined,
+    translatedModel: toText(record.translatedModel) || undefined,
     chineseTitle: toText(record.chineseTitle),
     englishTitle: toText(record.englishTitle) || stripExtension(toText(record.pdfName) || pdfPath),
     journal: toText(record.journal),
@@ -223,6 +268,14 @@ function parseSheetCells(value: unknown): PaperSheetCells {
     }
     return cells;
   }, {});
+}
+
+function parseTranslatedPdfMode(value: unknown): PdfTranslationOutputMode | undefined {
+  return value === 'dual' || value === 'mono' ? value : undefined;
+}
+
+function parseTranslationEngine(value: unknown): PdfTranslationEngine | undefined {
+  return value === 'pdfmathtranslate' ? value : undefined;
 }
 
 function getFirstTranslationText(document: TranslationDocument): string {
