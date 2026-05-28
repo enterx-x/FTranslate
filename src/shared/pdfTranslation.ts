@@ -73,6 +73,37 @@ export function buildPdf2zhCommand(input: PdfTranslationCommandInput): PdfTransl
   };
 }
 
+export function patchPdf2zhOpenAiTemperatureSource(source: string): { source: string; changed: boolean } {
+  const openAiClassStart = source.indexOf('class OpenAITranslator');
+  if (openAiClassStart < 0) {
+    return { source, changed: false };
+  }
+
+  const nextClassStart = source.indexOf('\nclass ', openAiClassStart + 1);
+  const openAiClassEnd = nextClassStart > openAiClassStart ? nextClassStart : source.length;
+  const before = source.slice(0, openAiClassStart);
+  const openAiClass = source.slice(openAiClassStart, openAiClassEnd);
+  const after = source.slice(openAiClassEnd);
+
+  if (openAiClass.includes('PDF_TRANSLATION_READER_OPENAI_TEMPERATURE')) {
+    return { source, changed: false };
+  }
+
+  const patchedClass = openAiClass.replace(
+    /^(\s*)self\.options\s*=\s*\{"temperature":\s*0\}[^\n]*/mu,
+    '$1self.options = {"temperature": float(os.environ.get("PDF_TRANSLATION_READER_OPENAI_TEMPERATURE", "0"))}  # App runtime patch: Kimi K2 requires temperature=1'
+  );
+
+  if (patchedClass === openAiClass) {
+    return { source, changed: false };
+  }
+
+  return {
+    source: `${before}${patchedClass}${after}`,
+    changed: true
+  };
+}
+
 export function buildPdfTranslationOutputPaths(input: {
   pdfPath: string;
   outputDir: string;

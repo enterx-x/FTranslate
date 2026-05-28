@@ -3,6 +3,7 @@ import {
   buildPdf2zhCommand,
   buildPdfTranslationOutputPaths,
   buildPdfTranslationSourceHash,
+  patchPdf2zhOpenAiTemperatureSource,
   sanitizePdfTranslationLog
 } from './pdfTranslation';
 
@@ -92,6 +93,32 @@ describe('PDFMathTranslate command helpers', () => {
 
     expect(command.args).not.toContain('--no-mono');
     expect(command.args).not.toContain('--no-dual');
+  });
+
+  it('patches the OpenAI translator temperature even if another translator was patched before', () => {
+    const source = [
+      'class XinferenceTranslator(BaseTranslator):',
+      '    def __init__(self):',
+      '        self.options = {"temperature": float(os.environ.get("PDF_TRANSLATION_READER_OPENAI_TEMPERATURE", "0"))}',
+      '',
+      'class OpenAITranslator(BaseTranslator):',
+      '    def __init__(self):',
+      '        self.options = {"temperature": 0}  # 随机采样可能会打断公式标记',
+      '        self.client = openai.OpenAI()',
+      '',
+      'class AzureOpenAITranslator(BaseTranslator):',
+      '    def __init__(self):',
+      '        self.options = {"temperature": 0}'
+    ].join('\n');
+
+    const patched = patchPdf2zhOpenAiTemperatureSource(source);
+
+    expect(patched.changed).toBe(true);
+    expect(patched.source).toContain(
+      'class OpenAITranslator(BaseTranslator):\n    def __init__(self):\n        self.options = {"temperature": float(os.environ.get("PDF_TRANSLATION_READER_OPENAI_TEMPERATURE", "0"))}'
+    );
+    expect(patched.source).toContain('class AzureOpenAITranslator(BaseTranslator):');
+    expect(patched.source).toContain('        self.options = {"temperature": 0}');
   });
 
   it('derives stable dual and mono output paths from the source PDF name', () => {

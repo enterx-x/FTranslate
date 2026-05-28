@@ -247,7 +247,11 @@ async function clickButtonByText(client, text) {
   const clicked = await evaluateJson(client, `() => {
     const needle = ${JSON.stringify(text)};
     const button = [...document.querySelectorAll('button')]
-      .find((item) => (item.textContent ?? '').trim() === needle);
+      .find((item) =>
+        (item.textContent ?? '').trim() === needle ||
+        item.getAttribute('aria-label') === needle ||
+        item.getAttribute('title') === needle
+      );
     button?.click();
     return Boolean(button);
   }`);
@@ -435,8 +439,12 @@ async function runResearchSheetScenario(client) {
     hasAiButton: [...document.querySelectorAll('button')].some((button) => /AI 填(此单元格|选区)/.test(button.textContent ?? '')),
     hasBindingToggle: [...document.querySelectorAll('button')].some((button) => /绑定|解除绑定|更新绑定/.test(button.textContent ?? '')),
     formatToolbarText: document.querySelector('.research-format-toolbar')?.textContent ?? '',
+    formatToolbarTitles: [...document.querySelectorAll('.research-format-toolbar button')]
+      .map((button) => button.getAttribute('title') || button.getAttribute('aria-label') || (button.textContent ?? '').trim()),
     contextMenuText: document.body.textContent ?? '',
     titleText: document.querySelector('.research-sheet-header')?.textContent ?? '',
+    headerActionTitles: [...document.querySelectorAll('.research-sheet-actions button')]
+      .map((button) => button.getAttribute('title') || button.getAttribute('aria-label') || (button.textContent ?? '').trim()),
     markStyle: (() => {
       const mark = document.querySelector('.research-sheet-title img');
       if (!mark) return null;
@@ -452,10 +460,10 @@ async function runResearchSheetScenario(client) {
   if (
     !snapshot.hasBindingToggle ||
     !/字号/.test(snapshot.formatToolbarText) ||
-    !/居中/.test(snapshot.formatToolbarText) ||
-    !/复制格式/.test(snapshot.formatToolbarText) ||
-    !/取消 B/.test(snapshot.formatToolbarText) ||
-    !/取消 I/.test(snapshot.formatToolbarText)
+    !snapshot.formatToolbarTitles.includes('水平居中') ||
+    !snapshot.formatToolbarTitles.includes('复制格式') ||
+    !snapshot.formatToolbarTitles.some((title) => title === '加粗' || title === '取消加粗') ||
+    !snapshot.formatToolbarTitles.some((title) => title === '斜体' || title === '取消斜体')
   ) {
     throw new Error(`researchSheet: expected binding and formatting toolbar controls, got ${JSON.stringify(snapshot)}`);
   }
@@ -470,8 +478,8 @@ async function runResearchSheetScenario(client) {
   if (
     !snapshot.commandText.includes('绑定论文到当前行') ||
     !snapshot.titleText.includes('研究表格') ||
-    !snapshot.titleText.includes('导入 Excel') ||
-    !snapshot.titleText.includes('导出 Excel')
+    !snapshot.headerActionTitles.includes('导入 Excel') ||
+    !snapshot.headerActionTitles.includes('导出 Excel')
   ) {
     throw new Error(`researchSheet: expected independent sheet controls, got ${JSON.stringify(snapshot)}`);
   }

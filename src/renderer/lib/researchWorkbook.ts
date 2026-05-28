@@ -55,6 +55,11 @@ export interface ResearchWorkbook {
   id: string;
   sheetName: string;
   styles?: IWorkbookData['styles'];
+  /**
+   * 保存 Univer 的原始工作簿快照，用于保留多工作表、冻结窗格、行高列宽和单元格格式。
+   * 旧的 rows/columns 仍作为首个工作表的轻量索引，方便论文行绑定和 AI 填表逻辑复用。
+   */
+  univerSnapshot?: IWorkbookData;
   freeze: {
     ySplit: number;
     xSplit: number;
@@ -128,6 +133,10 @@ export function parseResearchWorkbook(value: string | null): ResearchWorkbook {
     const parsed = JSON.parse(value) as unknown;
     if (!isRecord(parsed)) {
       return buildDefaultResearchWorkbook();
+    }
+
+    if (isRecord(parsed.univerSnapshot)) {
+      return fromUniverWorkbookData(parsed.univerSnapshot as unknown as IWorkbookData);
     }
 
     const fallback = buildDefaultResearchWorkbook();
@@ -208,6 +217,7 @@ export function ensurePaperRow(
   const rowId = `row-${rowIndex}`;
   const nextWorkbook = {
     ...workbook,
+    univerSnapshot: undefined,
     rows: [...workbook.rows, buildPaperRow(rowId, paper, workbook.columns)]
   };
   const nextLinks = [
@@ -274,6 +284,7 @@ export function setResearchCellText(
 
   return {
     ...workbook,
+    univerSnapshot: undefined,
     rows
   };
 }
@@ -313,6 +324,7 @@ export function setResearchCellStyle(
 
   return {
     ...workbook,
+    univerSnapshot: undefined,
     rows
   };
 }
@@ -331,6 +343,16 @@ export function getResearchCellUniverStyle(
   return isRecord(rawStyle) ? cloneUniverStyle(rawStyle as IStyleData) : {};
 }
 
+export function isResearchCellStyleEnabled(
+  workbook: ResearchWorkbook,
+  rowIndex: number,
+  columnIndex: number,
+  styleKey: 'bl' | 'it'
+): boolean {
+  const style = getResearchCellUniverStyle(workbook, rowIndex, columnIndex);
+  return style[styleKey] === BooleanNumber.TRUE;
+}
+
 export function getResearchRowValues(
   workbook: ResearchWorkbook,
   rowIndex: number
@@ -346,6 +368,10 @@ export function getResearchColumnHeader(workbook: ResearchWorkbook, columnIndex:
 }
 
 export function toUniverWorkbookData(workbook: ResearchWorkbook): IWorkbookData {
+  if (workbook.univerSnapshot) {
+    return cloneWorkbookData(workbook.univerSnapshot);
+  }
+
   const sheetId = 'research-sheet';
   const styles: IWorkbookData['styles'] = {
     ...(workbook.styles ?? {}),
@@ -462,6 +488,7 @@ export function fromUniverWorkbookData(snapshot: IWorkbookData): ResearchWorkboo
     id: snapshot.id || 'research-workbook',
     sheetName: snapshot.name || sheet.name || '论文研究表',
     styles: snapshot.styles,
+    univerSnapshot: cloneWorkbookData(snapshot),
     freeze: {
       ySplit: Math.max(1, Number(sheet.freeze?.ySplit) || 1),
       xSplit: Math.max(0, Number(sheet.freeze?.xSplit) || 0)
@@ -469,6 +496,47 @@ export function fromUniverWorkbookData(snapshot: IWorkbookData): ResearchWorkboo
     columns,
     rows: normalizeRows(rows, columns)
   };
+}
+
+export function appendResearchWorkbookSheets(
+  currentWorkbook: ResearchWorkbook,
+  importedWorkbook: ResearchWorkbook
+): ResearchWorkbook {
+  const currentSnapshot = toUniverWorkbookData(currentWorkbook);
+  const importedSnapshot = toUniverWorkbookData(importedWorkbook);
+  const nextSnapshot: IWorkbookData = {
+    ...cloneWorkbookData(currentSnapshot),
+    styles: {
+      ...(currentSnapshot.styles ?? {}),
+      ...(importedSnapshot.styles ?? {})
+    },
+    sheets: {
+      ...cloneWorkbookData(currentSnapshot).sheets
+    },
+    sheetOrder: [...currentSnapshot.sheetOrder]
+  };
+  const usedNames = new Set(
+    nextSnapshot.sheetOrder
+      .map((sheetId) => nextSnapshot.sheets[sheetId]?.name)
+      .filter((name): name is string => Boolean(name))
+  );
+
+  importedSnapshot.sheetOrder.forEach((sheetId, index) => {
+    const importedSheet = importedSnapshot.sheets[sheetId];
+    if (!importedSheet) {
+      return;
+    }
+
+    const nextSheetId = makeUniqueSheetId(nextSnapshot, `imported-${Date.now()}-${index}`);
+    const sheetCopy = cloneWorkbookData(importedSheet);
+    sheetCopy.id = nextSheetId;
+    sheetCopy.name = makeUniqueSheetName(importedSheet.name || `导入工作表 ${index + 1}`, usedNames);
+    usedNames.add(sheetCopy.name);
+    nextSnapshot.sheets[nextSheetId] = sheetCopy;
+    nextSnapshot.sheetOrder.push(nextSheetId);
+  });
+
+  return fromUniverWorkbookData(nextSnapshot);
 }
 
 function buildPaperRow(rowId: string, paper: PaperRecord, columns: ResearchSheetColumn[]): ResearchRow {
@@ -693,6 +761,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cloneUniverStyle(style: IStyleData): IStyleData {
   return JSON.parse(JSON.stringify(style)) as IStyleData;
+}
+
+function cloneWorkbookData<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function makeUniqueSheetId(snapshot: IWorkbookData, preferredId: string): string {
+  let candidate = preferredId;
+  let suffix = 2;
+  while (snapshot.sheets[candidate]) {
+    candidate = `${preferredId}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
+function makeUniqueSheetName(name: string, usedNames: Set<string>): string {
+  let candidate = name;
+  let suffix = 2;
+  while (usedNames.has(candidate)) {
+    candidate = `${name} (${suffix})`;
+    suffix += 1;
+  }
+  return candidate;
 }
 
 function readString(value: unknown): string {

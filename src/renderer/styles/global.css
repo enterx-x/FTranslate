@@ -68,6 +68,29 @@ button:disabled {
   box-shadow: none;
 }
 
+.icon-button,
+.toolbar-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.toolbar-icon-button {
+  height: 31px;
+}
+
+.icon-button.is-active,
+.icon-button[aria-pressed="true"] {
+  border-color: #111111;
+  background: #111111;
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+}
+
 .app-shell {
   display: grid;
   grid-template-rows: auto 1fr auto;
@@ -1218,6 +1241,7 @@ button:disabled {
 
 .home-module-card {
   display: grid;
+  grid-template-rows: auto auto minmax(82px, 1fr) auto auto;
   gap: 14px;
   min-height: 260px;
   border: 1px solid #111111;
@@ -1269,6 +1293,7 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-self: end;
 }
 
 .home-empty {
@@ -1604,8 +1629,14 @@ button:disabled {
 
 .research-format-toolbar button {
   height: 28px;
-  padding: 0 9px;
   font-size: 12px;
+}
+
+.research-format-toolbar .icon-button,
+.research-sheet-actions .icon-button {
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
 }
 
 .primary-button {

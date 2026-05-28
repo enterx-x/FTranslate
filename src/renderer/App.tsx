@@ -596,34 +596,7 @@ export default function App() {
   }
 
   async function handleNewProject(): Promise<void> {
-    const pdfPayload = await window.electronAPI.openPdf();
-    if (!pdfPayload) {
-      return;
-    }
-
-    const translationPayload = await window.electronAPI.openTranslation();
-    if (!translationPayload) {
-      return;
-    }
-
-    try {
-      applyPdfPayload(pdfPayload);
-      const document = applyTranslationPayload(translationPayload);
-      const record = buildPaperRecord({
-        pdfPath: pdfPayload.filePath,
-        pdfName: pdfPayload.fileName,
-        translationPath: translationPayload.filePath,
-        translationName: translationPayload.fileName,
-        document
-      });
-      const storedRecord = rememberPaper(record);
-
-      setActiveNotes(storedRecord.notes);
-      setView('reader');
-      setStatusMessage(`新建翻译项目完成：${storedRecord.chineseTitle || storedRecord.englishTitle}`);
-    } catch (error) {
-      setStatusMessage(`新建翻译项目失败：${String(error)}`);
-    }
+    await handleNewPdfTranslationProject();
   }
 
   async function handleSaveTranslation(): Promise<void> {
@@ -1206,7 +1179,7 @@ export default function App() {
       <div className="app-shell home-shell">
         <HomePage
           papers={paperLibrary}
-          onNewProject={handleNewProject}
+          onNewProject={handleNewPdfTranslationProject}
           onOpenPaper={handleOpenPaper}
           onOpenResearchSheet={handleOpenResearchSheet}
           onUpdatePaper={(paper) =>

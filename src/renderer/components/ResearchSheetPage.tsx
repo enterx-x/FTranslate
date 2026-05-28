@@ -15,11 +15,13 @@ import brandMark from '../assets/brand-mark.png';
 import {
   RESEARCH_SHEET_LINKS_KEY,
   RESEARCH_WORKBOOK_KEY,
+  appendResearchWorkbookSheets,
   fromUniverWorkbookData,
   getResearchCellUniverStyle,
   getResearchCellText,
   getResearchColumnHeader,
   getResearchRowValues,
+  isResearchCellStyleEnabled,
   parseResearchWorkbook,
   serializeResearchWorkbook,
   setResearchCellStyle,
@@ -143,6 +145,18 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const selectedCellCount = countSelectedCells(selectedRanges);
   const selectedRangeLabel = formatSelectedRanges(selectedRanges);
   const selectedBindingPaper = props.papers.find((paper) => paper.id === bindingPaperId) ?? null;
+  const isBoldActive = isResearchCellStyleEnabled(
+    workbookModelRef.current,
+    selectedCell.rowIndex,
+    selectedCell.columnIndex,
+    'bl'
+  );
+  const isItalicActive = isResearchCellStyleEnabled(
+    workbookModelRef.current,
+    selectedCell.rowIndex,
+    selectedCell.columnIndex,
+    'it'
+  );
   const bindButtonLabel = linkedPaper
     ? selectedBindingPaper && selectedBindingPaper.id !== linkedPaper.id
       ? '更新绑定'
@@ -405,6 +419,20 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     scheduleWorkbookSave();
   }
 
+  function handleToggleBold(): void {
+    applyStylePatchToSelection(
+      { bl: isBoldActive ? BooleanNumber.FALSE : BooleanNumber.TRUE },
+      isBoldActive ? '已取消选区加粗。' : '已加粗选区。'
+    );
+  }
+
+  function handleToggleItalic(): void {
+    applyStylePatchToSelection(
+      { it: isItalicActive ? BooleanNumber.FALSE : BooleanNumber.TRUE },
+      isItalicActive ? '已取消选区斜体。' : '已将选区设为斜体。'
+    );
+  }
+
   async function handleExportExcel(): Promise<void> {
     const workbook = flushWorkbookFromUniver() ?? workbookModelRef.current;
     const result = await window.electronAPI.exportResearchWorkbookExcel({ workbook });
@@ -419,13 +447,14 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
       return;
     }
 
-    const nextWorkbook = parseResearchWorkbook(JSON.stringify(result.workbook));
+    const currentWorkbook = flushWorkbookFromUniver() ?? workbookModelRef.current;
+    const importedWorkbook = parseResearchWorkbook(JSON.stringify(result.workbook));
+    const nextWorkbook = appendResearchWorkbookSheets(currentWorkbook, importedWorkbook);
     workbookModelRef.current = nextWorkbook;
     props.onWorkbookChange(nextWorkbook);
-    props.onLinksChange([]);
     localStorage.setItem(RESEARCH_WORKBOOK_KEY, serializeResearchWorkbook(nextWorkbook));
-    localStorage.setItem(RESEARCH_SHEET_LINKS_KEY, '[]');
-    setLocalMessage(`已导入 Excel：${result.fileName}。论文绑定已清空，请按行重新绑定。`);
+    localStorage.setItem(RESEARCH_SHEET_LINKS_KEY, JSON.stringify(props.links, null, 2));
+    setLocalMessage(`已导入 Excel：${result.fileName}。外部工作表已追加，原工作表和论文绑定已保留。`);
     window.location.reload();
   }
 
@@ -653,14 +682,14 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
           </div>
         </div>
         <div className="research-sheet-actions">
-          <button type="button" onClick={handleImportExcel}>
-            导入 Excel
+          <button type="button" className="icon-button" onClick={handleImportExcel} title="导入 Excel" aria-label="导入 Excel">
+            ⇧
           </button>
-          <button type="button" onClick={handleExportExcel}>
-            导出 Excel
+          <button type="button" className="icon-button" onClick={handleExportExcel} title="导出 Excel" aria-label="导出 Excel">
+            ⇩
           </button>
-          <button type="button" onClick={props.onBackHome}>
-            返回主页
+          <button type="button" className="icon-button" onClick={props.onBackHome} title="返回主页" aria-label="返回主页">
+            ⌂
           </button>
         </div>
       </header>
@@ -725,23 +754,31 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
               ))}
             </select>
           </label>
-          <button type="button" onClick={handleCopyFormat}>
-            复制格式
+          <button type="button" className="icon-button" onClick={handleCopyFormat} title="复制格式" aria-label="复制格式">
+            ⧉
           </button>
-          <button type="button" onClick={handlePasteCopiedFormat} disabled={!hasCopiedFormat}>
-            粘贴格式
+          <button type="button" className="icon-button" onClick={handlePasteCopiedFormat} disabled={!hasCopiedFormat} title="粘贴格式" aria-label="粘贴格式">
+            ▣
           </button>
-          <button type="button" onClick={() => applyStylePatchToSelection({ bl: BooleanNumber.TRUE }, '已加粗选区。')}>
-            B
+          <button
+            type="button"
+            className={`icon-button ${isBoldActive ? 'is-active' : ''}`}
+            onClick={handleToggleBold}
+            title={isBoldActive ? '取消加粗' : '加粗'}
+            aria-label={isBoldActive ? '取消加粗' : '加粗'}
+            aria-pressed={isBoldActive}
+          >
+            <strong>B</strong>
           </button>
-          <button type="button" onClick={() => applyStylePatchToSelection({ bl: BooleanNumber.FALSE }, '已取消选区加粗。')}>
-            取消 B
-          </button>
-          <button type="button" onClick={() => applyStylePatchToSelection({ it: BooleanNumber.TRUE }, '已将选区设为斜体。')}>
-            I
-          </button>
-          <button type="button" onClick={() => applyStylePatchToSelection({ it: BooleanNumber.FALSE }, '已取消选区斜体。')}>
-            取消 I
+          <button
+            type="button"
+            className={`icon-button ${isItalicActive ? 'is-active' : ''}`}
+            onClick={handleToggleItalic}
+            title={isItalicActive ? '取消斜体' : '斜体'}
+            aria-label={isItalicActive ? '取消斜体' : '斜体'}
+            aria-pressed={isItalicActive}
+          >
+            <em>I</em>
           </button>
           <label>
             字色
@@ -765,20 +802,20 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
               }}
             />
           </label>
-          <button type="button" onClick={() => applyStylePatchToSelection({ ht: 1 }, '已左对齐选区。')}>
-            左
+          <button type="button" className="icon-button" onClick={() => applyStylePatchToSelection({ ht: 1 }, '已左对齐选区。')} title="左对齐" aria-label="左对齐">
+            ≡
           </button>
-          <button type="button" onClick={() => applyStylePatchToSelection({ ht: 2 }, '已居中选区。')}>
-            中
+          <button type="button" className="icon-button" onClick={() => applyStylePatchToSelection({ ht: 2 }, '已居中选区。')} title="水平居中" aria-label="水平居中">
+            ☰
           </button>
-          <button type="button" onClick={() => applyStylePatchToSelection({ ht: 3 }, '已右对齐选区。')}>
-            右
+          <button type="button" className="icon-button" onClick={() => applyStylePatchToSelection({ ht: 3 }, '已右对齐选区。')} title="右对齐" aria-label="右对齐">
+            ≣
           </button>
-          <button type="button" onClick={() => applyStylePatchToSelection({ vt: 2 }, '已垂直居中选区。')}>
-            垂直居中
+          <button type="button" className="icon-button" onClick={() => applyStylePatchToSelection({ vt: 2 }, '已垂直居中选区。')} title="垂直居中" aria-label="垂直居中">
+            ↕
           </button>
-          <button type="button" onClick={() => applyFormatToSelection((range) => range.setWrap?.(true), '已开启选区自动换行。')}>
-            换行
+          <button type="button" className="icon-button" onClick={() => applyFormatToSelection((range) => range.setWrap?.(true), '已开启选区自动换行。')} title="自动换行" aria-label="自动换行">
+            ↵
           </button>
         </section>
 

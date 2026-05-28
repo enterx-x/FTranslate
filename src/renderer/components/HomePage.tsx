@@ -84,9 +84,14 @@ export function HomePage(props: HomePageProps) {
               <span>首行冻结</span>
               <span>AI 填表</span>
             </div>
-            <button type="button" className="primary-button" onClick={() => props.onOpenResearchSheet()}>
-              打开研究表格
-            </button>
+            <div className="home-module-actions">
+              <button type="button" className="primary-button" onClick={() => props.onOpenResearchSheet()}>
+                打开研究表格
+              </button>
+              <button type="button" onClick={props.onNewProject}>
+                新建 PDF 翻译
+              </button>
+            </div>
           </article>
 
           <article className="home-module-card">
@@ -136,7 +141,7 @@ export function HomePage(props: HomePageProps) {
       {props.papers.length === 0 ? (
         <section className="home-empty">
           <h2>还没有论文记录</h2>
-          <p>点击“新建翻译项目”，选择 PDF 和翻译文件后会自动加入论文库。</p>
+          <p>点击“新建翻译项目”选择 PDF 即可加入论文库；手动段落翻译文件可以之后再导入。</p>
         </section>
       ) : (
         <section className="paper-table-wrap">

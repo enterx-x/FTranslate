@@ -33,6 +33,7 @@ import {
   buildPdf2zhCommand,
   buildPdfTranslationOutputPaths,
   buildPdfTranslationSourceHash,
+  patchPdf2zhOpenAiTemperatureSource,
   sanitizePdfTranslationLog,
   type PdfTranslationInvocation,
   type PdfTranslationOutputMode
@@ -69,6 +70,7 @@ interface ResearchWorkbookExcelResult {
 interface ResearchWorkbookExcelPayload {
   id: string;
   sheetName: string;
+  univerSnapshot?: Record<string, unknown>;
   freeze: {
     ySplit: number;
     xSplit: number;
@@ -101,6 +103,7 @@ interface ResearchWorkbookExcelCellStyle {
   bold?: boolean;
   italic?: boolean;
   align?: 'left' | 'center' | 'right';
+  wrapText?: boolean;
   univerStyle?: unknown;
 }
 
@@ -571,16 +574,8 @@ async function patchPrivatePdf2zhTemperatureOption(
   }
 
   const content = await fs.readFile(translatorPath, 'utf8');
-  if (content.includes('PDF_TRANSLATION_READER_OPENAI_TEMPERATURE')) {
-    return;
-  }
-
-  const patched = content.replace(
-    'self.options = {"temperature": 0}  # 随机采样可能会打断公式标记',
-    'self.options = {"temperature": float(os.environ.get("PDF_TRANSLATION_READER_OPENAI_TEMPERATURE", "0"))}  # App runtime patch: Kimi K2 requires temperature=1'
-  );
-
-  if (patched === content) {
+  const patchResult = patchPdf2zhOpenAiTemperatureSource(content);
+  if (!patchResult.changed) {
     return;
   }
 
@@ -589,7 +584,7 @@ async function patchPrivatePdf2zhTemperatureOption(
     status: 'running',
     message: '正在修正 PDFMathTranslate 的 OpenAI-compatible temperature 兼容性。'
   });
-  await fs.writeFile(translatorPath, patched, 'utf8');
+  await fs.writeFile(translatorPath, patchResult.source, 'utf8');
 }
 
 function getPdfTranslationInstallCommand(): string {
@@ -846,6 +841,16 @@ async function exportResearchWorkbookToExcel(
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'PDF Translation Reader';
   workbook.created = new Date();
+
+  if (isResearchWorkbookUniverSnapshot(workbookPayload.univerSnapshot)) {
+    writeUniverSnapshotToExcelWorkbook(workbook, workbookPayload.univerSnapshot);
+    await workbook.xlsx.writeFile(result.filePath);
+    return {
+      filePath: result.filePath,
+      fileName: path.basename(result.filePath)
+    };
+  }
+
   const worksheet = workbook.addWorksheet(workbookPayload.sheetName || '论文研究表', {
     views: [{
       state: 'frozen',
@@ -905,6 +910,7 @@ async function importResearchWorkbookFromExcel(): Promise<{
     throw new Error('Excel 文件中没有可导入的工作表。');
   }
 
+  const freeze = readExcelWorksheetFreeze(worksheet);
   const columnCount = Math.max(1, worksheet.actualColumnCount || worksheet.columnCount || 1);
   const rowCount = Math.max(1, worksheet.actualRowCount || worksheet.rowCount || 1);
   const columns: ResearchWorkbookExcelColumn[] = Array.from({ length: columnCount }, (_, index) => {
@@ -938,14 +944,201 @@ async function importResearchWorkbookFromExcel(): Promise<{
     workbook: {
       id: 'research-workbook',
       sheetName: worksheet.name || '论文研究表',
-      freeze: {
-        ySplit: 1,
-        xSplit: 0
-      },
+      univerSnapshot: buildUniverSnapshotFromExcelWorkbook(workbook, filePath),
+      freeze,
       columns,
       rows
     }
   };
+}
+
+function buildUniverSnapshotFromExcelWorkbook(
+  workbook: ExcelJS.Workbook,
+  sourcePath: string
+): Record<string, unknown> {
+  const sheetOrder: string[] = [];
+  const sheets: Record<string, unknown> = {};
+  const styles: Record<string, unknown> = {
+    header: {
+      bg: { rgb: '#111111' },
+      cl: { rgb: '#ffffff' },
+      bl: 1,
+      ht: 2,
+      vt: 2,
+      fs: 13,
+      tb: 3
+    },
+    normal: {
+      fs: 12,
+      vt: 2,
+      tb: 3
+    }
+  };
+
+  workbook.worksheets.forEach((worksheet, sheetIndex) => {
+    const sheetId = `sheet-${sheetIndex + 1}`;
+    sheetOrder.push(sheetId);
+    sheets[sheetId] = buildUniverSheetFromExcelWorksheet(worksheet, sheetId);
+  });
+
+  return {
+    id: 'research-workbook',
+    name: path.basename(sourcePath, path.extname(sourcePath)) || '论文研究表',
+    appVersion: '0.24.0',
+    locale: 'zhCN',
+    styles,
+    sheetOrder,
+    sheets
+  };
+}
+
+function buildUniverSheetFromExcelWorksheet(
+  worksheet: ExcelJS.Worksheet,
+  sheetId: string
+): Record<string, unknown> {
+  const freeze = readExcelWorksheetFreeze(worksheet);
+  const columnCount = Math.max(1, worksheet.actualColumnCount || worksheet.columnCount || 1);
+  const rowCount = Math.max(1, worksheet.actualRowCount || worksheet.rowCount || 1);
+  const cellData: Record<number, Record<number, Record<string, unknown>>> = {};
+  const rowData: Record<number, { h: number }> = {};
+  const columnData: Record<number, { w: number }> = {};
+
+  for (let columnIndex = 1; columnIndex <= columnCount; columnIndex += 1) {
+    const width = Math.max(70, Math.round((worksheet.getColumn(columnIndex).width || 16) * 7));
+    columnData[columnIndex - 1] = { w: width };
+  }
+
+  for (let rowIndex = 1; rowIndex <= rowCount; rowIndex += 1) {
+    const sourceRow = worksheet.getRow(rowIndex);
+    if (sourceRow.height) {
+      rowData[rowIndex - 1] = { h: excelRowHeightToPx(sourceRow.height) };
+    }
+
+    for (let columnIndex = 1; columnIndex <= columnCount; columnIndex += 1) {
+      const sourceCell = sourceRow.getCell(columnIndex);
+      const value = readExcelCellText(sourceCell);
+      const style = readExcelCellStyle(sourceCell);
+      if (!value && !style?.univerStyle) {
+        continue;
+      }
+
+      if (!cellData[rowIndex - 1]) {
+        cellData[rowIndex - 1] = {};
+      }
+
+      const cellPayload: Record<string, unknown> = value.trim().startsWith('=')
+        ? { f: value }
+        : { v: value, t: 1 };
+      if (style?.univerStyle) {
+        cellPayload.s = style.univerStyle;
+      }
+      cellData[rowIndex - 1][columnIndex - 1] = cellPayload;
+    }
+  }
+
+  return {
+    id: sheetId,
+    name: worksheet.name || '论文研究表',
+    hidden: 0,
+    freeze: {
+      xSplit: freeze.xSplit,
+      ySplit: freeze.ySplit,
+      startColumn: freeze.xSplit > 0 ? freeze.xSplit : -1,
+      startRow: freeze.ySplit > 0 ? freeze.ySplit : -1
+    },
+    rowCount: Math.max(rowCount, 20),
+    columnCount: Math.max(columnCount, 10),
+    zoomRatio: 1,
+    scrollTop: 0,
+    scrollLeft: 0,
+    defaultColumnWidth: 120,
+    defaultRowHeight: 28,
+    mergeData: [],
+    cellData,
+    rowData,
+    columnData,
+    rowHeader: { width: 46 },
+    columnHeader: { height: 26 },
+    showGridlines: 1,
+    rightToLeft: 0
+  };
+}
+
+function writeUniverSnapshotToExcelWorkbook(
+  workbook: ExcelJS.Workbook,
+  snapshot: Record<string, unknown>
+): void {
+  const sheetOrder = Array.isArray(snapshot.sheetOrder) ? snapshot.sheetOrder.map(String) : [];
+  const sheets = isRecord(snapshot.sheets) ? snapshot.sheets : {};
+  const orderedSheetIds = sheetOrder.length > 0 ? sheetOrder : Object.keys(sheets);
+
+  orderedSheetIds.forEach((sheetId, index) => {
+    const sheet = isRecord(sheets[sheetId]) ? sheets[sheetId] : null;
+    if (!sheet) {
+      return;
+    }
+
+    const worksheet = workbook.addWorksheet(
+      sanitizeExcelSheetName(String(sheet.name || `Sheet ${index + 1}`)),
+      { views: [readUniverSheetFreeze(sheet)] }
+    );
+    writeUniverSheetToExcelWorksheet(worksheet, sheet, isRecord(snapshot.styles) ? snapshot.styles : {});
+  });
+
+  if (workbook.worksheets.length === 0) {
+    workbook.addWorksheet('论文研究表');
+  }
+}
+
+function writeUniverSheetToExcelWorksheet(
+  worksheet: ExcelJS.Worksheet,
+  sheet: Record<string, unknown>,
+  styles: Record<string, unknown>
+): void {
+  const rowCount = getUniverSheetUsedRowCount(sheet);
+  const columnCount = getUniverSheetUsedColumnCount(sheet);
+  const cellData = isRecord(sheet.cellData) ? sheet.cellData : {};
+  const rowData = isRecord(sheet.rowData) ? sheet.rowData : {};
+  const columnData = isRecord(sheet.columnData) ? sheet.columnData : {};
+
+  for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+    const column = (isRecord(columnData[String(columnIndex)]) ? columnData[String(columnIndex)] : {}) as Record<string, unknown>;
+    const widthPx = readNumberLike(column.w, 120);
+    worksheet.getColumn(columnIndex + 1).width = Math.max(8, Math.round(widthPx / 7));
+  }
+
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    const excelRow = worksheet.getRow(rowIndex + 1);
+    const rowMeta = (isRecord(rowData[String(rowIndex)]) ? rowData[String(rowIndex)] : {}) as Record<string, unknown>;
+    if (typeof rowMeta.h === 'number') {
+      excelRow.height = pxToExcelRowHeight(rowMeta.h);
+    }
+
+    const rowCells = (isRecord(cellData[String(rowIndex)]) ? cellData[String(rowIndex)] : {}) as Record<string, unknown>;
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+      const sourceCell = (isRecord(rowCells[String(columnIndex)])
+        ? rowCells[String(columnIndex)]
+        : null) as Record<string, unknown> | null;
+      const excelCell = excelRow.getCell(columnIndex + 1);
+      if (!sourceCell) {
+        continue;
+      }
+
+      const value = readUniverCellText(sourceCell);
+      excelCell.value = value.trim().startsWith('=')
+        ? { formula: value.trim().slice(1) }
+        : value;
+      applyExcelCellStyle(
+        excelCell,
+        {
+          univerStyle: resolveUniverStyle(sourceCell.s, styles),
+          wrapText: true
+        },
+        rowIndex === 0
+      );
+    }
+    excelRow.commit();
+  }
 }
 
 function normalizeResearchWorkbookExcelPayload(
@@ -961,6 +1154,7 @@ function normalizeResearchWorkbookExcelPayload(
   return {
     id: workbook.id || 'research-workbook',
     sheetName: workbook.sheetName || '论文研究表',
+    univerSnapshot: isRecord(workbook.univerSnapshot) ? workbook.univerSnapshot : undefined,
     freeze: {
       ySplit: Math.max(0, Number(workbook.freeze?.ySplit) || 0),
       xSplit: Math.max(0, Number(workbook.freeze?.xSplit) || 0)
@@ -993,6 +1187,7 @@ function applyExcelCellStyle(
   const bold = style?.bold ?? readBooleanNumber(univerStyle.bl) ?? isHeader;
   const italic = style?.italic ?? readBooleanNumber(univerStyle.it) ?? false;
   const align = style?.align ?? readHorizontalAlign(univerStyle.ht) ?? (isHeader ? 'center' : 'left');
+  const wrapText = style?.wrapText ?? readUniverWrap(univerStyle.tb) ?? true;
 
   cell.font = {
     size: fontSize,
@@ -1003,7 +1198,7 @@ function applyExcelCellStyle(
   cell.alignment = {
     horizontal: align,
     vertical: 'middle',
-    wrapText: true
+    wrapText
   };
   if (fillColor) {
     cell.fill = {
@@ -1036,24 +1231,30 @@ function readExcelCellText(cell: ExcelJS.Cell): string {
 
 function readExcelCellStyle(cell: ExcelJS.Cell): ResearchWorkbookExcelCellStyle | undefined {
   const style: ResearchWorkbookExcelCellStyle = {};
+  const univerStyle: Record<string, unknown> = {};
   if (typeof cell.font?.size === 'number') {
     style.fontSize = cell.font.size;
+    univerStyle.fs = cell.font.size;
   }
   if (cell.font?.bold !== undefined) {
     style.bold = Boolean(cell.font.bold);
+    univerStyle.bl = cell.font.bold ? 1 : 0;
   }
   if (cell.font?.italic !== undefined) {
     style.italic = Boolean(cell.font.italic);
+    univerStyle.it = cell.font.italic ? 1 : 0;
   }
   const fontColor = fromExcelArgb(cell.font?.color?.argb);
   if (fontColor) {
     style.color = fontColor;
+    univerStyle.cl = { rgb: fontColor };
   }
   const fill = cell.fill;
   if (fill && fill.type === 'pattern' && 'fgColor' in fill) {
     const fillColor = fromExcelArgb(fill.fgColor?.argb);
     if (fillColor) {
       style.backgroundColor = fillColor;
+      univerStyle.bg = { rgb: fillColor };
     }
   }
   if (
@@ -1062,6 +1263,22 @@ function readExcelCellStyle(cell: ExcelJS.Cell): ResearchWorkbookExcelCellStyle 
     cell.alignment?.horizontal === 'right'
   ) {
     style.align = cell.alignment.horizontal;
+    univerStyle.ht = cell.alignment.horizontal === 'left' ? 1 : cell.alignment.horizontal === 'center' ? 2 : 3;
+  }
+  if (cell.alignment?.vertical === 'top') {
+    univerStyle.vt = 1;
+  } else if (cell.alignment?.vertical === 'middle') {
+    univerStyle.vt = 2;
+  } else if (cell.alignment?.vertical === 'bottom') {
+    univerStyle.vt = 3;
+  }
+  if (cell.alignment?.wrapText || readExcelCellText(cell).length > 24) {
+    style.wrapText = true;
+    // Univer 的 tb=3 对应 wrap，保证导入外部 Excel 后长文本默认自动换行。
+    univerStyle.tb = 3;
+  }
+  if (Object.keys(univerStyle).length > 0) {
+    style.univerStyle = univerStyle;
   }
   return Object.keys(style).length > 0 ? style : undefined;
 }
@@ -1080,6 +1297,83 @@ function getDefaultResearchColumnKey(index: number): string {
     'futureIdeas',
     'notes'
   ][index] ?? `custom-${index}`;
+}
+
+function readExcelWorksheetFreeze(worksheet: ExcelJS.Worksheet): { xSplit: number; ySplit: number } {
+  const frozenView = worksheet.views?.find((view) => view.state === 'frozen') as Record<string, unknown> | undefined;
+  return {
+    xSplit: Math.max(0, Number(frozenView?.xSplit) || 0),
+    ySplit: Math.max(0, Number(frozenView?.ySplit) || 0)
+  };
+}
+
+function isResearchWorkbookUniverSnapshot(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && isRecord(value.sheets) && Array.isArray(value.sheetOrder);
+}
+
+function readUniverSheetFreeze(sheet: Record<string, unknown>): ExcelJS.WorksheetView {
+  const freeze = isRecord(sheet.freeze) ? sheet.freeze : {};
+  return {
+    state: 'frozen',
+    xSplit: Math.max(0, Number(freeze.xSplit) || 0),
+    ySplit: Math.max(0, Number(freeze.ySplit) || 0)
+  } as ExcelJS.WorksheetView;
+}
+
+function getUniverSheetUsedRowCount(sheet: Record<string, unknown>): number {
+  const indexes = new Set<number>([0]);
+  const cellData = isRecord(sheet.cellData) ? sheet.cellData : {};
+  const rowData = isRecord(sheet.rowData) ? sheet.rowData : {};
+
+  Object.keys(cellData).forEach((key) => addNonNegativeInteger(indexes, key));
+  Object.keys(rowData).forEach((key) => addNonNegativeInteger(indexes, key));
+  return Math.max(...indexes) + 1;
+}
+
+function getUniverSheetUsedColumnCount(sheet: Record<string, unknown>): number {
+  const indexes = new Set<number>([0]);
+  const cellData = isRecord(sheet.cellData) ? sheet.cellData : {};
+  const columnData = isRecord(sheet.columnData) ? sheet.columnData : {};
+
+  Object.values(cellData).forEach((row) => {
+    if (isRecord(row)) {
+      Object.keys(row).forEach((key) => addNonNegativeInteger(indexes, key));
+    }
+  });
+  Object.keys(columnData).forEach((key) => addNonNegativeInteger(indexes, key));
+  return Math.max(...indexes) + 1;
+}
+
+function addNonNegativeInteger(indexes: Set<number>, value: string): void {
+  const index = Number(value);
+  if (Number.isInteger(index) && index >= 0) {
+    indexes.add(index);
+  }
+}
+
+function sanitizeExcelSheetName(value: string): string {
+  const cleaned = value.replace(/[:\\/?*\[\]]/gu, ' ').trim() || 'Sheet';
+  return cleaned.slice(0, 31);
+}
+
+function readUniverCellText(cell: Record<string, unknown>): string {
+  if (typeof cell.f === 'string' && cell.f) {
+    return cell.f.startsWith('=') ? cell.f : `=${cell.f}`;
+  }
+  if (typeof cell.v === 'string') {
+    return cell.v;
+  }
+  if (typeof cell.v === 'number' || typeof cell.v === 'boolean') {
+    return String(cell.v);
+  }
+  return '';
+}
+
+function resolveUniverStyle(styleRef: unknown, styles: Record<string, unknown>): unknown {
+  if (typeof styleRef === 'string') {
+    return styles[styleRef];
+  }
+  return isRecord(styleRef) ? styleRef : undefined;
 }
 
 function pxToExcelRowHeight(px: number): number {
@@ -1111,6 +1405,16 @@ function readBooleanNumber(value: unknown): boolean | undefined {
     return true;
   }
   if (value === 0) {
+    return false;
+  }
+  return undefined;
+}
+
+function readUniverWrap(value: unknown): boolean | undefined {
+  if (value === 3 || value === 'wrap') {
+    return true;
+  }
+  if (value === 1 || value === 2 || value === 'overflow' || value === 'clip') {
     return false;
   }
   return undefined;

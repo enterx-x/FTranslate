@@ -4,8 +4,10 @@ import {
   RESEARCH_SHEET_LINKS_KEY,
   RESEARCH_WORKBOOK_KEY,
   buildDefaultResearchWorkbook,
+  appendResearchWorkbookSheets,
   ensurePaperRow,
   fromUniverWorkbookData,
+  isResearchCellStyleEnabled,
   getResearchCellText,
   migrateLegacyPaperSheetCells,
   parseResearchWorkbook,
@@ -163,6 +165,10 @@ describe('research workbook model', () => {
     const enabledAgain = setResearchCellStyle(disabled, 1, 3, { bl: 1, it: 1 });
 
     expect(getResearchCellText(enabledAgain, 1, 3)).toBe('格式测试');
+    expect(isResearchCellStyleEnabled(disabled, 1, 3, 'bl')).toBe(false);
+    expect(isResearchCellStyleEnabled(disabled, 1, 3, 'it')).toBe(false);
+    expect(isResearchCellStyleEnabled(enabledAgain, 1, 3, 'bl')).toBe(true);
+    expect(isResearchCellStyleEnabled(enabledAgain, 1, 3, 'it')).toBe(true);
     expect(enabledAgain.rows[1].cells[3].style?.univerStyle).toMatchObject({
       bl: 1,
       it: 1
@@ -179,5 +185,27 @@ describe('research workbook model', () => {
     expect(restored.rows[0].cells).toHaveLength(workbook.columns.length);
     expect(restored.rows[1].cells).toHaveLength(workbook.columns.length);
     expect(getResearchCellText(restored, 1, 3)).toBe('kept value');
+  });
+
+  it('appends imported Excel sheets without replacing the current workbook', () => {
+    const current = setResearchCellText(buildDefaultResearchWorkbook(), 1, 3, '保留当前工作表');
+    const imported = setResearchCellText(
+      {
+        ...buildDefaultResearchWorkbook(),
+        sheetName: '外部文献总览'
+      },
+      1,
+      3,
+      '导入工作表内容'
+    );
+
+    const merged = appendResearchWorkbookSheets(current, imported);
+    const snapshot = toUniverWorkbookData(merged);
+
+    expect(snapshot.sheetOrder).toHaveLength(2);
+    expect(snapshot.sheets[snapshot.sheetOrder[0]].name).toBe('论文研究表');
+    expect(snapshot.sheets[snapshot.sheetOrder[1]].name).toBe('外部文献总览');
+    expect(getResearchCellText(merged, 1, 3)).toBe('保留当前工作表');
+    expect(snapshot.sheets[snapshot.sheetOrder[1]].cellData?.[1]?.[3]?.v).toBe('导入工作表内容');
   });
 });
