@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   createUniver,
   defaultTheme,
   LocaleType,
   type ICellData,
+  type IStyleData,
   type IWorkbookData
 } from '@univerjs/presets';
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core';
@@ -66,6 +67,14 @@ interface SelectedRange {
   endColumn: number;
 }
 
+interface ResearchSheetActions {
+  fillSelectedCells: () => void;
+  toggleBindSelectedRow: () => void;
+  openLinkedPaper: () => void;
+  copyFormat: () => void;
+  pasteFormat: () => void;
+}
+
 type UniverInstance = ReturnType<typeof createUniver>;
 type UniverWorkbook = ReturnType<UniverInstance['univerAPI']['getActiveWorkbook']>;
 type UniverRange = {
@@ -80,6 +89,8 @@ type UniverRange = {
   setVerticalAlignment?: (alignment: 'top' | 'middle' | 'bottom') => unknown;
   setWrap?: (enabled: boolean) => unknown;
   setValue?: (value: ICellData | string) => unknown;
+  getCellStyleData?: (type?: 'row' | 'col' | 'cell') => IStyleData | null;
+  getValue?: () => unknown;
 };
 
 const DEFAULT_SELECTED_CELL: SelectedCell = {
@@ -100,13 +111,21 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const workbookHandleRef = useRef<NonNullable<UniverWorkbook> | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const workbookModelRef = useRef(props.workbook);
+  const copiedFormatRef = useRef<IStyleData | null>(null);
+  const latestActionsRef = useRef<ResearchSheetActions>({
+    fillSelectedCells: () => undefined,
+    toggleBindSelectedRow: () => undefined,
+    openLinkedPaper: () => undefined,
+    copyFormat: () => undefined,
+    pasteFormat: () => undefined
+  });
   const [selectedCell, setSelectedCell] = useState<SelectedCell>(DEFAULT_SELECTED_CELL);
   const [selectedRanges, setSelectedRanges] = useState<SelectedRange[]>([DEFAULT_SELECTED_RANGE]);
   const [bindingPaperId, setBindingPaperId] = useState('');
   const [fontSize, setFontSize] = useState(12);
   const [fontColor, setFontColor] = useState('#111111');
   const [fillColor, setFillColor] = useState('#ffffff');
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [hasCopiedFormat, setHasCopiedFormat] = useState(false);
   const [localMessage, setLocalMessage] = useState('');
 
   const selectedRowId = getRowId(workbookModelRef.current, selectedCell.rowIndex);
@@ -116,6 +135,13 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const selectedColumnHeader = getResearchColumnHeader(workbookModelRef.current, selectedCell.columnIndex);
   const selectedCellCount = countSelectedCells(selectedRanges);
   const selectedRangeLabel = formatSelectedRanges(selectedRanges);
+  const selectedBindingPaper = props.papers.find((paper) => paper.id === bindingPaperId) ?? null;
+  const bindButtonLabel = linkedPaper
+    ? selectedBindingPaper && selectedBindingPaper.id !== linkedPaper.id
+      ? '更新绑定'
+      : '解除绑定'
+    : '绑定';
+  const canToggleBinding = selectedCell.rowIndex > 0 && Boolean(linkedPaper || selectedBindingPaper);
 
   const aiTargetCount = useMemo(() => buildSelectedCellTargets().length, [
     props.links,
@@ -138,12 +164,6 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   useEffect(() => {
     workbookModelRef.current = props.workbook;
   }, [props.workbook]);
-
-  useEffect(() => {
-    const closeContextMenu = () => setContextMenu(null);
-    window.addEventListener('click', closeContextMenu);
-    return () => window.removeEventListener('click', closeContextMenu);
-  }, []);
 
   useEffect(() => {
     if (!containerRef.current || univerRef.current) {
@@ -173,6 +193,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     const workbookHandle = instance.univerAPI.createWorkbook(toUniverWorkbookData(props.workbook));
     univerRef.current = instance;
     workbookHandleRef.current = workbookHandle;
+    registerNativeContextMenus(instance);
 
     const commandDisposable = instance.univerAPI.onCommandExecuted(() => {
       scheduleWorkbookSave();
@@ -279,6 +300,19 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     setLocalMessage('已解除当前行论文绑定，表格内容保留。');
   }
 
+  function handleToggleBindSelectedRow(): void {
+    if (selectedCell.rowIndex === 0) {
+      return;
+    }
+
+    if (linkedPaper && (!selectedBindingPaper || selectedBindingPaper.id === linkedPaper.id)) {
+      handleUnbindSelectedRow();
+      return;
+    }
+
+    handleBindSelectedRow();
+  }
+
   function setCellValues(values: FillResearchCellResult[], targets: FillResearchCellTarget[]): void {
     const targetByAddress = new Map(targets.map((target) => [target.cellAddress, target]));
     let nextWorkbook = workbookModelRef.current;
@@ -329,10 +363,93 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     scheduleWorkbookSave();
   }
 
-  function handleContextMenu(event: MouseEvent): void {
-    event.preventDefault();
+  function handleCopyFormat(): void {
     updateSelectionFromUniver();
-    setContextMenu({ x: event.clientX, y: event.clientY });
+    const worksheet = workbookHandleRef.current?.getActiveSheet();
+    const sourceRange = worksheet?.getRange(selectedCell.rowIndex, selectedCell.columnIndex) as UniverRange | undefined;
+    const sourceStyle = cloneStyle(sourceRange?.getCellStyleData?.('row') ?? sourceRange?.getCellStyleData?.('cell') ?? null);
+
+    if (!sourceStyle) {
+      setLocalMessage('当前单元格没有可复制的格式。');
+      return;
+    }
+
+    copiedFormatRef.current = sourceStyle;
+    setHasCopiedFormat(true);
+    setLocalMessage(`已复制 ${selectedCellAddress} 的格式；请选择目标区域后点击“粘贴格式”。`);
+  }
+
+  function handlePasteCopiedFormat(): void {
+    if (!copiedFormatRef.current) {
+      setLocalMessage('还没有复制格式；请先选择一个源单元格并点击“复制格式”。');
+      return;
+    }
+
+    const worksheet = workbookHandleRef.current?.getActiveSheet();
+    if (!worksheet) {
+      return;
+    }
+
+    const workbook = flushWorkbookFromUniver() ?? workbookModelRef.current;
+    const seen = new Set<string>();
+
+    selectedRanges.forEach((range) => {
+      for (let rowIndex = range.startRow; rowIndex <= range.endRow; rowIndex += 1) {
+        for (let columnIndex = range.startColumn; columnIndex <= range.endColumn; columnIndex += 1) {
+          const address = toA1(rowIndex, columnIndex);
+          if (seen.has(address)) {
+            continue;
+          }
+
+          seen.add(address);
+          const text = getResearchCellText(workbook, rowIndex, columnIndex);
+          const cellValue: ICellData = text.trim().startsWith('=')
+            ? { f: text, s: cloneStyle(copiedFormatRef.current) ?? copiedFormatRef.current }
+            : { v: text, s: cloneStyle(copiedFormatRef.current) ?? copiedFormatRef.current };
+          (worksheet.getRange(rowIndex, columnIndex) as UniverRange).setValue?.(cellValue);
+        }
+      }
+    });
+
+    setLocalMessage(`已把复制的格式粘贴到 ${selectedRangeLabel}。`);
+    scheduleWorkbookSave();
+  }
+
+  function registerNativeContextMenus(instance: UniverInstance): void {
+    const api = instance.univerAPI;
+    const aiMenu = api.createMenu({
+      id: 'ftranslate.context.ai-fill-selection',
+      title: 'AI 填充选区',
+      tooltip: '用当前行绑定论文填充选中的一个或多个单元格',
+      order: 90,
+      action: () => latestActionsRef.current.fillSelectedCells()
+    });
+    const bindMenu = api.createMenu({
+      id: 'ftranslate.context.toggle-bind-row',
+      title: '绑定/解除当前行论文',
+      tooltip: '当前行未绑定时绑定下拉框所选论文；已绑定时解除绑定',
+      order: 91,
+      action: () => latestActionsRef.current.toggleBindSelectedRow()
+    });
+    const copyFormatMenu = api.createMenu({
+      id: 'ftranslate.context.copy-format',
+      title: '复制格式',
+      tooltip: '复制当前单元格格式',
+      order: 92,
+      action: () => latestActionsRef.current.copyFormat()
+    });
+    const pasteFormatMenu = api.createMenu({
+      id: 'ftranslate.context.paste-format',
+      title: '粘贴格式到选区',
+      tooltip: '把已复制的格式刷到当前选区',
+      order: 93,
+      action: () => latestActionsRef.current.pasteFormat()
+    });
+
+    // 直接挂到 Univer 原生右键菜单底部，避免再弹一层子菜单影响填表效率。
+    [aiMenu, bindMenu, copyFormatMenu, pasteFormatMenu].forEach((menu) => {
+      menu.appendTo(['contextMenu.mainArea', 'contextMenu.others']);
+    });
   }
 
   function buildSelectedCellTargets(): FillResearchCellTarget[] {
@@ -430,6 +547,30 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     }, 350);
   }
 
+  function flushWorkbookFromUniver(): ResearchWorkbook | null {
+    const snapshot = workbookHandleRef.current?.save();
+    if (!snapshot) {
+      return null;
+    }
+
+    const nextWorkbook = fromUniverWorkbookData(snapshot as IWorkbookData);
+    workbookModelRef.current = nextWorkbook;
+    props.onWorkbookChange(nextWorkbook);
+    return nextWorkbook;
+  }
+
+  latestActionsRef.current = {
+    fillSelectedCells: () => void handleFillSelectedCells(),
+    toggleBindSelectedRow: handleToggleBindSelectedRow,
+    openLinkedPaper: () => {
+      if (linkedPaper) {
+        props.onOpenPaper(linkedPaper);
+      }
+    },
+    copyFormat: handleCopyFormat,
+    pasteFormat: handlePasteCopiedFormat
+  };
+
   return (
     <main className="research-sheet-page">
       <header className="research-sheet-header">
@@ -442,150 +583,139 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
         </div>
         <div className="research-sheet-actions">
           <button type="button" onClick={props.onBackHome}>
-            返回论文库
+            返回主页
           </button>
         </div>
       </header>
 
-      <section className="research-command-bar">
-        <div>
-          <strong>{statusText}</strong>
-          <span>{localMessage || '当前工作簿会自动保存到本机 localStorage。'}</span>
-        </div>
-        <div className="research-command-actions">
-          <select
-            value={bindingPaperId}
-            onChange={(event) => setBindingPaperId(event.target.value)}
-            disabled={selectedCell.rowIndex === 0}
-          >
-            <option value="">绑定论文到当前行</option>
-            {props.papers.map((paper) => (
-              <option key={paper.id} value={paper.id}>
-                {paper.chineseTitle || paper.englishTitle || paper.pdfName}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={handleBindSelectedRow}
-            disabled={!bindingPaperId || selectedCell.rowIndex === 0}
-          >
-            绑定
-          </button>
-          <button
-            type="button"
-            onClick={handleUnbindSelectedRow}
-            disabled={!linkedPaper || selectedCell.rowIndex === 0}
-          >
-            解除绑定
-          </button>
-          <button
-            type="button"
-            onClick={() => linkedPaper && props.onOpenPaper(linkedPaper)}
-            disabled={!linkedPaper}
-          >
-            打开行论文
-          </button>
-          <button
-            type="button"
-            className="primary-button"
-            onClick={handleFillSelectedCells}
-            disabled={aiTargetCount === 0 || props.isAiBusy}
-          >
-            {props.isAiBusy ? 'AI 填写中...' : aiTargetCount > 1 ? `AI 填选区 ${aiTargetCount} 格` : 'AI 填此单元格'}
-          </button>
-        </div>
-      </section>
-
-      <section className="research-format-toolbar" aria-label="表格格式工具栏">
-        <label>
-          字号
-          <select
-            value={fontSize}
-            onChange={(event) => {
-              const size = Number(event.target.value);
-              setFontSize(size);
-              applyFormatToSelection((range) => range.setFontSize?.(size), `已将选区字号设为 ${size}。`);
-            }}
-          >
-            {[10, 11, 12, 13, 14, 16, 18, 20, 24].map((size) => (
-              <option key={size} value={size}>{size}</option>
-            ))}
-          </select>
-        </label>
-        <button type="button" onClick={() => applyFormatToSelection((range) => range.setFontWeight?.('bold'), '已加粗选区。')}>
-          B
-        </button>
-        <button type="button" onClick={() => applyFormatToSelection((range) => range.setFontWeight?.('normal'), '已取消选区加粗。')}>
-          常规
-        </button>
-        <button type="button" onClick={() => applyFormatToSelection((range) => range.setFontStyle?.('italic'), '已将选区设为斜体。')}>
-          I
-        </button>
-        <label>
-          字色
-          <input
-            type="color"
-            value={fontColor}
-            onChange={(event) => {
-              setFontColor(event.target.value);
-              applyFormatToSelection((range) => range.setFontColor?.(event.target.value), '已更新选区文字颜色。');
-            }}
-          />
-        </label>
-        <label>
-          底色
-          <input
-            type="color"
-            value={fillColor}
-            onChange={(event) => {
-              setFillColor(event.target.value);
-              applyFormatToSelection((range) => range.setBackground?.(event.target.value), '已更新选区底色。');
-            }}
-          />
-        </label>
-        <button type="button" onClick={() => applyFormatToSelection((range) => range.setHorizontalAlignment?.('left'), '已左对齐选区。')}>
-          左
-        </button>
-        <button type="button" onClick={() => applyFormatToSelection((range) => range.setHorizontalAlignment?.('center'), '已居中选区。')}>
-          中
-        </button>
-        <button type="button" onClick={() => applyFormatToSelection((range) => range.setHorizontalAlignment?.('right'), '已右对齐选区。')}>
-          右
-        </button>
-        <button type="button" onClick={() => applyFormatToSelection((range) => range.setVerticalAlignment?.('middle'), '已垂直居中选区。')}>
-          垂直居中
-        </button>
-        <button type="button" onClick={() => applyFormatToSelection((range) => range.setWrap?.(true), '已开启选区自动换行。')}>
-          换行
-        </button>
-      </section>
-
-      <section className="research-sheet-surface" onContextMenu={handleContextMenu}>
-        <div ref={containerRef} className="univer-container" />
-        {contextMenu ? (
-          <div
-            className="sheet-context-menu"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-            role="menu"
-          >
-            <button type="button" onClick={handleFillSelectedCells} disabled={aiTargetCount === 0 || props.isAiBusy}>
-              AI 填充选区
+      <section className="research-sheet-workbench">
+        <section className="research-command-bar">
+          <div>
+            <strong>{statusText}</strong>
+            <span>{localMessage || '当前工作簿会自动保存到本机 localStorage；右键菜单已接入 AI 填写、绑定和格式刷操作。'}</span>
+          </div>
+          <div className="research-command-actions">
+            <select
+              value={bindingPaperId}
+              onChange={(event) => setBindingPaperId(event.target.value)}
+              disabled={selectedCell.rowIndex === 0}
+            >
+              <option value="">绑定论文到当前行</option>
+              {props.papers.map((paper) => (
+                <option key={paper.id} value={paper.id}>
+                  {paper.chineseTitle || paper.englishTitle || paper.pdfName}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={handleToggleBindSelectedRow}
+              disabled={!canToggleBinding}
+            >
+              {bindButtonLabel}
             </button>
-            <button type="button" onClick={handleUnbindSelectedRow} disabled={!linkedPaper || selectedCell.rowIndex === 0}>
-              解除当前行绑定
+            <button
+              type="button"
+              onClick={() => linkedPaper && props.onOpenPaper(linkedPaper)}
+              disabled={!linkedPaper}
+            >
+              打开行论文
             </button>
-            <button type="button" onClick={() => applyFormatToSelection((range) => range.setHorizontalAlignment?.('center'), '已居中选区。')}>
-              居中
-            </button>
-            <button type="button" onClick={() => applyFormatToSelection((range) => range.setWrap?.(true), '已开启选区自动换行。')}>
-              自动换行
+            <button
+              type="button"
+              className="primary-button"
+              onClick={handleFillSelectedCells}
+              disabled={aiTargetCount === 0 || props.isAiBusy}
+            >
+              {props.isAiBusy ? 'AI 填写中...' : aiTargetCount > 1 ? `AI 填选区 ${aiTargetCount} 格` : 'AI 填此单元格'}
             </button>
           </div>
-        ) : null}
+        </section>
+
+        <section className="research-format-toolbar" aria-label="表格格式工具栏">
+          <label>
+            字号
+            <select
+              value={fontSize}
+              onChange={(event) => {
+                const size = Number(event.target.value);
+                setFontSize(size);
+                applyFormatToSelection((range) => range.setFontSize?.(size), `已将选区字号设为 ${size}。`);
+              }}
+            >
+              {[10, 11, 12, 13, 14, 16, 18, 20, 24].map((size) => (
+                <option key={size} value={size}>{size}</option>
+              ))}
+            </select>
+          </label>
+          <button type="button" onClick={handleCopyFormat}>
+            复制格式
+          </button>
+          <button type="button" onClick={handlePasteCopiedFormat} disabled={!hasCopiedFormat}>
+            粘贴格式
+          </button>
+          <button type="button" onClick={() => applyFormatToSelection((range) => range.setFontWeight?.('bold'), '已加粗选区。')}>
+            B
+          </button>
+          <button type="button" onClick={() => applyFormatToSelection((range) => range.setFontWeight?.('normal'), '已取消选区加粗。')}>
+            常规
+          </button>
+          <button type="button" onClick={() => applyFormatToSelection((range) => range.setFontStyle?.('italic'), '已将选区设为斜体。')}>
+            I
+          </button>
+          <label>
+            字色
+            <input
+              type="color"
+              value={fontColor}
+              onChange={(event) => {
+                setFontColor(event.target.value);
+                applyFormatToSelection((range) => range.setFontColor?.(event.target.value), '已更新选区文字颜色。');
+              }}
+            />
+          </label>
+          <label>
+            底色
+            <input
+              type="color"
+              value={fillColor}
+              onChange={(event) => {
+                setFillColor(event.target.value);
+                applyFormatToSelection((range) => range.setBackground?.(event.target.value), '已更新选区底色。');
+              }}
+            />
+          </label>
+          <button type="button" onClick={() => applyFormatToSelection((range) => range.setHorizontalAlignment?.('left'), '已左对齐选区。')}>
+            左
+          </button>
+          <button type="button" onClick={() => applyFormatToSelection((range) => range.setHorizontalAlignment?.('center'), '已居中选区。')}>
+            中
+          </button>
+          <button type="button" onClick={() => applyFormatToSelection((range) => range.setHorizontalAlignment?.('right'), '已右对齐选区。')}>
+            右
+          </button>
+          <button type="button" onClick={() => applyFormatToSelection((range) => range.setVerticalAlignment?.('middle'), '已垂直居中选区。')}>
+            垂直居中
+          </button>
+          <button type="button" onClick={() => applyFormatToSelection((range) => range.setWrap?.(true), '已开启选区自动换行。')}>
+            换行
+          </button>
+        </section>
+
+        <section className="research-sheet-surface">
+          <div ref={containerRef} className="univer-container" />
+        </section>
       </section>
     </main>
   );
+}
+
+function cloneStyle(style: IStyleData | null): IStyleData | null {
+  if (!style) {
+    return null;
+  }
+
+  return JSON.parse(JSON.stringify(style)) as IStyleData;
 }
 
 function normalizeUniverRange(

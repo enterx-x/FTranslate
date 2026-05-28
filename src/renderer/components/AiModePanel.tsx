@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { shouldTranslateItem, type AiModelOption, type AiProviderId } from '../../shared/aiTranslation';
 import {
   getAiQueueSections,
@@ -47,8 +46,6 @@ export function AiModePanel(props: AiModePanelProps) {
   const queueSections = getAiQueueSections(jsonDocument?.items ?? []);
   const currentItem = getCurrentAiCacheItem(jsonDocument, props.currentIndex);
   const extractedTranslatableCount = getTranslatableExtractedBlocks(props.extractedBlocks).length;
-  const [currentDetailOpen, setCurrentDetailOpen] = useState(true);
-  const [sectionOpenState, setSectionOpenState] = useState<Record<string, boolean>>({});
 
   return (
     <div className="ai-mode-panel">
@@ -77,8 +74,7 @@ export function AiModePanel(props: AiModePanelProps) {
       {currentItem ? (
         <details
           className="reader-card compact-card ai-current-detail-card"
-          open={currentDetailOpen}
-          onToggle={(event) => setCurrentDetailOpen(event.currentTarget.open)}
+          open
         >
           <summary>
             <span className="card-header">当前 AI 段译文</span>
@@ -288,13 +284,7 @@ export function AiModePanel(props: AiModePanelProps) {
                   <details
                     key={section.id}
                     className="ai-section-group"
-                    open={sectionOpenState[section.id] ?? (containsCurrent || section.startIndex === 0)}
-                    onToggle={(event) => {
-                      setSectionOpenState((value) => ({
-                        ...value,
-                        [section.id]: event.currentTarget.open
-                      }));
-                    }}
+                    open={containsCurrent || section.startIndex === 0}
                   >
                     <summary>
                       <span className="ai-section-title">

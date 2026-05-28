@@ -138,15 +138,67 @@ async function waitForResearchSheetCanvas(client) {
     await wait(250);
   }
 
-  throw new Error('Research sheet canvas did not paint visible grid content.');
+  const snapshot = await evaluateJson(client, `() => ({
+    hasResearchPage: Boolean(document.querySelector('.research-sheet-page')),
+    hasContainer: Boolean(document.querySelector('.univer-container')),
+    canvasCount: document.querySelectorAll('.univer-container canvas').length,
+    text: document.body.textContent?.slice(0, 1000) ?? ''
+  })`);
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'research-sheet-canvas-timeout.png'), Buffer.from(shot.data, 'base64'))
+  );
+  throw new Error(`Research sheet canvas did not paint visible grid content: ${JSON.stringify(snapshot)}`);
 }
 
-async function clickSelector(client, selector) {
-  await client.send('Runtime.evaluate', {
-    expression: `document.querySelector(${JSON.stringify(selector)})?.click()`,
-    returnByValue: true
+async function clickButtonByText(client, text) {
+  const clicked = await evaluateJson(client, `() => {
+    const needle = ${JSON.stringify(text)};
+    const button = [...document.querySelectorAll('button')]
+      .find((item) => (item.textContent ?? '').trim() === needle);
+    button?.click();
+    return Boolean(button);
+  }`);
+  if (!clicked) {
+    throw new Error(`Button not found: ${text}`);
+  }
+  await wait(700);
+}
+
+async function rightClickResearchSheetCanvas(client) {
+  const rect = await evaluateJson(client, `() => {
+    const canvas = [...document.querySelectorAll('.univer-container canvas')]
+      .find((item) => item.getBoundingClientRect().width > 200 && item.getBoundingClientRect().height > 120);
+    const fallback = document.querySelector('.univer-container');
+    const target = canvas ?? fallback;
+    if (!target) return null;
+    const rect = target.getBoundingClientRect();
+    return {
+      x: rect.left + Math.min(180, rect.width * 0.35),
+      y: rect.top + Math.min(120, rect.height * 0.35)
+    };
+  }`);
+
+  if (!rect) {
+    throw new Error('researchSheet: cannot find Univer canvas for right click.');
+  }
+
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: rect.x,
+    y: rect.y,
+    button: 'right',
+    buttons: 2,
+    clickCount: 1
   });
-  await wait(600);
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: rect.x,
+    y: rect.y,
+    button: 'right',
+    buttons: 0,
+    clickCount: 1
+  });
+  await wait(500);
 }
 
 async function loadPaperRecord(client, translationPath, extraPaperFields = {}) {
@@ -179,7 +231,48 @@ async function loadPaperRecord(client, translationPath, extraPaperFields = {}) {
 }
 
 async function runHomeScenario(client) {
-  const snapshot = await evaluateJson(client, `() => ({
+  const hub = await evaluateJson(client, `() => ({
+    hasHome: Boolean(document.querySelector('.home-page')),
+    hasModuleGrid: Boolean(document.querySelector('.home-module-grid')),
+    hasPaperTable: Boolean(document.querySelector('.paper-table')),
+    moduleTitles: [...document.querySelectorAll('.home-module-card h2')].map((item) => item.textContent?.trim()),
+    headerActions: [...document.querySelectorAll('.home-header-actions button')].map((button) => button.textContent?.trim()),
+    markStyle: (() => {
+      const mark = document.querySelector('.home-header-mark');
+      if (!mark) return null;
+      const style = getComputedStyle(mark);
+      return { background: style.backgroundColor, border: style.borderTopWidth, boxShadow: style.boxShadow, borderRadius: style.borderRadius };
+    })(),
+    imageAlpha: (() => {
+      const img = document.querySelector('.home-header-mark');
+      if (!img || !img.complete) return null;
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      return [
+        ctx.getImageData(0, 0, 1, 1).data[3],
+        ctx.getImageData(canvas.width - 1, 0, 1, 1).data[3],
+        ctx.getImageData(0, canvas.height - 1, 1, 1).data[3],
+        ctx.getImageData(canvas.width - 1, canvas.height - 1, 1, 1).data[3]
+      ];
+    })()
+  })`);
+
+  if (!hub.hasHome || !hub.hasModuleGrid || hub.hasPaperTable) {
+    throw new Error(`home: expected module hub before entering a module, got ${JSON.stringify(hub)}`);
+  }
+  if (!hub.moduleTitles.includes('研究表格') || !hub.moduleTitles.includes('论文库')) {
+    throw new Error(`home: expected peer module cards, got ${JSON.stringify(hub.moduleTitles)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'home.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  await clickButtonByText(client, '进入论文库');
+  const library = await evaluateJson(client, `() => ({
     hasHome: Boolean(document.querySelector('.home-page')),
     hasAgGrid: Boolean(document.querySelector('.ag-root, .paper-grid')),
     hasPaperTable: Boolean(document.querySelector('.paper-table')),
@@ -209,62 +302,47 @@ async function runHomeScenario(client) {
     })()
   })`);
 
-  if (!snapshot.hasHome || !snapshot.hasPaperTable) {
-    throw new Error(`home: expected lightweight paper table, got ${JSON.stringify(snapshot)}`);
+  if (!library.hasHome || !library.hasPaperTable) {
+    throw new Error(`home: expected lightweight paper table after entering paper library, got ${JSON.stringify(library)}`);
   }
-  if (snapshot.visibleInputs !== 0) {
-    throw new Error(`home: expected read-only table outside edit mode, got ${snapshot.visibleInputs} visible inputs`);
+  if (library.visibleInputs !== 0) {
+    throw new Error(`home: expected read-only table outside edit mode, got ${library.visibleInputs} visible inputs`);
   }
-  if (snapshot.hasAgGrid || /创新点|局限点|复现计划|后续/.test(snapshot.headerText)) {
-    throw new Error(`home: paper library should not contain research spreadsheet columns, got ${snapshot.headerText}`);
+  if (library.hasAgGrid || /创新点|局限点|复现计划|后续/.test(library.headerText)) {
+    throw new Error(`home: paper library should not contain research spreadsheet columns, got ${library.headerText}`);
   }
-  if (!snapshot.headerActions.includes('研究表格')) {
-    throw new Error(`home: expected research sheet entry, got ${JSON.stringify(snapshot.headerActions)}`);
+  if (!library.headerActions.includes('研究表格') || !library.headerActions.includes('返回主页')) {
+    throw new Error(`home: expected research sheet and home entries, got ${JSON.stringify(library.headerActions)}`);
   }
-  if (!snapshot.imageAlpha || snapshot.imageAlpha.some((alpha) => alpha !== 0)) {
-    throw new Error(`home: expected transparent icon corners, got ${JSON.stringify(snapshot.imageAlpha)}`);
+  if (!hub.imageAlpha || hub.imageAlpha.some((alpha) => alpha !== 0)) {
+    throw new Error(`home: expected transparent icon corners, got ${JSON.stringify(hub.imageAlpha)}`);
   }
   if (
-    snapshot.markStyle?.background !== 'rgba(0, 0, 0, 0)' ||
-    snapshot.markStyle?.border !== '0px' ||
-    snapshot.markStyle?.boxShadow !== 'none'
+    hub.markStyle?.background !== 'rgba(0, 0, 0, 0)' ||
+    hub.markStyle?.border !== '0px' ||
+    hub.markStyle?.boxShadow !== 'none'
   ) {
-    throw new Error(`home: expected no icon wrapper background/border/shadow, got ${JSON.stringify(snapshot.markStyle)}`);
+    throw new Error(`home: expected no icon wrapper background/border/shadow, got ${JSON.stringify(hub.markStyle)}`);
   }
 
-  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
-    writeFile(path.join(outputDir, 'home.png'), Buffer.from(shot.data, 'base64'))
-  );
-  return snapshot;
+  await clickButtonByText(client, '返回主页');
+  return { hub, library };
 }
 
 async function runResearchSheetScenario(client) {
-  await clickSelector(client, '.home-header-actions button:first-child');
+  await clickButtonByText(client, '打开研究表格');
   await waitForAppReady(client);
   const canvasStatus = await waitForResearchSheetCanvas(client);
-  await client.send('Runtime.evaluate', {
-    expression: `
-      const surface = document.querySelector('.research-sheet-surface');
-      const rect = surface.getBoundingClientRect();
-      surface.dispatchEvent(new MouseEvent('contextmenu', {
-        bubbles: true,
-        cancelable: true,
-        clientX: rect.left + 80,
-        clientY: rect.top + 80
-      }));
-    `,
-    returnByValue: true
-  });
-  await wait(300);
+  await rightClickResearchSheetCanvas(client);
 
   const snapshot = await evaluateJson(client, `() => ({
     hasResearchSheet: Boolean(document.querySelector('.research-sheet-page')),
     hasUniver: Boolean(document.querySelector('.univer-container')),
     commandText: document.querySelector('.research-command-bar')?.textContent ?? '',
     hasAiButton: [...document.querySelectorAll('button')].some((button) => /AI 填(此单元格|选区)/.test(button.textContent ?? '')),
-    hasUnbindButton: [...document.querySelectorAll('button')].some((button) => button.textContent?.includes('解除绑定')),
+    hasBindingToggle: [...document.querySelectorAll('button')].some((button) => /绑定|解除绑定|更新绑定/.test(button.textContent ?? '')),
     formatToolbarText: document.querySelector('.research-format-toolbar')?.textContent ?? '',
-    contextMenuText: document.querySelector('.sheet-context-menu')?.textContent ?? '',
+    contextMenuText: document.body.textContent ?? '',
     titleText: document.querySelector('.research-sheet-header')?.textContent ?? '',
     markStyle: (() => {
       const mark = document.querySelector('.research-sheet-title img');
@@ -278,11 +356,16 @@ async function runResearchSheetScenario(client) {
   if (!snapshot.hasResearchSheet || !snapshot.hasUniver || !snapshot.hasAiButton) {
     throw new Error(`researchSheet: expected Univer surface and cell AI action, got ${JSON.stringify(snapshot)}`);
   }
-  if (!snapshot.hasUnbindButton || !/字号/.test(snapshot.formatToolbarText) || !/居中/.test(snapshot.formatToolbarText)) {
+  if (!snapshot.hasBindingToggle || !/字号/.test(snapshot.formatToolbarText) || !/居中/.test(snapshot.formatToolbarText) || !/复制格式/.test(snapshot.formatToolbarText)) {
     throw new Error(`researchSheet: expected binding and formatting toolbar controls, got ${JSON.stringify(snapshot)}`);
   }
-  if (!/AI 填充选区/.test(snapshot.contextMenuText)) {
-    throw new Error(`researchSheet: expected right click AI fill menu, got ${JSON.stringify(snapshot.contextMenuText)}`);
+  if (!/AI 填充选区/.test(snapshot.contextMenuText) || !/绑定\/解除当前行论文/.test(snapshot.contextMenuText) || !/粘贴格式到选区/.test(snapshot.contextMenuText)) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'research-sheet-menu-debug.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(
+      `researchSheet: expected FTranslate actions inside native Univer context menu, got text: ${snapshot.contextMenuText.slice(0, 1000)}`
+    );
   }
   if (!snapshot.commandText.includes('绑定论文到当前行') || !snapshot.titleText.includes('研究表格')) {
     throw new Error(`researchSheet: expected independent sheet controls, got ${JSON.stringify(snapshot)}`);
@@ -293,6 +376,83 @@ async function runResearchSheetScenario(client) {
 
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'research-sheet.png'), Buffer.from(shot.data, 'base64'))
+  );
+  return snapshot;
+}
+
+async function runAiQueueClickScenario(client) {
+  await clickButtonByText(client, '返回主页');
+  await waitForAppReady(client);
+  await clickButtonByText(client, '进入论文库');
+  await clickButtonByText(client, '打开阅读');
+  await waitForAppReady(client);
+  await clickButtonByText(client, 'AI 模式');
+  await client.send('Runtime.evaluate', {
+    expression: `
+      window.__visualErrors = [];
+      window.addEventListener('error', (event) => {
+        window.__visualErrors.push(event.message);
+      });
+      window.addEventListener('unhandledrejection', (event) => {
+        window.__visualErrors.push(String(event.reason));
+      });
+    `,
+    returnByValue: true
+  });
+
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const ready = await evaluateJson(client, `() => Boolean(document.querySelector('.ai-section-group'))`);
+    if (ready) {
+      break;
+    }
+    await wait(250);
+  }
+
+  await client.send('Runtime.evaluate', {
+    expression: `
+      const summary = document.querySelector('.ai-section-group summary');
+      const rect = summary.getBoundingClientRect();
+      summary.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        clientX: rect.right - 80,
+        clientY: rect.top + rect.height / 2
+      }));
+    `,
+    returnByValue: true
+  });
+  await wait(300);
+  await client.send('Runtime.evaluate', {
+    expression: `
+      const row = document.querySelector('.ai-item-row');
+      const rect = row.getBoundingClientRect();
+      row.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        clientX: rect.right - 120,
+        clientY: rect.top + rect.height / 2
+      }));
+    `,
+    returnByValue: true
+  });
+  await wait(500);
+
+  const snapshot = await evaluateJson(client, `() => ({
+    hasSplitLayout: Boolean(document.querySelector('.split-layout')),
+    hasAiPanel: Boolean(document.querySelector('.ai-mode-panel')),
+    bodyLength: document.body.textContent?.length ?? 0,
+    errors: window.__visualErrors ?? []
+  })`);
+
+  if (!snapshot.hasSplitLayout || !snapshot.hasAiPanel || snapshot.bodyLength < 100) {
+    throw new Error(`aiQueue: clicking blank areas caused app to disappear, got ${JSON.stringify(snapshot)}`);
+  }
+  if (snapshot.errors.length > 0) {
+    throw new Error(`aiQueue: clicking blank areas raised errors ${JSON.stringify(snapshot.errors)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'ai-queue-click.png'), Buffer.from(shot.data, 'base64'))
   );
   return snapshot;
 }
@@ -344,8 +504,9 @@ async function main() {
 
     const home = await runHomeScenario(client);
     const researchSheet = await runResearchSheetScenario(client);
+    const aiQueue = await runAiQueueClickScenario(client);
     client.close();
-    console.log(JSON.stringify({ pdfPath, home, researchSheet, outputDir }, null, 2));
+    console.log(JSON.stringify({ pdfPath, home, researchSheet, aiQueue, outputDir }, null, 2));
   } finally {
     appProcess.kill();
     await wait(500);

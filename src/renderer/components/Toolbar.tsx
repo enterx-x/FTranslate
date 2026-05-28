@@ -22,7 +22,7 @@ export function Toolbar(props: ToolbarProps) {
     <header className="toolbar">
       <div className="toolbar-group">
         <button type="button" onClick={props.onGoHome}>
-          论文库
+          主页
         </button>
         <button type="button" onClick={props.onNewProject}>
           新建翻译项目

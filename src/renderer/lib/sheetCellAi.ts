@@ -79,7 +79,12 @@ export function parseSheetCellsAiResponse(responseText: string, cells: SheetCell
   if (cells.length === 1) {
     const parsed = tryParseJsonCells(trimmed);
     if (parsed.length > 0) {
-      return parsed;
+      return [
+        {
+          cellAddress: cells[0].cellAddress,
+          value: parsed[0].value
+        }
+      ];
     }
 
     return [{ cellAddress: cells[0].cellAddress, value: trimmed }];
@@ -87,13 +92,10 @@ export function parseSheetCellsAiResponse(responseText: string, cells: SheetCell
 
   const parsed = tryParseJsonCells(trimmed);
   if (parsed.length > 0) {
-    return parsed;
+    return normalizeParsedCells(parsed, cells);
   }
 
-  return cells.map((cell) => ({
-    cellAddress: cell.cellAddress,
-    value: ''
-  }));
+  return buildEmptyCellResults(cells);
 }
 
 function formatSingleCellTarget(cell: SheetCellTarget): string {
@@ -168,6 +170,34 @@ function tryParseJsonCells(value: string): Array<{ cellAddress: string; value: s
   } catch {
     return [];
   }
+}
+
+function normalizeParsedCells(
+  parsed: Array<{ cellAddress: string; value: string }>,
+  cells: SheetCellTarget[]
+): Array<{ cellAddress: string; value: string }> {
+  const requestedAddresses = new Set(cells.map((cell) => cell.cellAddress));
+  const parsedByAddress = new Map<string, string>();
+
+  parsed.forEach((item) => {
+    if (!requestedAddresses.has(item.cellAddress) || parsedByAddress.has(item.cellAddress)) {
+      return;
+    }
+
+    parsedByAddress.set(item.cellAddress, item.value);
+  });
+
+  return cells.map((cell) => ({
+    cellAddress: cell.cellAddress,
+    value: parsedByAddress.get(cell.cellAddress) ?? ''
+  }));
+}
+
+function buildEmptyCellResults(cells: SheetCellTarget[]): Array<{ cellAddress: string; value: string }> {
+  return cells.map((cell) => ({
+    cellAddress: cell.cellAddress,
+    value: ''
+  }));
 }
 
 function stripCodeFence(value: string): string {

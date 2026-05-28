@@ -31,6 +31,7 @@ const editableFields: Array<{
 ];
 
 export function HomePage(props: HomePageProps) {
+  const [activeSection, setActiveSection] = useState<'hub' | 'library'>('hub');
   const [editingPaperId, setEditingPaperId] = useState<string | null>(null);
   const [draftPaper, setDraftPaper] = useState<PaperRecord | null>(null);
 
@@ -57,6 +58,60 @@ export function HomePage(props: HomePageProps) {
     setDraftPaper((paper) => (paper ? { ...paper, [field]: value } : paper));
   }
 
+  if (activeSection === 'hub') {
+    return (
+      <main className="home-page home-hub-page">
+        <header className="home-header">
+          <img className="home-header-mark" src={brandMark} alt="" />
+          <div>
+            <h1>FTranslate 工作台</h1>
+            <p>把论文阅读、研究表格和后续扩展模块放在同一入口下管理。</p>
+          </div>
+          <div className="home-header-actions">
+            <button type="button" onClick={props.onNewProject}>
+              新建翻译项目
+            </button>
+          </div>
+        </header>
+
+        <section className="home-module-grid" aria-label="功能模块">
+          <article className="home-module-card">
+            <span className="home-module-kicker">Research Sheet</span>
+            <h2>研究表格</h2>
+            <p>像表格一样整理论文创新点、局限、方法、复现计划和后续 idea，支持格式、公式和选区级 AI 填写。</p>
+            <div className="home-module-meta">
+              <span>独立工作台</span>
+              <span>首行冻结</span>
+              <span>AI 填表</span>
+            </div>
+            <button type="button" className="primary-button" onClick={() => props.onOpenResearchSheet()}>
+              打开研究表格
+            </button>
+          </article>
+
+          <article className="home-module-card">
+            <span className="home-module-kicker">Paper Library</span>
+            <h2>论文库</h2>
+            <p>快速浏览已打开论文的标题、作者、期刊、年份、文件状态和最近阅读位置。</p>
+            <div className="home-module-meta">
+              <span>已收录 {props.papers.length} 篇</span>
+              <span>轻量信息</span>
+              <span>一键阅读</span>
+            </div>
+            <div className="home-module-actions">
+              <button type="button" onClick={() => setActiveSection('library')}>
+                进入论文库
+              </button>
+              <button type="button" onClick={props.onNewProject}>
+                新建项目
+              </button>
+            </div>
+          </article>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="home-page">
       <header className="home-header">
@@ -66,6 +121,9 @@ export function HomePage(props: HomePageProps) {
           <p>快速浏览论文主要信息；复杂笔记、创新点和对照分析放到独立研究表格里整理。</p>
         </div>
         <div className="home-header-actions">
+          <button type="button" onClick={() => setActiveSection('hub')}>
+            返回主页
+          </button>
           <button type="button" onClick={() => props.onOpenResearchSheet()}>
             研究表格
           </button>
