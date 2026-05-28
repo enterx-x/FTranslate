@@ -181,8 +181,11 @@ export function HomePage(props: HomePageProps) {
                     ))}
                     <td>
                       <div className="path-hint">PDF：{paper.pdfName}</div>
-                      <div className="path-hint">翻译：{paper.translationName}</div>
+                      <div className="path-hint">翻译：{paper.translationName || '未绑定段落翻译'}</div>
                       {paper.aiCacheName ? <div className="path-hint">AI 缓存：{paper.aiCacheName}</div> : null}
+                      {paper.translatedPdfName ? (
+                        <div className="path-hint">双语 PDF：{paper.translatedPdfName}</div>
+                      ) : null}
                       {paper.notes.trim() ? <div className="path-hint">已记录阅读笔记</div> : null}
                     </td>
                     <td>{formatDateTime(paper.lastOpenedAt)}</td>

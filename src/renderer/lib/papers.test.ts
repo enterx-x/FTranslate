@@ -62,6 +62,32 @@ describe('paper library metadata', () => {
     expect(record.year).toBe('');
   });
 
+  it('loads PDF-only records so whole-document PDF translation can start without JSON or Markdown', () => {
+    const parsed = parsePaperLibrary(
+      JSON.stringify([
+        {
+          id: 'paper-only-1',
+          pdfPath: 'D:/paper.pdf',
+          pdfName: 'paper.pdf',
+          translationPath: '',
+          translationName: '',
+          chineseTitle: '',
+          englishTitle: 'paper',
+          journal: '',
+          authors: '',
+          year: '',
+          notes: '',
+          lastOpenedAt: '2026-05-28T10:00:00.000Z',
+          lastPage: 1
+        }
+      ])
+    );
+
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].pdfPath).toBe('D:/paper.pdf');
+    expect(parsed[0].translationPath).toBe('');
+  });
+
   it('upserts records by pdf and translation path while preserving edited metadata', () => {
     const document = parseTranslationFile('中文译文。', 'translation.md', 'D:/translation.md');
     const first = buildPaperRecord({

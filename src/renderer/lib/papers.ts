@@ -224,7 +224,7 @@ function normalizePaperRecord(value: unknown): PaperRecord | null {
   const pdfPath = toText(record.pdfPath);
   const translationPath = toText(record.translationPath);
 
-  if (!pdfPath || !translationPath) {
+  if (!pdfPath) {
     return null;
   }
 
@@ -233,7 +233,7 @@ function normalizePaperRecord(value: unknown): PaperRecord | null {
     pdfPath,
     pdfName: toText(record.pdfName) || stripExtension(pdfPath),
     translationPath,
-    translationName: toText(record.translationName) || stripExtension(translationPath),
+    translationName: toText(record.translationName) || (translationPath ? stripExtension(translationPath) : ''),
     aiCachePath: toText(record.aiCachePath) || undefined,
     aiCacheName: toText(record.aiCacheName) || undefined,
     translatedPdfPath: toText(record.translatedPdfPath) || undefined,

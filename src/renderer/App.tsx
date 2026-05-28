@@ -60,6 +60,9 @@ import type {
   AiSettingsView,
   AiBalanceResult,
   PdfFilePayload,
+  PdfTranslationEngineResult,
+  PdfTranslationProgress,
+  PdfTranslationResult,
   SaveTextResult,
   TextFilePayload
 } from './types/electron';
@@ -82,6 +85,7 @@ interface RecentProject {
 
 type AppView = 'home' | 'reader' | 'researchSheet';
 type ReaderMode = 'manual' | 'ai';
+type PdfViewMode = 'source' | 'translated';
 type BuiltInProviderId = Exclude<AiProviderId, 'custom'>;
 
 const RECENT_PROJECT_KEY = 'pdfTranslationReader:lastProject';
@@ -105,6 +109,8 @@ export default function App() {
   const [researchFocusPaperId, setResearchFocusPaperId] = useState<string | null>(null);
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
   const [pdf, setPdf] = useState<PdfState | null>(null);
+  const [translatedPdf, setTranslatedPdf] = useState<PdfState | null>(null);
+  const [pdfViewMode, setPdfViewMode] = useState<PdfViewMode>('source');
   const [translationDocument, setTranslationDocument] = useState<TranslationDocument | null>(null);
   const [aiCacheDocument, setAiCacheDocument] = useState<TranslationDocument | null>(null);
   const [extractedPdfBlocks, setExtractedPdfBlocks] = useState<ExtractedPdfBlock[]>([]);
@@ -129,9 +135,14 @@ export default function App() {
     apiKey: ''
   });
   const [isAiBusy, setIsAiBusy] = useState(false);
+  const [isPdfTranslationBusy, setIsPdfTranslationBusy] = useState(false);
+  const [pdfTranslationEngine, setPdfTranslationEngine] =
+    useState<PdfTranslationEngineResult | null>(null);
+  const [pdfTranslationStatus, setPdfTranslationStatus] = useState('');
   const [statusMessage, setStatusMessage] = useState('请在论文库中新建或打开一个翻译项目。');
 
   const currentItem = translationDocument?.items[currentParagraphIndex] ?? null;
+  const displayedPdf = pdfViewMode === 'translated' && translatedPdf ? translatedPdf : pdf;
 
   useEffect(() => {
     window.electronAPI
@@ -149,6 +160,30 @@ export default function App() {
       .catch((error) => {
         setStatusMessage(`读取 AI 设置失败：${String(error)}`);
       });
+  }, []);
+
+  useEffect(() => {
+    window.electronAPI
+      .checkPdfTranslationEngine()
+      .then((engine) => {
+        setPdfTranslationEngine(engine);
+        setPdfTranslationStatus(engine.message);
+      })
+      .catch((error) => {
+        setPdfTranslationStatus(`PDF 翻译引擎检查失败：${String(error)}`);
+      });
+  }, []);
+
+  useEffect(() => {
+    return window.electronAPI.onPdfTranslationProgress((progress: PdfTranslationProgress) => {
+      setPdfTranslationStatus(progress.message);
+      if (progress.status === 'running') {
+        setIsPdfTranslationBusy(true);
+      }
+      if (progress.status === 'completed' || progress.status === 'failed') {
+        setIsPdfTranslationBusy(false);
+      }
+    });
   }, []);
 
   const recentProject = useMemo<RecentProject>(() => {
@@ -212,18 +247,43 @@ export default function App() {
     );
   }, [activePaperId, currentPage, view]);
 
-  function applyPdfPayload(payload: PdfFilePayload, initialPage = 1): PdfState {
+  function buildPdfState(payload: PdfFilePayload): PdfState {
+    return {
+      filePath: payload.filePath,
+      fileName: payload.fileName,
+      data: base64ToUint8Array(payload.base64)
+    };
+  }
+
+  function applyPdfPayload(
+    payload: PdfFilePayload,
+    initialPage = 1,
+    options: { keepTranslatedPdf?: boolean } = {}
+  ): PdfState {
+    const nextPdf = buildPdfState(payload);
+
+    setPdf(nextPdf);
+    if (!options.keepTranslatedPdf) {
+      setTranslatedPdf(null);
+      setPdfViewMode('source');
+    }
+    setExtractedPdfBlocks([]);
+    setAiCacheDocument(null);
+    setCurrentPage(initialPage);
+    setAiParagraphIndex(0);
+    setPageCount(0);
+    return nextPdf;
+  }
+
+  function applyTranslatedPdfPayload(payload: PdfFilePayload): PdfState {
     const nextPdf = {
       filePath: payload.filePath,
       fileName: payload.fileName,
       data: base64ToUint8Array(payload.base64)
     };
 
-    setPdf(nextPdf);
-    setExtractedPdfBlocks([]);
-    setAiCacheDocument(null);
-    setCurrentPage(initialPage);
-    setAiParagraphIndex(0);
+    setTranslatedPdf(nextPdf);
+    setPdfViewMode('translated');
     setPageCount(0);
     return nextPdf;
   }
@@ -268,25 +328,35 @@ export default function App() {
       const result = await window.electronAPI.loadProject({
         pdfPath: paper.pdfPath,
         translationPath: paper.translationPath,
-        aiCachePath: paper.aiCachePath
+        aiCachePath: paper.aiCachePath,
+        translatedPdfPath: paper.translatedPdfPath
       });
 
-      if (!result.pdf || !result.translation) {
+      if (!result.pdf) {
         setStatusMessage(
           result.errors.length > 0
             ? result.errors.join('；')
-            : '无法打开论文记录，请检查 PDF 或翻译文件是否仍在原路径。'
+            : '无法打开论文记录，请检查 PDF 是否仍在原路径。'
         );
         return;
       }
 
-      applyPdfPayload(result.pdf, paper.lastPage);
-      applyTranslationPayload(result.translation);
+      applyPdfPayload(result.pdf, paper.lastPage, { keepTranslatedPdf: Boolean(result.translatedPdf) });
+      if (result.translation) {
+        applyTranslationPayload(result.translation);
+      } else {
+        setTranslationDocument(null);
+        setCurrentParagraphIndex(0);
+        setShowTranslation(false);
+      }
       if (result.aiCache) {
         const aiDocument = applyAiCachePayload(result.aiCache);
         if (!aiDocument) {
           setStatusMessage('AI 缓存不是 JSON 翻译数组，已只打开手动翻译文件。');
         }
+      }
+      if (result.translatedPdf) {
+        applyTranslatedPdfPayload(result.translatedPdf);
       }
       const updated = updatePaperRecord(paper, {
         lastOpenedAt: new Date().toISOString()
@@ -298,9 +368,11 @@ export default function App() {
       setActiveNotes(paper.notes ?? '');
       setView('reader');
       setStatusMessage(
-        result.aiCache
-          ? `已打开论文并自动导入 AI 缓存：${paper.chineseTitle || paper.englishTitle}`
-          : `已打开论文：${paper.chineseTitle || paper.englishTitle}`
+        result.translatedPdf
+          ? `已打开论文并切换到双语 PDF：${paper.chineseTitle || paper.englishTitle}`
+          : result.aiCache
+            ? `已打开论文并自动导入 AI 缓存：${paper.chineseTitle || paper.englishTitle}`
+            : `已打开论文：${paper.chineseTitle || paper.englishTitle}`
       );
     } catch (error) {
       setStatusMessage(`打开论文记录失败：${String(error)}`);
@@ -328,6 +400,8 @@ export default function App() {
       }
 
       applyPdfPayload(payload);
+      setActivePaperId(null);
+      setActiveNotes('');
       setStatusMessage(`已打开 PDF：${payload.fileName}`);
     } catch (error) {
       setStatusMessage(`打开 PDF 失败：${String(error)}`);
@@ -346,6 +420,140 @@ export default function App() {
     } catch (error) {
       setStatusMessage(`打开翻译文件失败：${String(error)}`);
     }
+  }
+
+  async function handleCheckPdfTranslationEngine(): Promise<void> {
+    try {
+      const engine = await window.electronAPI.checkPdfTranslationEngine();
+      setPdfTranslationEngine(engine);
+      setPdfTranslationStatus(engine.message);
+      setStatusMessage(engine.message);
+    } catch (error) {
+      const message = `PDF 翻译引擎检查失败：${String(error)}`;
+      setPdfTranslationStatus(message);
+      setStatusMessage(message);
+    }
+  }
+
+  async function handleGenerateBilingualPdf(force = false): Promise<void> {
+    const sourcePdf = pdf;
+    if (!sourcePdf) {
+      setStatusMessage('请先打开原文 PDF。');
+      return;
+    }
+
+    const paper = ensureActivePaperForCurrentPdf();
+    if (!paper) {
+      setStatusMessage('无法建立论文记录，暂不能生成双语 PDF。');
+      return;
+    }
+
+    try {
+      setIsPdfTranslationBusy(true);
+      setReaderMode('ai');
+      setPdfTranslationStatus('正在准备生成双语 PDF...');
+      const result = await window.electronAPI.translatePdf({
+        paperId: paper.id,
+        pdfPath: sourcePdf.filePath,
+        outputMode: 'dual',
+        force
+      });
+
+      applyTranslatedPdfPayload(result.pdf);
+      rememberTranslatedPdfResult(paper.id, result);
+      setStatusMessage(result.message);
+      setPdfTranslationStatus(result.message);
+    } catch (error) {
+      const message = `生成双语 PDF 失败：${String(error)}`;
+      setStatusMessage(message);
+      setPdfTranslationStatus(message);
+    } finally {
+      setIsPdfTranslationBusy(false);
+    }
+  }
+
+  async function handleImportTranslatedPdf(): Promise<void> {
+    try {
+      const payload = await window.electronAPI.openTranslatedPdf();
+      if (!payload) {
+        return;
+      }
+
+      applyTranslatedPdfPayload(payload);
+      const paper = ensureActivePaperForCurrentPdf();
+      if (paper) {
+        setPaperLibrary((library) =>
+          library.map((item) =>
+            item.id === paper.id
+              ? updatePaperRecord(item, {
+                  translatedPdfPath: payload.filePath,
+                  translatedPdfName: payload.fileName,
+                  translatedPdfMode: 'dual',
+                  translatedAt: new Date().toISOString()
+                })
+              : item
+          )
+        );
+      }
+      setStatusMessage(`已导入并显示中文/双语 PDF：${payload.fileName}`);
+    } catch (error) {
+      setStatusMessage(`导入中文/双语 PDF 失败：${String(error)}`);
+    }
+  }
+
+  function ensureActivePaperForCurrentPdf(): PaperRecord | null {
+    if (!pdf) {
+      return null;
+    }
+
+    const existing = activePaperId
+      ? paperLibrary.find((paper) => paper.id === activePaperId && paper.pdfPath === pdf.filePath)
+      : paperLibrary.find((paper) => paper.pdfPath === pdf.filePath);
+
+    if (existing) {
+      setActivePaperId(existing.id);
+      return existing;
+    }
+
+    const now = new Date().toISOString();
+    const record: PaperRecord = {
+      id: `paper-${hashText(pdf.filePath)}`,
+      pdfPath: pdf.filePath,
+      pdfName: pdf.fileName,
+      translationPath: '',
+      translationName: '',
+      aiCachePath: undefined,
+      aiCacheName: undefined,
+      chineseTitle: '',
+      englishTitle: pdf.fileName.replace(/\.[^.]+$/u, ''),
+      journal: '',
+      authors: '',
+      year: '',
+      notes: '',
+      lastOpenedAt: now,
+      lastPage: currentPage || 1
+    };
+
+    return rememberPaper(record);
+  }
+
+  function rememberTranslatedPdfResult(paperId: string, result: PdfTranslationResult): void {
+    setPaperLibrary((library) =>
+      library.map((paper) =>
+        paper.id === paperId
+          ? updatePaperRecord(paper, {
+              translatedPdfPath: result.translatedPdfPath,
+              translatedPdfName: result.translatedPdfName,
+              translatedPdfMode: result.translatedPdfMode,
+              translationEngine: result.translationEngine,
+              translationSourceHash: result.translationSourceHash,
+              translatedAt: result.translatedAt,
+              translatedProvider: result.translatedProvider,
+              translatedModel: result.translatedModel
+            })
+          : paper
+      )
+    );
   }
 
   async function handleNewProject(): Promise<void> {
@@ -1018,8 +1226,8 @@ export default function App() {
       <main className="split-layout">
         <section className="pdf-pane">
           <PdfViewer
-            pdfData={pdf?.data ?? null}
-            fileName={pdf?.fileName}
+            pdfData={displayedPdf?.data ?? null}
+            fileName={displayedPdf?.fileName}
             currentPage={currentPage}
             scale={scale}
             highlightText={
@@ -1035,7 +1243,11 @@ export default function App() {
             onCurrentPageChange={(page) => {
               setCurrentPage((current) => (current === page ? current : page));
             }}
-            onExtractedTextReady={setExtractedPdfBlocks}
+            onExtractedTextReady={(blocks) => {
+              if (pdfViewMode === 'source') {
+                setExtractedPdfBlocks(blocks);
+              }
+            }}
             onHighlightStatusChange={setStatusMessage}
             onStatusChange={setStatusMessage}
           />
@@ -1043,6 +1255,68 @@ export default function App() {
 
         <section className="translation-pane">
           <div className="side-panel">
+            <section className="whole-pdf-panel" aria-label="整体双语 PDF">
+              <div className="whole-pdf-header">
+                <strong>整体 PDF 阅读</strong>
+                <span>
+                  {pdfViewMode === 'translated' && translatedPdf
+                    ? `正在显示：${translatedPdf.fileName}`
+                    : pdf
+                      ? `正在显示：${pdf.fileName}`
+                      : '尚未打开 PDF'}
+                </span>
+              </div>
+              <div className="whole-pdf-actions">
+                <div className="pdf-view-toggle" role="group" aria-label="PDF 显示模式">
+                  <button
+                    type="button"
+                    className={pdfViewMode === 'source' ? 'active' : ''}
+                    disabled={!pdf}
+                    onClick={() => setPdfViewMode('source')}
+                  >
+                    原文 PDF
+                  </button>
+                  <button
+                    type="button"
+                    className={pdfViewMode === 'translated' ? 'active' : ''}
+                    disabled={!translatedPdf}
+                    onClick={() => setPdfViewMode('translated')}
+                  >
+                    双语 PDF
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  disabled={!pdf || isPdfTranslationBusy}
+                  onClick={() => handleGenerateBilingualPdf(false)}
+                >
+                  生成双语 PDF
+                </button>
+                <button
+                  type="button"
+                  disabled={!pdf || isPdfTranslationBusy}
+                  onClick={() => handleGenerateBilingualPdf(true)}
+                >
+                  重新生成
+                </button>
+                <button type="button" disabled={isPdfTranslationBusy} onClick={handleImportTranslatedPdf}>
+                  导入中文/双语 PDF
+                </button>
+                <button type="button" disabled={isPdfTranslationBusy} onClick={handleCheckPdfTranslationEngine}>
+                  检查引擎
+                </button>
+              </div>
+              <p>
+                {pdfTranslationStatus ||
+                  pdfTranslationEngine?.message ||
+                  '使用 PDFMathTranslate 生成整本文档的双语 PDF，完成后会直接在左侧显示。'}
+              </p>
+              {!pdfTranslationEngine?.available ? (
+                <p className="engine-hint">
+                  安装命令：<code>{pdfTranslationEngine?.installCommand ?? 'uv tool install pdf2zh'}</code>
+                </p>
+              ) : null}
+            </section>
             <div className="mode-tabs">
               <button
                 type="button"
@@ -1190,6 +1464,15 @@ function cleanAiCellText(value: string): string {
     .replace(/^```(?:markdown|text)?\s*/iu, '')
     .replace(/```$/u, '')
     .trim();
+}
+
+function hashText(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
