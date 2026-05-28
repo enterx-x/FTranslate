@@ -31,6 +31,7 @@ import {
   type ResearchWorkbook
 } from '../lib/researchWorkbook';
 import type { PaperRecord } from '../lib/papers';
+import type { LiteratureGapPaperInput } from '../lib/literatureInsight';
 
 export interface FillResearchCellTarget {
   rowIndex: number;
@@ -51,6 +52,10 @@ export interface FillResearchCellResult {
   value: string;
 }
 
+export interface AnalyzeLiteratureGapRequest {
+  papers: LiteratureGapPaperInput[];
+}
+
 interface ResearchSheetPageProps {
   papers: PaperRecord[];
   workbook: ResearchWorkbook;
@@ -62,6 +67,7 @@ interface ResearchSheetPageProps {
   onWorkbookChange: (workbook: ResearchWorkbook) => void;
   onLinksChange: (links: ResearchSheetLink[]) => void;
   onFillCellsWithAi: (request: FillResearchCellsRequest) => Promise<FillResearchCellResult[]>;
+  onAnalyzeLiteratureGap: (request: AnalyzeLiteratureGapRequest) => Promise<string>;
 }
 
 interface SelectedCell {
@@ -136,6 +142,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const [fillColor, setFillColor] = useState('#ffffff');
   const [hasCopiedFormat, setHasCopiedFormat] = useState(false);
   const [localMessage, setLocalMessage] = useState('');
+  const [literatureInsight, setLiteratureInsight] = useState('');
 
   const selectedRowId = getRowId(workbookModelRef.current, selectedCell.rowIndex);
   const linkedPaperId = props.links.find((link) => link.rowId === selectedRowId)?.paperId ?? '';
@@ -165,6 +172,11 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const canToggleBinding = selectedCell.rowIndex > 0 && Boolean(linkedPaper || selectedBindingPaper);
 
   const aiTargetCount = useMemo(() => buildSelectedCellTargets().length, [
+    props.links,
+    props.papers,
+    selectedRanges
+  ]);
+  const selectedLiteratureCount = useMemo(() => getSelectedLiteraturePapers().length, [
     props.links,
     props.papers,
     selectedRanges
@@ -279,6 +291,21 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     for (const group of groups.values()) {
       const filled = await props.onFillCellsWithAi(group);
       setCellValues(filled, group.cells);
+    }
+  }
+
+  async function handleAnalyzeSelectedLiterature(): Promise<void> {
+    const papers = getSelectedLiteraturePapers();
+    if (papers.length === 0) {
+      setLocalMessage('请先选中至少一行已绑定论文的单元格，再做 AI 大观分析。');
+      return;
+    }
+
+    setLocalMessage(`AI 正在综合分析 ${papers.length} 篇论文...`);
+    const text = await props.onAnalyzeLiteratureGap({ papers });
+    if (text.trim()) {
+      setLiteratureInsight(text);
+      setLocalMessage(`AI 已完成 ${papers.length} 篇论文的大观分析。`);
     }
   }
 
@@ -585,6 +612,33 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     return targets;
   }
 
+  function getSelectedLiteraturePapers(): LiteratureGapPaperInput[] {
+    const workbook = workbookModelRef.current;
+    const rows = new Set<number>();
+
+    selectedRanges.forEach((range) => {
+      for (let rowIndex = range.startRow; rowIndex <= range.endRow; rowIndex += 1) {
+        if (rowIndex > 0) {
+          rows.add(rowIndex);
+        }
+      }
+    });
+
+    return [...rows]
+      .map((rowIndex) => {
+        const paper = getLinkedPaperForRow(rowIndex);
+        if (!paper) {
+          return null;
+        }
+
+        return {
+          paper,
+          rowValues: getResearchRowValues(workbook, rowIndex)
+        };
+      })
+      .filter((item): item is LiteratureGapPaperInput => Boolean(item));
+  }
+
   function getLinkedPaperForRow(rowIndex: number): PaperRecord | null {
     const rowId = getRowId(workbookModelRef.current, rowIndex);
     const paperId = props.links.find((link) => link.rowId === rowId)?.paperId;
@@ -735,8 +789,31 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
             >
               {props.isAiBusy ? 'AI 填写中...' : aiTargetCount > 1 ? `AI 填选区 ${aiTargetCount} 格` : 'AI 填此单元格'}
             </button>
+            <button
+              type="button"
+              onClick={handleAnalyzeSelectedLiterature}
+              disabled={selectedLiteratureCount === 0 || props.isAiBusy}
+              title="综合选中行论文，提炼领域核心缺口和 1 个可验证 idea"
+            >
+              AI 大观分析
+            </button>
           </div>
         </section>
+
+        {literatureInsight ? (
+          <section className="literature-insight-panel">
+            <header>
+              <strong>AI 大观分析结果</strong>
+              <button
+                type="button"
+                onClick={() => void navigator.clipboard.writeText(literatureInsight)}
+              >
+                复制
+              </button>
+            </header>
+            <textarea value={literatureInsight} readOnly />
+          </section>
+        ) : null}
 
         <section className="research-format-toolbar" aria-label="表格格式工具栏">
           <label>

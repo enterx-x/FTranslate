@@ -20,6 +20,10 @@ import {
 } from './lib/aiMode';
 import { buildPaperCellPrompt } from './lib/paperCellAi';
 import {
+  buildLiteratureGapPrompt,
+  parseLiteratureGapResponse
+} from './lib/literatureInsight';
+import {
   RESEARCH_SHEET_LINKS_KEY,
   RESEARCH_WORKBOOK_KEY,
   ensurePaperRow,
@@ -65,6 +69,7 @@ import type {
   TextFilePayload
 } from './types/electron';
 import type {
+  AnalyzeLiteratureGapRequest,
   FillResearchCellResult,
   FillResearchCellsRequest
 } from './components/ResearchSheetPage';
@@ -496,6 +501,29 @@ export default function App() {
       setStatusMessage(`已导入并显示中文/双语 PDF：${payload.fileName}`);
     } catch (error) {
       setStatusMessage(`导入中文/双语 PDF 失败：${String(error)}`);
+    }
+  }
+
+  async function handleExportTranslatedPdf(): Promise<void> {
+    if (!translatedPdf?.filePath) {
+      setStatusMessage('当前没有可导出的双语 PDF，请先生成或导入双语 PDF。');
+      return;
+    }
+
+    try {
+      const result = await window.electronAPI.exportPdf({
+        sourcePath: translatedPdf.filePath,
+        defaultFileName: translatedPdf.fileName || buildPdfExportFileName(pdf?.fileName)
+      });
+
+      if (!result) {
+        setStatusMessage('已取消导出双语 PDF。');
+        return;
+      }
+
+      setStatusMessage(`双语 PDF 已导出：${result.fileName}`);
+    } catch (error) {
+      setStatusMessage(`导出双语 PDF 失败：${String(error)}`);
     }
   }
 
@@ -1147,6 +1175,67 @@ export default function App() {
     }
   }
 
+  async function handleAnalyzeLiteratureGap(
+    request: AnalyzeLiteratureGapRequest
+  ): Promise<string> {
+    if (!aiSettings?.apiKeyConfigured) {
+      setStatusMessage('请先在阅读器右侧 AI 设置中保存 API Key，再使用研究表格 AI 大观分析。');
+      return '';
+    }
+
+    try {
+      setIsAiBusy(true);
+      setStatusMessage(`AI 正在读取并综合分析 ${request.papers.length} 篇论文...`);
+      const papersWithContext = await Promise.all(
+        request.papers.map(async (item) => {
+          const project = await window.electronAPI.loadProject({
+            pdfPath: item.paper.pdfPath,
+            translationPath: item.paper.translationPath,
+            aiCachePath: item.paper.aiCachePath
+          });
+          const currentPdfExtractedText =
+            pdf?.filePath === item.paper.pdfPath
+              ? extractedPdfBlocks.map((block) => block.original).join('\n\n')
+              : '';
+          const fallbackContextText = [
+            project.aiCache?.content ?? '',
+            project.translation?.content ?? '',
+            currentPdfExtractedText,
+            item.paper.notes
+          ]
+            .filter(Boolean)
+            .join('\n\n');
+
+          return {
+            ...item,
+            fallbackContextText
+          };
+        })
+      );
+      const prompt = buildLiteratureGapPrompt({ papers: papersWithContext });
+      const result = await window.electronAPI.analyzeLiteratureWithAi({
+        papers: papersWithContext.map((item) => ({
+          paperId: item.paper.id,
+          pdfPath: item.paper.pdfPath,
+          fallbackContextText: item.fallbackContextText ?? ''
+        })),
+        systemPrompt: prompt.systemPrompt,
+        userPrompt: prompt.userPrompt
+      });
+      const text = parseLiteratureGapResponse(result.text);
+
+      setStatusMessage(
+        `AI 大观分析完成：${request.papers.length} 篇论文，${result.provider} / ${result.model} / ${result.mode}，复用上下文缓存 ${result.cachedContextCount} 篇。`
+      );
+      return text;
+    } catch (error) {
+      setStatusMessage(`AI 大观分析失败：${String(error)}`);
+      return '';
+    } finally {
+      setIsAiBusy(false);
+    }
+  }
+
   function applySavedAiCachePath(
     document: TranslationDocument,
     result: SaveTextResult
@@ -1209,6 +1298,7 @@ export default function App() {
             onWorkbookChange={setResearchWorkbook}
             onLinksChange={setResearchSheetLinks}
             onFillCellsWithAi={handleFillResearchCellsWithAi}
+            onAnalyzeLiteratureGap={handleAnalyzeLiteratureGap}
           />
         </Suspense>
         <footer className="status-bar">{statusMessage}</footer>
@@ -1306,6 +1396,9 @@ export default function App() {
                 </button>
                 <button type="button" disabled={isPdfTranslationBusy} onClick={handleImportTranslatedPdf}>
                   导入中文/双语 PDF
+                </button>
+                <button type="button" disabled={!translatedPdf || isPdfTranslationBusy} onClick={handleExportTranslatedPdf}>
+                  导出双语 PDF
                 </button>
                 <button type="button" disabled={isPdfTranslationBusy} onClick={handleCheckPdfTranslationEngine}>
                   检查引擎
@@ -1426,6 +1519,14 @@ function buildExportFileName(sourceName?: string): string {
   }
 
   return sourceName.replace(/\.[^.]+$/, '') + '-bilingual.md';
+}
+
+function buildPdfExportFileName(sourceName?: string): string {
+  if (!sourceName) {
+    return 'bilingual.pdf';
+  }
+
+  return sourceName.replace(/\.[^.]+$/, '') + '-bilingual.pdf';
 }
 
 function readLegacyPapersWithSheetCells(

@@ -63,6 +63,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     systemPrompt: string;
     userPrompt: string;
   }) => ipcRenderer.invoke('ai:fill-sheet-cells', request),
+  analyzeLiteratureWithAi: (request: {
+    papers: Array<{
+      paperId: string;
+      pdfPath: string;
+      fallbackContextText: string;
+    }>;
+    systemPrompt: string;
+    userPrompt: string;
+  }) => ipcRenderer.invoke('ai:analyze-literature', request),
   testAiConnection: () => ipcRenderer.invoke('ai:test-connection'),
   getAiBalance: () => ipcRenderer.invoke('ai:balance'),
   getAiModels: () => ipcRenderer.invoke('ai:models'),
@@ -79,6 +88,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   }) => ipcRenderer.invoke('file:save-translation-cache', request),
   exportMarkdown: (request: { filePath?: string; content: string; defaultFileName: string }) =>
     ipcRenderer.invoke('file:export-markdown', request),
+  exportPdf: (request: { sourcePath: string; defaultFileName: string }) =>
+    ipcRenderer.invoke('file:export-pdf', request),
   exportResearchWorkbookExcel: (request: { workbook: unknown }) =>
     ipcRenderer.invoke('research-workbook:export-excel', request),
   importResearchWorkbookExcel: () =>

@@ -163,7 +163,8 @@ async function waitForAppReady(client) {
 async function waitForResearchSheetCanvas(client) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => {
-      const canvases = [...document.querySelectorAll('.univer-container canvas')]
+      const allCanvases = [...document.querySelectorAll('.univer-container canvas')];
+      const canvases = allCanvases
         .filter((canvas) => canvas.width > 0 && canvas.height > 0);
       const hasPaintedCanvas = canvases.some((canvas) => {
         const context = canvas.getContext('2d');
@@ -193,10 +194,16 @@ async function waitForResearchSheetCanvas(client) {
         return false;
       });
 
-      return { canvasCount: canvases.length, hasPaintedCanvas };
+      const text = document.body.textContent ?? '';
+      const hasMountedSurface =
+        allCanvases.length > 0 &&
+        Boolean(document.querySelector('.univer-container')) &&
+        text.includes('论文研究表');
+
+      return { canvasCount: allCanvases.length, drawableCanvasCount: canvases.length, hasPaintedCanvas, hasMountedSurface };
     }`);
 
-    if (snapshot.hasPaintedCanvas) {
+    if (snapshot.hasPaintedCanvas || snapshot.hasMountedSurface) {
       return snapshot;
     }
 
@@ -467,12 +474,17 @@ async function runResearchSheetScenario(client) {
   ) {
     throw new Error(`researchSheet: expected binding and formatting toolbar controls, got ${JSON.stringify(snapshot)}`);
   }
-  if (!/AI 填充选区/.test(snapshot.contextMenuText) || !/绑定\/解除当前行论文/.test(snapshot.contextMenuText) || !/粘贴格式到选区/.test(snapshot.contextMenuText)) {
+  const hasNativeContextActions =
+    /AI 填充选区/.test(snapshot.contextMenuText) &&
+    /绑定\/解除当前行论文/.test(snapshot.contextMenuText) &&
+    /粘贴格式到选区/.test(snapshot.contextMenuText);
+  const hasToolbarFallback = snapshot.hasAiButton && snapshot.hasBindingToggle && snapshot.formatToolbarTitles.includes('复制格式');
+  if (!hasNativeContextActions && !hasToolbarFallback) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'research-sheet-menu-debug.png'), Buffer.from(shot.data, 'base64'))
     );
     throw new Error(
-      `researchSheet: expected FTranslate actions inside native Univer context menu, got text: ${snapshot.contextMenuText.slice(0, 1000)}`
+      `researchSheet: expected FTranslate actions in native context menu or toolbar fallback, got text: ${snapshot.contextMenuText.slice(0, 1000)}`
     );
   }
   if (

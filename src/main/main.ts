@@ -160,12 +160,30 @@ interface AiFillSheetCellsRequest extends AiCompleteRequest {
   cellCount: number;
 }
 
+interface AiAnalyzeLiteraturePaperRequest {
+  paperId: string;
+  pdfPath: string;
+  fallbackContextText: string;
+}
+
+interface AiAnalyzeLiteratureRequest extends AiCompleteRequest {
+  papers: AiAnalyzeLiteraturePaperRequest[];
+}
+
 interface AiFillSheetCellResult {
   text: string;
   provider: AiProviderId;
   model: string;
   mode: PaperContextStrategyMode;
   cached: boolean;
+}
+
+interface AiAnalyzeLiteratureResult {
+  text: string;
+  provider: AiProviderId;
+  model: string;
+  mode: PaperContextStrategyMode;
+  cachedContextCount: number;
 }
 
 interface StoredAiSettings extends AiProviderSettings {
@@ -375,6 +393,7 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
     pdfPath: request.pdfPath,
     outputDir,
     mode: outputMode,
+    ignoreCache: request.force,
     settings
   });
 
@@ -696,6 +715,7 @@ async function runPdfTranslationProcess(
   }
 ): Promise<void> {
   const logs: string[] = [];
+  const startedAt = Date.now();
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, {
@@ -706,6 +726,22 @@ async function runPdfTranslationProcess(
       },
       windowsHide: true
     });
+    const heartbeat = setInterval(() => {
+      const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+      const lastLog = logs.at(-1);
+      sendPdfTranslationProgress({
+        paperId: options.paperId,
+        status: 'running',
+        message: lastLog
+          ? `PDFMathTranslate 仍在运行（${elapsedSeconds}s）：${lastLog}`
+          : `PDFMathTranslate 仍在运行（${elapsedSeconds}s），正在等待翻译引擎输出进度。`
+      });
+    }, 30000);
+
+    const finish = (callback: () => void): void => {
+      clearInterval(heartbeat);
+      callback();
+    };
 
     const handleChunk = (chunk: Buffer): void => {
       const message = sanitizePdfTranslationLog(chunk.toString('utf8'), options.apiKey).trim();
@@ -727,15 +763,15 @@ async function runPdfTranslationProcess(
     child.stdout?.on('data', handleChunk);
     child.stderr?.on('data', handleChunk);
     child.on('error', (error) => {
-      reject(error);
+      finish(() => reject(error));
     });
     child.on('close', (code) => {
       if (code === 0) {
-        resolve();
+        finish(resolve);
         return;
       }
 
-      reject(new Error(`PDFMathTranslate 退出码 ${code}：${logs.join('\n').slice(-4000)}`));
+      finish(() => reject(new Error(`PDFMathTranslate 退出码 ${code}：${logs.join('\n').slice(-4000)}`)));
     });
   });
 }
@@ -1649,6 +1685,109 @@ async function fillSheetCellsWithAi(
   };
 }
 
+async function analyzeLiteratureWithAi(
+  request: AiAnalyzeLiteratureRequest
+): Promise<AiAnalyzeLiteratureResult> {
+  const settings = await loadStoredAiSettings();
+  const apiKey = decryptApiKey(settings.encryptedApiKey);
+
+  if (!apiKey) {
+    throw new Error('请先在 AI 设置中保存 API Key。');
+  }
+
+  if (!request.papers.length) {
+    throw new Error('请先在研究表格中选中至少一行已绑定论文的单元格。');
+  }
+
+  const strategy = getPaperContextStrategy(settings);
+  const normalizedSettings = normalizeAiProviderSettings(settings);
+
+  if (strategy.mode === 'openai-pdf-input') {
+    const content: Array<
+      | { type: 'input_text'; text: string }
+      | { type: 'input_file'; file_id: string }
+    > = [];
+    let cachedContextCount = 0;
+
+    for (const paper of request.papers) {
+      if (!paper.pdfPath.trim()) {
+        continue;
+      }
+
+      const contextResult = await getOpenAiPaperFileContext(normalizedSettings, apiKey, paper.pdfPath);
+      if (contextResult.cached) {
+        cachedContextCount += 1;
+      }
+      content.push({ type: 'input_file', file_id: contextResult.fileId });
+    }
+
+    content.push({
+      type: 'input_text',
+      text: mergeLiteratureInsightPrompt(request, '')
+    });
+
+    const text = await executeOpenAiResponses(
+      `${normalizedSettings.baseURL.replace(/\/+$/u, '')}/responses`,
+      {
+        model: normalizedSettings.model,
+        input: [{ role: 'user', content }]
+      },
+      apiKey
+    );
+
+    return {
+      text,
+      provider: normalizedSettings.provider,
+      model: normalizedSettings.model,
+      mode: strategy.mode,
+      cachedContextCount
+    };
+  }
+
+  let cachedContextCount = 0;
+  const contexts: string[] = [];
+
+  for (const paper of request.papers) {
+    let extractedText = '';
+    let cached = false;
+
+    if (strategy.mode === 'kimi-file-extract') {
+      const contextResult = await getKimiPaperContext(normalizedSettings, apiKey, paper.pdfPath);
+      extractedText = contextResult.text;
+      cached = contextResult.cached;
+    } else {
+      const contextResult = await getLocalPaperContext(paper.pdfPath);
+      extractedText = contextResult.text;
+      cached = contextResult.cached;
+    }
+
+    if (cached) {
+      cachedContextCount += 1;
+    }
+
+    contexts.push(
+      [
+        `【论文上下文 ${contexts.length + 1} / ${paper.paperId}】`,
+        [extractedText, paper.fallbackContextText].filter(Boolean).join('\n\n').slice(0, 18000)
+      ].join('\n')
+    );
+  }
+
+  const chatRequest = buildGenericChatCompletionRequest(normalizedSettings, {
+    systemPrompt: request.systemPrompt,
+    userPrompt: mergeLiteratureInsightPrompt(request, contexts.join('\n\n'))
+  });
+  const text = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey);
+
+  return {
+    text,
+    provider: normalizedSettings.provider,
+    model: normalizedSettings.model,
+    mode: strategy.mode,
+    cachedContextCount
+  };
+}
+
 async function testAiConnection(): Promise<AiConnectionTestResult> {
   const settings = await loadStoredAiSettings();
   const apiKey = decryptApiKey(settings.encryptedApiKey);
@@ -1833,6 +1972,19 @@ function mergeSheetCellPrompt(request: AiFillSheetCellRequest, paperContext: str
     '',
     '补充论文全文/提取上下文：',
     paperContext.slice(0, 60000)
+  ].join('\n');
+}
+
+function mergeLiteratureInsightPrompt(request: AiAnalyzeLiteratureRequest, paperContext: string): string {
+  if (!paperContext.trim()) {
+    return request.userPrompt;
+  }
+
+  return [
+    request.userPrompt,
+    '',
+    '补充论文全文/提取上下文：',
+    paperContext.slice(0, 90000)
   ].join('\n');
 }
 
@@ -2167,6 +2319,10 @@ function registerIpcHandlers(): void {
     return fillSheetCellsWithAi(request);
   });
 
+  ipcMain.handle('ai:analyze-literature', async (_event, request: AiAnalyzeLiteratureRequest) => {
+    return analyzeLiteratureWithAi(request);
+  });
+
   ipcMain.handle('ai:test-connection', async () => {
     return testAiConnection();
   });
@@ -2343,6 +2499,28 @@ function registerIpcHandlers(): void {
     }
 
     await fs.writeFile(result.filePath, request.content, 'utf8');
+    return {
+      filePath: result.filePath,
+      fileName: path.basename(result.filePath)
+    };
+  });
+
+  ipcMain.handle('file:export-pdf', async (_event, request: { sourcePath: string; defaultFileName: string }) => {
+    if (!request.sourcePath || !(await pathExists(request.sourcePath))) {
+      throw new Error('没有可导出的双语 PDF 文件。');
+    }
+
+    const result = await dialog.showSaveDialog({
+      title: '导出双语 PDF',
+      defaultPath: request.defaultFileName,
+      filters: [{ name: 'PDF', extensions: ['pdf'] }]
+    });
+
+    if (result.canceled || !result.filePath) {
+      return null;
+    }
+
+    await fs.copyFile(request.sourcePath, result.filePath);
     return {
       filePath: result.filePath,
       fileName: path.basename(result.filePath)

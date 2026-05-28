@@ -40,7 +40,27 @@ describe('PDFMathTranslate command helpers', () => {
     expect(command.env.OPENAI_BASE_URL).toBe('https://api.moonshot.cn/v1');
     expect(command.env.OPENAI_MODEL).toBe('kimi-k2.5');
     expect(command.env.PDF_TRANSLATION_READER_OPENAI_TEMPERATURE).toBe('1');
+    expect(command.env.PDF_TRANSLATION_READER_DISABLE_THINKING).toBe('1');
+    expect(command.env.PDF_TRANSLATION_READER_OPENAI_TIMEOUT).toBe('120');
+    expect(command.args).toEqual(expect.arrayContaining(['-t', '1']));
     expect(command.args.join(' ')).not.toContain('sk-');
+  });
+
+  it('can force pdf2zh to ignore stale translation cache when regenerating', () => {
+    const command = buildPdf2zhCommand({
+      executable: 'pdf2zh',
+      pdfPath: 'D:/papers/robot paper.pdf',
+      outputDir: 'C:/cache',
+      mode: 'dual',
+      ignoreCache: true,
+      settings: {
+        provider: 'kimi',
+        baseURL: 'https://api.moonshot.cn/v1',
+        model: 'kimi-k2.5'
+      }
+    });
+
+    expect(command.args).toContain('--ignore-cache');
   });
 
   it('keeps non-Kimi pdf2zh translations deterministic when the runtime patch is available', () => {
@@ -57,6 +77,7 @@ describe('PDFMathTranslate command helpers', () => {
     });
 
     expect(command.env.PDF_TRANSLATION_READER_OPENAI_TEMPERATURE).toBe('0');
+    expect(command.env.PDF_TRANSLATION_READER_DISABLE_THINKING).toBe('0');
   });
 
   it('can invoke pdf2zh as a Python module from the app private venv', () => {
@@ -117,6 +138,8 @@ describe('PDFMathTranslate command helpers', () => {
     expect(patched.source).toContain(
       'class OpenAITranslator(BaseTranslator):\n    def __init__(self):\n        self.options = {"temperature": float(os.environ.get("PDF_TRANSLATION_READER_OPENAI_TEMPERATURE", "0"))}'
     );
+    expect(patched.source).toContain('PDF_TRANSLATION_READER_DISABLE_THINKING');
+    expect(patched.source).toContain('PDF_TRANSLATION_READER_OPENAI_TIMEOUT');
     expect(patched.source).toContain('class AzureOpenAITranslator(BaseTranslator):');
     expect(patched.source).toContain('        self.options = {"temperature": 0}');
   });

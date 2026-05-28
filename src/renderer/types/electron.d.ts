@@ -73,6 +73,14 @@ export interface AiFillSheetCellResult {
   cached: boolean;
 }
 
+export interface AiAnalyzeLiteratureResult {
+  text: string;
+  provider: AiProviderId;
+  model: string;
+  mode: 'openai-pdf-input' | 'kimi-file-extract' | 'local-text';
+  cachedContextCount: number;
+}
+
 export interface PdfTranslationEngineResult {
   available: boolean;
   executable?: string;
@@ -156,6 +164,15 @@ export interface ElectronApi {
     systemPrompt: string;
     userPrompt: string;
   }) => Promise<AiFillSheetCellResult>;
+  analyzeLiteratureWithAi: (request: {
+    papers: Array<{
+      paperId: string;
+      pdfPath: string;
+      fallbackContextText: string;
+    }>;
+    systemPrompt: string;
+    userPrompt: string;
+  }) => Promise<AiAnalyzeLiteratureResult>;
   testAiConnection: () => Promise<AiConnectionTestResult>;
   getAiBalance: () => Promise<AiBalanceResult>;
   getAiModels: () => Promise<AiModelsResult>;
@@ -173,6 +190,10 @@ export interface ElectronApi {
   exportMarkdown: (request: {
     filePath?: string;
     content: string;
+    defaultFileName: string;
+  }) => Promise<SaveTextResult | null>;
+  exportPdf: (request: {
+    sourcePath: string;
     defaultFileName: string;
   }) => Promise<SaveTextResult | null>;
   exportResearchWorkbookExcel: (request: {
