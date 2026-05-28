@@ -4,7 +4,6 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   base: './',
   plugins: [react()],
-  root: '.',
   build: {
     outDir: 'dist-renderer',
     emptyOutDir: true,
@@ -23,13 +22,10 @@ export default defineConfig({
             return 'katex';
           }
 
-          if (id.includes('ag-grid')) {
-            return 'ag-grid';
+          if (id.includes('@univerjs')) {
+            return 'univer';
           }
 
-          if (id.includes('react')) {
-            return 'react-vendor';
-          }
         }
       }
     }

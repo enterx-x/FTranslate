@@ -64,6 +64,14 @@ export interface AiModelsResult {
   checkedAt?: string;
 }
 
+export interface AiFillSheetCellResult {
+  text: string;
+  provider: AiProviderId;
+  model: string;
+  mode: 'openai-pdf-input' | 'kimi-file-extract' | 'local-text';
+  cached: boolean;
+}
+
 export interface ElectronApi {
   openPdf: () => Promise<PdfFilePayload | null>;
   openTranslation: () => Promise<TextFilePayload | null>;
@@ -91,6 +99,13 @@ export interface ElectronApi {
     systemPrompt: string;
     userPrompt: string;
   }) => Promise<string>;
+  fillSheetCellWithAi: (request: {
+    paperId: string;
+    pdfPath: string;
+    fallbackContextText: string;
+    systemPrompt: string;
+    userPrompt: string;
+  }) => Promise<AiFillSheetCellResult>;
   testAiConnection: () => Promise<AiConnectionTestResult>;
   getAiBalance: () => Promise<AiBalanceResult>;
   getAiModels: () => Promise<AiModelsResult>;

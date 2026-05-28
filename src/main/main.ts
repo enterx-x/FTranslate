@@ -19,6 +19,12 @@ import {
   type AiModelOption,
   type AiTranslationItem
 } from '../shared/aiTranslation';
+import {
+  buildKimiFileExtractRequest,
+  buildOpenAiPdfDataResponseRequest,
+  getPaperContextStrategy,
+  type PaperContextStrategyMode
+} from '../shared/aiPaperContext';
 
 interface PdfFilePayload {
   filePath: string;
@@ -78,8 +84,33 @@ interface AiCompleteRequest {
   userPrompt: string;
 }
 
+interface AiFillSheetCellRequest extends AiCompleteRequest {
+  paperId: string;
+  pdfPath: string;
+  fallbackContextText: string;
+}
+
+interface AiFillSheetCellResult {
+  text: string;
+  provider: AiProviderId;
+  model: string;
+  mode: PaperContextStrategyMode;
+  cached: boolean;
+}
+
 interface StoredAiSettings extends AiProviderSettings {
   encryptedApiKey?: string;
+}
+
+interface PaperContextCacheEntry {
+  key: string;
+  provider: AiProviderId;
+  pdfPath: string;
+  fileSize: number;
+  mtimeMs: number;
+  fileId?: string;
+  extractedText?: string;
+  cachedAt: string;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -107,6 +138,7 @@ async function createMainWindow(): Promise<void> {
     minWidth: 1100,
     minHeight: 720,
     title: 'PDF Translation Reader',
+    icon: path.join(__dirname, '../../assets/icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -308,6 +340,68 @@ async function completeWithAi(request: AiCompleteRequest): Promise<string> {
   return executeChatCompletion(chatRequest.url, chatRequest.body, apiKey);
 }
 
+async function fillSheetCellWithAi(
+  request: AiFillSheetCellRequest
+): Promise<AiFillSheetCellResult> {
+  const settings = await loadStoredAiSettings();
+  const apiKey = decryptApiKey(settings.encryptedApiKey);
+
+  if (!apiKey) {
+    throw new Error('请先在 AI 设置中保存 API Key。');
+  }
+
+  const strategy = getPaperContextStrategy(settings);
+  const normalizedSettings = normalizeAiProviderSettings(settings);
+
+  if (strategy.mode === 'openai-pdf-input') {
+    const pdfBuffer = await fs.readFile(request.pdfPath);
+    const pdfFileData = `data:application/pdf;base64,${pdfBuffer.toString('base64')}`;
+    const prompt = mergeSheetCellPrompt(request, '');
+    const responseRequest = buildOpenAiPdfDataResponseRequest(
+      normalizedSettings,
+      path.basename(request.pdfPath),
+      pdfFileData,
+      prompt
+    );
+    const text = await executeOpenAiResponses(responseRequest.url, responseRequest.body, apiKey);
+
+    return {
+      text,
+      provider: normalizedSettings.provider,
+      model: normalizedSettings.model,
+      mode: strategy.mode,
+      cached: false
+    };
+  }
+
+  let cached = false;
+  let paperContext = request.fallbackContextText;
+
+  if (strategy.mode === 'kimi-file-extract') {
+    const contextResult = await getKimiPaperContext(normalizedSettings, apiKey, request.pdfPath);
+    cached = contextResult.cached;
+    paperContext = [contextResult.text, request.fallbackContextText].filter(Boolean).join('\n\n');
+  } else {
+    const contextResult = await getLocalPaperContext(request.pdfPath);
+    cached = contextResult.cached;
+    paperContext = [contextResult.text, request.fallbackContextText].filter(Boolean).join('\n\n');
+  }
+
+  const chatRequest = buildGenericChatCompletionRequest(normalizedSettings, {
+    systemPrompt: request.systemPrompt,
+    userPrompt: mergeSheetCellPrompt(request, paperContext)
+  });
+  const text = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey);
+
+  return {
+    text,
+    provider: normalizedSettings.provider,
+    model: normalizedSettings.model,
+    mode: strategy.mode,
+    cached
+  };
+}
+
 async function testAiConnection(): Promise<AiConnectionTestResult> {
   const settings = await loadStoredAiSettings();
   const apiKey = decryptApiKey(settings.encryptedApiKey);
@@ -439,6 +533,283 @@ async function executeChatCompletion(
   return content;
 }
 
+async function executeOpenAiResponses(
+  url: string,
+  body: ReturnType<typeof buildOpenAiPdfDataResponseRequest>['body'],
+  apiKey: string
+): Promise<string> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(body)
+  });
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`AI 请求失败：HTTP ${response.status} ${formatAiErrorBody(responseText)}`);
+  }
+
+  const parsed = JSON.parse(responseText) as {
+    output_text?: string;
+    output?: Array<{
+      content?: Array<{ type?: string; text?: string }>;
+    }>;
+  };
+  const directText = parsed.output_text?.trim();
+  if (directText) {
+    return directText;
+  }
+
+  const contentText = parsed.output
+    ?.flatMap((item) => item.content ?? [])
+    .map((content) => content.text ?? '')
+    .join('')
+    .trim();
+
+  if (!contentText) {
+    throw new Error('AI 响应中没有可用文本。');
+  }
+
+  return contentText;
+}
+
+function mergeSheetCellPrompt(request: AiFillSheetCellRequest, paperContext: string): string {
+  if (!paperContext.trim()) {
+    return request.userPrompt;
+  }
+
+  return [
+    request.userPrompt,
+    '',
+    '补充论文全文/提取上下文：',
+    paperContext.slice(0, 60000)
+  ].join('\n');
+}
+
+async function getKimiPaperContext(
+  settings: AiProviderSettings,
+  apiKey: string,
+  pdfPath: string
+): Promise<{ text: string; cached: boolean }> {
+  const stats = await fs.stat(pdfPath);
+  const cacheKey = buildPaperContextCacheKey(settings.provider, pdfPath, stats);
+  const cached = await readPaperContextCache(cacheKey);
+
+  if (cached?.extractedText) {
+    return { text: cached.extractedText, cached: true };
+  }
+
+  const fileId = cached?.fileId ?? (await uploadKimiPdf(settings, apiKey, pdfPath));
+  const extractRequest = buildKimiFileExtractRequest(settings, fileId);
+  const response = await fetch(extractRequest.url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    }
+  });
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`Kimi 文件提取失败：HTTP ${response.status} ${formatAiErrorBody(responseText)}`);
+  }
+
+  const extractedText = parseProviderTextPayload(responseText);
+  await writePaperContextCache({
+    key: cacheKey,
+    provider: settings.provider,
+    pdfPath,
+    fileSize: stats.size,
+    mtimeMs: stats.mtimeMs,
+    fileId,
+    extractedText,
+    cachedAt: new Date().toISOString()
+  });
+
+  return { text: extractedText, cached: false };
+}
+
+async function uploadKimiPdf(
+  settings: AiProviderSettings,
+  apiKey: string,
+  pdfPath: string
+): Promise<string> {
+  const formData = new FormData();
+  const buffer = await fs.readFile(pdfPath);
+
+  formData.append('purpose', 'file-extract');
+  formData.append(
+    'file',
+    new Blob([buffer], { type: 'application/pdf' }),
+    path.basename(pdfPath)
+  );
+
+  const response = await fetch(`${settings.baseURL.replace(/\/+$/u, '')}/files`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: formData
+  });
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`Kimi 文件上传失败：HTTP ${response.status} ${formatAiErrorBody(responseText)}`);
+  }
+
+  const parsed = JSON.parse(responseText) as {
+    id?: string;
+    data?: { id?: string };
+  };
+  const fileId = parsed.id ?? parsed.data?.id;
+
+  if (!fileId) {
+    throw new Error('Kimi 文件上传响应中没有 file id。');
+  }
+
+  return fileId;
+}
+
+async function getLocalPaperContext(pdfPath: string): Promise<{ text: string; cached: boolean }> {
+  const stats = await fs.stat(pdfPath);
+  const cacheKey = buildPaperContextCacheKey('custom', pdfPath, stats);
+  const cached = await readPaperContextCache(cacheKey);
+
+  if (cached?.extractedText) {
+    return { text: cached.extractedText, cached: true };
+  }
+
+  const extractedText = await extractPdfTextLocally(pdfPath);
+  await writePaperContextCache({
+    key: cacheKey,
+    provider: 'custom',
+    pdfPath,
+    fileSize: stats.size,
+    mtimeMs: stats.mtimeMs,
+    extractedText,
+    cachedAt: new Date().toISOString()
+  });
+
+  return { text: extractedText, cached: false };
+}
+
+async function extractPdfTextLocally(pdfPath: string): Promise<string> {
+  const pdfjs = (await Function('specifier', 'return import(specifier)')(
+    'pdfjs-dist/legacy/build/pdf.mjs'
+  )) as {
+    getDocument: (options: { data: Uint8Array; disableWorker: boolean }) => {
+      promise: Promise<{
+        numPages: number;
+        getPage: (pageNumber: number) => Promise<{
+          getTextContent: () => Promise<{ items: Array<{ str?: string }> }>;
+        }>;
+      }>;
+    };
+  };
+  const buffer = await fs.readFile(pdfPath);
+  const loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(buffer),
+    disableWorker: true
+  });
+  const document = await loadingTask.promise;
+  const pages: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+    const page = await document.getPage(pageNumber);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .map((item) => item.str ?? '')
+      .join(' ')
+      .replace(/\s+/gu, ' ')
+      .trim();
+
+    if (pageText) {
+      pages.push(`Page ${pageNumber}\n${pageText}`);
+    }
+  }
+
+  return pages.join('\n\n');
+}
+
+function getPaperContextCachePath(): string {
+  return path.join(app.getPath('userData'), 'paper-context-cache.json');
+}
+
+async function loadPaperContextCache(): Promise<Record<string, PaperContextCacheEntry>> {
+  try {
+    const content = await fs.readFile(getPaperContextCachePath(), 'utf8');
+    const parsed = JSON.parse(content) as unknown;
+    return isRecord(parsed) ? (parsed as Record<string, PaperContextCacheEntry>) : {};
+  } catch {
+    return {};
+  }
+}
+
+async function readPaperContextCache(key: string): Promise<PaperContextCacheEntry | null> {
+  const cache = await loadPaperContextCache();
+  return cache[key] ?? null;
+}
+
+async function writePaperContextCache(entry: PaperContextCacheEntry): Promise<void> {
+  const cache = await loadPaperContextCache();
+  cache[entry.key] = entry;
+  await fs.mkdir(path.dirname(getPaperContextCachePath()), { recursive: true });
+  await fs.writeFile(getPaperContextCachePath(), JSON.stringify(cache, null, 2), 'utf8');
+}
+
+function buildPaperContextCacheKey(
+  provider: AiProviderId,
+  pdfPath: string,
+  stats: { size: number; mtimeMs: number }
+): string {
+  return [
+    provider,
+    pdfPath,
+    String(stats.size),
+    String(Math.round(stats.mtimeMs))
+  ].join('|');
+}
+
+function parseProviderTextPayload(responseText: string): string {
+  try {
+    const parsed = JSON.parse(responseText) as unknown;
+    if (!isRecord(parsed)) {
+      return responseText;
+    }
+
+    const directText = readString(parsed.content) ?? readString(parsed.text);
+    if (directText) {
+      return directText;
+    }
+
+    if (isRecord(parsed.data)) {
+      return readString(parsed.data.content) ?? readString(parsed.data.text) ?? responseText;
+    }
+  } catch {
+    return responseText;
+  }
+
+  return responseText;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readString(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim();
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  return null;
+}
+
 function formatAiErrorBody(responseText: string): string {
   try {
     const parsed = JSON.parse(responseText) as {
@@ -476,6 +847,10 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('ai:complete', async (_event, request: AiCompleteRequest) => {
     return completeWithAi(request);
+  });
+
+  ipcMain.handle('ai:fill-sheet-cell', async (_event, request: AiFillSheetCellRequest) => {
+    return fillSheetCellWithAi(request);
   });
 
   ipcMain.handle('ai:test-connection', async () => {

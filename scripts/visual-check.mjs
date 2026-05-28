@@ -9,43 +9,10 @@ const root = path.resolve(scriptDir, '..');
 const exe = path.join(root, 'dist', 'win-unpacked', 'PDF Translation Reader.exe');
 const pdfPath =
   process.env.VISUAL_CHECK_PDF ??
-  path.join('D:\\', 'GPT\u6d4f\u89c8\u5668\u4e0b\u8f7d', '2604.15483v2.pdf');
+  path.join('D:\\', 'GPT浏览器下载', '2604.15483v2.pdf');
 const outputDir = path.join(root, '.tmp-visual-check');
 const visualUserDataDir = path.join(outputDir, 'user-data');
 const port = Number(process.env.VISUAL_CHECK_PORT ?? 9333);
-
-const scenarios = [
-  {
-    name: 'intro-body-match',
-    section: 'I. INTRODUCTION',
-    original: [
-      'Foundation models work on the principle that generalist capabilities emerge from training on large and diverse datasets.',
-      'For example, large language models can not only recall facts and semantic knowledge, but they can also compose that knowledge in new ways, solving problems that require unlikely connections, applying user-defined formats (e.g., JSON), and performing chain-of-thought reasoning.',
-      'This kind of compositional generalization is arguably the cornerstone of generalist capabilities, but it has proven elusive in the domain of physical intelligence.'
-    ].join(' '),
-    expectUnderlines: 'positive'
-  },
-  {
-    name: 'intro-full-paragraph-match',
-    section: 'I. INTRODUCTION',
-    original: [
-      'Foundation models work on the principle that generalist capabilities emerge from training on large and diverse datasets.',
-      'For example, large language models can not only recall facts and semantic knowledge, but they can also compose that knowledge in new ways, solving problems that require unlikely connections, applying user-defined formats (e.g., JSON), and performing chain-of-thought reasoning.',
-      'This kind of compositional generalization is arguably the cornerstone of generalist capabilities, but it has proven elusive in the domain of physical intelligence.',
-      'While robotic foundation models such as vision-language-action models (VLAs) have advanced significantly in size and capability, their ability to generalize to new tasks or recombine skills in new ways has so far been limited.',
-      'Unlike language models, which can compose different capabilities from their training data to solve new problems, prior VLAs not only lack the ability to solve new tasks, but often struggle to fluently perform all of the instructions they were trained on without task-specific fine-tuning.'
-    ].join(' '),
-    expectUnderlines: 'positive',
-    minOverlayLines: 14
-  },
-  {
-    name: 'title-high-confidence',
-    section: 'Title',
-    original: '\u03c00.7: a Steerable Generalist Robotic Foundation Model with Emergent Capabilities',
-    expectUnderlines: 'positive',
-    expectStatus: 'full'
-  }
-];
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -89,11 +56,7 @@ async function createCdpClient(webSocketUrl) {
     if (payload.id && callbacks.has(payload.id)) {
       const { resolve, reject } = callbacks.get(payload.id);
       callbacks.delete(payload.id);
-      if (payload.error) {
-        reject(new Error(payload.error.message));
-      } else {
-        resolve(payload.result);
-      }
+      payload.error ? reject(new Error(payload.error.message)) : resolve(payload.result);
     }
   });
 
@@ -117,486 +80,88 @@ async function evaluateJson(client, expression) {
   return JSON.parse(result.result.value);
 }
 
-async function waitForButtonBox(client, label) {
+async function waitForAppReady(client) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const snapshot = await evaluateJson(client, `() => ({
+      ready: Boolean(document.querySelector('.home-page, .split-layout, .research-sheet-page')),
+      text: document.body.textContent ?? ''
+    })`);
+    if (snapshot.ready) {
+      return;
+    }
+    await wait(250);
+  }
+
+  throw new Error('App did not render a known view.');
+}
+
+async function waitForResearchSheetCanvas(client) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => {
-      const button = [...document.querySelectorAll('button')]
-        .find((entry) => entry.textContent.includes(${JSON.stringify(label)}));
-      if (!button) {
-        return { found: false };
-      }
-      const rect = button.getBoundingClientRect();
-      return { found: true, x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+      const canvases = [...document.querySelectorAll('.univer-container canvas')]
+        .filter((canvas) => canvas.width > 0 && canvas.height > 0);
+      const hasPaintedCanvas = canvases.some((canvas) => {
+        const context = canvas.getContext('2d');
+        if (!context) return false;
+
+        const imageData = context.getImageData(
+          0,
+          0,
+          Math.min(canvas.width, 700),
+          Math.min(canvas.height, 260)
+        ).data;
+        let visiblePixelCount = 0;
+
+        for (let index = 0; index < imageData.length; index += 4 * 37) {
+          const red = imageData[index];
+          const green = imageData[index + 1];
+          const blue = imageData[index + 2];
+          const alpha = imageData[index + 3];
+          if (alpha > 0 && (red < 245 || green < 245 || blue < 245)) {
+            visiblePixelCount += 1;
+          }
+          if (visiblePixelCount > 30) {
+            return true;
+          }
+        }
+
+        return false;
+      });
+
+      return { canvasCount: canvases.length, hasPaintedCanvas };
     }`);
 
-    if (snapshot.found) {
+    if (snapshot.hasPaintedCanvas) {
       return snapshot;
     }
+
     await wait(250);
   }
 
-  throw new Error(`Button not found: ${label}`);
+  throw new Error('Research sheet canvas did not paint visible grid content.');
 }
 
-async function waitForButtonEnabled(client, label) {
-  let snapshot = null;
-  for (let attempt = 0; attempt < 160; attempt += 1) {
-    snapshot = await evaluateJson(client, `() => {
-      const button = [...document.querySelectorAll('button')]
-        .find((entry) => entry.textContent.includes(${JSON.stringify(label)}));
-      if (!button) {
-        return { found: false, enabled: false };
-      }
-      return { found: true, enabled: !button.disabled, text: button.textContent };
-    }`);
-
-    if (snapshot.found && snapshot.enabled) {
-      return snapshot;
-    }
-    await wait(500);
-  }
-
-  throw new Error(`Button not enabled: ${label}; last=${JSON.stringify(snapshot)}`);
-}
-
-async function clickButton(client, label) {
-  await waitForButtonBox(client, label);
+async function clickSelector(client, selector) {
   await client.send('Runtime.evaluate', {
-    expression: `
-      (() => {
-        const button = [...document.querySelectorAll('button')]
-          .find((entry) => entry.textContent.includes(${JSON.stringify(label)}));
-        button?.click();
-      })()
-    `,
+    expression: `document.querySelector(${JSON.stringify(selector)})?.click()`,
     returnByValue: true
   });
+  await wait(600);
 }
 
-async function waitForReaderSettled(client) {
-  let snapshot = null;
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    snapshot = await evaluateJson(client, `() => ({
-      hasReader: Boolean(document.querySelector('.split-layout')),
-      rendering: [...document.querySelectorAll('.subtle')].some((node) => node.textContent.includes('\u6b63\u5728\u6e32\u67d3')),
-      status: document.querySelector('.status-bar')?.textContent ?? ''
-    })`);
-
-    if (snapshot.hasReader && !snapshot.rendering && !snapshot.status.includes('\u6587\u672c\u5c42\u4ecd\u5728\u6e32\u67d3')) {
-      return snapshot;
-    }
-    await wait(500);
-  }
-
-  throw new Error(`Reader did not settle: ${JSON.stringify(snapshot)}`);
-}
-
-async function getHighlightSnapshot(client) {
-  return evaluateJson(client, `() => ({
-    officialHighlights: document.querySelectorAll('.pdf-viewer-shell .textLayer .highlight').length,
-    overlayLines: document.querySelectorAll('.pdf-highlight-overlay-line').length,
-    legacyUnderlines: document.querySelectorAll('.pdf-highlight-underline').length,
-    redTextMatches: document.querySelectorAll('.pdf-highlight-match').length,
-    status: document.querySelector('.status-bar')?.textContent ?? '',
-    overlayDetail: [...document.querySelectorAll('.pdf-highlight-overlay-line')].map((node) => {
-      const rect = node.getBoundingClientRect();
-      const page = node.closest('.page')?.getBoundingClientRect();
-      const style = getComputedStyle(node);
-      return {
-        width: rect.width,
-        height: rect.height,
-        backgroundColor: style.backgroundColor,
-        outOfPage: page ? rect.left < page.left || rect.right > page.right || rect.top < page.top || rect.bottom > page.bottom : true,
-        outOfViewport: rect.right < 0 || rect.left > window.innerWidth || rect.bottom < 0 || rect.top > window.innerHeight
-      };
-    })
-  })`);
-}
-
-async function waitForHighlightSnapshot(client, scenario) {
-  let snapshot = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    snapshot = await getHighlightSnapshot(client);
-
-    if (snapshot.legacyUnderlines > 0) {
-      return snapshot;
-    }
-
-    const hasEnoughOverlayLines =
-      snapshot.overlayLines >= (scenario.minOverlayLines ?? (scenario.expectUnderlines === 'positive' ? 1 : 0));
-
-    if (
-      scenario.expectUnderlines !== 'positive' ||
-      hasEnoughOverlayLines
-    ) {
-      return snapshot;
-    }
-
-    await wait(250);
-  }
-
-  return snapshot;
-}
-
-async function runScenario(scenario) {
-  const translationPath = path.join(outputDir, `${scenario.name}.json`);
-  const outputPath = path.join(outputDir, `${scenario.name}.png`);
-  await writeFile(
-    translationPath,
-    `${JSON.stringify([{ section: scenario.section, original: scenario.original, translation: '' }], null, 2)}\n`,
-    'utf8'
-  );
-
-  const appProcess = spawn(exe, [`--remote-debugging-port=${port}`], {
-    env: {
-      ...process.env,
-      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir
-    },
-    windowsHide: true,
-    stdio: 'ignore'
-  });
-
-  try {
-    const client = await createCdpClient(await waitForWebSocketUrl());
-    await client.send('Runtime.enable');
-    await client.send('Page.enable');
-    await loadPaperRecord(client, translationPath, `${scenario.name}.json`);
-    await clickButton(client, '\u6253\u5f00\u9605\u8bfb');
-    await waitForReaderSettled(client);
-
-    const snapshot = await waitForHighlightSnapshot(client, scenario);
-    const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
-    await writeFile(outputPath, Buffer.from(screenshot.data, 'base64'));
-    validateHighlightScenario(scenario, snapshot);
-
-    client.close();
-    return {
-      name: scenario.name,
-      screenshot: outputPath,
-      officialHighlights: snapshot.officialHighlights,
-      overlayLines: snapshot.overlayLines,
-      status: snapshot.status
-    };
-  } finally {
-    appProcess.kill();
-    await wait(500);
-  }
-}
-
-async function runAiQueueScenario() {
-  const scenarioName = 'ai-queue';
-  const translationPath = path.join(outputDir, `${scenarioName}.json`);
-  const outputPath = path.join(outputDir, `${scenarioName}.png`);
-  await writeFile(translationPath, '[]\n', 'utf8');
-
-  const appProcess = spawn(exe, [`--remote-debugging-port=${port}`], {
-    env: {
-      ...process.env,
-      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir
-    },
-    windowsHide: true,
-    stdio: 'ignore'
-  });
-
-  try {
-    const client = await createCdpClient(await waitForWebSocketUrl());
-    await client.send('Runtime.enable');
-    await client.send('Page.enable');
-    await loadPaperRecord(client, translationPath, `${scenarioName}.json`);
-    await clickButton(client, '\u6253\u5f00\u9605\u8bfb');
-    await waitForReaderSettled(client);
-    await client.send('Runtime.evaluate', {
-      expression: `
-        (() => {
-          const textarea = document.querySelector('.notes-panel textarea');
-          if (!textarea) return;
-          const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-          setter?.call(textarea, 'visual check note');
-          textarea.dispatchEvent(new Event('input', { bubbles: true }));
-          textarea.dispatchEvent(new Event('change', { bubbles: true }));
-        })()
-      `,
-      returnByValue: true
-    });
-    await wait(300);
-    await clickButton(client, 'AI \u6a21\u5f0f');
-    await waitForButtonEnabled(client, '\u751f\u6210/\u5237\u65b0 JSON \u7f13\u5b58');
-    await clickButton(client, '\u751f\u6210/\u5237\u65b0 JSON \u7f13\u5b58');
-    await wait(1000);
-
-    const snapshot = await evaluateJson(client, `() => ({
-      rows: [...document.querySelectorAll('.ai-item-row')].map((row) => row.textContent ?? ''),
-      summary: document.querySelector('.ai-summary')?.textContent ?? '',
-      summaryStats: [...document.querySelectorAll('.ai-summary-stat')].map((node) => node.textContent ?? ''),
-      settingsText: document.querySelector('.ai-settings-card')?.textContent ?? '',
-      commandBarText: document.querySelector('.ai-command-bar')?.textContent ?? '',
-      brandText: document.querySelector('.toolbar-brand')?.textContent ?? '',
-      brandImageWidth: document.querySelector('.toolbar-brand img')?.getBoundingClientRect().width ?? 0,
-      cacheCardOpen: document.querySelector('.ai-cache-card')?.open ?? null,
-      settingsCardOpen: document.querySelector('.ai-settings-card')?.open ?? null,
-      rowActionText: document.querySelector('.ai-item-row .ai-item-actions')?.textContent ?? '',
-      sectionGroups: [...document.querySelectorAll('.ai-section-group')].map((group) => ({
-        open: group.open,
-        text: group.querySelector('summary')?.textContent ?? ''
-      })),
-      toolbarBackground: getComputedStyle(document.querySelector('.toolbar')).backgroundColor,
-      activeModeBackground: getComputedStyle(document.querySelector('.mode-tab.active')).backgroundColor,
-      notesPanelExists: Boolean(document.querySelector('.notes-panel textarea')),
-      storedNotes: JSON.parse(localStorage.getItem('pdfTranslationReader:paperLibrary') ?? '[]')[0]?.notes ?? '',
-      listHasOwnScrollbar: (() => {
-        const list = document.querySelector('.ai-section-list');
-        return list ? list.scrollHeight > list.clientHeight : false;
-      })(),
-      fieldHintExists: Boolean(document.querySelector('.field-hint')),
-      fieldHelpExists: Boolean(document.querySelector('.field-help')),
-      officialHighlights: document.querySelectorAll('.pdf-viewer-shell .textLayer .highlight').length,
-      overlayLines: document.querySelectorAll('.pdf-highlight-overlay-line').length,
-      legacyUnderlines: document.querySelectorAll('.pdf-highlight-underline').length,
-      redTextMatches: document.querySelectorAll('.pdf-highlight-match').length,
-      status: document.querySelector('.status-bar')?.textContent ?? ''
-    })`);
-    validateAiQueueScenario(snapshot);
-
-    const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
-    await writeFile(outputPath, Buffer.from(screenshot.data, 'base64'));
-    client.close();
-    return { name: scenarioName, screenshot: outputPath, rowCount: snapshot.rows.length, summary: snapshot.summary };
-  } finally {
-    appProcess.kill();
-    await wait(500);
-  }
-}
-
-async function runAiTranslatedDetailScenario() {
-  const scenarioName = 'ai-translated-detail';
-  const translationPath = path.join(outputDir, `${scenarioName}.json`);
-  const outputPath = path.join(outputDir, `${scenarioName}.png`);
-  const translatedText = '基础模型最小化 $L=\\sum_i x_i^2$，并使用 $$\\max_\\theta \\mathbb{E}[R]$$ 表示目标。';
-  const expectedTranslationSnippet = '基础模型最小化';
-  await writeFile(
-    translationPath,
-    `${JSON.stringify(
-      [
-        {
-          section: 'Abstract',
-          original: 'Foundation models minimize $L=\\sum_i x_i^2$ and optimize $$\\max_\\theta \\mathbb{E}[R]$$.',
-          translation: translatedText,
-          translatedAt: '2026-05-27T08:00:00.000Z',
-          provider: 'kimi',
-          model: 'kimi-k2.6'
-        }
-      ],
-      null,
-      2
-    )}\n`,
-    'utf8'
-  );
-
-  const appProcess = spawn(exe, [`--remote-debugging-port=${port}`], {
-    env: {
-      ...process.env,
-      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir
-    },
-    windowsHide: true,
-    stdio: 'ignore'
-  });
-
-  try {
-    const client = await createCdpClient(await waitForWebSocketUrl());
-    await client.send('Runtime.enable');
-    await client.send('Page.enable');
-    await loadPaperRecord(client, translationPath, `${scenarioName}.json`);
-    await clickButton(client, '\u6253\u5f00\u9605\u8bfb');
-    await waitForReaderSettled(client);
-    await clickButton(client, 'AI \u6a21\u5f0f');
-    await wait(600);
-
-    const snapshot = await evaluateJson(client, `() => ({
-      detailText: document.querySelector('.ai-current-detail')?.textContent ?? '',
-      katexCount: document.querySelectorAll('.ai-current-detail .katex').length,
-      translatedBlockResize: (() => {
-        const block = document.querySelector('.ai-current-block.translated');
-        return block ? getComputedStyle(block).resize : '';
-      })(),
-      detailColumns: (() => {
-        const detail = document.querySelector('.ai-current-detail');
-        return detail ? getComputedStyle(detail).gridTemplateColumns : '';
-      })(),
-      translatedBlockMinHeight: (() => {
-        const block = document.querySelector('.ai-current-block.translated');
-        return block ? getComputedStyle(block).minHeight : '';
-      })(),
-      translationText: [...document.querySelectorAll('.ai-current-block.translated p')]
-        .map((node) => node.textContent ?? '')
-        .join('\\n')
-    })`);
-    if (!snapshot.translationText.includes(expectedTranslationSnippet)) {
-      throw new Error(`ai-translated-detail: expected AI translation detail, got ${JSON.stringify(snapshot)}`);
-    }
-    if (snapshot.katexCount < 2) {
-      throw new Error(`ai-translated-detail: expected rendered KaTeX formulas, got ${JSON.stringify(snapshot)}`);
-    }
-    if (snapshot.translatedBlockResize !== 'both') {
-      throw new Error(`ai-translated-detail: expected resizable AI translation block, got ${JSON.stringify(snapshot)}`);
-    }
-    if (snapshot.detailColumns.split(' ').length !== 1) {
-      throw new Error(`ai-translated-detail: expected vertical stacked detail layout, got ${JSON.stringify(snapshot)}`);
-    }
-    if (!snapshot.detailText.includes('kimi-k2.6')) {
-      throw new Error(`ai-translated-detail: expected model metadata in detail, got ${snapshot.detailText}`);
-    }
-
-    const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
-    await writeFile(outputPath, Buffer.from(screenshot.data, 'base64'));
-    client.close();
-    return { name: scenarioName, screenshot: outputPath, detailText: snapshot.detailText };
-  } finally {
-    appProcess.kill();
-    await wait(500);
-  }
-}
-
-async function runAiCacheAutoloadScenario() {
-  const scenarioName = 'ai-cache-autoload';
-  const translationPath = path.join(outputDir, `${scenarioName}.md`);
-  const aiCachePath = path.join(outputDir, `${scenarioName}.json`);
-  const outputPath = path.join(outputDir, `${scenarioName}.png`);
-  await writeFile(translationPath, '手动译文占位。\n', 'utf8');
-  await writeFile(
-    aiCachePath,
-    `${JSON.stringify(
-      [
-        {
-          section: 'Autoload',
-          original: 'Cached AI translation should load automatically.',
-          translation: '自动导入的 AI 缓存译文。',
-          translatedAt: '2026-05-27T08:00:00.000Z',
-          provider: 'openai',
-          model: 'gpt-5.5'
-        }
-      ],
-      null,
-      2
-    )}\n`,
-    'utf8'
-  );
-
-  const appProcess = spawn(exe, [`--remote-debugging-port=${port}`], {
-    env: {
-      ...process.env,
-      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir
-    },
-    windowsHide: true,
-    stdio: 'ignore'
-  });
-
-  try {
-    const client = await createCdpClient(await waitForWebSocketUrl());
-    await client.send('Runtime.enable');
-    await client.send('Page.enable');
-    await loadPaperRecord(client, translationPath, `${scenarioName}.md`, {
-      aiCachePath,
-      aiCacheName: `${scenarioName}.json`
-    });
-    await clickButton(client, '\u6253\u5f00\u9605\u8bfb');
-    await waitForReaderSettled(client);
-    await clickButton(client, 'AI \u6a21\u5f0f');
-    await wait(600);
-
-    const snapshot = await evaluateJson(client, `() => ({
-      detailText: document.querySelector('.ai-current-detail')?.textContent ?? '',
-      status: document.querySelector('.status-bar')?.textContent ?? ''
-    })`);
-    if (!snapshot.detailText.includes('自动导入的 AI 缓存译文')) {
-      throw new Error(`ai-cache-autoload: expected saved AI cache in AI mode detail, got ${JSON.stringify(snapshot)}`);
-    }
-    const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
-    await writeFile(outputPath, Buffer.from(screenshot.data, 'base64'));
-    client.close();
-    return { name: scenarioName, screenshot: outputPath, detailText: snapshot.detailText };
-  } finally {
-    appProcess.kill();
-    await wait(500);
-  }
-}
-
-async function runPaperGridScenario() {
-  const scenarioName = 'paper-grid';
-  const translationPath = path.join(outputDir, `${scenarioName}.json`);
-  const outputPath = path.join(outputDir, `${scenarioName}.png`);
-  await writeFile(translationPath, '[]\n', 'utf8');
-
-  const appProcess = spawn(exe, [`--remote-debugging-port=${port}`], {
-    env: {
-      ...process.env,
-      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir
-    },
-    windowsHide: true,
-    stdio: 'ignore'
-  });
-
-  try {
-    const client = await createCdpClient(await waitForWebSocketUrl());
-    await client.send('Runtime.enable');
-    await client.send('Page.enable');
-    await loadPaperRecord(client, translationPath, `${scenarioName}.json`, {
-      chineseTitle: '公式化论文笔记',
-      englishTitle: 'Spreadsheet Notes',
-      notes: '关键目标 $L=\\sum_i x_i^2$',
-      sheetCells: {
-        innovation: '提出 $L=\\sum_i x_i^2$ 形式的约束。',
-        limitations: '需要更多真实机器人实验。'
-      }
-    });
-    await wait(1500);
-
-    const snapshot = await evaluateJson(client, `() => ({
-      hasGrid: Boolean(document.querySelector('.paper-grid .ag-root')),
-      headerText: document.querySelector('.paper-grid .ag-header')?.textContent ?? '',
-      toolbarText: document.querySelector('.paper-grid-toolbar')?.textContent ?? '',
-      aiButtonText: [...document.querySelectorAll('.home-header-actions button')].map((button) => button.textContent ?? '').join('|'),
-      pinnedLeftWidth: document.querySelector('.ag-pinned-left-cols-container')?.getBoundingClientRect().width ?? 0,
-      katexCount: document.querySelectorAll('.home-page .katex').length
-    })`);
-    if (!snapshot.hasGrid) {
-      throw new Error(`paper-grid: expected AG Grid paper library, got ${JSON.stringify(snapshot)}`);
-    }
-    if (!snapshot.headerText.includes('创新点') || !snapshot.headerText.includes('局限点')) {
-      throw new Error(`paper-grid: expected research spreadsheet columns, got ${snapshot.headerText}`);
-    }
-    if (!snapshot.toolbarText.includes('表头固定') || snapshot.pinnedLeftWidth <= 0) {
-      throw new Error(`paper-grid: expected frozen header and pinned title column, got ${JSON.stringify(snapshot)}`);
-    }
-    if (!snapshot.aiButtonText.includes('AI 填当前单元格')) {
-      throw new Error(`paper-grid: expected AI fill-cell action, got ${snapshot.aiButtonText}`);
-    }
-    if (snapshot.katexCount <= 0) {
-      throw new Error(`paper-grid: expected formula rendering inside grid cells, got ${JSON.stringify(snapshot)}`);
-    }
-
-    const screenshot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
-    await writeFile(outputPath, Buffer.from(screenshot.data, 'base64'));
-    client.close();
-    return { name: scenarioName, screenshot: outputPath, headerText: snapshot.headerText };
-  } finally {
-    appProcess.kill();
-    await wait(500);
-  }
-}
-
-async function loadPaperRecord(client, translationPath, translationName, extraPaperFields = {}) {
+async function loadPaperRecord(client, translationPath, extraPaperFields = {}) {
   const paper = {
-    id: `visual-check-${Date.now()}`,
+    id: 'visual-check-paper',
     pdfPath,
     pdfName: path.basename(pdfPath),
     translationPath,
-    translationName,
-    chineseTitle: 'visual check',
-    englishTitle: 'Visual Check',
-    journal: '',
-    authors: '',
-    year: '',
-    notes: '',
+    translationName: path.basename(translationPath),
+    chineseTitle: '视觉检查论文',
+    englishTitle: 'Visual Check Paper',
+    journal: 'arXiv',
+    authors: 'Visual Check',
+    year: '2026',
+    notes: '用于检查研究表格和透明图标。',
     lastOpenedAt: new Date().toISOString(),
     lastPage: 1,
     ...extraPaperFields
@@ -605,197 +170,104 @@ async function loadPaperRecord(client, translationPath, translationName, extraPa
   await client.send('Runtime.evaluate', {
     expression: `
       localStorage.setItem('pdfTranslationReader:paperLibrary', ${JSON.stringify(JSON.stringify([paper]))});
+      localStorage.removeItem('pdfTranslationReader:researchWorkbook');
+      localStorage.removeItem('pdfTranslationReader:researchSheetLinks');
       location.reload();
     `
   });
   await wait(1500);
 }
 
-function validateHighlightScenario(scenario, snapshot) {
-  if (snapshot.redTextMatches !== 0) {
-    throw new Error(`${scenario.name}: expected no red text overlay, got ${snapshot.redTextMatches}`);
-  }
+async function runHomeScenario(client) {
+  const snapshot = await evaluateJson(client, `() => ({
+    hasHome: Boolean(document.querySelector('.home-page')),
+    hasAgGrid: Boolean(document.querySelector('.ag-root, .paper-grid')),
+    hasPaperTable: Boolean(document.querySelector('.paper-table')),
+    headerText: document.querySelector('.paper-table thead')?.textContent ?? '',
+    headerActions: [...document.querySelectorAll('.home-header-actions button')].map((button) => button.textContent?.trim()),
+    markStyle: (() => {
+      const mark = document.querySelector('.home-header-mark');
+      if (!mark) return null;
+      const style = getComputedStyle(mark);
+      return { background: style.backgroundColor, border: style.borderTopWidth, boxShadow: style.boxShadow, borderRadius: style.borderRadius };
+    })(),
+    imageAlpha: (() => {
+      const img = document.querySelector('.home-header-mark');
+      if (!img || !img.complete) return null;
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      return [
+        ctx.getImageData(0, 0, 1, 1).data[3],
+        ctx.getImageData(canvas.width - 1, 0, 1, 1).data[3],
+        ctx.getImageData(0, canvas.height - 1, 1, 1).data[3],
+        ctx.getImageData(canvas.width - 1, canvas.height - 1, 1, 1).data[3]
+      ];
+    })()
+  })`);
 
-  if (snapshot.legacyUnderlines !== 0) {
-    throw new Error(`${scenario.name}: expected no legacy custom underlines, got ${snapshot.legacyUnderlines}`);
+  if (!snapshot.hasHome || !snapshot.hasPaperTable) {
+    throw new Error(`home: expected lightweight paper table, got ${JSON.stringify(snapshot)}`);
   }
-
-  if (snapshot.overlayDetail.some((line) => line.outOfPage)) {
-    throw new Error(`${scenario.name}: overlay highlight escaped page bounds`);
+  if (snapshot.hasAgGrid || /创新点|局限点|复现计划|后续/.test(snapshot.headerText)) {
+    throw new Error(`home: paper library should not contain research spreadsheet columns, got ${snapshot.headerText}`);
   }
-
-  if (snapshot.overlayDetail.some((line) => line.height > 1.5)) {
-    throw new Error(`${scenario.name}: overlay highlight line should be 1px`);
+  if (!snapshot.headerActions.includes('研究表格')) {
+    throw new Error(`home: expected research sheet entry, got ${JSON.stringify(snapshot.headerActions)}`);
   }
-
-  if (scenario.expectUnderlines === 0 && snapshot.officialHighlights !== 0) {
-    throw new Error(`${scenario.name}: expected zero official highlights, got ${snapshot.officialHighlights}`);
+  if (!snapshot.imageAlpha || snapshot.imageAlpha.some((alpha) => alpha !== 0)) {
+    throw new Error(`home: expected transparent icon corners, got ${JSON.stringify(snapshot.imageAlpha)}`);
   }
-
-  if (scenario.expectUnderlines === 'positive' && snapshot.overlayLines <= 0) {
-    throw new Error(`${scenario.name}: expected visible merged overlay lines`);
-  }
-
   if (
-    scenario.name === 'title-high-confidence' &&
-    snapshot.officialHighlights > 0 &&
-    snapshot.overlayLines >= snapshot.officialHighlights
+    snapshot.markStyle?.background !== 'rgba(0, 0, 0, 0)' ||
+    snapshot.markStyle?.border !== '0px' ||
+    snapshot.markStyle?.boxShadow !== 'none'
   ) {
-    throw new Error(
-      `${scenario.name}: expected merged overlay lines, got ${snapshot.overlayLines} overlay lines for ${snapshot.officialHighlights} PDF.js spans`
-    );
+    throw new Error(`home: expected no icon wrapper background/border/shadow, got ${JSON.stringify(snapshot.markStyle)}`);
   }
 
-  if (scenario.minOverlayLines && snapshot.overlayLines < scenario.minOverlayLines) {
-    throw new Error(
-      `${scenario.name}: expected at least ${scenario.minOverlayLines} merged overlay lines for a full paragraph, got ${snapshot.overlayLines}`
-    );
-  }
-
-  if (
-    scenario.expectUnderlines === 'positive' &&
-    !snapshot.overlayDetail.some((line) => !line.outOfViewport)
-  ) {
-    throw new Error(`${scenario.name}: expected at least one merged overlay line inside the viewport`);
-  }
-
-  if (scenario.expectStatus === 'full' && !snapshot.status.includes('PDF.js \u5b98\u65b9\u641c\u7d22')) {
-    throw new Error(`${scenario.name}: expected a full-highlight status, got "${snapshot.status}"`);
-  }
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'home.png'), Buffer.from(shot.data, 'base64'))
+  );
+  return snapshot;
 }
 
-function validateAiQueueScenario(snapshot) {
-  if (snapshot.rows.length === 0) {
-    throw new Error('ai-queue: expected extracted paragraph rows');
+async function runResearchSheetScenario(client) {
+  await clickSelector(client, '.home-header-actions button:first-child');
+  await waitForAppReady(client);
+  const canvasStatus = await waitForResearchSheetCanvas(client);
+
+  const snapshot = await evaluateJson(client, `() => ({
+    hasResearchSheet: Boolean(document.querySelector('.research-sheet-page')),
+    hasUniver: Boolean(document.querySelector('.univer-container')),
+    commandText: document.querySelector('.research-command-bar')?.textContent ?? '',
+    hasAiButton: [...document.querySelectorAll('button')].some((button) => button.textContent?.includes('AI 填此单元格')),
+    titleText: document.querySelector('.research-sheet-header')?.textContent ?? '',
+    markStyle: (() => {
+      const mark = document.querySelector('.research-sheet-title img');
+      if (!mark) return null;
+      const style = getComputedStyle(mark);
+      return { background: style.backgroundColor, border: style.borderTopWidth, boxShadow: style.boxShadow };
+    })(),
+    canvasStatus: ${JSON.stringify(canvasStatus)}
+  })`);
+
+  if (!snapshot.hasResearchSheet || !snapshot.hasUniver || !snapshot.hasAiButton) {
+    throw new Error(`researchSheet: expected Univer surface and cell AI action, got ${JSON.stringify(snapshot)}`);
+  }
+  if (!snapshot.commandText.includes('绑定论文到当前行') || !snapshot.titleText.includes('研究表格')) {
+    throw new Error(`researchSheet: expected independent sheet controls, got ${JSON.stringify(snapshot)}`);
+  }
+  if (snapshot.markStyle?.background !== 'rgba(0, 0, 0, 0)' || snapshot.markStyle?.border !== '0px') {
+    throw new Error(`researchSheet: expected transparent icon without wrapper, got ${JSON.stringify(snapshot.markStyle)}`);
   }
 
-  if (snapshot.summaryStats.length !== 4) {
-    throw new Error(`ai-queue: expected 4 structured summary stats, got ${snapshot.summaryStats.length}`);
-  }
-
-  if (snapshot.listHasOwnScrollbar) {
-    throw new Error('ai-queue: expected the right pane to own vertical scrolling, not the candidate list');
-  }
-
-  if (snapshot.settingsText.includes('API Key \u5df2\u4fdd\u5b58')) {
-    throw new Error('ai-queue: visual check leaked real AI settings instead of isolated test user data');
-  }
-
-  if (!snapshot.notesPanelExists || snapshot.storedNotes !== 'visual check note') {
-    throw new Error(`ai-queue: expected reader notes to auto-save into paper library, got ${JSON.stringify(snapshot)}`);
-  }
-
-  if (snapshot.brandText.trim() || snapshot.brandImageWidth < 20) {
-    throw new Error(`ai-queue: expected compact icon-only toolbar brand, got ${JSON.stringify(snapshot)}`);
-  }
-
-  if (!snapshot.commandBarText.includes('AI 翻译当前段') || !snapshot.commandBarText.includes('批量翻译未缓存')) {
-    throw new Error(`ai-queue: expected sticky AI command bar actions, got ${snapshot.commandBarText}`);
-  }
-
-  if (!snapshot.rowActionText.includes('翻译') || !snapshot.rowActionText.includes('重译')) {
-    throw new Error(`ai-queue: expected per-row translate actions, got ${snapshot.rowActionText}`);
-  }
-
-  if (snapshot.sectionGroups.length === 0) {
-    throw new Error('ai-queue: expected AI queue to be grouped by section');
-  }
-
-  if (!snapshot.sectionGroups.some((group) => group.text.includes('Abstract') && group.text.includes('待翻译'))) {
-    throw new Error(`ai-queue: expected section summary stats, got ${JSON.stringify(snapshot.sectionGroups)}`);
-  }
-
-  if (snapshot.fieldHintExists || !snapshot.fieldHelpExists) {
-    throw new Error(`ai-queue: expected compact Base URL help icon without inline hint, got ${JSON.stringify(snapshot)}`);
-  }
-
-  if (snapshot.cacheCardOpen !== false) {
-    throw new Error(`ai-queue: expected PDF cache panel to be collapsed by default, got ${snapshot.cacheCardOpen}`);
-  }
-
-  if (snapshot.settingsCardOpen !== false) {
-    throw new Error(`ai-queue: expected AI settings panel to be collapsed by default, got ${snapshot.settingsCardOpen}`);
-  }
-
-  if (snapshot.toolbarBackground !== 'rgb(8, 8, 8)' || snapshot.activeModeBackground !== 'rgb(17, 17, 17)') {
-    throw new Error(`ai-queue: expected monochrome premium UI colors, got ${JSON.stringify(snapshot)}`);
-  }
-
-  const joinedRows = snapshot.rows.join('\n');
-  const forbiddenSnippets = [
-    'World Model',
-    'Demonstration Data',
-    'Autonomous Data',
-    'Non-Robot Data',
-    'Multimodal Web Data',
-    'Language Instructions',
-    'Subgoal Images',
-    'Robot Data',
-    'Episode Metadata',
-    'Physical Intelligence',
-    'I am a part of all that I have met',
-    'Alfred, Lord Tennyson',
-    'Bo Ai',
-    'Ali Amin',
-    'Ashwin Balakrishna'
-  ];
-  const leakedSnippet = forbiddenSnippets.find((snippet) => joinedRows.includes(snippet));
-  if (leakedSnippet) {
-    const leakedRow = snapshot.rows.find((row) => row.includes(leakedSnippet)) ?? '';
-    throw new Error(`ai-queue: leaked diagram label "${leakedSnippet}" into translation queue: ${leakedRow}`);
-  }
-
-  if (/[�\u25a0\u25a1]/u.test(joinedRows)) {
-    throw new Error('ai-queue: leaked unreadable glyph noise into translation queue');
-  }
-
-  if (/π\s+0\s+\.\s+7/u.test(joinedRows)) {
-    throw new Error('ai-queue: leaked spaced model token "π 0 . 7" into translation queue');
-  }
-
-  const firstRow = snapshot.rows[0] ?? '';
-  if (
-    !snapshot.sectionGroups.some((group) => group.text.includes('Abstract')) ||
-    !firstRow.includes('including demonstrations')
-  ) {
-    throw new Error(
-      `ai-queue: expected the cross-page Abstract continuation to stay in the first paragraph row: ${firstRow}`
-    );
-  }
-
-  const detachedAbstractContinuation = snapshot.rows
-    .slice(1)
-    .find((row) => /including demonstrations, potentially suboptimal/iu.test(row));
-  if (detachedAbstractContinuation) {
-    throw new Error(`ai-queue: detached Abstract continuation into a separate row: ${detachedAbstractContinuation}`);
-  }
-
-  const introRow = snapshot.rows.find((row) => row.includes('Foundation models'));
-  if (!introRow || !introRow.includes('capabilities emerge from training')) {
-    throw new Error(
-      `ai-queue: expected first Introduction body row to contain the left-column paragraph continuation: ${snapshot.rows
-        .slice(0, 5)
-        .join(' | ')}`
-    );
-  }
-  if (introRow.includes('express with language alone')) {
-    throw new Error(`ai-queue: merged right-column text into first Introduction body row: ${introRow}`);
-  }
-
-  if (
-    snapshot.officialHighlights !== 0 ||
-    snapshot.overlayLines !== 0 ||
-    snapshot.legacyUnderlines !== 0 ||
-    snapshot.redTextMatches !== 0
-  ) {
-    throw new Error(
-      `ai-queue: AI mode should not draw PDF highlights while reviewing extracted candidates, got ${snapshot.officialHighlights} official highlights, ${snapshot.overlayLines} overlay lines, ${snapshot.legacyUnderlines} legacy underlines and ${snapshot.redTextMatches} red text overlays`
-    );
-  }
-
-  if (snapshot.status.includes('\u9ad8\u4eae')) {
-    throw new Error(`ai-queue: AI mode leaked a highlight status message: ${snapshot.status}`);
-  }
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'research-sheet.png'), Buffer.from(shot.data, 'base64'))
+  );
+  return snapshot;
 }
 
 async function main() {
@@ -809,15 +281,48 @@ async function main() {
   await mkdir(outputDir, { recursive: true });
   await rm(visualUserDataDir, { recursive: true, force: true });
   await mkdir(visualUserDataDir, { recursive: true });
-  const results = [];
-  results.push(await runPaperGridScenario());
-  for (const scenario of scenarios) {
-    results.push(await runScenario(scenario));
+
+  const translationPath = path.join(outputDir, 'visual-check.json');
+  await writeFile(
+    translationPath,
+    `${JSON.stringify(
+      [
+        {
+          section: 'Abstract',
+          original: 'Foundation models work on the principle that generalist capabilities emerge from training on large and diverse datasets.',
+          translation: ''
+        }
+      ],
+      null,
+      2
+    )}\n`,
+    'utf8'
+  );
+
+  const appProcess = spawn(exe, [`--remote-debugging-port=${port}`], {
+    env: {
+      ...process.env,
+      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir
+    },
+    windowsHide: true,
+    stdio: 'ignore'
+  });
+
+  try {
+    const client = await createCdpClient(await waitForWebSocketUrl());
+    await client.send('Runtime.enable');
+    await client.send('Page.enable');
+    await loadPaperRecord(client, translationPath);
+    await waitForAppReady(client);
+
+    const home = await runHomeScenario(client);
+    const researchSheet = await runResearchSheetScenario(client);
+    client.close();
+    console.log(JSON.stringify({ pdfPath, home, researchSheet, outputDir }, null, 2));
+  } finally {
+    appProcess.kill();
+    await wait(500);
   }
-  results.push(await runAiTranslatedDetailScenario());
-  results.push(await runAiCacheAutoloadScenario());
-  results.push(await runAiQueueScenario());
-  console.log(JSON.stringify({ pdfPath, results }, null, 2));
 }
 
 main().catch((error) => {

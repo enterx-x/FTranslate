@@ -1,186 +1,73 @@
 # PDF Translation Reader
 
-一个本地离线的 Windows 桌面端“PDF 原文 + 中文翻译交互阅读器”。
+本项目是一个本地 Windows 桌面端论文阅读工具，用于“PDF 原文 + 中文翻译”交互阅读，并提供 AI 翻译缓存、阅读笔记、论文库和独立研究表格。
 
 技术栈：
 
-- Electron
-- React
-- TypeScript
-- Vite
-- PDF.js
-- electron-builder
-- AG Grid Community（MIT，用于论文库扩展表格）
+- Electron + React + TypeScript + Vite
+- PDF.js，本地渲染 PDF，不依赖在线 PDF 服务
+- KaTeX，用于右侧译文、笔记和表格内公式显示
+- Univer `0.24.0`，用于独立研究表格模块
+- electron-builder，生成 Windows NSIS 安装包
 
-应用支持两种工作流：手动模式保持本地阅读和外部 AI 提示词复制；AI 模式可选接入 OpenAI-compatible API（OpenAI、DeepSeek、Kimi 或自定义地址）逐段翻译。PDF 文本提取只使用 PDF.js 文本层，不做 OCR；扫描版图片 PDF 无法自动提取正文。
+## 运行
 
-## 功能
-
-- 打开本地英文 PDF。
-- PDF 左侧连续滚动阅读，支持上一页、下一页、页码跳转、按钮缩放、`Ctrl + 鼠标滚轮` 按鼠标位置缩放、空格键拖拽或鼠标中键拖拽平移。
-- PDF 文本层支持鼠标选中复制；JSON 当前段会尽量在 PDF 内按完整段落、句子或模糊片段高亮。
-- 右侧原文和译文支持 KaTeX 公式渲染，行内公式使用 `$...$`，独立公式使用 `$$...$$`。
-- 从 PDF 提取出的裸公式行也会尽量转换为 KaTeX 显示，减少算法伪代码和公式阅读时的乱码感。
-- AI 模式当前段译文区改为上下堆叠：原文在上、译文在下，译文框支持双向拖拽调整大小，方便阅读长段落。
-- 右侧提供“阅读笔记”折叠面板，按论文自动保存到本机论文库。
-- 界面采用简洁黑白灰风格，顶部工具栏只保留小圆品牌图标，关键状态使用高对比黑白样式。
-- 默认进入“论文库”主页，按表格管理看过的论文。
-- 论文库使用类 Excel 表格管理论文，支持固定表头、固定中文标题列、列宽拖拽、排序、筛选和单元格编辑。
-- 论文库记录中文标题、英文标题、期刊、作者、年份、阅读笔记、创新点、局限点、方法、数据/任务、指标/结果、复现计划、后续 idea、最近打开时间和上次阅读页码。
-- 论文库单元格支持 `$...$` 和 `$$...$$` 公式渲染，方便记录损失函数、约束和关键公式。
-- 打开本地翻译文件，支持 `.json`、`.md`、`.markdown`、`.txt`。
-- JSON 翻译模式：
-  - 默认只显示英文原文；
-  - 点击“翻译当前段”显示中文译文；
-  - 点击“上一段原文”或“下一段原文”会自动隐藏译文；
-  - 支持编辑当前段译文；
-  - 点击“保存翻译”写回本地 JSON 文件。
-- Markdown 翻译模式：
-  - 按空行切分为多个中文段落；
-  - 支持上一段/下一段切换；
-  - 点击“保存翻译”写回 Markdown 文件。
-- 手动模式：
-  - 右侧提供“AI 提示词”区域；
-  - 可一键复制当前段或全文 JSON 生成提示词，拿去给外部 AI 使用。
-- AI 模式：
-  - 支持 OpenAI、DeepSeek、Kimi、Custom 四类 OpenAI-compatible 接口；
-  - OpenAI preset 包含官方模型选项，例如 `gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.4-nano`、`gpt-5.2`、`gpt-5.2-pro`、`gpt-5.1`、`gpt-5` 等；
-  - API Key 通过 Electron `safeStorage` 优先加密保存到本机；
-  - 支持刷新当前 Provider 的模型列表，优先使用服务商 `/models` 返回的可用模型；
-  - 支持查询 Kimi、DeepSeek 余额，以及 OpenAI 近 7 天成本概览；
-  - 可从 PDF 文本层生成 JSON 缓存草稿；
-  - AI 翻译队列按论文小标题分组，例如 Abstract、Introduction、子章节标题，组内保留自然段；
-  - 翻译完成后逐段写回 JSON 缓存，避免重复消耗 token；
-  - 当前段操作条固定在 AI 模式顶部；队列中每一行也提供“翻译 / 重译”，不需要上下滚动找按钮；
-  - 保存过的 AI JSON 缓存会绑定到当前论文记录，下次从论文库打开时自动导入；
-  - 提示词会要求模型保留 LaTeX 定界符，便于右侧公式排版。
-- 论文库 AI 填表：
-  - 在论文库中选中“创新点、局限点、方法、数据/任务、指标/结果、复现计划、后续 idea”等研究列单元格；
-  - 点击“AI 填当前单元格”；
-  - 应用会读取该论文的 AI JSON 缓存或翻译文件内容，结合标题和阅读笔记生成单元格内容；
-  - 结果仍保存在本机 `localStorage` 的论文库记录中。
-- 新建翻译项目：
-  - 依次选择 PDF 和翻译文件；
-  - 自动加入论文库并保存到 `localStorage`；
-  - 下次启动默认显示论文库，可从表格继续打开阅读。
-- 导出双语 Markdown：
-  - 当前翻译文件为 JSON 时可用；
-  - 导出为 `## section`、`Original`、`Translation` 结构。
-- 可选全局快捷键：
-  - 应用运行时按 `Ctrl + Alt + P` 可把窗口显示到前台；
-  - 应用退出时会自动释放快捷键。
-
-## 安装依赖
+安装依赖：
 
 ```bash
 npm install
 ```
 
-## 开发模式启动
+开发模式：
 
 ```bash
 npm run dev
 ```
 
-该命令会启动 Vite 开发服务器，并打开 Electron 桌面窗口。
-
-## 构建检查
+完整构建检查：
 
 ```bash
 npm run build
 ```
 
-该命令会依次运行：
-
-- `npm test`
-- TypeScript 类型检查
-- Vite 前端构建
-- Electron 主进程构建
-
-## 视觉检查
-
-```bash
-npm run visual:check
-```
-
-该命令会启动打包后的 `dist/win-unpacked/PDF Translation Reader.exe`，用真实论文做自动截图检查。
-
-默认测试文件路径为：
-
-```text
-D:\GPT浏览器下载\2604.15483v2.pdf
-```
-
-如需指定其它 PDF：
-
-```bash
-set VISUAL_CHECK_PDF=D:\path\to\paper.pdf
-npm run visual:check
-```
-
-截图输出到：
-
-```text
-.tmp-visual-check/
-```
-
-检查内容包括：
-
-- PDF 当前段高亮是否越界；
-- 高亮线是否保持细线；
-- AI 队列是否混入明显图中文字噪声；
-- AI 当前译文框是否可双向调整大小，且原文/译文是否上下堆叠；
-- 论文阅读笔记是否自动保存到论文库；
-- 论文记录中的 AI JSON 缓存是否能在下次打开时自动导入；
-- 右侧公式是否成功渲染为 KaTeX；
-- 顶部小圆品牌图标、AI 快捷操作条、section 分组队列、每行翻译按钮和折叠面板是否正常显示。
-
-## 生成 Windows 安装包
+生成 Windows 安装包：
 
 ```bash
 npm run dist
 ```
 
-打包产物位于：
+打包产物在 `dist/` 目录。安装 `dist/PDF Translation Reader Setup 0.1.0.exe` 后，会自动创建桌面快捷方式和开始菜单快捷方式，双击 `PDF Translation Reader` 即可打开。
 
-```text
-dist/
-```
+## 桌面打包配置
 
-当前 `electron-builder` 配置：
+`package.json` 已配置：
 
 - `appId`: `com.local.pdf.translation.reader`
 - `productName`: `PDF Translation Reader`
-- Windows target: `nsis`
-- 安装后创建桌面快捷方式
-- 安装后创建开始菜单快捷方式
-- 快捷方式名称：`PDF Translation Reader`
-- 安装包和桌面快捷方式图标：`assets/icon.ico`
+- `win.target`: `nsis`
+- `nsis.createDesktopShortcut`: `true`
+- `nsis.createStartMenuShortcut`: `true`
+- `nsis.shortcutName`: `PDF Translation Reader`
+- 图标：`assets/icon.ico`
 
-`npm run dist` 已配置 `ELECTRON_BUILDER_BINARIES_MIRROR`，用于下载 NSIS 等 electron-builder 打包工具二进制，减少 GitHub 连接失败导致的打包中断。
+图标资源使用透明边缘版本。前端品牌图标为 `src/renderer/assets/brand-mark.png`，安装包/桌面快捷方式图标为 `assets/icon.ico`。
 
-安装完成后，双击桌面上的 `PDF Translation Reader` 快捷方式即可打开应用。
+## 主要功能
 
-## 使用方式
+- 论文库：只保留论文主要信息，包括中文标题、英文标题、期刊、作者、年份、最近打开时间、上次页码、PDF/翻译/AI 缓存状态。
+- 阅读器：左侧连续滚动 PDF，支持页码跳转、上一页/下一页、按钮缩放、`Ctrl + 鼠标滚轮` 缩放、文本选择复制。
+- 手动模式：导入 JSON/Markdown/TXT 翻译文件，逐段显示原文和译文，并提供外部 AI JSON 提示词复制。
+- AI 模式：支持 OpenAI、DeepSeek、Kimi 和 Custom OpenAI-compatible API；翻译后逐段保存 JSON 缓存，避免重复消耗 token。
+- 阅读笔记：按论文自动保存到本机论文库记录。
+- 独立研究表格：从论文库入口打开，使用 Univer 提供接近 Excel 的表格体验。
 
-### 新建翻译项目
+## 独立研究表格
 
-1. 在“论文库”主页点击“新建翻译项目”。
-2. 先选择英文原文 PDF。
-3. 再选择翻译文件，支持 JSON 或 Markdown。
-4. 应用会把论文加入主页表格。
-5. 后续可在主页点击“打开阅读”继续阅读。
+研究表格是独立模块，不再塞进论文库。默认工作表为“论文研究表”，第一行冻结，默认列包括：
 
-### 编辑论文信息
-
-主页论文库是类 Excel 表格。双击或单击可编辑单元格，可以修改：
-
+- 论文
 - 中文标题
 - 英文标题
-- 期刊
-- 作者
-- 年份
-- 阅读笔记
 - 创新点
 - 局限点
 - 方法
@@ -188,113 +75,38 @@ dist/
 - 指标/结果
 - 复现计划
 - 后续 idea
+- 备注
 
-这些信息保存在本机 `localStorage`，不上传到任何在线服务。
+Univer 内置支持基础表格能力，包括增删行列、拖拽列宽、复制粘贴、编辑单元格、输入公式、调整字体大小、字体颜色、填充颜色和单元格格式。工作簿保存到本机 `localStorage`：
 
-表格支持固定表头、固定中文标题列、拖拽列宽、排序和筛选。单元格中输入 `$L=\sum_i x_i^2$` 这类 LaTeX 公式后会自动渲染。
+- `pdfTranslationReader:researchWorkbook`
+- `pdfTranslationReader:researchSheetLinks`
 
-### 单独打开文件
+每行可以绑定一篇论文。从论文库点击“表格定位”会自动创建或定位到该论文对应行。
 
-也可以分别点击：
+## 单元格级 AI 填写
 
-- “打开 PDF”
-- “打开翻译文件”
+研究表格中选中任意正文单元格后，可以点击“AI 填此单元格”。AI 只填写当前单元格，不会一键填全表。
 
-用于替换当前阅读中的 PDF 或翻译稿。
+AI 上下文包括：
 
-### 保存译文
+- 当前列名和单元格地址
+- 当前单元格已有内容
+- 同一行其它单元格内容
+- 绑定论文的元信息
+- 论文 PDF、翻译文件、AI 缓存和阅读笔记
 
-编辑当前段译文后，点击“保存翻译”写入本地文件。
+Provider 策略：
 
-JSON 文件会保存为数组结构；Markdown 文件会按空行分隔段落保存。
+- OpenAI：使用 Responses API 的 PDF `input_file`。
+- Kimi：使用 Files API 上传 PDF，`purpose=file-extract`，提取后再进入 chat completions。
+- DeepSeek/Custom：使用本地 PDF.js 文本提取作为上下文兜底，因为 DeepSeek 官方 chat completions 没有等价 PDF 上传接口。
 
-### PDF 阅读操作
+PDF 上下文会按 provider、PDF 路径、文件大小和修改时间做本地缓存，减少重复上传或重复提取。
 
-- 普通鼠标滚轮：上下连续滚动。
-- `Ctrl + 鼠标滚轮`：按鼠标所在位置放大或缩小。
-- 空格键按住后左键拖动：平移 PDF 视图。
-- 鼠标中键拖动：平移 PDF 视图。
-- 普通左键拖选：选中 PDF 文本并复制。
+## 翻译文件格式
 
-### 手动模式提示词
-
-右侧切到“手动模式”后，在“AI 提示词”区域点击：
-
-- “复制当前段 JSON 提示词”：让外部 AI 只翻译当前段；
-- “复制全文 JSON 提示词”：让外部 AI 按数组输出整篇 JSON。
-
-提示词会要求外部 AI 只返回 JSON 数组，不要使用 Markdown 代码块，不要输出解释文字。
-
-### AI 模式
-
-1. 右侧切到“AI 模式”。
-2. 选择 Provider：OpenAI、DeepSeek、Kimi 或 Custom。
-3. 填写 `Base URL`、`Model` 和 `API Key`，点击“保存 AI 设置”。
-4. 可点击“刷新模型”从当前 Provider 拉取可用模型列表。
-5. 可点击“刷新余额”查看 Kimi/DeepSeek 余额或 OpenAI 近 7 天成本。
-6. 打开 PDF 后等待文本层提取完成，展开“PDF 提取与缓存”，点击“生成/刷新 JSON 缓存”。
-7. 点击“保存 AI JSON”选择缓存文件位置。
-8. 点击顶部“AI 翻译当前段”或“批量翻译未缓存”，也可以在队列某一行直接点击“翻译 / 重译”。
-
-AI 模式会跳过已有 `translation` 的段落；如果要重新调用 API，使用“重新翻译当前段”。
-
-AI 队列会按论文标题折叠分组。每个标题组显示总自然段数、已缓存数量和待翻译数量；展开标题组后可以选择任意自然段并立即翻译，不需要滚回顶部寻找按钮。
-
-AI 设置中的 Base URL 旁有一个小问号提示。鼠标悬停可查看 Kimi API 地址说明，界面不会再固定显示大段提示文字。
-
-保存 AI JSON 后，缓存路径会写入当前论文库记录。下次在“论文库”点击同一篇论文的“打开阅读”，应用会同时读取 PDF、手动翻译文件和 AI JSON 缓存，并在 AI 模式中直接显示已缓存译文。
-
-### 阅读笔记
-
-右侧顶部有“阅读笔记”折叠面板。展开后可以记录：
-
-- 论文核心结论；
-- 公式推导和符号解释；
-- 复现实验计划；
-- 对照实验或消融实验想法；
-- 后续论文 idea。
-
-笔记内容会自动保存到本机论文库的当前论文记录中，不会写入 PDF，也不会上传到任何在线服务。
-
-### 公式显示
-
-右侧阅读区支持常见 LaTeX 定界符：
-
-- 行内公式：`$L=\sum_i x_i^2$`
-- 独立公式：`$$\max_\theta \mathbb{E}[R]$$`
-- 也支持 `\(...\)` 和 `\[...\]`
-
-JSON 或 Markdown 译文中保留这些定界符后，应用会自动渲染公式。AI 模式的系统提示词和手动模式复制提示词都已经加入“保留 LaTeX 定界符”的要求。
-
-从 PDF 文本层提取出的算法伪代码或独立公式行，即使没有 `$...$` 定界符，也会尽量按本地规则转换成 KaTeX 展示；普通正文不会被强制当作公式处理。
-
-### 导出双语 Markdown
-
-当前翻译文件为 JSON 时，点击“导出双语 Markdown”。
-
-导出格式示例：
-
-```markdown
-## Abstract
-
-**Original**
-
-We present a new robotic foundation model, called π0.7...
-
-**Translation**
-
-我们提出一种新的机器人基础模型，称为 π0.7...
-```
-
-## JSON 翻译文件格式
-
-JSON 文件必须是数组，每一项包含：
-
-- `section`
-- `original`
-- `translation`
-
-示例：
+JSON 格式必须是数组，每项包含 `section`、`original`、`translation`：
 
 ```json
 [
@@ -302,90 +114,76 @@ JSON 文件必须是数组，每一项包含：
     "section": "Abstract",
     "original": "We present a new robotic foundation model, called π0.7...",
     "translation": "我们提出一种新的机器人基础模型，称为 π0.7..."
-  },
-  {
-    "section": "I. INTRODUCTION",
-    "original": "Foundation models work on the principle that generalist capabilities emerge from training on large and diverse datasets.",
-    "translation": "基础模型的工作原理在于：通用能力会从大规模且多样化的数据集训练中涌现出来。若包含公式，例如 $L=\\sum_i x_i^2$，会在右侧渲染。"
   }
 ]
 ```
 
-## Markdown 翻译文件格式
-
-Markdown 文件按空行切分段落。
-
-推荐在文件开头写论文元信息，主页会自动预填：
+Markdown/TXT 格式按空行切分段落。文件开头可以写元信息：
 
 ```markdown
 中文标题：机器人基础模型 π0.7
 英文标题：A Robotic Foundation Model
 期刊：arXiv
 作者：Author A, Author B
-年份：2025
+年份：2026
 
 摘要
 
-我们提出一种新的机器人基础模型，称为 π0.7。
+这里开始是中文译文正文。
 ```
 
-如果没有这些元信息，应用会用第一个中文段落预填中文标题，用 PDF 文件名预填英文标题。
+## 视觉检查
 
-示例：
+先执行 `npm run dist`，再执行：
 
-```markdown
-我们提出一种新的机器人基础模型，称为 π0.7。
-
-基础模型的工作原理在于：通用能力会从大规模且多样化的数据集训练中涌现出来。
-
-这是一段新的中文译文。
+```bash
+npm run visual:check
 ```
+
+脚本会启动 `dist/win-unpacked/PDF Translation Reader.exe`，使用真实 PDF 做桌面端截图检查。默认 PDF 路径：
+
+```text
+D:\GPT浏览器下载\2604.15483v2.pdf
+```
+
+可以用环境变量覆盖：
+
+```bash
+set VISUAL_CHECK_PDF=D:\path\to\paper.pdf
+npm run visual:check
+```
+
+截图输出到 `.tmp-visual-check/`，不会提交到 git。当前检查重点：
+
+- 顶栏和主页图标没有黑圈/胶囊背景，PNG 四角透明。
+- 论文库只显示主要论文信息，不再混入研究表格列。
+- 研究表格作为独立页面打开，能看到 Univer 表格 surface、绑定论文控件和“AI 填此单元格”按钮。
 
 ## 项目结构
 
 ```text
 src/
   main/
-    main.ts              Electron 主进程：窗口、文件对话框、读写文件、全局快捷键
-    preload.ts           安全暴露给 React 的 IPC API
+    main.ts              Electron 主进程、文件读写、AI IPC、PDF 上下文缓存
+    preload.ts           暴露给 React 的安全 IPC API
   renderer/
-    App.tsx              应用状态、最近项目恢复、文件操作协调
-    main.tsx             React 入口
-    assets/
-      brand-mark.png     顶部工具栏品牌图标
+    App.tsx              顶层状态、home/reader/researchSheet 三视图切换
     components/
-      HomePage.tsx       论文库主页和论文信息表格
-      AiModePanel.tsx    AI 设置、PDF 提取缓存、批量翻译队列
-      MathText.tsx       KaTeX 公式渲染组件
-      NotesPanel.tsx     当前论文阅读笔记面板
-      PdfViewer.tsx      PDF.js 阅读器、文本层、搜索高亮和缩放交互
-      Toolbar.tsx        顶部工具栏
-      TranslationPanel.tsx 右侧段落阅读和编辑组件
+      HomePage.tsx       轻量论文库
+      ResearchSheetPage.tsx 独立 Univer 研究表格
+      PdfViewer.tsx      PDF.js 阅读器
+      AiModePanel.tsx    AI 翻译模式
+      TranslationPanel.tsx 手动翻译阅读器
     lib/
-      aiMode.ts          PDF 提取块转换为 AI JSON 缓存的辅助逻辑
-      mathText.ts        解析普通文本和 LaTeX 公式并生成安全 HTML
-      papers.ts          论文库记录、元数据预填、localStorage 序列化辅助
-      papers.test.ts     论文库数据处理测试
-      promptTemplates.ts 外部 AI JSON 提示词生成
-      translation.ts     JSON/Markdown 解析、保存、双语 Markdown 导出
-      translation.test.ts 翻译数据处理测试
-    styles/
-      global.css         全局样式
-    types/
-      electron.d.ts      preload API 类型声明
+      papers.ts          论文库记录
+      researchWorkbook.ts 研究表格本地模型与 Univer snapshot 转换
+      sheetCellAi.ts     单元格级 AI prompt
+      translation.ts     JSON/Markdown/TXT 翻译文件解析与导出
   shared/
-    aiTranslation.ts     OpenAI-compatible 请求构造、缓存跳过规则和 provider preset
+    aiTranslation.ts     OpenAI-compatible chat completions 请求
+    aiPaperContext.ts    PDF 上下文 provider 策略
 scripts/
-  visual-check.mjs       打包后桌面端视觉回归检查
+  visual-check.mjs       打包后视觉验收脚本
 assets/
   icon.ico               Windows 安装包和快捷方式图标
 ```
-
-## 后续可扩展方向
-
-- 增加 PDF 书签或页码与段落的手动映射。
-- 增加段落搜索。
-- 增加双栏同步阅读进度。
-- 增加多项目列表。
-- 增加本地模型或更细粒度 provider 配置。
-- 增加公式识别辅助，把纯文本公式半自动转换为 LaTeX。

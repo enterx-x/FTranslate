@@ -43,7 +43,6 @@ export interface PaperRecord {
   authors: string;
   year: string;
   notes: string;
-  sheetCells: PaperSheetCells;
   lastOpenedAt: string;
   lastPage: number;
 }
@@ -76,7 +75,6 @@ export function buildPaperRecord(input: BuildPaperRecordInput): PaperRecord {
     authors: metadata.authors || '',
     year: metadata.year || '',
     notes: '',
-    sheetCells: {},
     lastOpenedAt: input.now ?? new Date().toISOString(),
     lastPage: input.lastPage ?? 1
   };
@@ -103,10 +101,6 @@ export function upsertPaperRecord(library: PaperRecord[], incoming: PaperRecord)
     aiCachePath: existing.aiCachePath || incoming.aiCachePath,
     aiCacheName: existing.aiCacheName || incoming.aiCacheName,
     notes: existing.notes || incoming.notes,
-    sheetCells: {
-      ...incoming.sheetCells,
-      ...existing.sheetCells
-    },
     lastPage: existing.lastPage || incoming.lastPage
   };
 
@@ -128,7 +122,6 @@ export function updatePaperRecord(
       | 'authors'
       | 'year'
       | 'notes'
-      | 'sheetCells'
       | 'lastOpenedAt'
       | 'lastPage'
     >
@@ -141,15 +134,18 @@ export function updatePaperRecord(
   };
 }
 
-export function getPaperSheetCell(record: PaperRecord, key: PaperResearchColumnKey): string {
-  return record.sheetCells[key] ?? '';
+export function getPaperSheetCell(
+  record: PaperRecord & { sheetCells?: PaperSheetCells },
+  key: PaperResearchColumnKey
+): string {
+  return record.sheetCells?.[key] ?? '';
 }
 
 export function updatePaperSheetCell(
-  record: PaperRecord,
+  record: PaperRecord & { sheetCells?: PaperSheetCells },
   key: PaperResearchColumnKey,
   value: string
-): PaperRecord {
+): PaperRecord & { sheetCells: PaperSheetCells } {
   return {
     ...record,
     sheetCells: {
@@ -209,7 +205,6 @@ function normalizePaperRecord(value: unknown): PaperRecord | null {
     authors: toText(record.authors),
     year: toText(record.year),
     notes: toText(record.notes),
-    sheetCells: parseSheetCells(record.sheetCells),
     lastOpenedAt: toText(record.lastOpenedAt) || new Date().toISOString(),
     lastPage: Math.max(1, Number(record.lastPage) || 1)
   };

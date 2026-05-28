@@ -1,12 +1,11 @@
 import {
   PAPER_RESEARCH_COLUMNS,
-  getPaperSheetCell,
   type PaperRecord,
   type PaperResearchColumnKey
 } from './papers';
 
 interface BuildPaperCellPromptInput {
-  paper: PaperRecord;
+  paper: PaperRecord & { sheetCells?: Partial<Record<PaperResearchColumnKey, string>> };
   field: PaperResearchColumnKey;
   contextText: string;
 }
@@ -16,35 +15,28 @@ interface PaperCellPrompt {
   userPrompt: string;
 }
 
-const MAX_CONTEXT_LENGTH = 7200;
+const MAX_CONTEXT_LENGTH = 8000;
 
+// 兼容旧版论文库表格的内部 helper。新版入口已迁移到独立研究表格。
 export function buildPaperCellPrompt(input: BuildPaperCellPromptInput): PaperCellPrompt {
   const column = PAPER_RESEARCH_COLUMNS.find((entry) => entry.key === input.field);
-  const label = column?.label ?? input.field;
-  const aiHint = column?.aiHint ?? '填写该论文阅读表格单元格。';
-  const currentValue = getPaperSheetCell(input.paper, input.field);
+  const currentValue = input.paper.sheetCells?.[input.field] ?? '';
 
   return {
     systemPrompt: [
-      '你是严谨的科研论文阅读表格助手。',
-      '你的任务是根据论文标题、用户笔记和已有翻译/AI 缓存内容，填写一个表格单元格。',
-      '输出必须简洁、具体、适合放在 Excel 风格单元格中。',
-      '如果涉及数学公式，请保留 LaTeX 定界符，例如 $L=\\sum_i x_i^2$。',
+      '你是科研论文阅读表格助手。',
+      '只填写当前指定单元格，内容要简洁、可直接放入表格。',
       '不要输出 Markdown 表格，不要解释过程。'
     ].join('\n'),
     userPrompt: [
-      `目标单元格：${label}`,
-      `填写要求：${aiHint}`,
+      `目标单元格：${column?.label ?? input.field}`,
+      `当前已有内容：${currentValue || '空'}`,
       '',
-      '论文信息：',
       `中文标题：${input.paper.chineseTitle || '未填写'}`,
       `英文标题：${input.paper.englishTitle || '未填写'}`,
-      `期刊/来源：${input.paper.journal || '未填写'}`,
+      `期刊：${input.paper.journal || '未填写'}`,
       `作者：${input.paper.authors || '未填写'}`,
       `年份：${input.paper.year || '未填写'}`,
-      '',
-      `当前单元格已有内容：${currentValue || '空'}`,
-      `阅读笔记：${input.paper.notes || '空'}`,
       '',
       '论文上下文：',
       clipContext(input.contextText),

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
   AI_PROVIDER_PRESETS,
   AI_PROVIDER_MODEL_OPTIONS,
@@ -22,6 +22,19 @@ import {
 import { buildPaperCellPrompt } from './lib/paperCellAi';
 import { buildPdfHighlightQuery } from './lib/pdfTextHighlight';
 import {
+  RESEARCH_SHEET_LINKS_KEY,
+  RESEARCH_WORKBOOK_KEY,
+  ensurePaperRow,
+  migrateLegacyPaperSheetCells,
+  parseResearchSheetLinks,
+  parseResearchWorkbook,
+  serializeResearchSheetLinks,
+  serializeResearchWorkbook,
+  type ResearchSheetLink,
+  type ResearchWorkbook
+} from './lib/researchWorkbook';
+import { buildSheetCellPrompt } from './lib/sheetCellAi';
+import {
   exportBilingualMarkdown,
   parseTranslationFile,
   serializeTranslationDocument,
@@ -33,8 +46,8 @@ import type { ExtractedPdfBlock } from './lib/pdfTextStructure';
 import {
   buildPaperRecord,
   PAPER_LIBRARY_KEY,
-  parsePaperLibrary,
   PAPER_RESEARCH_COLUMNS,
+  parsePaperLibrary,
   serializePaperLibrary,
   updatePaperRecord,
   updatePaperSheetCell,
@@ -50,6 +63,7 @@ import type {
   SaveTextResult,
   TextFilePayload
 } from './types/electron';
+import type { FillResearchCellRequest } from './components/ResearchSheetPage';
 
 interface PdfState {
   filePath: string;
@@ -63,11 +77,15 @@ interface RecentProject {
   aiCachePath?: string;
 }
 
-type AppView = 'home' | 'reader';
+type AppView = 'home' | 'reader' | 'researchSheet';
 type ReaderMode = 'manual' | 'ai';
 type BuiltInProviderId = Exclude<AiProviderId, 'custom'>;
 
 const RECENT_PROJECT_KEY = 'pdfTranslationReader:lastProject';
+const ResearchSheetPage = lazy(async () => {
+  const module = await import('./components/ResearchSheetPage');
+  return { default: module.ResearchSheetPage };
+});
 
 export default function App() {
   const [view, setView] = useState<AppView>('home');
@@ -75,6 +93,13 @@ export default function App() {
   const [paperLibrary, setPaperLibrary] = useState<PaperRecord[]>(() =>
     parsePaperLibrary(localStorage.getItem(PAPER_LIBRARY_KEY))
   );
+  const [researchWorkbook, setResearchWorkbook] = useState<ResearchWorkbook>(() =>
+    parseResearchWorkbook(localStorage.getItem(RESEARCH_WORKBOOK_KEY))
+  );
+  const [researchSheetLinks, setResearchSheetLinks] = useState<ResearchSheetLink[]>(() =>
+    parseResearchSheetLinks(localStorage.getItem(RESEARCH_SHEET_LINKS_KEY))
+  );
+  const [researchFocusPaperId, setResearchFocusPaperId] = useState<string | null>(null);
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
   const [pdf, setPdf] = useState<PdfState | null>(null);
   const [translationDocument, setTranslationDocument] = useState<TranslationDocument | null>(null);
@@ -134,6 +159,35 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(PAPER_LIBRARY_KEY, serializePaperLibrary(paperLibrary));
   }, [paperLibrary]);
+
+  useEffect(() => {
+    localStorage.setItem(RESEARCH_WORKBOOK_KEY, serializeResearchWorkbook(researchWorkbook));
+  }, [researchWorkbook]);
+
+  useEffect(() => {
+    localStorage.setItem(RESEARCH_SHEET_LINKS_KEY, serializeResearchSheetLinks(researchSheetLinks));
+  }, [researchSheetLinks]);
+
+  useEffect(() => {
+    const legacyPapers = readLegacyPapersWithSheetCells(
+      localStorage.getItem(PAPER_LIBRARY_KEY),
+      paperLibrary
+    );
+
+    if (legacyPapers.length === 0) {
+      return;
+    }
+
+    const migrated = migrateLegacyPaperSheetCells(
+      researchWorkbook,
+      researchSheetLinks,
+      legacyPapers
+    );
+    setResearchWorkbook(migrated.workbook);
+    setResearchSheetLinks(migrated.links);
+  // 旧版 sheetCells 只需要在启动后尝试迁移一次，之后独立工作簿负责保存。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!recentProject.pdfPath && !recentProject.translationPath) {
@@ -248,6 +302,19 @@ export default function App() {
     } catch (error) {
       setStatusMessage(`打开论文记录失败：${String(error)}`);
     }
+  }
+
+  function handleOpenResearchSheet(paper?: PaperRecord): void {
+    if (paper) {
+      const ensured = ensurePaperRow(researchWorkbook, researchSheetLinks, paper);
+      setResearchWorkbook(ensured.workbook);
+      setResearchSheetLinks(ensured.links);
+      setResearchFocusPaperId(paper.id);
+    } else {
+      setResearchFocusPaperId(null);
+    }
+
+    setView('researchSheet');
   }
 
   async function handleOpenPdf(): Promise<void> {
@@ -797,6 +864,63 @@ export default function App() {
     }
   }
 
+  async function handleFillResearchCellWithAi(
+    request: FillResearchCellRequest
+  ): Promise<string | null> {
+    if (!aiSettings?.apiKeyConfigured) {
+      setStatusMessage('请先在阅读器右侧 AI 设置中保存 API Key，再使用研究表格 AI 填写。');
+      return null;
+    }
+
+    try {
+      setIsAiBusy(true);
+      setStatusMessage(`AI 正在填写 ${request.cellAddress} / ${request.columnHeader}...`);
+      const project = await window.electronAPI.loadProject({
+        pdfPath: request.paper.pdfPath,
+        translationPath: request.paper.translationPath,
+        aiCachePath: request.paper.aiCachePath
+      });
+      const currentPdfExtractedText =
+        pdf?.filePath === request.paper.pdfPath
+          ? extractedPdfBlocks.map((block) => block.original).join('\n\n')
+          : '';
+      const fallbackContextText = [
+        project.aiCache?.content ?? '',
+        project.translation?.content ?? '',
+        currentPdfExtractedText,
+        request.paper.notes
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+      const prompt = buildSheetCellPrompt({
+        paper: request.paper,
+        columnHeader: request.columnHeader,
+        cellAddress: request.cellAddress,
+        currentCellText: request.currentCellText,
+        neighborRowValues: request.neighborRowValues,
+        paperContext: fallbackContextText
+      });
+      const result = await window.electronAPI.fillSheetCellWithAi({
+        paperId: request.paper.id,
+        pdfPath: request.paper.pdfPath,
+        fallbackContextText,
+        systemPrompt: prompt.systemPrompt,
+        userPrompt: prompt.userPrompt
+      });
+      const cellValue = cleanAiCellText(result.text);
+
+      setStatusMessage(
+        `AI 已填写 ${request.cellAddress}（${result.provider} / ${result.model} / ${result.mode}）。`
+      );
+      return cellValue;
+    } catch (error) {
+      setStatusMessage(`AI 填写单元格失败：${String(error)}`);
+      return null;
+    } finally {
+      setIsAiBusy(false);
+    }
+  }
+
   function applySavedAiCachePath(
     document: TranslationDocument,
     result: SaveTextResult
@@ -829,10 +953,9 @@ export default function App() {
       <div className="app-shell home-shell">
         <HomePage
           papers={paperLibrary}
-          isAiBusy={isAiBusy}
           onNewProject={handleNewProject}
           onOpenPaper={handleOpenPaper}
-          onFillPaperCellWithAi={handleFillPaperCellWithAi}
+          onOpenResearchSheet={handleOpenResearchSheet}
           onUpdatePaper={(paper) =>
             setPaperLibrary((library) => library.map((item) => (item.id === paper.id ? paper : item)))
           }
@@ -840,6 +963,28 @@ export default function App() {
             setPaperLibrary((library) => library.filter((item) => item.id !== paper.id))
           }
         />
+        <footer className="status-bar">{statusMessage}</footer>
+      </div>
+    );
+  }
+
+  if (view === 'researchSheet') {
+    return (
+      <div className="app-shell research-shell">
+        <Suspense fallback={<main className="research-sheet-loading">正在加载研究表格...</main>}>
+          <ResearchSheetPage
+            papers={paperLibrary}
+            workbook={researchWorkbook}
+            links={researchSheetLinks}
+            focusPaperId={researchFocusPaperId}
+            isAiBusy={isAiBusy}
+            onBackHome={() => setView('home')}
+            onOpenPaper={handleOpenPaper}
+            onWorkbookChange={setResearchWorkbook}
+            onLinksChange={setResearchSheetLinks}
+            onFillCellWithAi={handleFillResearchCellWithAi}
+          />
+        </Suspense>
         <footer className="status-bar">{statusMessage}</footer>
       </div>
     );
@@ -992,9 +1137,55 @@ function buildExportFileName(sourceName?: string): string {
   return sourceName.replace(/\.[^.]+$/, '') + '-bilingual.md';
 }
 
+function readLegacyPapersWithSheetCells(
+  rawValue: string | null,
+  papers: PaperRecord[]
+): Array<PaperRecord & { sheetCells?: Record<string, string> }> {
+  if (!rawValue) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    const legacyPapers: Array<PaperRecord & { sheetCells?: Record<string, string> }> = [];
+
+    parsed.forEach((entry) => {
+      if (!isObjectRecord(entry) || !isObjectRecord(entry.sheetCells)) {
+        return;
+      }
+
+      const paper = papers.find((item) => item.id === entry.id);
+      if (!paper) {
+        return;
+      }
+
+      legacyPapers.push({
+        ...paper,
+        sheetCells: Object.fromEntries(
+          Object.entries(entry.sheetCells)
+            .filter(([, value]) => typeof value === 'string')
+            .map(([key, value]) => [key, String(value)])
+        )
+      });
+    });
+
+    return legacyPapers;
+  } catch {
+    return [];
+  }
+}
+
 function cleanAiCellText(value: string): string {
   return value
     .replace(/^```(?:markdown|text)?\s*/iu, '')
     .replace(/```$/u, '')
     .trim();
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

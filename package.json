@@ -15,9 +15,11 @@
     "visual:check": "node scripts/visual-check.mjs"
   },
   "dependencies": {
-    "ag-grid-community": "^35.3.0",
-    "ag-grid-react": "^35.3.0",
-    "katex": "^0.17.0"
+    "@univerjs/preset-sheets-core": "^0.24.0",
+    "@univerjs/presets": "^0.24.0",
+    "katex": "^0.17.0",
+    "pdfjs-dist": "5.7.284",
+    "rxjs": "^7.8.2"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
@@ -27,7 +29,6 @@
     "concurrently": "^9.2.1",
     "electron": "^39.2.6",
     "electron-builder": "^26.0.12",
-    "pdfjs-dist": "5.7.284",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "typescript": "^5.9.3",
@@ -45,6 +46,7 @@
     "files": [
       "dist-renderer/**/*",
       "dist-electron/**/*",
+      "assets/**/*",
       "package.json"
     ],
     "win": {
