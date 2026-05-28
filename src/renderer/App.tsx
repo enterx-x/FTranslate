@@ -7,12 +7,11 @@ import {
   type AiModelOption,
   type AiProviderId
 } from '../shared/aiTranslation';
-import { AiModePanel, type AiFormState } from './components/AiModePanel';
+import type { AiFormState } from './components/AiModePanel';
 import { HomePage } from './components/HomePage';
 import { NotesPanel } from './components/NotesPanel';
 import { PdfViewer } from './components/PdfViewer';
 import { Toolbar } from './components/Toolbar';
-import { TranslationPanel } from './components/TranslationPanel';
 import {
   buildAiCacheDocument,
   cloneJsonDocumentForAi,
@@ -20,7 +19,6 @@ import {
   updateAiCacheItem
 } from './lib/aiMode';
 import { buildPaperCellPrompt } from './lib/paperCellAi';
-import { buildPdfHighlightQuery } from './lib/pdfTextHighlight';
 import {
   RESEARCH_SHEET_LINKS_KEY,
   RESEARCH_WORKBOOK_KEY,
@@ -554,6 +552,47 @@ export default function App() {
           : paper
       )
     );
+  }
+
+  async function handleNewPdfTranslationProject(): Promise<void> {
+    const pdfPayload = await window.electronAPI.openPdf();
+    if (!pdfPayload) {
+      return;
+    }
+
+    try {
+      applyPdfPayload(pdfPayload);
+      setTranslationDocument(null);
+      setAiCacheDocument(null);
+      setTranslatedPdf(null);
+      setPdfViewMode('source');
+
+      const now = new Date().toISOString();
+      const record: PaperRecord = {
+        id: `paper-${hashText(pdfPayload.filePath)}`,
+        pdfPath: pdfPayload.filePath,
+        pdfName: pdfPayload.fileName,
+        translationPath: '',
+        translationName: '',
+        aiCachePath: undefined,
+        aiCacheName: undefined,
+        chineseTitle: '',
+        englishTitle: pdfPayload.fileName.replace(/\.[^.]+$/u, ''),
+        journal: '',
+        authors: '',
+        year: '',
+        notes: '',
+        lastOpenedAt: now,
+        lastPage: 1
+      };
+      const storedRecord = rememberPaper(record);
+
+      setActiveNotes(storedRecord.notes);
+      setView('reader');
+      setStatusMessage(`已新建 PDF 翻译项目：${storedRecord.chineseTitle || storedRecord.englishTitle}`);
+    } catch (error) {
+      setStatusMessage(`新建 PDF 翻译项目失败：${String(error)}`);
+    }
   }
 
   async function handleNewProject(): Promise<void> {
@@ -1211,11 +1250,8 @@ export default function App() {
         pageCount={pageCount}
         scale={scale}
         onGoHome={() => setView('home')}
-        onNewProject={handleNewProject}
+        onNewProject={handleNewPdfTranslationProject}
         onOpenPdf={handleOpenPdf}
-        onOpenTranslation={handleOpenTranslation}
-        onSaveTranslation={handleSaveTranslation}
-        onExportBilingualMarkdown={handleExportBilingualMarkdown}
         onZoomIn={() => setScale((value) => Math.min(2.4, Number((value + 0.1).toFixed(2))))}
         onZoomOut={() => setScale((value) => Math.max(0.6, Number((value - 0.1).toFixed(2))))}
         onPreviousPage={() => handlePageChange(currentPage - 1)}
@@ -1230,11 +1266,7 @@ export default function App() {
             fileName={displayedPdf?.fileName}
             currentPage={currentPage}
             scale={scale}
-            highlightText={
-              readerMode === 'manual' && translationDocument?.kind === 'json'
-                ? buildPdfHighlightQuery(currentItem?.original ?? '')
-                : ''
-            }
+            highlightText=""
             onScaleChange={(nextScale) => setScale(nextScale)}
             onDocumentLoad={(nextPageCount) => {
               setPageCount(nextPageCount);
@@ -1317,78 +1349,84 @@ export default function App() {
                 </p>
               ) : null}
             </section>
-            <div className="mode-tabs">
-              <button
-                type="button"
-                className={readerMode === 'manual' ? 'mode-tab active' : 'mode-tab'}
-                onClick={() => {
-                  setReaderMode('manual');
-                  resetParagraphDisplay();
-                }}
-              >
-                手动模式
-              </button>
-              <button
-                type="button"
-                className={readerMode === 'ai' ? 'mode-tab active' : 'mode-tab'}
-                onClick={() => setReaderMode('ai')}
-              >
-                AI 模式
-              </button>
-            </div>
+            <details className="pdf-ai-settings">
+              <summary>
+                <span>PDF 翻译 API</span>
+                <small>
+                  {aiSettings
+                    ? `${aiSettings.provider} / ${aiSettings.model}，API Key ${aiSettings.apiKeyConfigured ? '已保存' : '未保存'}`
+                    : '尚未读取设置'}
+                </small>
+              </summary>
+              <div className="pdf-ai-settings-grid">
+                <label>
+                  Provider
+                  <select
+                    value={aiForm.provider}
+                    onChange={(event) => handleProviderChange(event.target.value as AiProviderId)}
+                  >
+                    <option value="openai">OpenAI</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="kimi">Kimi</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+                <label>
+                  Base URL
+                  <input
+                    value={aiForm.baseURL}
+                    onChange={(event) => handleAiFormChange({ baseURL: event.target.value })}
+                    placeholder="https://api.openai.com/v1"
+                  />
+                </label>
+                <label>
+                  Model
+                  {aiForm.provider === 'custom' ? (
+                    <input
+                      value={aiForm.model}
+                      onChange={(event) => handleAiFormChange({ model: event.target.value })}
+                      placeholder="model-name"
+                    />
+                  ) : (
+                    <select
+                      value={aiForm.model}
+                      onChange={(event) => handleAiFormChange({ model: event.target.value })}
+                    >
+                      {(runtimeModelOptions[aiForm.provider] ?? AI_PROVIDER_MODEL_OPTIONS[aiForm.provider]).map((model) => (
+                        <option key={model.value} value={model.value}>
+                          {model.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </label>
+                <label>
+                  API Key
+                  <input
+                    type="password"
+                    value={aiForm.apiKey}
+                    onChange={(event) => handleAiFormChange({ apiKey: event.target.value })}
+                    placeholder={aiSettings?.apiKeyConfigured ? '已保存，留空继续使用' : 'sk-...'}
+                  />
+                </label>
+              </div>
+              <div className="pdf-ai-settings-actions">
+                <button type="button" disabled={isAiBusy} onClick={handleSaveAiSettings}>
+                  保存设置
+                </button>
+                <button type="button" disabled={isAiBusy} onClick={handleTestAiConnection}>
+                  测试连接
+                </button>
+                <button type="button" disabled={isAiBusy} onClick={handleRefreshAiModels}>
+                  刷新模型
+                </button>
+                <button type="button" disabled={isAiBusy} onClick={handleRefreshAiBalance}>
+                  查询余额
+                </button>
+              </div>
+              {aiBalance ? <p className="pdf-ai-balance">{aiBalance.message}</p> : null}
+            </details>
             <NotesPanel notes={activeNotes} onChange={handleNotesChange} />
-            {readerMode === 'manual' ? (
-              <TranslationPanel
-                document={translationDocument}
-                currentIndex={currentParagraphIndex}
-                showTranslation={showTranslation}
-                isEditing={isEditing}
-                editingText={editingText}
-                onEditingTextChange={setEditingText}
-                onPrevious={handlePreviousParagraph}
-                onShowTranslation={handleShowTranslation}
-                onNext={handleNextParagraph}
-                onStartEdit={handleStartEdit}
-                onApplyEdit={handleApplyEdit}
-                onCancelEdit={() => {
-                  setIsEditing(false);
-                  setEditingText('');
-                }}
-                onCopyCurrentPrompt={handleCopyCurrentPrompt}
-                onCopyFullPrompt={handleCopyFullPrompt}
-              />
-            ) : (
-              <AiModePanel
-                document={aiCacheDocument}
-                extractedBlocks={extractedPdfBlocks}
-                currentIndex={aiParagraphIndex}
-                aiSettings={aiSettings}
-                aiBalance={aiBalance}
-                aiForm={aiForm}
-                modelOptions={
-                  aiForm.provider === 'custom'
-                    ? []
-                    : runtimeModelOptions[aiForm.provider] ?? AI_PROVIDER_MODEL_OPTIONS[aiForm.provider]
-                }
-                isBusy={isAiBusy}
-                onProviderChange={handleProviderChange}
-                onAiFormChange={handleAiFormChange}
-                onSaveSettings={handleSaveAiSettings}
-                onTestConnection={handleTestAiConnection}
-                onRefreshBalance={handleRefreshAiBalance}
-                onRefreshModels={handleRefreshAiModels}
-                onBuildCache={handleBuildAiCacheDocument}
-                onSaveCache={handleSaveAiCache}
-                onTranslateCurrent={handleTranslateCurrentWithAi}
-                onTranslateItem={translateAiItemWithAi}
-                onTranslatePending={handleTranslatePendingWithAi}
-                onSelectItem={(index) => {
-                  setAiParagraphIndex(index);
-                  setShowTranslation(true);
-                  setIsEditing(false);
-                }}
-              />
-            )}
           </div>
         </section>
       </main>

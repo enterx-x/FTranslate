@@ -3,9 +3,11 @@ import type { AiProviderSettings } from './aiTranslation';
 export type PdfTranslationEngine = 'pdfmathtranslate';
 export type PdfTranslationOutputMode = 'dual' | 'mono';
 export type PdfTranslationJobStatus = 'unavailable' | 'idle' | 'running' | 'cached' | 'completed' | 'failed';
+export type PdfTranslationInvocation = 'cli' | 'python-module';
 
 export interface PdfTranslationCommandInput {
   executable: string;
+  invocation?: PdfTranslationInvocation;
   pdfPath: string;
   outputDir: string;
   mode: PdfTranslationOutputMode;
@@ -41,7 +43,12 @@ export interface PdfTranslationRecordFields {
 }
 
 export function buildPdf2zhCommand(input: PdfTranslationCommandInput): PdfTranslationCommand {
-  const args = [
+  const args =
+    input.invocation === 'python-module'
+      ? ['-m', 'pdf2zh']
+      : [];
+
+  args.push(
     input.pdfPath,
     '-s',
     'openai',
@@ -51,13 +58,7 @@ export function buildPdf2zhCommand(input: PdfTranslationCommandInput): PdfTransl
     'zh',
     '-o',
     input.outputDir
-  ];
-
-  if (input.mode === 'dual') {
-    args.push('--no-mono');
-  } else {
-    args.push('--no-dual');
-  }
+  );
 
   return {
     command: input.executable,

@@ -31,13 +31,50 @@ describe('PDFMathTranslate command helpers', () => {
         '-lo',
         'zh',
         '-o',
-        'C:/Users/me/AppData/Roaming/PDF Translation Reader/translations/paper-1',
-        '--no-mono'
+        'C:/Users/me/AppData/Roaming/PDF Translation Reader/translations/paper-1'
       ])
     );
+    expect(command.args).not.toContain('--no-mono');
+    expect(command.args).not.toContain('--no-dual');
     expect(command.env.OPENAI_BASE_URL).toBe('https://api.moonshot.cn/v1');
     expect(command.env.OPENAI_MODEL).toBe('kimi-k2.5');
     expect(command.args.join(' ')).not.toContain('sk-');
+  });
+
+  it('can invoke pdf2zh as a Python module from the app private venv', () => {
+    const command = buildPdf2zhCommand({
+      executable: 'C:/app/sidecars/pdf2zh-venv/Scripts/python.exe',
+      invocation: 'python-module',
+      pdfPath: 'D:/papers/robot paper.pdf',
+      outputDir: 'C:/cache',
+      mode: 'dual',
+      settings: {
+        provider: 'openai',
+        baseURL: 'https://api.openai.com/v1',
+        model: 'gpt-5.5'
+      }
+    });
+
+    expect(command.command).toBe('C:/app/sidecars/pdf2zh-venv/Scripts/python.exe');
+    expect(command.args.slice(0, 2)).toEqual(['-m', 'pdf2zh']);
+    expect(command.args).toContain('D:/papers/robot paper.pdf');
+  });
+
+  it('does not pass version-specific output suppression flags for mono mode', () => {
+    const command = buildPdf2zhCommand({
+      executable: 'pdf2zh',
+      pdfPath: 'D:/papers/robot paper.pdf',
+      outputDir: 'C:/cache',
+      mode: 'mono',
+      settings: {
+        provider: 'kimi',
+        baseURL: 'https://api.moonshot.cn/v1',
+        model: 'kimi-k2.5'
+      }
+    });
+
+    expect(command.args).not.toContain('--no-mono');
+    expect(command.args).not.toContain('--no-dual');
   });
 
   it('derives stable dual and mono output paths from the source PDF name', () => {

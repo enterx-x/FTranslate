@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, safeStorage } from 'electron';
 import { spawn, spawnSync } from 'node:child_process';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -32,6 +33,7 @@ import {
   buildPdfTranslationOutputPaths,
   buildPdfTranslationSourceHash,
   sanitizePdfTranslationLog,
+  type PdfTranslationInvocation,
   type PdfTranslationOutputMode
 } from '../shared/pdfTranslation';
 
@@ -133,6 +135,21 @@ interface PaperContextCacheEntry {
 interface PdfTranslationEngineView {
   available: boolean;
   executable?: string;
+  invocation?: PdfTranslationInvocation;
+  message: string;
+  installCommand: string;
+  autoInstall?: boolean;
+}
+
+interface PythonCommand {
+  command: string;
+  argsPrefix: string[];
+  label: string;
+}
+
+interface PdfTranslationRuntime {
+  executable: string;
+  invocation?: PdfTranslationInvocation;
   message: string;
   installCommand: string;
 }
@@ -257,11 +274,6 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
     throw new Error('缺少 PDF 路径。');
   }
 
-  const engine = checkPdfTranslationEngine();
-  if (!engine.available || !engine.executable) {
-    throw new Error(engine.message);
-  }
-
   const settings = normalizeStoredAiSettings(await loadStoredAiSettings());
   const apiKey = decryptApiKey(settings.encryptedApiKey);
   if (!apiKey) {
@@ -299,6 +311,7 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
   }
 
   await fs.mkdir(outputDir, { recursive: true });
+  const engine = await ensurePdfTranslationRuntime(request.paperId);
   sendPdfTranslationProgress({
     paperId: request.paperId,
     status: 'running',
@@ -307,6 +320,7 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
 
   const command = buildPdf2zhCommand({
     executable: engine.executable,
+    invocation: engine.invocation,
     pdfPath: request.pdfPath,
     outputDir,
     mode: outputMode,
@@ -355,15 +369,26 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
 }
 
 function checkPdfTranslationEngine(): PdfTranslationEngineView {
-  const installCommand = 'uv tool install pdf2zh';
-  const executable = findExecutableOnPath('pdf2zh') ?? findExecutableOnPath('pdf2zh_next');
+  const installCommand = getPdfTranslationInstallCommand();
+  const runtime = inspectPdfTranslationRuntime();
 
-  if (executable) {
+  if (runtime) {
     return {
       available: true,
-      executable,
-      message: `已找到 PDFMathTranslate 命令：${executable}`,
+      executable: runtime.executable,
+      invocation: runtime.invocation,
+      message: runtime.message,
       installCommand
+    };
+  }
+
+  const python = findCompatiblePythonCommand();
+  if (python) {
+    return {
+      available: true,
+      message: `未检测到 PDFMathTranslate；生成时会使用 ${python.label} 自动创建私有翻译环境。`,
+      installCommand,
+      autoInstall: true
     };
   }
 
@@ -371,10 +396,182 @@ function checkPdfTranslationEngine(): PdfTranslationEngineView {
   return {
     available: false,
     message: uvExecutable
-      ? `未找到 PDFMathTranslate 命令。请先执行：${installCommand}`
-      : `未找到 PDFMathTranslate 命令，也未找到 uv。请先安装 uv，再执行：${installCommand}`,
+      ? `未找到 PDFMathTranslate 命令。可以执行：${installCommand}`
+      : `未找到 PDFMathTranslate，也未找到可用 Python 3.10/3.12。请安装 Python 3.12，或手动执行：${installCommand}`,
     installCommand
   };
+}
+
+async function ensurePdfTranslationRuntime(paperId: string): Promise<PdfTranslationRuntime> {
+  const existing = inspectPdfTranslationRuntime();
+  if (existing) {
+    return existing;
+  }
+
+  const python = findCompatiblePythonCommand();
+  if (!python) {
+    throw new Error(
+      `未找到 PDFMathTranslate，也未找到可用于自动安装的 Python 3.10/3.12。请安装 Python 3.12 后重试，或手动执行：${getPdfTranslationInstallCommand()}`
+    );
+  }
+
+  const venvDir = getPdf2zhVenvDir();
+  const venvPython = getPdf2zhVenvPythonPath();
+  const userDataDir = app.getPath('userData');
+
+  await fs.mkdir(path.dirname(venvDir), { recursive: true });
+
+  if (!fsSync.existsSync(venvPython)) {
+    sendPdfTranslationProgress({
+      paperId,
+      status: 'running',
+      message: `正在创建 PDFMathTranslate 私有 Python 环境：${venvDir}`
+    });
+    await runPdfTranslationProcess(python.command, [...python.argsPrefix, '-m', 'venv', venvDir], {
+      cwd: userDataDir,
+      env: {},
+      apiKey: '',
+      paperId
+    });
+  }
+
+  sendPdfTranslationProgress({
+    paperId,
+    status: 'running',
+    message: '正在安装或更新 PDFMathTranslate，这一步首次运行会较慢。'
+  });
+  await runPdfTranslationProcess(venvPython, ['-m', 'pip', 'install', '--upgrade', 'pip'], {
+    cwd: userDataDir,
+    env: {},
+    apiKey: '',
+    paperId
+  });
+  await runPdfTranslationProcess(venvPython, ['-m', 'pip', 'install', 'pdf2zh'], {
+    cwd: userDataDir,
+    env: {},
+    apiKey: '',
+    paperId
+  });
+
+  const installed = inspectPdfTranslationRuntime();
+  if (!installed) {
+    throw new Error('PDFMathTranslate 安装完成后仍无法启动，请查看安装日志。');
+  }
+
+  return installed;
+}
+
+function inspectPdfTranslationRuntime(): PdfTranslationRuntime | null {
+  const installCommand = getPdfTranslationInstallCommand();
+  const executable = findExecutableOnPath('pdf2zh') ?? findExecutableOnPath('pdf2zh_next');
+
+  if (executable) {
+    return {
+      executable,
+      invocation: 'cli',
+      message: `已找到 PDFMathTranslate 命令：${executable}`,
+      installCommand
+    };
+  }
+
+  const venvCli = getPdf2zhVenvCliPath();
+  if (fsSync.existsSync(venvCli)) {
+    return {
+      executable: venvCli,
+      invocation: 'cli',
+      message: `已找到应用私有 PDFMathTranslate：${venvCli}`,
+      installCommand
+    };
+  }
+
+  const venvPython = getPdf2zhVenvPythonPath();
+  if (fsSync.existsSync(venvPython) && isPdf2zhModuleAvailable(venvPython)) {
+    return {
+      executable: venvPython,
+      invocation: 'python-module',
+      message: `已找到应用私有 PDFMathTranslate Python 模块：${venvPython}`,
+      installCommand
+    };
+  }
+
+  return null;
+}
+
+function getPdfTranslationInstallCommand(): string {
+  return 'uv tool install pdf2zh 或 py -3.12 -m pip install pdf2zh';
+}
+
+function getPdf2zhVenvDir(): string {
+  return path.join(app.getPath('userData'), 'sidecars', 'pdf2zh-venv');
+}
+
+function getPdf2zhVenvPythonPath(): string {
+  return process.platform === 'win32'
+    ? path.join(getPdf2zhVenvDir(), 'Scripts', 'python.exe')
+    : path.join(getPdf2zhVenvDir(), 'bin', 'python');
+}
+
+function getPdf2zhVenvCliPath(): string {
+  return process.platform === 'win32'
+    ? path.join(getPdf2zhVenvDir(), 'Scripts', 'pdf2zh.exe')
+    : path.join(getPdf2zhVenvDir(), 'bin', 'pdf2zh');
+}
+
+function isPdf2zhModuleAvailable(pythonPath: string): boolean {
+  const result = spawnSync(
+    pythonPath,
+    ['-c', 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("pdf2zh") else 1)'],
+    {
+      encoding: 'utf8',
+      windowsHide: true
+    }
+  );
+
+  return result.status === 0;
+}
+
+function findCompatiblePythonCommand(): PythonCommand | null {
+  const envPython = process.env.PDF_TRANSLATION_READER_PYTHON?.trim();
+  const candidates: PythonCommand[] = [
+    ...(envPython ? [{ command: envPython, argsPrefix: [], label: envPython }] : []),
+    { command: 'py', argsPrefix: ['-3.12'], label: 'Python 3.12' },
+    { command: 'py', argsPrefix: ['-3.10'], label: 'Python 3.10' },
+    { command: 'python', argsPrefix: [], label: 'python' }
+  ];
+
+  for (const candidate of candidates) {
+    const version = readPythonVersion(candidate);
+    if (version && isSupportedPdfTranslationPython(version)) {
+      return {
+        ...candidate,
+        label: `${candidate.label} (${version})`
+      };
+    }
+  }
+
+  return null;
+}
+
+function readPythonVersion(candidate: PythonCommand): string | null {
+  const result = spawnSync(
+    candidate.command,
+    [...candidate.argsPrefix, '-c', 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")'],
+    {
+      encoding: 'utf8',
+      windowsHide: true
+    }
+  );
+
+  if (result.status !== 0) {
+    return null;
+  }
+
+  return (result.stdout || result.stderr).trim() || null;
+}
+
+function isSupportedPdfTranslationPython(version: string): boolean {
+  const [major, minor] = version.split('.').map((part) => Number(part));
+  return major === 3 && Number.isFinite(minor) && minor >= 10 && minor <= 12;
 }
 
 function findExecutableOnPath(command: string): string | null {

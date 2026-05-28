@@ -7,9 +7,6 @@ interface ToolbarProps {
   onNewProject: () => void;
   onGoHome: () => void;
   onOpenPdf: () => void;
-  onOpenTranslation: () => void;
-  onSaveTranslation: () => void;
-  onExportBilingualMarkdown: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onPreviousPage: () => void;
@@ -25,19 +22,10 @@ export function Toolbar(props: ToolbarProps) {
           主页
         </button>
         <button type="button" onClick={props.onNewProject}>
-          新建翻译项目
+          新建 PDF 翻译
         </button>
         <button type="button" onClick={props.onOpenPdf}>
           打开 PDF
-        </button>
-        <button type="button" onClick={props.onOpenTranslation}>
-          打开翻译文件
-        </button>
-        <button type="button" onClick={props.onSaveTranslation}>
-          保存翻译
-        </button>
-        <button type="button" onClick={props.onExportBilingualMarkdown}>
-          导出双语 Markdown
         </button>
       </div>
 

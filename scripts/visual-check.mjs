@@ -13,9 +13,74 @@ const pdfPath =
 const outputDir = path.join(root, '.tmp-visual-check');
 const visualUserDataDir = path.join(outputDir, 'user-data');
 const port = Number(process.env.VISUAL_CHECK_PORT ?? 9333);
+const defaultPdfPath = path.join('D:\\', 'GPT浏览器下载', '2604.15483v2.pdf');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createFallbackPdfBuffer() {
+  return Buffer.from(
+    `%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Count 1 /Kids [3 0 R] >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 143 >>
+stream
+BT
+/F1 24 Tf
+72 760 Td
+(PDF Translation Reader visual check fallback PDF) Tj
+0 -36 Td
+/F1 14 Tf
+(This file is auto-generated when VISUAL_CHECK_PDF is not set and the default sample PDF is unavailable.) Tj
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000311 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+559
+%%EOF
+`,
+    'ascii'
+  );
+}
+
+async function resolveVisualCheckPdfPath() {
+  const requestedPdfPath = process.env.VISUAL_CHECK_PDF?.trim();
+  if (requestedPdfPath) {
+    if (!existsSync(requestedPdfPath)) {
+      throw new Error(`VISUAL_CHECK_PDF points to a missing file: ${requestedPdfPath}`);
+    }
+    return requestedPdfPath;
+  }
+
+  if (existsSync(defaultPdfPath)) {
+    return defaultPdfPath;
+  }
+
+  const fallbackPdfPath = path.join(outputDir, 'visual-check-fallback.pdf');
+  await writeFile(fallbackPdfPath, createFallbackPdfBuffer());
+  return fallbackPdfPath;
 }
 
 async function fetchJson(url) {
@@ -408,7 +473,7 @@ async function runResearchSheetScenario(client) {
   return snapshot;
 }
 
-async function runAiQueueClickScenario(client) {
+async function runWholePdfReaderScenario(client) {
   await clickButtonByText(client, '返回主页');
   await waitForAppReady(client);
   await clickButtonByText(client, '进入论文库');
@@ -433,92 +498,39 @@ async function runAiQueueClickScenario(client) {
     throw new Error(`wholePdf: expected translated PDF as primary reading surface, got ${JSON.stringify(wholePdf)}`);
   }
 
+  const legacyPanels = await evaluateJson(client, `() => ({
+    hasModeTabs: Boolean(document.querySelector('.mode-tabs')),
+    hasManualPanel: Boolean(document.querySelector('.translation-panel')),
+    hasAiPanel: Boolean(document.querySelector('.ai-mode-panel')),
+    hasSegmentCards: Boolean(document.querySelector('.ai-current-detail-card, .ai-translation-workbench, .original-card, .translation-card')),
+    toolbarText: document.querySelector('.toolbar')?.textContent ?? ''
+  })`);
+
+  if (
+    legacyPanels.hasModeTabs ||
+    legacyPanels.hasManualPanel ||
+    legacyPanels.hasAiPanel ||
+    legacyPanels.hasSegmentCards ||
+    /打开翻译文件|保存翻译|导出双语 Markdown/.test(legacyPanels.toolbarText)
+  ) {
+    throw new Error(`wholePdf: legacy segment translation UI should be hidden, got ${JSON.stringify(legacyPanels)}`);
+  }
+
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'whole-pdf-reader.png'), Buffer.from(shot.data, 'base64'))
   );
-
-  await clickButtonByText(client, 'AI 模式');
-  await client.send('Runtime.evaluate', {
-    expression: `
-      window.__visualErrors = [];
-      window.addEventListener('error', (event) => {
-        window.__visualErrors.push(event.message);
-      });
-      window.addEventListener('unhandledrejection', (event) => {
-        window.__visualErrors.push(String(event.reason));
-      });
-    `,
-    returnByValue: true
-  });
-
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    const ready = await evaluateJson(client, `() => Boolean(document.querySelector('.ai-section-group'))`);
-    if (ready) {
-      break;
-    }
-    await wait(250);
-  }
-
-  await client.send('Runtime.evaluate', {
-    expression: `
-      const summary = document.querySelector('.ai-section-group summary');
-      const rect = summary.getBoundingClientRect();
-      summary.dispatchEvent(new MouseEvent('click', {
-        bubbles: true,
-        cancelable: true,
-        clientX: rect.right - 80,
-        clientY: rect.top + rect.height / 2
-      }));
-    `,
-    returnByValue: true
-  });
-  await wait(300);
-  await client.send('Runtime.evaluate', {
-    expression: `
-      const row = document.querySelector('.ai-item-row');
-      const rect = row.getBoundingClientRect();
-      row.dispatchEvent(new MouseEvent('click', {
-        bubbles: true,
-        cancelable: true,
-        clientX: rect.right - 120,
-        clientY: rect.top + rect.height / 2
-      }));
-    `,
-    returnByValue: true
-  });
-  await wait(500);
-
-  const snapshot = await evaluateJson(client, `() => ({
-    hasSplitLayout: Boolean(document.querySelector('.split-layout')),
-    hasAiPanel: Boolean(document.querySelector('.ai-mode-panel')),
-    bodyLength: document.body.textContent?.length ?? 0,
-    errors: window.__visualErrors ?? []
-  })`);
-
-  if (!snapshot.hasSplitLayout || !snapshot.hasAiPanel || snapshot.bodyLength < 100) {
-    throw new Error(`aiQueue: clicking blank areas caused app to disappear, got ${JSON.stringify(snapshot)}`);
-  }
-  if (snapshot.errors.length > 0) {
-    throw new Error(`aiQueue: clicking blank areas raised errors ${JSON.stringify(snapshot.errors)}`);
-  }
-
-  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
-    writeFile(path.join(outputDir, 'ai-queue-click.png'), Buffer.from(shot.data, 'base64'))
-  );
-  return { ...snapshot, wholePdf };
+  return { wholePdf, legacyPanels };
 }
 
 async function main() {
   if (!existsSync(exe)) {
     throw new Error(`Packaged executable not found. Run npm run dist first: ${exe}`);
   }
-  if (!existsSync(pdfPath)) {
-    throw new Error(`Visual check PDF not found: ${pdfPath}`);
-  }
 
   await mkdir(outputDir, { recursive: true });
   await rm(visualUserDataDir, { recursive: true, force: true });
   await mkdir(visualUserDataDir, { recursive: true });
+  const pdfPath = await resolveVisualCheckPdfPath();
 
   const translationPath = path.join(outputDir, 'visual-check.json');
   await writeFile(
@@ -564,9 +576,9 @@ async function main() {
 
     const home = await runHomeScenario(client);
     const researchSheet = await runResearchSheetScenario(client);
-    const aiQueue = await runAiQueueClickScenario(client);
+    const wholePdfReader = await runWholePdfReaderScenario(client);
     client.close();
-    console.log(JSON.stringify({ pdfPath, home, researchSheet, aiQueue, outputDir }, null, 2));
+    console.log(JSON.stringify({ pdfPath, home, researchSheet, wholePdfReader, outputDir }, null, 2));
   } finally {
     appProcess.kill();
     await wait(500);

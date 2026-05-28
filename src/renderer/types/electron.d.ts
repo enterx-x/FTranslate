@@ -76,8 +76,10 @@ export interface AiFillSheetCellResult {
 export interface PdfTranslationEngineResult {
   available: boolean;
   executable?: string;
+  invocation?: 'cli' | 'python-module';
   message: string;
   installCommand: string;
+  autoInstall?: boolean;
 }
 
 export interface PdfTranslationProgress {
