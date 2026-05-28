@@ -19,6 +19,7 @@ export interface ProjectLoadResult {
   pdf: PdfFilePayload | null;
   translation: TextFilePayload | null;
   aiCache: TextFilePayload | null;
+  translatedPdf: PdfFilePayload | null;
   errors: string[];
 }
 
@@ -72,14 +73,53 @@ export interface AiFillSheetCellResult {
   cached: boolean;
 }
 
+export interface PdfTranslationEngineResult {
+  available: boolean;
+  executable?: string;
+  message: string;
+  installCommand: string;
+}
+
+export interface PdfTranslationProgress {
+  paperId: string;
+  status: 'running' | 'completed' | 'failed';
+  message: string;
+}
+
+export interface PdfTranslationResult {
+  status: 'cached' | 'completed';
+  message: string;
+  pdf: PdfFilePayload;
+  translatedPdfPath: string;
+  translatedPdfName: string;
+  translatedPdfMode: 'dual' | 'mono';
+  translationEngine: 'pdfmathtranslate';
+  translationSourceHash: string;
+  translatedAt: string;
+  translatedProvider: AiProviderId;
+  translatedModel: string;
+}
+
 export interface ElectronApi {
   openPdf: () => Promise<PdfFilePayload | null>;
   openTranslation: () => Promise<TextFilePayload | null>;
+  openTranslatedPdf: () => Promise<PdfFilePayload | null>;
   loadProject: (request: {
     pdfPath?: string;
     translationPath?: string;
     aiCachePath?: string;
+    translatedPdfPath?: string;
   }) => Promise<ProjectLoadResult>;
+  checkPdfTranslationEngine: () => Promise<PdfTranslationEngineResult>;
+  translatePdf: (request: {
+    paperId: string;
+    pdfPath: string;
+    outputMode?: 'dual' | 'mono';
+    force?: boolean;
+  }) => Promise<PdfTranslationResult>;
+  onPdfTranslationProgress: (
+    callback: (progress: PdfTranslationProgress) => void
+  ) => () => void;
   loadAiSettings: () => Promise<AiSettingsView>;
   saveAiSettings: (request: {
     provider: AiProviderId;

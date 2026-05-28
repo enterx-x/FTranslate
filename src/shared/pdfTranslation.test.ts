@@ -59,8 +59,22 @@ describe('PDFMathTranslate command helpers', () => {
       })
     ).toBe(
       buildPdfTranslationSourceHash({
+        pdfPath: 'd:\\PAPER.pdf',
+        fileSize: 123,
+        mtimeMs: 456
+      })
+    );
+
+    expect(
+      buildPdfTranslationSourceHash({
         pdfPath: 'D:/paper.pdf',
         fileSize: 123,
+        mtimeMs: 456
+      })
+    ).not.toBe(
+      buildPdfTranslationSourceHash({
+        pdfPath: 'D:/paper.pdf',
+        fileSize: 124,
         mtimeMs: 456
       })
     );

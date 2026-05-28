@@ -3,8 +3,34 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('electronAPI', {
   openPdf: () => ipcRenderer.invoke('dialog:open-pdf'),
   openTranslation: () => ipcRenderer.invoke('dialog:open-translation'),
-  loadProject: (request: { pdfPath?: string; translationPath?: string; aiCachePath?: string }) =>
+  openTranslatedPdf: () => ipcRenderer.invoke('dialog:open-translated-pdf'),
+  loadProject: (request: {
+    pdfPath?: string;
+    translationPath?: string;
+    aiCachePath?: string;
+    translatedPdfPath?: string;
+  }) =>
     ipcRenderer.invoke('project:load', request),
+  checkPdfTranslationEngine: () => ipcRenderer.invoke('pdf-translation:check-engine'),
+  translatePdf: (request: {
+    paperId: string;
+    pdfPath: string;
+    outputMode?: 'dual' | 'mono';
+    force?: boolean;
+  }) => ipcRenderer.invoke('pdf-translation:translate', request),
+  onPdfTranslationProgress: (callback: (progress: {
+    paperId: string;
+    status: 'running' | 'completed' | 'failed';
+    message: string;
+  }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: {
+      paperId: string;
+      status: 'running' | 'completed' | 'failed';
+      message: string;
+    }) => callback(progress);
+    ipcRenderer.on('pdf-translation:progress', listener);
+    return () => ipcRenderer.removeListener('pdf-translation:progress', listener);
+  },
   loadAiSettings: () => ipcRenderer.invoke('ai-settings:load'),
   saveAiSettings: (request: {
     provider: 'openai' | 'deepseek' | 'kimi' | 'custom';
