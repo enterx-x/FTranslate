@@ -107,6 +107,7 @@ interface ResearchSheetPageProps {
   onFillCellsWithAi: (request: FillResearchCellsRequest) => Promise<FillResearchCellResult[]>;
   onAnalyzeLiteratureGap: (request: AnalyzeLiteratureGapRequest) => Promise<AnalyzeLiteratureGapResult>;
   onOpenAiAssistant: () => void;
+  onOpenKnowledgeGraph: () => void;
 }
 
 interface SelectedCell {
@@ -187,6 +188,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const [literatureInsightHistory, setLiteratureInsightHistory] = useState<LiteratureInsightHistoryEntry[]>([]);
   const [selectedInsightHistoryId, setSelectedInsightHistoryId] = useState('');
   const [isLiteratureInsightRunning, setIsLiteratureInsightRunning] = useState(false);
+  const [showRowDetail, setShowRowDetail] = useState(false);
   const literatureInsightStateRef = useRef<LiteratureInsightRunState | null>(null);
 
   const selectedRowId = getRowId(workbookModelRef.current, selectedCell.rowIndex);
@@ -194,6 +196,8 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const linkedPaper = props.papers.find((paper) => paper.id === linkedPaperId) ?? null;
   const selectedCellAddress = toA1(selectedCell.rowIndex, selectedCell.columnIndex);
   const selectedColumnHeader = getResearchColumnHeader(workbookModelRef.current, selectedCell.columnIndex);
+  const selectedCellText = getResearchCellText(workbookModelRef.current, selectedCell.rowIndex, selectedCell.columnIndex);
+  const selectedRowValues = getResearchRowValues(workbookModelRef.current, selectedCell.rowIndex);
   const selectedCellCount = countSelectedCells(selectedRanges);
   const selectedRangeLabel = formatSelectedRanges(selectedRanges);
   const selectedBindingPaper = props.papers.find((paper) => paper.id === bindingPaperId) ?? null;
@@ -1017,11 +1021,31 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
               <img className="button-icon" src={analysisIcon} alt="" />
               <span>AI 大观分析</span>
             </button>
+            <button
+              type="button"
+              className="secondary-button button-with-icon"
+              onClick={props.onOpenKnowledgeGraph}
+              title="根据研究表格和论文库生成知识图谱"
+            >
+              <img className="button-icon" src={analysisIcon} alt="" />
+              <span>知识图谱</span>
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setShowRowDetail(true)}
+              disabled={selectedCell.rowIndex <= 0}
+            >
+              查看行详情
+            </button>
           </div>
         </section>
 
-        <section className="literature-insight-progress research-insight-strip" aria-live="polite">
+        <section className="literature-insight-progress research-insight-strip research-context-strip" aria-live="polite">
           <span>{literatureInsightAction.scopeText}</span>
+          <span className="formula-help-inline">
+            公式：行内 <code>$E=mc^2$</code>，块级 <code>$$L=L_data+λL_physics$$</code>
+          </span>
           {isLiteratureInsightRunning ? <div className="indeterminate-progress" /> : null}
           {literatureInsightProgress ? <p>{literatureInsightProgress}</p> : null}
           {literatureInsightHistory[0] ? (
@@ -1119,6 +1143,51 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
         <section className="research-sheet-surface">
           <div ref={containerRef} id={RESEARCH_UNIVER_CONTAINER_ID} className="univer-container" />
         </section>
+        {selectedCellText.trim() ? (
+          <section className="formula-preview-strip">
+            <span>{selectedCellAddress} / {selectedColumnHeader} 预览</span>
+            <MathText text={selectedCellText} />
+          </section>
+        ) : null}
+        {showRowDetail ? (
+          <aside className="row-detail-drawer" role="dialog" aria-label="研究表格行详情">
+            <header>
+              <div>
+                <strong>第 {selectedCell.rowIndex + 1} 行详情</strong>
+                <p>{linkedPaper ? linkedPaper.chineseTitle || linkedPaper.englishTitle || linkedPaper.pdfName : '当前行未绑定论文'}</p>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setShowRowDetail(false)} aria-label="关闭行详情">
+                ×
+              </button>
+            </header>
+            <div className="row-detail-list">
+              {Object.entries(selectedRowValues).map(([key, value]) => (
+                <p key={key}>
+                  <span>{key}</span>
+                  <em>{value || '-'}</em>
+                </p>
+              ))}
+            </div>
+            {linkedPaper?.notes.trim() ? (
+              <section className="row-linked-notes">
+                <strong>关联笔记</strong>
+                <MathText text={linkedPaper.notes} />
+              </section>
+            ) : null}
+            <div className="row-detail-actions">
+              <button type="button" className="secondary-button" disabled={!linkedPaper} onClick={() => linkedPaper && props.onOpenPaper(linkedPaper)}>
+                查看对应论文
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void navigator.clipboard.writeText(formatRowValuesForCopy(selectedRowValues))}
+              >
+                复制行信息
+              </button>
+            </div>
+          </aside>
+        ) : null}
       </section>
     </main>
   );
@@ -1164,6 +1233,12 @@ function InsightMarkdown(props: { text: string }) {
       })}
     </div>
   );
+}
+
+function formatRowValuesForCopy(values: Record<string, string>): string {
+  return Object.entries(values)
+    .map(([key, value]) => `${key}: ${value || '-'}`)
+    .join('\n');
 }
 
 function cloneStyle(style: IStyleData | null): IStyleData | null {

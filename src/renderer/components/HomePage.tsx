@@ -3,6 +3,7 @@ import brandMark from '../assets/brand-mark.png';
 import translateIcon from '../assets/icons/duotone/translate.svg';
 import libraryLineIcon from '../assets/icons/duotone/library.svg';
 import researchSheetIcon from '../assets/icons/duotone/research-sheet.svg';
+import graphIcon from '../assets/icons/duotone/analysis.svg';
 import pdfReaderIcon from '../assets/icons/duotone/pdf-reader.svg';
 import backIcon from '../assets/icons/duotone/back.svg';
 import deleteIcon from '../assets/icons/duotone/delete.svg';
@@ -15,6 +16,12 @@ interface HomePageProps {
   onNewProject: () => void;
   onOpenPaper: (paper: PaperRecord) => void;
   onOpenResearchSheet: (paper?: PaperRecord) => void;
+  onOpenKnowledgeGraph: () => void;
+  knowledgeGraphStats: {
+    paperCount: number;
+    nodeCount: number;
+    edgeCount: number;
+  };
   onUpdatePaper: (paper: PaperRecord) => void;
   onRemovePaper: (paper: PaperRecord) => void;
 }
@@ -109,6 +116,11 @@ export function HomePage(props: HomePageProps) {
             <small>已有本地笔记</small>
           </article>
           <article>
+            <span>知识图谱</span>
+            <strong>{props.knowledgeGraphStats.nodeCount}</strong>
+            <small>{props.knowledgeGraphStats.edgeCount} 条关系边</small>
+          </article>
+          <article>
             <span>最近打开</span>
             <strong>{latestPaper ? latestPaper.pdfName.replace(/\.pdf$/iu, '').slice(0, 18) : '暂无'}</strong>
             <small>{latestPaper?.lastOpenedAt ? new Date(latestPaper.lastOpenedAt).toLocaleString() : '从新建项目开始'}</small>
@@ -132,6 +144,26 @@ export function HomePage(props: HomePageProps) {
               <button type="button" className="primary-button button-with-icon" onClick={() => props.onOpenResearchSheet()}>
                 <img className="button-icon" src={researchSheetIcon} alt="" />
                 <span>打开研究表格</span>
+              </button>
+            </div>
+          </article>
+
+          <article className="home-module-card">
+            <span className="home-module-kicker">
+              <img className="button-icon" src={graphIcon} alt="" />
+              Knowledge Graph
+            </span>
+            <h2>知识图谱</h2>
+            <p>自动从研究表格和论文库中抽取论文、作者、年份、关键词、方法、场景和指标，形成可点击的主题关系图。</p>
+            <div className="home-module-meta">
+              <span className="badge">{props.knowledgeGraphStats.nodeCount} 节点</span>
+              <span className="badge">{props.knowledgeGraphStats.edgeCount} 关系</span>
+              <span className="badge">自动生成</span>
+            </div>
+            <div className="home-module-actions">
+              <button type="button" className="primary-button button-with-icon" onClick={props.onOpenKnowledgeGraph}>
+                <img className="button-icon" src={graphIcon} alt="" />
+                <span>打开知识图谱</span>
               </button>
             </div>
           </article>
@@ -299,6 +331,11 @@ export function HomePage(props: HomePageProps) {
                             <button type="button" className="secondary-button" onClick={() => props.onOpenResearchSheet(paper)}>
                               表格定位
                             </button>
+                            {paper.notes.trim() ? (
+                              <button type="button" className="secondary-button" onClick={() => props.onOpenPaper(paper)}>
+                                查看笔记
+                              </button>
+                            ) : null}
                             <button type="button" className="secondary-button" onClick={() => startEdit(paper)}>
                               编辑信息
                             </button>

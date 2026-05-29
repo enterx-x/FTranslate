@@ -22,7 +22,7 @@ export interface AnchoredScrollPosition {
   scrollTop: number;
 }
 
-const MIN_SCALE = 0.6;
+const MIN_SCALE = 0.35;
 const MAX_SCALE = 2.4;
 const WHEEL_SCALE_STEP = 0.1;
 

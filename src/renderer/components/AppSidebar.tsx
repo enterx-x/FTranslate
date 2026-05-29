@@ -4,15 +4,24 @@ import researchSheetIcon from '../assets/icons/duotone/research-sheet.svg';
 import libraryIcon from '../assets/icons/duotone/library.svg';
 import pdfReaderIcon from '../assets/icons/duotone/pdf-reader.svg';
 import aiFillIcon from '../assets/icons/duotone/ai-fill.svg';
+import analysisIcon from '../assets/icons/duotone/analysis.svg';
 import settingsIcon from '../assets/icons/duotone/settings.svg';
 
-export type AppSidebarSection = 'workspace' | 'library' | 'researchSheet' | 'reader' | 'ai' | 'settings';
+export type AppSidebarSection =
+  | 'workspace'
+  | 'library'
+  | 'researchSheet'
+  | 'knowledgeGraph'
+  | 'reader'
+  | 'ai'
+  | 'settings';
 
 interface AppSidebarProps {
   activeSection: AppSidebarSection;
   onOpenWorkspace: () => void;
   onOpenLibrary: () => void;
   onOpenResearchSheet: () => void;
+  onOpenKnowledgeGraph: () => void;
   onOpenReader: () => void;
   onOpenAi: () => void;
   onOpenSettings: () => void;
@@ -26,6 +35,7 @@ const navigationItems: Array<{
 }> = [
   { section: 'workspace', label: '工作台', icon: workspaceIcon },
   { section: 'researchSheet', label: '研究表格', icon: researchSheetIcon },
+  { section: 'knowledgeGraph', label: '知识图谱', icon: analysisIcon },
   { section: 'library', label: '论文库', icon: libraryIcon },
   { section: 'reader', label: 'PDF 阅读', icon: pdfReaderIcon },
   { section: 'ai', label: 'AI 助手', icon: aiFillIcon, isUtility: true },
@@ -50,6 +60,10 @@ export function AppSidebar(props: AppSidebarProps) {
     }
     if (target === 'researchSheet') {
       props.onOpenResearchSheet();
+      return;
+    }
+    if (target === 'knowledgeGraph') {
+      props.onOpenKnowledgeGraph();
       return;
     }
     if (target === 'reader') {

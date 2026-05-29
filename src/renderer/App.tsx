@@ -18,6 +18,7 @@ import type { AiAssistantFocus } from './components/AiAssistantPage';
 import type { AiFormState } from './components/AiModePanel';
 import { AppSidebar, type AppSidebarSection } from './components/AppSidebar';
 import { HomePage } from './components/HomePage';
+import { buildKnowledgeGraph } from './lib/knowledgeGraph';
 import { NotesPanel } from './components/NotesPanel';
 import { PdfViewer } from './components/PdfViewer';
 import type { PdfViewportState } from './lib/pdfViewportSync';
@@ -48,6 +49,7 @@ import {
   parseResearchWorkbook,
   serializeResearchSheetLinks,
   serializeResearchWorkbook,
+  getResearchRowValues,
   type ResearchSheetLink,
   type ResearchWorkbook
 } from './lib/researchWorkbook';
@@ -104,7 +106,7 @@ interface RecentProject {
   aiCachePath?: string;
 }
 
-type AppView = 'home' | 'reader' | 'researchSheet' | 'aiAssistant';
+type AppView = 'home' | 'reader' | 'researchSheet' | 'aiAssistant' | 'knowledgeGraph';
 type ReaderMode = 'manual' | 'ai';
 type PdfViewMode = 'source' | 'parallel' | 'translated';
 type BuiltInProviderId = Exclude<AiProviderId, 'custom'>;
@@ -117,6 +119,10 @@ const ResearchSheetPage = lazy(async () => {
 const AiAssistantPage = lazy(async () => {
   const module = await import('./components/AiAssistantPage');
   return { default: module.AiAssistantPage };
+});
+const KnowledgeGraphPage = lazy(async () => {
+  const module = await import('./components/KnowledgeGraphPage');
+  return { default: module.KnowledgeGraphPage };
 });
 
 export default function App() {
@@ -172,6 +178,29 @@ export default function App() {
   const currentItem = translationDocument?.items[currentParagraphIndex] ?? null;
   const displayedPdf = pdfViewMode === 'translated' && translatedPdf ? translatedPdf : pdf;
   const parallelTranslationPdf = translatedMonoPdf ?? translatedPdf;
+  const activePaper = activePaperId
+    ? paperLibrary.find((paper) => paper.id === activePaperId) ?? null
+    : null;
+  const activePaperResearchLink = activePaperId
+    ? researchSheetLinks.find((link) => link.paperId === activePaperId)
+    : undefined;
+  const activePaperResearchRowIndex = activePaperResearchLink
+    ? researchWorkbook.rows.findIndex((row) => row.id === activePaperResearchLink.rowId)
+    : -1;
+  const activePaperResearchRowValues =
+    activePaperResearchRowIndex > 0
+      ? getResearchRowValues(researchWorkbook, activePaperResearchRowIndex)
+      : null;
+  const knowledgeGraphSummary = useMemo(
+    () =>
+      buildKnowledgeGraph({
+        papers: paperLibrary,
+        workbook: researchWorkbook,
+        links: researchSheetLinks,
+        maxNodes: 160
+      }).stats,
+    [paperLibrary, researchWorkbook, researchSheetLinks]
+  );
 
   useEffect(() => {
     window.electronAPI
@@ -1367,6 +1396,10 @@ export default function App() {
     void handleOpenResearchSheet();
   }
 
+  function openKnowledgeGraph(): void {
+    setView('knowledgeGraph');
+  }
+
   function openAiAssistant(focus: AiAssistantFocus = 'analysis'): void {
     setAiAssistantFocus(focus);
     setView('aiAssistant');
@@ -1381,6 +1414,10 @@ export default function App() {
   function getSidebarActiveSection(): AppSidebarSection {
     if (view === 'researchSheet') {
       return 'researchSheet';
+    }
+
+    if (view === 'knowledgeGraph') {
+      return 'knowledgeGraph';
     }
 
     if (view === 'aiAssistant') {
@@ -1401,6 +1438,7 @@ export default function App() {
         onOpenWorkspace={openWorkspace}
         onOpenLibrary={openLibrary}
         onOpenResearchSheet={openResearchSheetFromSidebar}
+        onOpenKnowledgeGraph={openKnowledgeGraph}
         onOpenReader={openReaderFromSidebar}
         onOpenAi={openAiFromSidebar}
         onOpenSettings={() => openAiAssistant('settings')}
@@ -1420,6 +1458,8 @@ export default function App() {
             onNewProject={handleNewPdfTranslationProject}
             onOpenPaper={handleOpenPaper}
             onOpenResearchSheet={handleOpenResearchSheet}
+            onOpenKnowledgeGraph={openKnowledgeGraph}
+            knowledgeGraphStats={knowledgeGraphSummary}
             onUpdatePaper={(paper) =>
               setPaperLibrary((library) => library.map((item) => (item.id === paper.id ? paper : item)))
             }
@@ -1452,6 +1492,7 @@ export default function App() {
               onFillCellsWithAi={handleFillResearchCellsWithAi}
               onAnalyzeLiteratureGap={handleAnalyzeLiteratureGap}
               onOpenAiAssistant={() => openAiAssistant('analysis')}
+              onOpenKnowledgeGraph={openKnowledgeGraph}
             />
           </Suspense>
           <footer className="status-bar">{statusMessage}</footer>
@@ -1494,6 +1535,27 @@ export default function App() {
     );
   }
 
+  if (view === 'knowledgeGraph') {
+    return (
+      <div className="app-shell desktop-shell knowledge-shell">
+        {renderSidebar()}
+        <div className="app-main">
+          <Suspense fallback={<main className="knowledge-graph-loading">正在加载知识图谱...</main>}>
+            <KnowledgeGraphPage
+              papers={paperLibrary}
+              workbook={researchWorkbook}
+              links={researchSheetLinks}
+              onBackHome={openWorkspace}
+              onOpenPaper={handleOpenPaper}
+              onOpenResearchSheet={handleOpenResearchSheet}
+            />
+          </Suspense>
+          <footer className="status-bar">{statusMessage}</footer>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell desktop-shell reader-shell">
       {renderSidebar()}
@@ -1506,7 +1568,7 @@ export default function App() {
           onNewProject={handleNewPdfTranslationProject}
           onOpenPdf={handleOpenPdf}
           onZoomIn={() => setScale((value) => Math.min(2.4, Number((value + 0.1).toFixed(2))))}
-          onZoomOut={() => setScale((value) => Math.max(0.6, Number((value - 0.1).toFixed(2))))}
+          onZoomOut={() => setScale((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}
           onPreviousPage={() => handlePageChange(currentPage - 1)}
           onNextPage={() => handlePageChange(currentPage + 1)}
           onPageChange={handlePageChange}
@@ -1860,7 +1922,16 @@ export default function App() {
               </div>
               {aiBalance ? <p className="pdf-ai-balance">{aiBalance.message}</p> : null}
             </details>
-            <NotesPanel notes={activeNotes} onChange={handleNotesChange} />
+            <NotesPanel
+              notes={activeNotes}
+              paper={activePaper}
+              pdfPage={currentPage}
+              linkedRowIndex={activePaperResearchRowIndex}
+              linkedRowValues={activePaperResearchRowValues}
+              onChange={handleNotesChange}
+              onOpenPaper={activePaper ? () => handleOpenPaper(activePaper) : undefined}
+              onOpenResearchSheet={activePaper ? () => handleOpenResearchSheet(activePaper) : undefined}
+            />
           </div>
         </section>
       </main>

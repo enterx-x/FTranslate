@@ -6,7 +6,7 @@ describe('PDF interaction helpers', () => {
     expect(getWheelZoomScale(1.15, -120)).toBe(1.25);
     expect(getWheelZoomScale(1.15, 120)).toBe(1.05);
     expect(getWheelZoomScale(2.4, -120)).toBe(2.4);
-    expect(getWheelZoomScale(0.6, 120)).toBe(0.6);
+    expect(getWheelZoomScale(0.35, 120)).toBe(0.35);
   });
 
   it('keeps the pointer anchored after scale changes', () => {
