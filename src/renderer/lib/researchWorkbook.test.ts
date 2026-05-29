@@ -248,6 +248,26 @@ describe('research workbook model', () => {
     expect(parsed.rows[0].cells.at(-1)?.value).toBe('My Custom Column');
   });
 
+  it('rebuilds the header row from parsed columns when stored rows are missing', () => {
+    const parsed = parseResearchWorkbook(JSON.stringify({
+      id: 'research-workbook',
+      sheetName: 'custom-sheet',
+      columns: [
+        { key: 'paper', label: 'Paper', width: 180 },
+        { key: 'custom-gap', label: 'Open Gap', width: 240 }
+      ],
+      rows: []
+    }));
+
+    expect(parsed.columns).toEqual([
+      { key: 'paper', label: 'Paper', width: 180 },
+      { key: 'custom-gap', label: 'Open Gap', width: 240 }
+    ]);
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0].id).toBe('header');
+    expect(parsed.rows[0].cells.map((cell) => cell.value)).toEqual(['Paper', 'Open Gap']);
+  });
+
   it('can toggle bold and italic off and back on without losing the cell value', () => {
     const seeded = setResearchCellText(buildDefaultResearchWorkbook(), 1, 3, '格式测试');
     const boldItalic = setResearchCellStyle(seeded, 1, 3, { bl: 1, it: 1 });

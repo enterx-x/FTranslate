@@ -146,14 +146,13 @@ export function parseResearchWorkbook(value: string | null): ResearchWorkbook {
     }
 
     const fallback = buildDefaultResearchWorkbook();
-    const rows = Array.isArray(parsed.rows)
-      ? parsed.rows.map(parseRow).filter((row): row is ResearchRow => Boolean(row))
-      : fallback.rows;
-
     const parsedColumns = Array.isArray(parsed.columns)
       ? parsed.columns.map(parseColumn).filter((column): column is ResearchSheetColumn => Boolean(column))
       : [];
     const columns = parsedColumns.length > 0 ? parsedColumns : fallback.columns;
+    const rows = Array.isArray(parsed.rows)
+      ? parsed.rows.map(parseRow).filter((row): row is ResearchRow => Boolean(row))
+      : buildHeaderRow(columns);
 
     return {
       id: readString(parsed.id) || fallback.id,
@@ -164,7 +163,7 @@ export function parseResearchWorkbook(value: string | null): ResearchWorkbook {
         xSplit: Math.max(0, Number(isRecord(parsed.freeze) ? parsed.freeze.xSplit : 0) || 0)
       },
       columns,
-      rows: normalizeRows(rows.length > 0 ? rows : fallback.rows, columns)
+      rows: normalizeRows(rows.length > 0 ? rows : buildHeaderRow(columns), columns)
     };
   } catch {
     return buildDefaultResearchWorkbook();
@@ -688,7 +687,7 @@ function normalizeRows(rows: ResearchRow[], columns: ResearchSheetColumn[]): Res
     return normalized;
   }
 
-  return [...buildDefaultResearchWorkbook().rows, ...normalized];
+  return [...buildHeaderRow(columns), ...normalized];
 }
 
 function normalizeCells(cells: ResearchCell[], columns: ResearchSheetColumn[]): ResearchCell[] {
@@ -712,6 +711,24 @@ function ensureRows(rows: ResearchRow[], columns: ResearchSheetColumn[], rowInde
   }
 
   return nextRows;
+}
+
+function buildHeaderRow(columns: ResearchSheetColumn[]): ResearchRow[] {
+  return [
+    {
+      id: 'header',
+      cells: columns.map((column) => ({
+        value: column.label,
+        style: {
+          bold: true,
+          fontSize: 13,
+          color: '#ffffff',
+          backgroundColor: '#111111',
+          align: 'center'
+        }
+      }))
+    }
+  ];
 }
 
 function getMeaningfulColumnCount(sheet: IWorkbookData['sheets'][string]): number {

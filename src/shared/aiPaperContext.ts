@@ -39,10 +39,17 @@ export interface OpenAiPdfResponseRequest {
     reasoning?: {
       effort: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
     };
+    tools?: Array<{
+      type: 'web_search_preview';
+    }>;
   };
 }
 
 export type OpenAiResponsesInputContent = OpenAiPdfResponseRequest['body']['input'][number]['content'][number];
+
+export interface OpenAiResponsesOptions {
+  enableWebSearch?: boolean;
+}
 
 export interface KimiFileExtractRequest {
   url: string;
@@ -103,24 +110,32 @@ export function buildOpenAiPdfDataResponseRequest(
 
 export function buildOpenAiResponsesRequest(
   settings: AiProviderSettings,
-  content: OpenAiResponsesInputContent[]
+  content: OpenAiResponsesInputContent[],
+  options: OpenAiResponsesOptions = {}
 ): OpenAiPdfResponseRequest {
   const normalized = normalizeAiProviderSettings(settings);
   const runtime = resolveAiRuntimeOptions(normalized);
+  const body = withOpenAiRuntimeOptions(
+    {
+      model: normalized.model,
+      input: [
+        {
+          role: 'user',
+          content
+        }
+      ]
+    },
+    runtime
+  );
+
+  if (options.enableWebSearch) {
+    // OpenAI Responses 内置 web_search_preview 工具用于运行时联网查新。
+    body.tools = [{ type: 'web_search_preview' }];
+  }
+
   return {
     url: `${normalized.baseURL.replace(/\/+$/u, '')}/responses`,
-    body: withOpenAiRuntimeOptions(
-      {
-        model: normalized.model,
-        input: [
-          {
-            role: 'user',
-            content
-          }
-        ]
-      },
-      runtime
-    )
+    body
   };
 }
 

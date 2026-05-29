@@ -44,6 +44,8 @@ export interface PaperRecord extends PdfTranslationRecordFields {
   aiCacheName?: string;
   translatedPdfPath?: string;
   translatedPdfName?: string;
+  translatedMonoPdfPath?: string;
+  translatedMonoPdfName?: string;
   translatedPdfMode?: PdfTranslationOutputMode;
   translationEngine?: PdfTranslationEngine;
   translationSourceHash?: string;
@@ -84,6 +86,8 @@ export function buildPaperRecord(input: BuildPaperRecordInput): PaperRecord {
     aiCacheName: undefined,
     translatedPdfPath: undefined,
     translatedPdfName: undefined,
+    translatedMonoPdfPath: undefined,
+    translatedMonoPdfName: undefined,
     translatedPdfMode: undefined,
     translationEngine: undefined,
     translationSourceHash: undefined,
@@ -123,6 +127,8 @@ export function upsertPaperRecord(library: PaperRecord[], incoming: PaperRecord)
     aiCacheName: existing.aiCacheName || incoming.aiCacheName,
     translatedPdfPath: existing.translatedPdfPath || incoming.translatedPdfPath,
     translatedPdfName: existing.translatedPdfName || incoming.translatedPdfName,
+    translatedMonoPdfPath: existing.translatedMonoPdfPath || incoming.translatedMonoPdfPath,
+    translatedMonoPdfName: existing.translatedMonoPdfName || incoming.translatedMonoPdfName,
     translatedPdfMode: existing.translatedPdfMode || incoming.translatedPdfMode,
     translationEngine: existing.translationEngine || incoming.translationEngine,
     translationSourceHash: existing.translationSourceHash || incoming.translationSourceHash,
@@ -147,6 +153,8 @@ export function updatePaperRecord(
       | 'aiCacheName'
       | 'translatedPdfPath'
       | 'translatedPdfName'
+      | 'translatedMonoPdfPath'
+      | 'translatedMonoPdfName'
       | 'translatedPdfMode'
       | 'translationEngine'
       | 'translationSourceHash'
@@ -238,6 +246,8 @@ function normalizePaperRecord(value: unknown): PaperRecord | null {
     aiCacheName: toText(record.aiCacheName) || undefined,
     translatedPdfPath: toText(record.translatedPdfPath) || undefined,
     translatedPdfName: toText(record.translatedPdfName) || undefined,
+    translatedMonoPdfPath: toText(record.translatedMonoPdfPath) || undefined,
+    translatedMonoPdfName: toText(record.translatedMonoPdfName) || undefined,
     translatedPdfMode: parseTranslatedPdfMode(record.translatedPdfMode),
     translationEngine: parseTranslationEngine(record.translationEngine),
     translationSourceHash: toText(record.translationSourceHash) || undefined,

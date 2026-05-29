@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildLiteratureGapPrompt,
+  appendLiteratureInsightHistory,
   completeLiteratureInsightRun,
   createLiteratureInsightRunState,
   describeLiteratureInsightAction,
   failLiteratureInsightRun,
+  normalizeLiteratureInsightHistory,
   normalizeLiteratureInsightRunState,
   updateLiteratureInsightRunProgress,
   parseLiteratureGapResponse
@@ -116,5 +118,45 @@ describe('literature gap insight prompt', () => {
       paperCount: 2,
       progress: expect.stringContaining('中断')
     });
+  });
+
+  it('stores newest literature insight history entries first with a bounded list', () => {
+    const existing = normalizeLiteratureInsightHistory([
+      {
+        id: 'old',
+        title: 'Old run',
+        paperCount: 1,
+        provider: 'kimi',
+        model: 'kimi-k2.5',
+        createdAt: 1000,
+        result: 'old result'
+      }
+    ]);
+
+    const next = appendLiteratureInsightHistory(
+      existing,
+      {
+        title: 'New run',
+        paperCount: 2,
+        provider: 'openai',
+        model: 'gpt-5.1',
+        createdAt: 2000,
+        result: 'new result',
+        webSearchUsed: true
+      },
+      1
+    );
+
+    expect(next).toHaveLength(1);
+    expect(next[0]).toMatchObject({
+      title: 'New run',
+      paperCount: 2,
+      provider: 'openai',
+      model: 'gpt-5.1',
+      createdAt: 2000,
+      result: 'new result',
+      webSearchUsed: true
+    });
+    expect(next[0].id).toContain('insight-2000');
   });
 });

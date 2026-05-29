@@ -205,6 +205,10 @@ button:disabled {
   background: var(--app-bg);
 }
 
+.split-layout.is-parallel-pdf {
+  grid-template-columns: minmax(0, 72%) minmax(320px, 28%);
+}
+
 .pdf-pane,
 .translation-pane {
   min-width: 0;
@@ -428,6 +432,38 @@ button:disabled {
   border: 0;
   border-radius: 0;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.16);
+}
+
+.pdf-pane.is-parallel {
+  background: #cfcfca;
+}
+
+.parallel-pdf-viewer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: #111111;
+}
+
+.parallel-pdf-viewer .pdf-viewer {
+  min-width: 0;
+  background: #d8d8d3;
+}
+
+.parallel-pdf-viewer .pane-title {
+  padding-inline: 10px;
+  font-size: 12px;
+}
+
+.parallel-pdf-viewer .pdf-viewer-shell .pdfViewer {
+  padding: 16px 0;
+}
+
+.parallel-pdf-viewer .pdf-viewer-shell .pdfViewer .page {
+  margin-bottom: 16px;
 }
 
 .pdf-viewer-shell .textLayer ::selection {
@@ -1663,6 +1699,35 @@ button:disabled {
   color: #6a6258;
 }
 
+.literature-insight-history {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: #f8f8f6;
+  color: #4f4a42;
+  font-size: 12px;
+}
+
+.literature-insight-history label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.literature-insight-history select {
+  min-width: min(520px, 65vw);
+  height: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: #ffffff;
+  padding: 0 8px;
+}
+
 .indeterminate-progress {
   position: relative;
   overflow: hidden;
@@ -1718,6 +1783,40 @@ button:disabled {
   background: #f8f8f6;
   color: #111111;
   line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.literature-insight-rendered {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: #f8f8f6;
+  color: #111111;
+  line-height: 1.75;
+}
+
+.literature-insight-rendered h3,
+.literature-insight-rendered h4,
+.literature-insight-rendered p,
+.literature-insight-rendered ul {
+  margin: 0 0 10px;
+}
+
+.literature-insight-rendered h3 {
+  font-size: 16px;
+}
+
+.literature-insight-rendered h4 {
+  font-size: 14px;
+}
+
+.literature-insight-rendered ul {
+  padding-left: 22px;
+}
+
+.literature-insight-rendered .math-text {
   white-space: pre-wrap;
 }
 

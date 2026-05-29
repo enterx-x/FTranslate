@@ -20,6 +20,7 @@ export interface ProjectLoadResult {
   translation: TextFilePayload | null;
   aiCache: TextFilePayload | null;
   translatedPdf: PdfFilePayload | null;
+  translatedMonoPdf: PdfFilePayload | null;
   errors: string[];
 }
 
@@ -88,6 +89,7 @@ export interface AiAnalyzeLiteratureResult {
   model: string;
   mode: 'openai-pdf-input' | 'kimi-file-extract' | 'local-text';
   cachedContextCount: number;
+  webSearchUsed?: boolean;
 }
 
 export interface PdfTranslationEngineResult {
@@ -109,8 +111,11 @@ export interface PdfTranslationResult {
   status: 'cached' | 'completed';
   message: string;
   pdf: PdfFilePayload;
+  monoPdf?: PdfFilePayload | null;
   translatedPdfPath: string;
   translatedPdfName: string;
+  translatedMonoPdfPath?: string;
+  translatedMonoPdfName?: string;
   translatedPdfMode: 'dual' | 'mono';
   translationEngine: 'pdfmathtranslate';
   translationSourceHash: string;
@@ -128,6 +133,7 @@ export interface ElectronApi {
     translationPath?: string;
     aiCachePath?: string;
     translatedPdfPath?: string;
+    translatedMonoPdfPath?: string;
   }) => Promise<ProjectLoadResult>;
   checkPdfTranslationEngine: () => Promise<PdfTranslationEngineResult>;
   translatePdf: (request: {

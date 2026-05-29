@@ -19,6 +19,7 @@ import '@univerjs/preset-sheets-core/lib/index.css';
 import '@univerjs/preset-sheets-conditional-formatting/lib/index.css';
 import '@univerjs/preset-sheets-data-validation/lib/index.css';
 import brandMark from '../assets/brand-mark.png';
+import { MathText } from './MathText';
 import {
   RESEARCH_SHEET_LINKS_KEY,
   RESEARCH_WORKBOOK_KEY,
@@ -40,12 +41,16 @@ import {
 import type { PaperRecord } from '../lib/papers';
 import {
   LITERATURE_INSIGHT_STATE_KEY,
+  LITERATURE_INSIGHT_HISTORY_KEY,
+  appendLiteratureInsightHistory,
   completeLiteratureInsightRun,
   createLiteratureInsightRunState,
   describeLiteratureInsightAction,
   failLiteratureInsightRun,
+  normalizeLiteratureInsightHistory,
   normalizeLiteratureInsightRunState,
   updateLiteratureInsightRunProgress,
+  type LiteratureInsightHistoryEntry,
   type LiteratureInsightRunState,
   type LiteratureGapPaperInput
 } from '../lib/literatureInsight';
@@ -73,6 +78,13 @@ export interface AnalyzeLiteratureGapRequest {
   papers: LiteratureGapPaperInput[];
 }
 
+export interface AnalyzeLiteratureGapResult {
+  text: string;
+  provider: string;
+  model: string;
+  webSearchUsed?: boolean;
+}
+
 interface ResearchSheetPageProps {
   papers: PaperRecord[];
   workbook: ResearchWorkbook;
@@ -84,7 +96,7 @@ interface ResearchSheetPageProps {
   onWorkbookChange: (workbook: ResearchWorkbook) => void;
   onLinksChange: (links: ResearchSheetLink[]) => void;
   onFillCellsWithAi: (request: FillResearchCellsRequest) => Promise<FillResearchCellResult[]>;
-  onAnalyzeLiteratureGap: (request: AnalyzeLiteratureGapRequest) => Promise<string>;
+  onAnalyzeLiteratureGap: (request: AnalyzeLiteratureGapRequest) => Promise<AnalyzeLiteratureGapResult>;
 }
 
 interface SelectedCell {
@@ -161,6 +173,8 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const [localMessage, setLocalMessage] = useState('');
   const [literatureInsight, setLiteratureInsight] = useState('');
   const [literatureInsightProgress, setLiteratureInsightProgress] = useState('');
+  const [literatureInsightHistory, setLiteratureInsightHistory] = useState<LiteratureInsightHistoryEntry[]>([]);
+  const [selectedInsightHistoryId, setSelectedInsightHistoryId] = useState('');
   const [isLiteratureInsightRunning, setIsLiteratureInsightRunning] = useState(false);
   const literatureInsightStateRef = useRef<LiteratureInsightRunState | null>(null);
 
@@ -239,6 +253,9 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     if (restored) {
       applyLiteratureInsightState(restored);
     }
+    const restoredHistory = readStoredLiteratureInsightHistory();
+    setLiteratureInsightHistory(restoredHistory);
+    setSelectedInsightHistoryId(restoredHistory[0]?.id ?? '');
   }, []);
 
   useEffect(() => {
@@ -393,6 +410,15 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     setLiteratureInsightProgress(state && state.status !== 'completed' ? state.progress || state.error || '' : '');
   }
 
+  function persistLiteratureInsightHistory(
+    updater: (history: LiteratureInsightHistoryEntry[]) => LiteratureInsightHistoryEntry[]
+  ): void {
+    const next = updater(readStoredLiteratureInsightHistory());
+    localStorage.setItem(LITERATURE_INSIGHT_HISTORY_KEY, JSON.stringify(next, null, 2));
+    setLiteratureInsightHistory(next);
+    setSelectedInsightHistoryId(next[0]?.id ?? '');
+  }
+
   async function handleAnalyzeSelectedLiterature(): Promise<void> {
     const selectedPapers = getSelectedLiteraturePapers();
     const papers = selectedPapers.length > 0 ? selectedPapers : getAllLinkedLiteraturePapers();
@@ -420,11 +446,24 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
 
     try {
       setLocalMessage(`AI 正在综合分析 ${papers.length} 篇论文/表格行...`);
-      const text = await props.onAnalyzeLiteratureGap({ papers });
-      if (text.trim()) {
-        runState = completeLiteratureInsightRun(runState, text, Date.now());
+      const analysis = await props.onAnalyzeLiteratureGap({ papers });
+      const text = analysis.text.trim();
+      if (text) {
+        const completedAt = Date.now();
+        runState = completeLiteratureInsightRun(runState, text, completedAt);
         applyLiteratureInsightState(runState);
         setLiteratureInsight(text);
+        persistLiteratureInsightHistory((history) =>
+          appendLiteratureInsightHistory(history, {
+            title: `AI 大观分析 ${papers.length} 篇`,
+            paperCount: papers.length,
+            provider: analysis.provider,
+            model: analysis.model,
+            createdAt: completedAt,
+            result: text,
+            webSearchUsed: analysis.webSearchUsed
+          })
+        );
         setLocalMessage(`AI 已完成 ${papers.length} 篇论文/表格行的大观分析。`);
         setLiteratureInsightProgress('');
       } else {
@@ -963,6 +1002,34 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
           {literatureInsightProgress ? <p>{literatureInsightProgress}</p> : null}
         </section>
 
+        {literatureInsightHistory.length > 0 ? (
+          <section className="literature-insight-history">
+            <label>
+              大观分析历史
+              <select
+                value={selectedInsightHistoryId || literatureInsightHistory[0]?.id || ''}
+                onChange={(event) => {
+                  const entry = literatureInsightHistory.find((item) => item.id === event.target.value);
+                  setSelectedInsightHistoryId(event.target.value);
+                  if (entry) {
+                    setLiteratureInsight(entry.result);
+                    setLiteratureInsightProgress('');
+                  }
+                }}
+              >
+                {literatureInsightHistory.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {new Date(entry.createdAt).toLocaleString()} · {entry.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span>
+              {literatureInsightHistory[0]?.webSearchUsed ? '最近一次已启用 OpenAI 联网查新' : '最近一次未启用实时联网查新'}
+            </span>
+          </section>
+        ) : null}
+
         {literatureInsight || literatureInsightProgress ? (
           <section className="literature-insight-panel">
             <header>
@@ -975,7 +1042,11 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
                 复制
               </button>
             </header>
-            <textarea value={literatureInsight || literatureInsightProgress} readOnly />
+            {literatureInsight ? (
+              <InsightMarkdown text={literatureInsight} />
+            ) : (
+              <textarea value={literatureInsightProgress} readOnly />
+            )}
           </section>
         ) : null}
 
@@ -1068,6 +1139,48 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   );
 }
 
+function InsightMarkdown(props: { text: string }) {
+  const blocks = props.text
+    .split(/\n{2,}/u)
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  return (
+    <div className="literature-insight-rendered">
+      {blocks.map((block, index) => {
+        const heading = block.match(/^(#{1,3})\s+(.+)$/u);
+        if (heading) {
+          const HeadingTag = heading[1].length === 1 ? 'h3' : 'h4';
+          return (
+            <HeadingTag key={index}>
+              <MathText text={heading[2]} />
+            </HeadingTag>
+          );
+        }
+
+        const listLines = block.split('\n').filter((line) => /^\s*(?:[-*]|\d+\.)\s+/u.test(line));
+        if (listLines.length >= 2) {
+          return (
+            <ul key={index}>
+              {listLines.map((line, itemIndex) => (
+                <li key={itemIndex}>
+                  <MathText text={line.replace(/^\s*(?:[-*]|\d+\.)\s+/u, '')} />
+                </li>
+              ))}
+            </ul>
+          );
+        }
+
+        return (
+          <p key={index}>
+            <MathText text={block} />
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 function cloneStyle(style: IStyleData | null): IStyleData | null {
   if (!style) {
     return null;
@@ -1109,6 +1222,15 @@ function readStoredLiteratureInsightState(): LiteratureInsightRunState | null {
     return raw ? normalizeLiteratureInsightRunState(JSON.parse(raw)) : null;
   } catch {
     return null;
+  }
+}
+
+function readStoredLiteratureInsightHistory(): LiteratureInsightHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(LITERATURE_INSIGHT_HISTORY_KEY);
+    return raw ? normalizeLiteratureInsightHistory(JSON.parse(raw)) : [];
+  } catch {
+    return [];
   }
 }
 

@@ -29,6 +29,7 @@ export interface LiteratureInsightActionState {
 }
 
 export const LITERATURE_INSIGHT_STATE_KEY = 'pdfTranslationReader:literatureInsightState';
+export const LITERATURE_INSIGHT_HISTORY_KEY = 'pdfTranslationReader:literatureInsightHistory';
 export const LITERATURE_INSIGHT_STALE_MS = 30 * 60 * 1000;
 
 export type LiteratureInsightRunStatus = 'running' | 'completed' | 'failed' | 'interrupted';
@@ -42,6 +43,17 @@ export interface LiteratureInsightRunState {
   progress: string;
   result?: string;
   error?: string;
+}
+
+export interface LiteratureInsightHistoryEntry {
+  id: string;
+  title: string;
+  paperCount: number;
+  provider: string;
+  model: string;
+  createdAt: number;
+  result: string;
+  webSearchUsed?: boolean;
 }
 
 export function describeLiteratureInsightAction(input: LiteratureInsightActionInput): LiteratureInsightActionState {
@@ -189,6 +201,61 @@ export function normalizeLiteratureInsightRunState(
   return state;
 }
 
+export function normalizeLiteratureInsightHistory(value: unknown): LiteratureInsightHistoryEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item): LiteratureInsightHistoryEntry | null => {
+      if (!isRecord(item)) {
+        return null;
+      }
+
+      const createdAt = Number(item.createdAt);
+      const paperCount = Math.max(0, Number(item.paperCount) || 0);
+      const result = typeof item.result === 'string' ? item.result.trim() : '';
+      if (!Number.isFinite(createdAt) || !result) {
+        return null;
+      }
+
+      return {
+        id: typeof item.id === 'string' && item.id.trim() ? item.id : `insight-${createdAt}`,
+        title: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : `AI 大观分析 ${paperCount} 篇`,
+        paperCount,
+        provider: typeof item.provider === 'string' ? item.provider : '',
+        model: typeof item.model === 'string' ? item.model : '',
+        createdAt,
+        result,
+        webSearchUsed: Boolean(item.webSearchUsed)
+      };
+    })
+    .filter((item): item is LiteratureInsightHistoryEntry => Boolean(item))
+    .sort((left, right) => right.createdAt - left.createdAt);
+}
+
+export function appendLiteratureInsightHistory(
+  history: LiteratureInsightHistoryEntry[],
+  entry: Omit<LiteratureInsightHistoryEntry, 'id'> & { id?: string },
+  limit = 20
+): LiteratureInsightHistoryEntry[] {
+  const createdAt = Number.isFinite(entry.createdAt) ? entry.createdAt : Date.now();
+  const normalizedEntry: LiteratureInsightHistoryEntry = {
+    id: entry.id || `insight-${createdAt}-${hashText(`${entry.title}|${entry.result}`)}`,
+    title: entry.title.trim() || `AI 大观分析 ${entry.paperCount} 篇`,
+    paperCount: Math.max(0, entry.paperCount),
+    provider: entry.provider,
+    model: entry.model,
+    createdAt,
+    result: entry.result,
+    webSearchUsed: Boolean(entry.webSearchUsed)
+  };
+
+  return [normalizedEntry, ...history.filter((item) => item.id !== normalizedEntry.id)]
+    .sort((left, right) => right.createdAt - left.createdAt)
+    .slice(0, Math.max(1, limit));
+}
+
 export function buildLiteratureGapPrompt(input: BuildLiteratureGapPromptInput): LiteratureGapPrompt {
   return {
     systemPrompt: [
@@ -199,6 +266,7 @@ export function buildLiteratureGapPrompt(input: BuildLiteratureGapPromptInput): 
       '输出必须具体、可复现、可实验验证；不要输出 Markdown 表格。'
     ].join('\n'),
     userPrompt: [
+      '如果当前模型/工具具备联网检索能力，请先用英文标题、关键词、方法名和 proposed idea 关键词检索公开网页、论文页、arXiv、GitHub 和项目页，排除已经高度重合的工作后再提出 idea；如果没有联网能力，必须明确标注“未进行实时网页查新”。',
       '请基于下面选定论文和表格信息，完成一次“领域大观分析”。',
       '',
       '必须回答：',
@@ -246,4 +314,14 @@ function formatPaperForPrompt(input: LiteratureGapPaperInput, index: number): st
     rowEntries ? `表格已有信息：\n${rowEntries}` : '表格已有信息：空',
     `已有缓存/摘要上下文：\n${context}`
   ].join('\n');
+}
+
+function hashText(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return (hash >>> 0).toString(36);
 }

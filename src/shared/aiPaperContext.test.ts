@@ -63,7 +63,8 @@ describe('AI paper context provider strategy', () => {
           type: 'input_text',
           text: 'Compare these papers.'
         }
-      ]
+      ],
+      { enableWebSearch: true }
     );
 
     expect(request.url).toBe('https://api.openai.com/v1/responses');
@@ -76,6 +77,7 @@ describe('AI paper context provider strategy', () => {
       { type: 'input_file', file_id: 'file-2' },
       { type: 'input_text', text: 'Compare these papers.' }
     ]);
+    expect(request.body.tools).toEqual([{ type: 'web_search_preview' }]);
   });
 
   it('uses Kimi file-extract before chat completion for Kimi providers', () => {

@@ -115,6 +115,7 @@ interface LoadProjectRequest {
   translationPath?: string;
   aiCachePath?: string;
   translatedPdfPath?: string;
+  translatedMonoPdfPath?: string;
 }
 
 interface AiSettingsRequest extends AiProviderSettings {
@@ -187,6 +188,7 @@ interface AiAnalyzeLiteratureResult {
   model: string;
   mode: PaperContextStrategyMode;
   cachedContextCount: number;
+  webSearchUsed?: boolean;
 }
 
 interface StoredAiSettings extends AiProviderSettings {
@@ -236,6 +238,8 @@ interface PdfTranslationRequest {
 interface PdfTranslationMetadata {
   translatedPdfPath: string;
   translatedPdfName: string;
+  translatedMonoPdfPath?: string;
+  translatedMonoPdfName?: string;
   translatedPdfMode: PdfTranslationOutputMode;
   translationEngine: 'pdfmathtranslate';
   translationSourceHash: string;
@@ -248,6 +252,7 @@ interface PdfTranslationResult extends PdfTranslationMetadata {
   status: 'cached' | 'completed';
   message: string;
   pdf: PdfFilePayload;
+  monoPdf?: PdfFilePayload | null;
 }
 
 interface PdfTranslationProgress {
@@ -337,6 +342,29 @@ async function readPdfFile(filePath: string): Promise<PdfFilePayload> {
   };
 }
 
+async function readOptionalPdfFile(filePath?: string | null): Promise<PdfFilePayload | null> {
+  if (!filePath || !(await pathExists(filePath))) {
+    return null;
+  }
+
+  return readPdfFile(filePath);
+}
+
+async function resolveOptionalMonoPdfPath(
+  preferredPath?: string,
+  fallbackPath?: string
+): Promise<string | undefined> {
+  if (preferredPath && (await pathExists(preferredPath))) {
+    return preferredPath;
+  }
+
+  if (fallbackPath && (await pathExists(fallbackPath))) {
+    return fallbackPath;
+  }
+
+  return undefined;
+}
+
 async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<PdfTranslationResult> {
   if (!request.paperId.trim()) {
     throw new Error('缺少论文记录 ID，无法写入双语 PDF 缓存。');
@@ -374,11 +402,18 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
     cachedMetadata.translatedPdfPath &&
     (await pathExists(cachedMetadata.translatedPdfPath))
   ) {
+    const cachedMonoPath = await resolveOptionalMonoPdfPath(
+      cachedMetadata.translatedMonoPdfPath,
+      outputPaths.monoPdfPath
+    );
     return {
       ...cachedMetadata,
+      translatedMonoPdfPath: cachedMonoPath,
+      translatedMonoPdfName: cachedMonoPath ? path.basename(cachedMonoPath) : undefined,
       status: 'cached',
       message: '已复用本机缓存的双语 PDF。',
-      pdf: await readPdfFile(cachedMetadata.translatedPdfPath)
+      pdf: await readPdfFile(cachedMetadata.translatedPdfPath),
+      monoPdf: await readOptionalPdfFile(cachedMonoPath)
     };
   }
 
@@ -387,11 +422,18 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
     if (reusableMetadata) {
       await fs.mkdir(outputDir, { recursive: true });
       await writePdfTranslationMetadata(request.paperId, reusableMetadata);
+      const reusableMonoPath = await resolveOptionalMonoPdfPath(
+        reusableMetadata.translatedMonoPdfPath,
+        outputPaths.monoPdfPath
+      );
       return {
         ...reusableMetadata,
+        translatedMonoPdfPath: reusableMonoPath,
+        translatedMonoPdfName: reusableMonoPath ? path.basename(reusableMonoPath) : undefined,
         status: 'cached',
         message: `已复用同一 PDF 的本机双语缓存：${reusableMetadata.translatedPdfName}`,
-        pdf: await readPdfFile(reusableMetadata.translatedPdfPath)
+        pdf: await readPdfFile(reusableMetadata.translatedPdfPath),
+        monoPdf: await readOptionalPdfFile(reusableMonoPath)
       };
     }
   }
@@ -428,10 +470,14 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
   if (!translatedPdfPath) {
     throw new Error(`PDFMathTranslate 已结束，但没有找到输出文件：${expectedOutputPath}`);
   }
+  const translatedMonoPdfPath = await resolveTranslatedPdfPath(outputPaths.monoPdfPath, outputDir, 'mono');
+  const translatedMonoPdfName = translatedMonoPdfPath ? path.basename(translatedMonoPdfPath) : undefined;
 
   const metadata: PdfTranslationMetadata = {
     translatedPdfPath,
     translatedPdfName: path.basename(translatedPdfPath),
+    translatedMonoPdfPath: translatedMonoPdfPath ?? undefined,
+    translatedMonoPdfName,
     translatedPdfMode: outputMode,
     translationEngine: 'pdfmathtranslate',
     translationSourceHash: sourceHash,
@@ -451,7 +497,8 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
     ...metadata,
     status: 'completed',
     message: `双语 PDF 已生成：${metadata.translatedPdfName}`,
-    pdf: await readPdfFile(translatedPdfPath)
+    pdf: await readPdfFile(translatedPdfPath),
+    monoPdf: await readOptionalPdfFile(translatedMonoPdfPath)
   };
 }
 
@@ -844,6 +891,9 @@ async function readPdfTranslationMetadata(paperId: string): Promise<PdfTranslati
     return {
       translatedPdfPath: parsed.translatedPdfPath,
       translatedPdfName: parsed.translatedPdfName || path.basename(parsed.translatedPdfPath),
+      translatedMonoPdfPath: typeof parsed.translatedMonoPdfPath === 'string' ? parsed.translatedMonoPdfPath : undefined,
+      translatedMonoPdfName:
+        typeof parsed.translatedMonoPdfName === 'string' ? parsed.translatedMonoPdfName : undefined,
       translatedPdfMode: parsed.translatedPdfMode === 'mono' ? 'mono' : 'dual',
       translationEngine: 'pdfmathtranslate',
       translationSourceHash: parsed.translationSourceHash,
@@ -1800,10 +1850,12 @@ async function analyzeLiteratureWithAi(
 
     content.push({
       type: 'input_text',
-      text: mergeLiteratureInsightPrompt(request, '')
+      text: mergeLiteratureInsightPrompt(request, await fetchAcademicWebContext(request))
     });
 
-    const responseRequest = buildOpenAiResponsesRequest(normalizedSettings, content);
+    const responseRequest = buildOpenAiResponsesRequest(normalizedSettings, content, {
+      enableWebSearch: true
+    });
     const text = await executeOpenAiResponses(
       responseRequest.url,
       responseRequest.body,
@@ -1816,12 +1868,14 @@ async function analyzeLiteratureWithAi(
       provider: normalizedSettings.provider,
       model: normalizedSettings.model,
       mode: strategy.mode,
-      cachedContextCount
+      cachedContextCount,
+      webSearchUsed: true
     };
   }
 
   let cachedContextCount = 0;
   const contexts: string[] = [];
+  const webContext = await fetchAcademicWebContext(request);
 
   for (const paper of request.papers) {
     let extractedText = '';
@@ -1853,7 +1907,7 @@ async function analyzeLiteratureWithAi(
 
   const chatRequest = buildGenericChatCompletionRequest(normalizedSettings, {
     systemPrompt: request.systemPrompt,
-    userPrompt: mergeLiteratureInsightPrompt(request, contexts.join('\n\n'))
+    userPrompt: mergeLiteratureInsightPrompt(request, [webContext, contexts.join('\n\n')].filter(Boolean).join('\n\n'))
   });
   const text = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey, normalizedSettings);
 
@@ -1862,7 +1916,8 @@ async function analyzeLiteratureWithAi(
     provider: normalizedSettings.provider,
     model: normalizedSettings.model,
     mode: strategy.mode,
-    cachedContextCount
+    cachedContextCount,
+    webSearchUsed: Boolean(webContext)
   };
 }
 
@@ -2095,6 +2150,78 @@ function mergeLiteratureInsightPrompt(request: AiAnalyzeLiteratureRequest, paper
     '补充论文全文/提取上下文：',
     paperContext.slice(0, 90000)
   ].join('\n');
+}
+
+async function fetchAcademicWebContext(request: AiAnalyzeLiteratureRequest): Promise<string> {
+  const queries = extractLiteratureSearchQueries(request.userPrompt);
+  const results: string[] = [];
+
+  for (const query of queries.slice(0, 3)) {
+    try {
+      const url = new URL('https://api.semanticscholar.org/graph/v1/paper/search');
+      url.searchParams.set('query', query);
+      url.searchParams.set('limit', '4');
+      url.searchParams.set('fields', 'title,year,abstract,url,authors');
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6500);
+      const response = await fetch(url, {
+        headers: { 'User-Agent': 'PDF Translation Reader literature insight' },
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+
+      if (!response.ok) {
+        continue;
+      }
+
+      const data = await response.json() as {
+        data?: Array<{
+          title?: string;
+          year?: number;
+          abstract?: string;
+          url?: string;
+          authors?: Array<{ name?: string }>;
+        }>;
+      };
+
+      for (const item of data.data ?? []) {
+        if (!item.title) {
+          continue;
+        }
+
+        results.push([
+          `Query: ${query}`,
+          `Title: ${item.title}`,
+          item.year ? `Year: ${item.year}` : '',
+          item.authors?.length ? `Authors: ${item.authors.map((author) => author.name).filter(Boolean).slice(0, 6).join(', ')}` : '',
+          item.url ? `URL: ${item.url}` : '',
+          item.abstract ? `Abstract: ${item.abstract.slice(0, 900)}` : ''
+        ].filter(Boolean).join('\n'));
+      }
+    } catch {
+      // 联网查新是增强上下文，失败时保留本地论文分析流程，不阻断主任务。
+    }
+  }
+
+  if (!results.length) {
+    return '';
+  }
+
+  return [
+    '公开网页/论文检索结果，用于排除重复 idea：',
+    ...results.slice(0, 10)
+  ].join('\n\n');
+}
+
+function extractLiteratureSearchQueries(prompt: string): string[] {
+  const titleMatches = Array.from(prompt.matchAll(/英文标题[:：]\s*([^\n]+)/gu))
+    .map((match) => match[1].trim())
+    .filter((title) => title && !title.includes('未填写'));
+  const asciiPhrases = Array.from(prompt.matchAll(/[A-Z][A-Za-z0-9:,\- ]{24,120}/gu))
+    .map((match) => match[0].replace(/\s+/gu, ' ').trim())
+    .filter((phrase) => phrase.split(/\s+/u).length >= 4);
+
+  return Array.from(new Set([...titleMatches, ...asciiPhrases])).slice(0, 5);
 }
 
 async function getOpenAiPaperFileContext(
@@ -2512,6 +2639,7 @@ function registerIpcHandlers(): void {
     let translation: TextFilePayload | null = null;
     let aiCache: TextFilePayload | null = null;
     let translatedPdf: PdfFilePayload | null = null;
+    let translatedMonoPdf: PdfFilePayload | null = null;
 
     if (request.pdfPath) {
       try {
@@ -2545,7 +2673,15 @@ function registerIpcHandlers(): void {
       }
     }
 
-    return { pdf, translation, aiCache, translatedPdf, errors };
+    if (request.translatedMonoPdfPath) {
+      try {
+        translatedMonoPdf = await readPdfFile(request.translatedMonoPdfPath);
+      } catch (error) {
+        errors.push(`无法读取中文 PDF：${request.translatedMonoPdfPath}，${String(error)}`);
+      }
+    }
+
+    return { pdf, translation, aiCache, translatedPdf, translatedMonoPdf, errors };
   });
 
   ipcMain.handle('file:save-text', async (_event, request: SaveTextRequest) => {

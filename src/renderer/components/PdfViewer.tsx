@@ -23,6 +23,11 @@ import {
 } from '../lib/pdfTextStructure';
 import { buildHighlightOverlayLines, type HighlightRectLike } from '../lib/pdfHighlightOverlay';
 import { buildOfficialFindFragments } from '../lib/pdfFindQuery';
+import {
+  buildPdfScrollPosition,
+  buildPdfViewportState,
+  type PdfViewportState
+} from '../lib/pdfViewportSync';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -38,6 +43,9 @@ interface PdfViewerProps {
   onExtractedTextReady?: (outline: ExtractedPdfBlock[]) => void;
   onHighlightStatusChange?: (message: string) => void;
   onStatusChange: (message: string) => void;
+  viewportSyncId?: string;
+  viewportState?: PdfViewportState | null;
+  onViewportStateChange?: (state: PdfViewportState) => void;
 }
 
 type PdfViewerRuntime = InstanceType<typeof PdfJsViewer>;
@@ -81,6 +89,8 @@ export function PdfViewer(props: PdfViewerProps) {
     scrollLeft: number;
     scrollTop: number;
   } | null>(null);
+  const isApplyingViewportSyncRef = useRef(false);
+  const viewportScrollFrameRef = useRef<number | null>(null);
   const [documentProxy, setDocumentProxy] = useState<PDFDocumentProxy | null>(null);
   const [findReadyToken, setFindReadyToken] = useState(0);
   const [isRendering, setIsRendering] = useState(false);
@@ -409,6 +419,80 @@ export function PdfViewer(props: PdfViewerProps) {
       window.removeEventListener('mouseup', stopPanning);
     };
   }, [isPanning]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !props.onViewportStateChange) {
+      return;
+    }
+
+    function emitViewportState(): void {
+      viewportScrollFrameRef.current = null;
+      if (!container || isApplyingViewportSyncRef.current) {
+        return;
+      }
+
+      propsRef.current.onViewportStateChange?.(
+        buildPdfViewportState(
+          {
+            scrollTop: container.scrollTop,
+            scrollLeft: container.scrollLeft,
+            scrollHeight: container.scrollHeight,
+            scrollWidth: container.scrollWidth,
+            clientHeight: container.clientHeight,
+            clientWidth: container.clientWidth
+          },
+          propsRef.current.viewportSyncId
+        )
+      );
+    }
+
+    function handleScroll(): void {
+      if (viewportScrollFrameRef.current !== null) {
+        return;
+      }
+
+      viewportScrollFrameRef.current = window.requestAnimationFrame(emitViewportState);
+    }
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+      if (viewportScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(viewportScrollFrameRef.current);
+        viewportScrollFrameRef.current = null;
+      }
+    };
+  }, [props.onViewportStateChange]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const viewportState = props.viewportState;
+    if (!container || !viewportState || viewportState.source === props.viewportSyncId) {
+      return;
+    }
+
+    const position = buildPdfScrollPosition(viewportState, {
+      scrollHeight: container.scrollHeight,
+      scrollWidth: container.scrollWidth,
+      clientHeight: container.clientHeight,
+      clientWidth: container.clientWidth
+    });
+
+    if (
+      Math.abs(container.scrollTop - position.scrollTop) < 2 &&
+      Math.abs(container.scrollLeft - position.scrollLeft) < 2
+    ) {
+      return;
+    }
+
+    isApplyingViewportSyncRef.current = true;
+    container.scrollTop = position.scrollTop;
+    container.scrollLeft = position.scrollLeft;
+    window.setTimeout(() => {
+      isApplyingViewportSyncRef.current = false;
+    }, 80);
+  }, [props.viewportState, props.viewportSyncId, props.scale, documentProxy]);
 
   function handleWheel(event: React.WheelEvent<HTMLDivElement>): void {
     if (!event.ctrlKey) {

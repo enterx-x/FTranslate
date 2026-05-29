@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     translationPath?: string;
     aiCachePath?: string;
     translatedPdfPath?: string;
+    translatedMonoPdfPath?: string;
   }) =>
     ipcRenderer.invoke('project:load', request),
   checkPdfTranslationEngine: () => ipcRenderer.invoke('pdf-translation:check-engine'),

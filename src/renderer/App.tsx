@@ -17,6 +17,7 @@ import type { AiFormState } from './components/AiModePanel';
 import { HomePage } from './components/HomePage';
 import { NotesPanel } from './components/NotesPanel';
 import { PdfViewer } from './components/PdfViewer';
+import type { PdfViewportState } from './lib/pdfViewportSync';
 import { Toolbar } from './components/Toolbar';
 import {
   buildAiCacheDocument,
@@ -76,6 +77,7 @@ import type {
 } from './types/electron';
 import type {
   AnalyzeLiteratureGapRequest,
+  AnalyzeLiteratureGapResult,
   FillResearchCellResult,
   FillResearchCellsRequest
 } from './components/ResearchSheetPage';
@@ -94,7 +96,7 @@ interface RecentProject {
 
 type AppView = 'home' | 'reader' | 'researchSheet';
 type ReaderMode = 'manual' | 'ai';
-type PdfViewMode = 'source' | 'translated';
+type PdfViewMode = 'source' | 'parallel' | 'translated';
 type BuiltInProviderId = Exclude<AiProviderId, 'custom'>;
 
 const RECENT_PROJECT_KEY = 'pdfTranslationReader:lastProject';
@@ -119,7 +121,9 @@ export default function App() {
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
   const [pdf, setPdf] = useState<PdfState | null>(null);
   const [translatedPdf, setTranslatedPdf] = useState<PdfState | null>(null);
+  const [translatedMonoPdf, setTranslatedMonoPdf] = useState<PdfState | null>(null);
   const [pdfViewMode, setPdfViewMode] = useState<PdfViewMode>('source');
+  const [pdfViewportState, setPdfViewportState] = useState<PdfViewportState | null>(null);
   const [translationDocument, setTranslationDocument] = useState<TranslationDocument | null>(null);
   const [aiCacheDocument, setAiCacheDocument] = useState<TranslationDocument | null>(null);
   const [extractedPdfBlocks, setExtractedPdfBlocks] = useState<ExtractedPdfBlock[]>([]);
@@ -150,6 +154,7 @@ export default function App() {
 
   const currentItem = translationDocument?.items[currentParagraphIndex] ?? null;
   const displayedPdf = pdfViewMode === 'translated' && translatedPdf ? translatedPdf : pdf;
+  const parallelTranslationPdf = translatedMonoPdf ?? translatedPdf;
 
   useEffect(() => {
     window.electronAPI
@@ -270,6 +275,7 @@ export default function App() {
     setPdf(nextPdf);
     if (!options.keepTranslatedPdf) {
       setTranslatedPdf(null);
+      setTranslatedMonoPdf(null);
       setPdfViewMode('source');
     }
     setExtractedPdfBlocks([]);
@@ -280,15 +286,12 @@ export default function App() {
     return nextPdf;
   }
 
-  function applyTranslatedPdfPayload(payload: PdfFilePayload): PdfState {
-    const nextPdf = {
-      filePath: payload.filePath,
-      fileName: payload.fileName,
-      data: base64ToUint8Array(payload.base64)
-    };
+  function applyTranslatedPdfPayload(payload: PdfFilePayload, monoPayload?: PdfFilePayload | null): PdfState {
+    const nextPdf = buildPdfState(payload);
 
     setTranslatedPdf(nextPdf);
-    setPdfViewMode('translated');
+    setTranslatedMonoPdf(monoPayload ? buildPdfState(monoPayload) : null);
+    setPdfViewMode(monoPayload ? 'parallel' : 'translated');
     setPageCount(0);
     return nextPdf;
   }
@@ -334,7 +337,8 @@ export default function App() {
         pdfPath: paper.pdfPath,
         translationPath: paper.translationPath,
         aiCachePath: paper.aiCachePath,
-        translatedPdfPath: paper.translatedPdfPath
+        translatedPdfPath: paper.translatedPdfPath,
+        translatedMonoPdfPath: paper.translatedMonoPdfPath
       });
 
       if (!result.pdf) {
@@ -361,7 +365,7 @@ export default function App() {
         }
       }
       if (result.translatedPdf) {
-        applyTranslatedPdfPayload(result.translatedPdf);
+        applyTranslatedPdfPayload(result.translatedPdf, result.translatedMonoPdf);
       }
       const updated = updatePaperRecord(paper, {
         lastOpenedAt: new Date().toISOString()
@@ -464,7 +468,7 @@ export default function App() {
         force
       });
 
-      applyTranslatedPdfPayload(result.pdf);
+      applyTranslatedPdfPayload(result.pdf, result.monoPdf);
       rememberTranslatedPdfResult(paper.id, result);
       setStatusMessage(result.message);
       setPdfTranslationStatus(result.message);
@@ -493,6 +497,8 @@ export default function App() {
               ? updatePaperRecord(item, {
                   translatedPdfPath: payload.filePath,
                   translatedPdfName: payload.fileName,
+                  translatedMonoPdfPath: undefined,
+                  translatedMonoPdfName: undefined,
                   translatedPdfMode: 'dual',
                   translatedAt: new Date().toISOString()
                 })
@@ -572,6 +578,8 @@ export default function App() {
           ? updatePaperRecord(paper, {
               translatedPdfPath: result.translatedPdfPath,
               translatedPdfName: result.translatedPdfName,
+              translatedMonoPdfPath: result.translatedMonoPdfPath,
+              translatedMonoPdfName: result.translatedMonoPdfName,
               translatedPdfMode: result.translatedPdfMode,
               translationEngine: result.translationEngine,
               translationSourceHash: result.translationSourceHash,
@@ -595,6 +603,7 @@ export default function App() {
       setTranslationDocument(null);
       setAiCacheDocument(null);
       setTranslatedPdf(null);
+      setTranslatedMonoPdf(null);
       setPdfViewMode('source');
 
       const now = new Date().toISOString();
@@ -1204,10 +1213,10 @@ export default function App() {
 
   async function handleAnalyzeLiteratureGap(
     request: AnalyzeLiteratureGapRequest
-  ): Promise<string> {
+  ): Promise<AnalyzeLiteratureGapResult> {
     if (!aiSettings?.apiKeyConfigured) {
       setStatusMessage('请先在阅读器右侧 AI 设置中保存 API Key，再使用研究表格 AI 大观分析。');
-      return '';
+      return { text: '', provider: '', model: '' };
     }
 
     try {
@@ -1254,10 +1263,15 @@ export default function App() {
       setStatusMessage(
         `AI 大观分析完成：${request.papers.length} 篇论文，${result.provider} / ${result.model} / ${result.mode}，复用上下文缓存 ${result.cachedContextCount} 篇。`
       );
-      return text;
+      return {
+        text,
+        provider: result.provider,
+        model: result.model,
+        webSearchUsed: Boolean(result.webSearchUsed)
+      };
     } catch (error) {
       setStatusMessage(`AI 大观分析失败：${String(error)}`);
-      return '';
+      return { text: '', provider: '', model: '' };
     } finally {
       setIsAiBusy(false);
     }
@@ -1349,30 +1363,76 @@ export default function App() {
         onPageChange={handlePageChange}
       />
 
-      <main className="split-layout">
-        <section className="pdf-pane">
-          <PdfViewer
-            pdfData={displayedPdf?.data ?? null}
-            fileName={displayedPdf?.fileName}
-            currentPage={currentPage}
-            scale={scale}
-            highlightText=""
-            onScaleChange={(nextScale) => setScale(nextScale)}
-            onDocumentLoad={(nextPageCount) => {
-              setPageCount(nextPageCount);
-              setCurrentPage((page) => Math.min(Math.max(1, page), nextPageCount));
-            }}
-            onCurrentPageChange={(page) => {
-              setCurrentPage((current) => (current === page ? current : page));
-            }}
-            onExtractedTextReady={(blocks) => {
-              if (pdfViewMode === 'source') {
-                setExtractedPdfBlocks(blocks);
-              }
-            }}
-            onHighlightStatusChange={setStatusMessage}
-            onStatusChange={setStatusMessage}
-          />
+      <main className={`split-layout${pdfViewMode === 'parallel' ? ' is-parallel-pdf' : ''}`}>
+        <section className={`pdf-pane${pdfViewMode === 'parallel' ? ' is-parallel' : ''}`}>
+          {pdfViewMode === 'parallel' && pdf && parallelTranslationPdf ? (
+            <div className="parallel-pdf-viewer" aria-label="左右双语 PDF 阅读">
+              <PdfViewer
+                pdfData={pdf.data}
+                fileName={`English · ${pdf.fileName}`}
+                currentPage={currentPage}
+                scale={scale}
+                highlightText=""
+                viewportSyncId="source"
+                viewportState={pdfViewportState}
+                onViewportStateChange={setPdfViewportState}
+                onScaleChange={(nextScale) => setScale(nextScale)}
+                onDocumentLoad={(nextPageCount) => {
+                  setPageCount(nextPageCount);
+                  setCurrentPage((page) => Math.min(Math.max(1, page), nextPageCount));
+                }}
+                onCurrentPageChange={(page) => {
+                  setCurrentPage((current) => (current === page ? current : page));
+                }}
+                onExtractedTextReady={setExtractedPdfBlocks}
+                onHighlightStatusChange={setStatusMessage}
+                onStatusChange={setStatusMessage}
+              />
+              <PdfViewer
+                pdfData={parallelTranslationPdf.data}
+                fileName={`中文 · ${parallelTranslationPdf.fileName}`}
+                currentPage={currentPage}
+                scale={scale}
+                highlightText=""
+                viewportSyncId="translation"
+                viewportState={pdfViewportState}
+                onViewportStateChange={setPdfViewportState}
+                onScaleChange={(nextScale) => setScale(nextScale)}
+                onDocumentLoad={(nextPageCount) => {
+                  setPageCount((count) => Math.max(count, nextPageCount));
+                }}
+                onCurrentPageChange={(page) => {
+                  setCurrentPage((current) => (current === page ? current : page));
+                }}
+                onExtractedTextReady={() => undefined}
+                onHighlightStatusChange={setStatusMessage}
+                onStatusChange={setStatusMessage}
+              />
+            </div>
+          ) : (
+            <PdfViewer
+              pdfData={displayedPdf?.data ?? null}
+              fileName={displayedPdf?.fileName}
+              currentPage={currentPage}
+              scale={scale}
+              highlightText=""
+              onScaleChange={(nextScale) => setScale(nextScale)}
+              onDocumentLoad={(nextPageCount) => {
+                setPageCount(nextPageCount);
+                setCurrentPage((page) => Math.min(Math.max(1, page), nextPageCount));
+              }}
+              onCurrentPageChange={(page) => {
+                setCurrentPage((current) => (current === page ? current : page));
+              }}
+              onExtractedTextReady={(blocks) => {
+                if (pdfViewMode === 'source') {
+                  setExtractedPdfBlocks(blocks);
+                }
+              }}
+              onHighlightStatusChange={setStatusMessage}
+              onStatusChange={setStatusMessage}
+            />
+          )}
         </section>
 
         <section className="translation-pane">
@@ -1397,6 +1457,14 @@ export default function App() {
                     onClick={() => setPdfViewMode('source')}
                   >
                     原文 PDF
+                  </button>
+                  <button
+                    type="button"
+                    className={pdfViewMode === 'parallel' ? 'active' : ''}
+                    disabled={!pdf || !parallelTranslationPdf}
+                    onClick={() => setPdfViewMode('parallel')}
+                  >
+                    左右双语
                   </button>
                   <button
                     type="button"

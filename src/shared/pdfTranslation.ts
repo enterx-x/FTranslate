@@ -35,6 +35,8 @@ export interface PdfTranslationSourceIdentity {
 export interface PdfTranslationRecordFields {
   translatedPdfPath?: string;
   translatedPdfName?: string;
+  translatedMonoPdfPath?: string;
+  translatedMonoPdfName?: string;
   translatedPdfMode?: PdfTranslationOutputMode;
   translationEngine?: PdfTranslationEngine;
   translationSourceHash?: string;
