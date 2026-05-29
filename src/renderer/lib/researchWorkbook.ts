@@ -11,6 +11,11 @@ import {
 export const RESEARCH_WORKBOOK_KEY = 'pdfTranslationReader:researchWorkbook';
 export const RESEARCH_SHEET_LINKS_KEY = 'pdfTranslationReader:researchSheetLinks';
 const RESEARCH_ROW_ID_META_KEY = 'fTranslateRowId';
+const WRAP_STRATEGY = 3;
+const LONG_TEXT_WRAP_THRESHOLD = 24;
+const MIN_WRAPPED_ROW_HEIGHT = 56;
+const MAX_AUTO_WRAPPED_ROW_HEIGHT = 132;
+const WRAPPED_LINE_HEIGHT = 20;
 
 export type ResearchColumnKey =
   | 'paper'
@@ -382,11 +387,13 @@ export function toUniverWorkbookData(workbook: ResearchWorkbook): IWorkbookData 
       bl: BooleanNumber.TRUE,
       ht: 2,
       vt: 2,
-      fs: 13
+      fs: 13,
+      tb: WRAP_STRATEGY
     },
     normal: {
       fs: 12,
-      vt: 2
+      vt: 2,
+      tb: WRAP_STRATEGY
     }
   };
   const cellData: Record<number, Record<number, ICellData>> = {};
@@ -458,8 +465,9 @@ export function toUniverWorkbookData(workbook: ResearchWorkbook): IWorkbookData 
 }
 
 export function fromUniverWorkbookData(snapshot: IWorkbookData): ResearchWorkbook {
-  const sheetId = snapshot.sheetOrder[0];
-  const sheet = sheetId ? snapshot.sheets[sheetId] : undefined;
+  const normalizedSnapshot = normalizeUniverSnapshotForResearch(snapshot);
+  const sheetId = normalizedSnapshot.sheetOrder[0];
+  const sheet = sheetId ? normalizedSnapshot.sheets[sheetId] : undefined;
   if (!sheet) {
     return buildDefaultResearchWorkbook();
   }
@@ -497,10 +505,10 @@ export function fromUniverWorkbookData(snapshot: IWorkbookData): ResearchWorkboo
   const rows = allRows.slice(0, lastUsedRowIndex + 1);
 
   return {
-    id: snapshot.id || 'research-workbook',
-    sheetName: snapshot.name || sheet.name || '论文研究表',
-    styles: snapshot.styles,
-    univerSnapshot: cloneWorkbookData(snapshot),
+    id: normalizedSnapshot.id || 'research-workbook',
+    sheetName: normalizedSnapshot.name || sheet.name || '论文研究表',
+    styles: normalizedSnapshot.styles,
+    univerSnapshot: cloneWorkbookData(normalizedSnapshot),
     freeze: {
       ySplit: Math.max(1, Number(sheet.freeze?.ySplit) || 1),
       xSplit: Math.max(0, Number(sheet.freeze?.xSplit) || 0)
@@ -548,6 +556,109 @@ export function appendResearchWorkbookSheets(
   });
 
   return fromUniverWorkbookData(nextSnapshot);
+}
+
+function normalizeUniverSnapshotForResearch(snapshot: IWorkbookData): IWorkbookData {
+  const next = cloneWorkbookData(snapshot);
+  next.styles = {
+    ...(next.styles ?? {}),
+    normal: {
+      ...((next.styles ?? {}).normal ?? {}),
+      fs: 12,
+      vt: 2,
+      tb: WRAP_STRATEGY
+    },
+    header: {
+      ...((next.styles ?? {}).header ?? {}),
+      bg: { rgb: '#111111' },
+      cl: { rgb: '#ffffff' },
+      bl: BooleanNumber.TRUE,
+      ht: 2,
+      vt: 2,
+      fs: 13,
+      tb: WRAP_STRATEGY
+    }
+  };
+
+  next.sheetOrder.forEach((sheetId) => {
+    const sheet = next.sheets[sheetId];
+    if (!sheet) {
+      return;
+    }
+
+    const cellData = sheet.cellData ?? {};
+    const rowData = { ...(sheet.rowData ?? {}) } as Record<number, { h?: number; [RESEARCH_ROW_ID_META_KEY]?: string }>;
+    const columnData = sheet.columnData ?? {};
+    const defaultColumnWidth = Number(sheet.defaultColumnWidth) || 120;
+
+    Object.entries(cellData).forEach(([rowKey, row]) => {
+      const rowIndex = Number(rowKey);
+      if (!Number.isInteger(rowIndex) || !row) {
+        return;
+      }
+
+      let estimatedHeight = 0;
+
+      Object.entries(row).forEach(([columnKey, cell]) => {
+        const columnIndex = Number(columnKey);
+        const typedCell = cell as ICellData | undefined;
+        const text = readCellText(typedCell);
+        if (!typedCell || !shouldWrapResearchCellText(text)) {
+          return;
+        }
+
+        typedCell.s = buildWrappedCellStyle(typedCell.s, next.styles);
+        const width = Number(columnData[columnIndex]?.w) || defaultColumnWidth;
+        estimatedHeight = Math.max(estimatedHeight, estimateWrappedRowHeight(text, width));
+      });
+
+      if (rowIndex > 0 && estimatedHeight > 0) {
+        const existing = rowData[rowIndex] ?? {};
+        rowData[rowIndex] = {
+          ...existing,
+          h: Math.max(Number(existing.h) || 0, estimatedHeight)
+        };
+      }
+    });
+
+    sheet.rowData = rowData;
+  });
+
+  return next;
+}
+
+function shouldWrapResearchCellText(text: string): boolean {
+  return text.includes('\n') || text.trim().length > LONG_TEXT_WRAP_THRESHOLD;
+}
+
+function buildWrappedCellStyle(
+  styleRef: ICellData['s'],
+  styles: NonNullable<IWorkbookData['styles']>
+): IStyleData {
+  const style =
+    typeof styleRef === 'string'
+      ? cloneUniverStyle((isRecord(styles[styleRef]) ? styles[styleRef] : {}) as IStyleData)
+      : isRecord(styleRef)
+        ? cloneUniverStyle(styleRef as IStyleData)
+        : {};
+
+  return {
+    ...style,
+    vt: typeof style.vt === 'number' ? style.vt : 2,
+    tb: WRAP_STRATEGY
+  };
+}
+
+function estimateWrappedRowHeight(text: string, columnWidthPx: number): number {
+  const charsPerLine = Math.max(8, Math.floor(columnWidthPx / 7));
+  const lineCount = text
+    .split(/\r?\n/u)
+    .reduce((count, line) => count + Math.max(1, Math.ceil(line.length / charsPerLine)), 0);
+
+  return Math.min(
+    MAX_AUTO_WRAPPED_ROW_HEIGHT,
+    Math.max(MIN_WRAPPED_ROW_HEIGHT, lineCount * WRAPPED_LINE_HEIGHT + 12)
+  );
 }
 
 function buildPaperRow(rowId: string, paper: PaperRecord, columns: ResearchSheetColumn[]): ResearchRow {

@@ -42,6 +42,8 @@ export interface OpenAiPdfResponseRequest {
   };
 }
 
+export type OpenAiResponsesInputContent = OpenAiPdfResponseRequest['body']['input'][number]['content'][number];
+
 export interface KimiFileExtractRequest {
   url: string;
 }
@@ -68,29 +70,16 @@ export function buildOpenAiPdfResponseRequest(
   fileId: string,
   prompt: string
 ): OpenAiPdfResponseRequest {
-  const normalized = normalizeAiProviderSettings(settings);
-  const runtime = resolveAiRuntimeOptions(normalized);
-  return {
-    url: `${normalized.baseURL.replace(/\/+$/u, '')}/responses`,
-    body: withOpenAiRuntimeOptions({
-      model: normalized.model,
-      input: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'input_file',
-              file_id: fileId
-            },
-            {
-              type: 'input_text',
-              text: prompt
-            }
-          ]
-        }
-      ]
-    }, runtime)
-  };
+  return buildOpenAiResponsesRequest(settings, [
+    {
+      type: 'input_file',
+      file_id: fileId
+    },
+    {
+      type: 'input_text',
+      text: prompt
+    }
+  ]);
 }
 
 export function buildOpenAiPdfDataResponseRequest(
@@ -99,29 +88,39 @@ export function buildOpenAiPdfDataResponseRequest(
   fileData: string,
   prompt: string
 ): OpenAiPdfResponseRequest {
+  return buildOpenAiResponsesRequest(settings, [
+    {
+      type: 'input_file',
+      filename,
+      file_data: fileData
+    },
+    {
+      type: 'input_text',
+      text: prompt
+    }
+  ]);
+}
+
+export function buildOpenAiResponsesRequest(
+  settings: AiProviderSettings,
+  content: OpenAiResponsesInputContent[]
+): OpenAiPdfResponseRequest {
   const normalized = normalizeAiProviderSettings(settings);
   const runtime = resolveAiRuntimeOptions(normalized);
   return {
     url: `${normalized.baseURL.replace(/\/+$/u, '')}/responses`,
-    body: withOpenAiRuntimeOptions({
-      model: normalized.model,
-      input: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'input_file',
-              filename,
-              file_data: fileData
-            },
-            {
-              type: 'input_text',
-              text: prompt
-            }
-          ]
-        }
-      ]
-    }, runtime)
+    body: withOpenAiRuntimeOptions(
+      {
+        model: normalized.model,
+        input: [
+          {
+            role: 'user',
+            content
+          }
+        ]
+      },
+      runtime
+    )
   };
 }
 

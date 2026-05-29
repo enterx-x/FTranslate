@@ -112,10 +112,28 @@ describe('AI translation helpers', () => {
     expect(request.body.thinking).toEqual({ type: 'disabled' });
   });
 
-  it('can enable Kimi thinking mode with the provider-required temperature', () => {
+  it('keeps non-thinking Kimi K2 models on the provider-required non-thinking options', () => {
     const request = buildGenericChatCompletionRequest(
       {
         ...AI_PROVIDER_PRESETS.kimi,
+        thinkingMode: 'enabled'
+      },
+      {
+        systemPrompt: 'Analyze deeply.',
+        userPrompt: 'Find the core limitation.'
+      }
+    );
+
+    expect(request.body.temperature).toBe(0.6);
+    expect(request.body.top_p).toBe(0.95);
+    expect(request.body.thinking).toEqual({ type: 'disabled' });
+  });
+
+  it('can enable Kimi thinking mode only for thinking-capable model names', () => {
+    const request = buildGenericChatCompletionRequest(
+      {
+        ...AI_PROVIDER_PRESETS.kimi,
+        model: 'kimi-k2-thinking',
         thinkingMode: 'enabled'
       },
       {

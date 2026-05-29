@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildOpenAiPdfDataResponseRequest,
   buildOpenAiPdfResponseRequest,
+  buildOpenAiResponsesRequest,
   buildKimiFileExtractRequest,
   getPaperContextStrategy
 } from './aiPaperContext';
@@ -36,6 +37,45 @@ describe('AI paper context provider strategy', () => {
       filename: 'paper.pdf',
       file_data: 'data:application/pdf;base64,AAAA'
     });
+  });
+
+  it('applies runtime options to generic OpenAI Responses requests', () => {
+    const request = buildOpenAiResponsesRequest(
+      {
+        provider: 'openai',
+        baseURL: 'https://api.openai.com/v1',
+        model: 'gpt-5',
+        temperature: 0.4,
+        topP: 0.9,
+        maxTokens: 4096,
+        reasoningEffort: 'high'
+      },
+      [
+        {
+          type: 'input_file',
+          file_id: 'file-1'
+        },
+        {
+          type: 'input_file',
+          file_id: 'file-2'
+        },
+        {
+          type: 'input_text',
+          text: 'Compare these papers.'
+        }
+      ]
+    );
+
+    expect(request.url).toBe('https://api.openai.com/v1/responses');
+    expect(request.body.temperature).toBe(0.4);
+    expect(request.body.top_p).toBe(0.9);
+    expect(request.body.max_output_tokens).toBe(4096);
+    expect(request.body.reasoning).toEqual({ effort: 'high' });
+    expect(request.body.input[0].content).toEqual([
+      { type: 'input_file', file_id: 'file-1' },
+      { type: 'input_file', file_id: 'file-2' },
+      { type: 'input_text', text: 'Compare these papers.' }
+    ]);
   });
 
   it('uses Kimi file-extract before chat completion for Kimi providers', () => {

@@ -25,6 +25,7 @@ import {
 } from '../shared/aiTranslation';
 import {
   buildKimiFileExtractRequest,
+  buildOpenAiResponsesRequest,
   buildOpenAiPdfDataResponseRequest,
   buildOpenAiPdfResponseRequest,
   getPaperContextStrategy,
@@ -34,6 +35,7 @@ import {
   buildPdf2zhCommand,
   buildPdfTranslationOutputPaths,
   buildPdfTranslationSourceHash,
+  findReusablePdfTranslationRecord,
   patchPdf2zhOpenAiTemperatureSource,
   sanitizePdfTranslationLog,
   type PdfTranslationInvocation,
@@ -378,6 +380,20 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
       message: '已复用本机缓存的双语 PDF。',
       pdf: await readPdfFile(cachedMetadata.translatedPdfPath)
     };
+  }
+
+  if (!request.force) {
+    const reusableMetadata = await findReusablePdfTranslationMetadata(request.paperId, sourceHash, outputMode);
+    if (reusableMetadata) {
+      await fs.mkdir(outputDir, { recursive: true });
+      await writePdfTranslationMetadata(request.paperId, reusableMetadata);
+      return {
+        ...reusableMetadata,
+        status: 'cached',
+        message: `已复用同一 PDF 的本机双语缓存：${reusableMetadata.translatedPdfName}`,
+        pdf: await readPdfFile(reusableMetadata.translatedPdfPath)
+      };
+    }
   }
 
   await fs.mkdir(outputDir, { recursive: true });
@@ -846,6 +862,34 @@ async function writePdfTranslationMetadata(
 ): Promise<void> {
   await fs.mkdir(getPdfTranslationOutputDir(paperId), { recursive: true });
   await fs.writeFile(getPdfTranslationMetadataPath(paperId), JSON.stringify(metadata, null, 2), 'utf8');
+}
+
+async function findReusablePdfTranslationMetadata(
+  currentPaperId: string,
+  sourceHash: string,
+  outputMode: PdfTranslationOutputMode
+): Promise<PdfTranslationMetadata | null> {
+  try {
+    const translationRoot = path.join(app.getPath('userData'), 'translations');
+    const entries = await fs.readdir(translationRoot, { withFileTypes: true });
+    const records = await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory() && entry.name !== sanitizeFileName(currentPaperId))
+        .map(async (entry) => readPdfTranslationMetadata(entry.name))
+    );
+    const reusable = findReusablePdfTranslationRecord(
+      records.filter((record): record is PdfTranslationMetadata => Boolean(record)),
+      { sourceHash, outputMode }
+    );
+
+    if (reusable?.translatedPdfPath && (await pathExists(reusable.translatedPdfPath))) {
+      return reusable;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -1679,7 +1723,7 @@ async function fillSheetCellsWithAi(
       contextResult.fileId,
       prompt
     );
-    const text = await executeOpenAiResponses(responseRequest.url, responseRequest.body, apiKey);
+    const text = await executeOpenAiResponses(responseRequest.url, responseRequest.body, apiKey, normalizedSettings);
 
     return {
       text,
@@ -1759,13 +1803,12 @@ async function analyzeLiteratureWithAi(
       text: mergeLiteratureInsightPrompt(request, '')
     });
 
+    const responseRequest = buildOpenAiResponsesRequest(normalizedSettings, content);
     const text = await executeOpenAiResponses(
-      `${normalizedSettings.baseURL.replace(/\/+$/u, '')}/responses`,
-      {
-        model: normalizedSettings.model,
-        input: [{ role: 'user', content }]
-      },
-      apiKey
+      responseRequest.url,
+      responseRequest.body,
+      apiKey,
+      normalizedSettings
     );
 
     return {
@@ -1972,16 +2015,32 @@ async function executeChatCompletion(
 async function executeOpenAiResponses(
   url: string,
   body: ReturnType<typeof buildOpenAiPdfDataResponseRequest>['body'],
-  apiKey: string
+  apiKey: string,
+  settings?: AiProviderSettings
 ): Promise<string> {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify(body)
+  const runtimeOptions = resolveAiRuntimeOptions(settings ?? {
+    provider: 'custom',
+    baseURL: url,
+    model: body.model
   });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), runtimeOptions.timeoutSeconds * 1000);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
   const responseText = await response.text();
 
   if (!response.ok) {

@@ -164,9 +164,11 @@ export function resolveAiRuntimeOptions(settings: AiProviderSettings): ResolvedA
   const isKimiThinkingModel = isKimiK2 && normalizedSettings.model.toLowerCase().includes('thinking');
   const explicitThinking = normalizedSettings.thinkingMode ?? 'auto';
   const thinkingMode: AiThinkingMode =
-    isKimiK2 && explicitThinking === 'auto'
+    isKimiK2
       ? isKimiThinkingModel
-        ? 'enabled'
+        ? explicitThinking === 'disabled'
+          ? 'disabled'
+          : 'enabled'
         : 'disabled'
       : explicitThinking;
   const defaultTemperature = isKimiK2

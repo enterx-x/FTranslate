@@ -16,6 +16,8 @@
   },
   "dependencies": {
     "@univerjs/preset-sheets-core": "^0.24.0",
+    "@univerjs/preset-sheets-conditional-formatting": "^0.24.0",
+    "@univerjs/preset-sheets-data-validation": "^0.24.0",
     "@univerjs/presets": "^0.24.0",
     "exceljs": "^4.4.0",
     "katex": "^0.17.0",

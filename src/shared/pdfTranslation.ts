@@ -43,6 +43,20 @@ export interface PdfTranslationRecordFields {
   translatedModel?: string;
 }
 
+export function findReusablePdfTranslationRecord<T extends PdfTranslationRecordFields>(
+  records: T[],
+  input: {
+    sourceHash: string;
+    outputMode: PdfTranslationOutputMode;
+  }
+): T | null {
+  return records.find((record) =>
+    record.translationSourceHash === input.sourceHash &&
+    record.translatedPdfMode === input.outputMode &&
+    Boolean(record.translatedPdfPath)
+  ) ?? null;
+}
+
 export function buildPdf2zhCommand(input: PdfTranslationCommandInput): PdfTranslationCommand {
   const args =
     input.invocation === 'python-module'

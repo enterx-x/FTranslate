@@ -3,6 +3,7 @@ import {
   buildPdf2zhCommand,
   buildPdfTranslationOutputPaths,
   buildPdfTranslationSourceHash,
+  findReusablePdfTranslationRecord,
   patchPdf2zhOpenAiTemperatureSource,
   sanitizePdfTranslationLog
 } from './pdfTranslation';
@@ -95,6 +96,24 @@ describe('PDFMathTranslate command helpers', () => {
 
     expect(command.env.PDF_TRANSLATION_READER_OPENAI_TEMPERATURE).toBe('1');
     expect(command.env.PDF_TRANSLATION_READER_DISABLE_THINKING).toBe('0');
+  });
+
+  it('forces Kimi K2 non-thinking PDF translations to the provider-required temperature', () => {
+    const command = buildPdf2zhCommand({
+      executable: 'pdf2zh',
+      pdfPath: 'D:/papers/robot paper.pdf',
+      outputDir: 'C:/cache',
+      mode: 'dual',
+      settings: {
+        provider: 'kimi',
+        baseURL: 'https://api.moonshot.cn/v1',
+        model: 'kimi-k2.5',
+        thinkingMode: 'enabled'
+      }
+    });
+
+    expect(command.env.PDF_TRANSLATION_READER_OPENAI_TEMPERATURE).toBe('0.6');
+    expect(command.env.PDF_TRANSLATION_READER_DISABLE_THINKING).toBe('1');
   });
 
   it('can invoke pdf2zh as a Python module from the app private venv', () => {
@@ -229,5 +248,42 @@ describe('PDFMathTranslate command helpers', () => {
     expect(sanitizePdfTranslationLog('failed with sk-secret-token', 'sk-secret-token')).toBe(
       'failed with [REDACTED_API_KEY]'
     );
+  });
+
+  it('selects reusable translated PDF cache records by source hash and mode', () => {
+    const reusable = findReusablePdfTranslationRecord(
+      [
+        {
+          translationSourceHash: 'abc',
+          translatedPdfMode: 'mono',
+          translatedPdfPath: 'C:/cache/paper-mono.pdf'
+        },
+        {
+          translationSourceHash: 'abc',
+          translatedPdfMode: 'dual',
+          translatedPdfPath: 'C:/cache/paper-dual.pdf'
+        }
+      ],
+      {
+        sourceHash: 'abc',
+        outputMode: 'dual'
+      }
+    );
+
+    expect(reusable?.translatedPdfPath).toBe('C:/cache/paper-dual.pdf');
+    expect(
+      findReusablePdfTranslationRecord(
+        [
+          {
+            translationSourceHash: 'abc',
+            translatedPdfMode: 'dual'
+          }
+        ],
+        {
+          sourceHash: 'abc',
+          outputMode: 'dual'
+        }
+      )
+    ).toBeNull();
   });
 });

@@ -28,6 +28,22 @@ export interface LiteratureInsightActionState {
   scopeText: string;
 }
 
+export const LITERATURE_INSIGHT_STATE_KEY = 'pdfTranslationReader:literatureInsightState';
+export const LITERATURE_INSIGHT_STALE_MS = 30 * 60 * 1000;
+
+export type LiteratureInsightRunStatus = 'running' | 'completed' | 'failed' | 'interrupted';
+
+export interface LiteratureInsightRunState {
+  status: LiteratureInsightRunStatus;
+  paperCount: number;
+  startedAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  progress: string;
+  result?: string;
+  error?: string;
+}
+
 export function describeLiteratureInsightAction(input: LiteratureInsightActionInput): LiteratureInsightActionState {
   const activeCount = input.selectedPaperCount > 0 ? input.selectedPaperCount : input.linkedPaperCount;
 
@@ -72,6 +88,107 @@ export function describeLiteratureInsightAction(input: LiteratureInsightActionIn
   };
 }
 
+export function createLiteratureInsightRunState(
+  paperCount: number,
+  now = Date.now()
+): LiteratureInsightRunState {
+  return {
+    status: 'running',
+    paperCount,
+    startedAt: now,
+    updatedAt: now,
+    progress: `正在准备 ${paperCount} 篇论文/表格行的上下文...`
+  };
+}
+
+export function updateLiteratureInsightRunProgress(
+  state: LiteratureInsightRunState,
+  progress: string,
+  now = Date.now()
+): LiteratureInsightRunState {
+  return {
+    ...state,
+    status: 'running',
+    updatedAt: now,
+    progress
+  };
+}
+
+export function completeLiteratureInsightRun(
+  state: LiteratureInsightRunState,
+  result: string,
+  now = Date.now()
+): LiteratureInsightRunState {
+  return {
+    ...state,
+    status: 'completed',
+    updatedAt: now,
+    completedAt: now,
+    progress: '',
+    result
+  };
+}
+
+export function failLiteratureInsightRun(
+  state: LiteratureInsightRunState,
+  error: string,
+  now = Date.now()
+): LiteratureInsightRunState {
+  return {
+    ...state,
+    status: 'failed',
+    updatedAt: now,
+    completedAt: now,
+    progress: error,
+    error
+  };
+}
+
+export function normalizeLiteratureInsightRunState(
+  value: unknown,
+  now = Date.now(),
+  staleMs = LITERATURE_INSIGHT_STALE_MS
+): LiteratureInsightRunState | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const status = typeof value.status === 'string' ? value.status : '';
+  if (!['running', 'completed', 'failed', 'interrupted'].includes(status)) {
+    return null;
+  }
+
+  const startedAt = Number(value.startedAt);
+  const updatedAt = Number(value.updatedAt);
+  const paperCount = Math.max(0, Number(value.paperCount) || 0);
+  if (!Number.isFinite(startedAt) || !Number.isFinite(updatedAt)) {
+    return null;
+  }
+
+  const state: LiteratureInsightRunState = {
+    status: status as LiteratureInsightRunStatus,
+    paperCount,
+    startedAt,
+    updatedAt,
+    completedAt: Number.isFinite(Number(value.completedAt)) ? Number(value.completedAt) : undefined,
+    progress: typeof value.progress === 'string' ? value.progress : '',
+    result: typeof value.result === 'string' ? value.result : undefined,
+    error: typeof value.error === 'string' ? value.error : undefined
+  };
+
+  if (state.status === 'running' && now - state.updatedAt > staleMs) {
+    return {
+      ...state,
+      status: 'interrupted',
+      updatedAt: now,
+      completedAt: now,
+      progress: `上次 AI 大观分析在 ${Math.round((now - state.updatedAt) / 1000)} 秒前停止更新，已标记为中断。`
+    };
+  }
+
+  return state;
+}
+
 export function buildLiteratureGapPrompt(input: BuildLiteratureGapPromptInput): LiteratureGapPrompt {
   return {
     systemPrompt: [
@@ -102,6 +219,10 @@ export function parseLiteratureGapResponse(value: string): string {
     .replace(/^```(?:markdown|md|text)?\s*/iu, '')
     .replace(/```$/u, '')
     .trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function formatPaperForPrompt(input: LiteratureGapPaperInput, index: number): string {

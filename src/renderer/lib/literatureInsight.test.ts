@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildLiteratureGapPrompt,
+  completeLiteratureInsightRun,
+  createLiteratureInsightRunState,
   describeLiteratureInsightAction,
+  failLiteratureInsightRun,
+  normalizeLiteratureInsightRunState,
+  updateLiteratureInsightRunProgress,
   parseLiteratureGapResponse
 } from './literatureInsight';
 import type { PaperRecord } from './papers';
@@ -77,6 +82,39 @@ describe('literature gap insight prompt', () => {
       disabled: true,
       label: 'AI 大观分析中...',
       scopeText: '正在综合分析 2 篇选中论文。'
+    });
+  });
+
+  it('persists literature insight progress and restores stale runs as interrupted', () => {
+    const running = createLiteratureInsightRunState(2, 1000);
+    const updated = updateLiteratureInsightRunProgress(running, 'running 12s', 12_000);
+    const completed = completeLiteratureInsightRun(updated, 'final insight', 20_000);
+    const failed = failLiteratureInsightRun(updated, 'request failed', 21_000);
+    const stale = normalizeLiteratureInsightRunState(updated, 40 * 60 * 1000, 30 * 60 * 1000);
+
+    expect(running).toMatchObject({
+      status: 'running',
+      paperCount: 2,
+      progress: expect.stringContaining('2')
+    });
+    expect(updated).toMatchObject({
+      status: 'running',
+      progress: 'running 12s'
+    });
+    expect(completed).toMatchObject({
+      status: 'completed',
+      progress: '',
+      result: 'final insight'
+    });
+    expect(failed).toMatchObject({
+      status: 'failed',
+      progress: 'request failed',
+      error: 'request failed'
+    });
+    expect(stale).toMatchObject({
+      status: 'interrupted',
+      paperCount: 2,
+      progress: expect.stringContaining('中断')
     });
   });
 });

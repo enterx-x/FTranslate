@@ -38,11 +38,13 @@ const basePaper: PaperRecord = {
 describe('research workbook model', () => {
   it('creates a frozen first row workbook with paper research columns', () => {
     const workbook = buildDefaultResearchWorkbook();
+    const snapshot = toUniverWorkbookData(workbook);
 
     expect(RESEARCH_WORKBOOK_KEY).toBe('pdfTranslationReader:researchWorkbook');
     expect(RESEARCH_SHEET_LINKS_KEY).toBe('pdfTranslationReader:researchSheetLinks');
     expect(workbook.sheetName).toBe('论文研究表');
     expect(workbook.freeze.ySplit).toBe(1);
+    expect(snapshot.styles.normal).toMatchObject({ tb: 3 });
     expect(RESEARCH_SHEET_COLUMNS.map((column) => column.label)).toEqual([
       '论文',
       '中文标题',
@@ -57,6 +59,43 @@ describe('research workbook model', () => {
       '备注'
     ]);
     expect(getResearchCellText(workbook, 0, 3)).toBe('创新点');
+  });
+
+  it('normalizes legacy snapshots so long research text wraps with readable row height', () => {
+    const longText = 'This is a long imported literature note that should wrap inside the cell instead of rendering as one clipped line across the worksheet.';
+    const restored = fromUniverWorkbookData({
+      id: 'research-workbook',
+      name: 'legacy-book',
+      appVersion: '0.24.0',
+      locale: 'zhCN',
+      styles: {},
+      sheetOrder: ['sheet-1'],
+      sheets: {
+        'sheet-1': {
+          id: 'sheet-1',
+          name: 'legacy-sheet',
+          cellData: {
+            0: { 0: { v: 'Header', t: 1 } },
+            1: { 0: { v: longText, t: 1 } }
+          },
+          rowCount: 2,
+          columnCount: 1,
+          defaultColumnWidth: 120,
+          defaultRowHeight: 28,
+          mergeData: [],
+          rowHeader: { width: 46 },
+          columnHeader: { height: 26 },
+          showGridlines: 1,
+          rightToLeft: 0
+        }
+      }
+    } as never);
+    const roundTrip = toUniverWorkbookData(restored);
+    const sheet = roundTrip.sheets[roundTrip.sheetOrder[0]];
+
+    expect(restored.rows[1].height).toBeGreaterThanOrEqual(56);
+    expect(sheet.cellData?.[1]?.[0]?.s).toMatchObject({ tb: 3 });
+    expect(sheet.rowData?.[1]?.h).toBeGreaterThanOrEqual(56);
   });
 
   it('adds or reuses a row linked to a paper without duplicating rows', () => {

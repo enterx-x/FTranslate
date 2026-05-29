@@ -4,13 +4,20 @@ import {
   createUniver,
   defaultTheme,
   LocaleType,
+  mergeLocales,
   type ICellData,
   type IStyleData,
   type IWorkbookData
 } from '@univerjs/presets';
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core';
+import { UniverSheetsConditionalFormattingPreset } from '@univerjs/preset-sheets-conditional-formatting';
+import { UniverSheetsDataValidationPreset } from '@univerjs/preset-sheets-data-validation';
 import zhCN from '@univerjs/preset-sheets-core/locales/zh-CN';
+import conditionalFormattingZhCN from '@univerjs/preset-sheets-conditional-formatting/locales/zh-CN';
+import dataValidationZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
 import '@univerjs/preset-sheets-core/lib/index.css';
+import '@univerjs/preset-sheets-conditional-formatting/lib/index.css';
+import '@univerjs/preset-sheets-data-validation/lib/index.css';
 import brandMark from '../assets/brand-mark.png';
 import {
   RESEARCH_SHEET_LINKS_KEY,
@@ -32,7 +39,14 @@ import {
 } from '../lib/researchWorkbook';
 import type { PaperRecord } from '../lib/papers';
 import {
+  LITERATURE_INSIGHT_STATE_KEY,
+  completeLiteratureInsightRun,
+  createLiteratureInsightRunState,
   describeLiteratureInsightAction,
+  failLiteratureInsightRun,
+  normalizeLiteratureInsightRunState,
+  updateLiteratureInsightRunProgress,
+  type LiteratureInsightRunState,
   type LiteratureGapPaperInput
 } from '../lib/literatureInsight';
 
@@ -148,6 +162,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const [literatureInsight, setLiteratureInsight] = useState('');
   const [literatureInsightProgress, setLiteratureInsightProgress] = useState('');
   const [isLiteratureInsightRunning, setIsLiteratureInsightRunning] = useState(false);
+  const literatureInsightStateRef = useRef<LiteratureInsightRunState | null>(null);
 
   const selectedRowId = getRowId(workbookModelRef.current, selectedCell.rowIndex);
   const linkedPaperId = props.links.find((link) => link.rowId === selectedRowId)?.paperId ?? '';
@@ -220,6 +235,13 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   }, [props.workbook]);
 
   useEffect(() => {
+    const restored = readStoredLiteratureInsightState();
+    if (restored) {
+      applyLiteratureInsightState(restored);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!containerRef.current || univerRef.current) {
       return;
     }
@@ -250,7 +272,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
         theme: defaultTheme,
         locale: LocaleType.ZH_CN,
         locales: {
-          [LocaleType.ZH_CN]: zhCN
+          [LocaleType.ZH_CN]: mergeLocales(zhCN, conditionalFormattingZhCN, dataValidationZhCN)
         },
         presets: [
           UniverSheetsCorePreset({
@@ -263,6 +285,11 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
               statisticBar: true,
               zoomSlider: true
             }
+          }),
+          UniverSheetsConditionalFormattingPreset(),
+          UniverSheetsDataValidationPreset({
+            showEditOnDropdown: true,
+            showSearchOnDropdown: true
           })
         ]
       });
@@ -353,6 +380,19 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     }
   }
 
+  function applyLiteratureInsightState(state: LiteratureInsightRunState | null): void {
+    literatureInsightStateRef.current = state;
+    if (state) {
+      localStorage.setItem(LITERATURE_INSIGHT_STATE_KEY, JSON.stringify(state));
+    } else {
+      localStorage.removeItem(LITERATURE_INSIGHT_STATE_KEY);
+    }
+
+    setIsLiteratureInsightRunning(state?.status === 'running');
+    setLiteratureInsight(state?.result ?? '');
+    setLiteratureInsightProgress(state && state.status !== 'completed' ? state.progress || state.error || '' : '');
+  }
+
   async function handleAnalyzeSelectedLiterature(): Promise<void> {
     const selectedPapers = getSelectedLiteraturePapers();
     const papers = selectedPapers.length > 0 ? selectedPapers : getAllLinkedLiteraturePapers();
@@ -362,11 +402,19 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     }
 
     const startedAt = Date.now();
+    let runState = createLiteratureInsightRunState(papers.length, startedAt);
+    applyLiteratureInsightState(runState);
     setIsLiteratureInsightRunning(true);
     setLiteratureInsight('');
     setLiteratureInsightProgress(`正在准备 ${papers.length} 篇论文/表格行的上下文...`);
     const timer = window.setInterval(() => {
       const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+      runState = updateLiteratureInsightRunProgress(
+        runState,
+        `AI 大观分析运行中 ${elapsedSeconds}s：正在读取 PDF 缓存、表格信息和笔记。`,
+        Date.now()
+      );
+      applyLiteratureInsightState(runState);
       setLiteratureInsightProgress(`AI 大观分析运行中 ${elapsedSeconds}s：正在读取 PDF 缓存、表格信息和笔记。`);
     }, 1000);
 
@@ -374,13 +422,23 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
       setLocalMessage(`AI 正在综合分析 ${papers.length} 篇论文/表格行...`);
       const text = await props.onAnalyzeLiteratureGap({ papers });
       if (text.trim()) {
+        runState = completeLiteratureInsightRun(runState, text, Date.now());
+        applyLiteratureInsightState(runState);
         setLiteratureInsight(text);
         setLocalMessage(`AI 已完成 ${papers.length} 篇论文/表格行的大观分析。`);
         setLiteratureInsightProgress('');
       } else {
+        runState = failLiteratureInsightRun(
+          runState,
+          'AI 大观分析没有返回内容；请检查 API 设置或选择包含论文/表格内容的行。',
+          Date.now()
+        );
+        applyLiteratureInsightState(runState);
         setLiteratureInsightProgress('AI 大观分析没有返回内容；请检查 API 设置或选择包含论文/表格内容的行。');
       }
     } catch (error) {
+      runState = failLiteratureInsightRun(runState, `AI 大观分析失败：${String(error)}`, Date.now());
+      applyLiteratureInsightState(runState);
       setLiteratureInsightProgress(`AI 大观分析失败：${String(error)}`);
     } finally {
       window.clearInterval(timer);
@@ -1043,6 +1101,15 @@ function normalizeUniverRange(
     startColumn: Math.min(startColumn, endColumn),
     endColumn: Math.max(startColumn, endColumn)
   };
+}
+
+function readStoredLiteratureInsightState(): LiteratureInsightRunState | null {
+  try {
+    const raw = localStorage.getItem(LITERATURE_INSIGHT_STATE_KEY);
+    return raw ? normalizeLiteratureInsightRunState(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
 }
 
 function getRowId(workbook: ResearchWorkbook, rowIndex: number): string {
