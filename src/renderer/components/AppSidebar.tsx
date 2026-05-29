@@ -14,6 +14,8 @@ interface AppSidebarProps {
   onOpenLibrary: () => void;
   onOpenResearchSheet: () => void;
   onOpenReader: () => void;
+  onOpenAi: () => void;
+  onOpenSettings: () => void;
 }
 
 const navigationItems: Array<{
@@ -30,23 +32,36 @@ const navigationItems: Array<{
   { section: 'settings', label: '设置', icon: settingsIcon, isUtility: true }
 ];
 
+export function getSidebarNavigationTarget(section: AppSidebarSection): AppSidebarSection | null {
+  return section;
+}
+
 export function AppSidebar(props: AppSidebarProps) {
   function handleNavigate(section: AppSidebarSection): void {
-    if (section === 'workspace') {
+    const target = getSidebarNavigationTarget(section);
+
+    if (target === 'workspace') {
       props.onOpenWorkspace();
       return;
     }
-    if (section === 'library') {
+    if (target === 'library') {
       props.onOpenLibrary();
       return;
     }
-    if (section === 'researchSheet') {
+    if (target === 'researchSheet') {
       props.onOpenResearchSheet();
       return;
     }
-    if (section === 'reader' || section === 'ai') {
+    if (target === 'reader') {
       props.onOpenReader();
       return;
+    }
+    if (target === 'ai') {
+      props.onOpenAi();
+      return;
+    }
+    if (target === 'settings') {
+      props.onOpenSettings();
     }
   }
 
@@ -63,8 +78,7 @@ export function AppSidebar(props: AppSidebarProps) {
             type="button"
             className={`app-sidebar-link${props.activeSection === item.section ? ' active' : ''}${item.isUtility ? ' utility' : ''}`}
             onClick={() => handleNavigate(item.section)}
-            disabled={item.section === 'settings'}
-            title={item.section === 'settings' ? '设置面板后续接入，当前 API 设置在 PDF 阅读页右侧' : item.label}
+            title={item.section === 'settings' ? '打开 AI 助手中的 API 与高级设置' : item.label}
           >
             <img className="button-icon" src={item.icon} alt="" />
             <span>{item.label}</span>

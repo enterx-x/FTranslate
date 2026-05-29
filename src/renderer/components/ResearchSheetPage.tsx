@@ -84,6 +84,7 @@ export interface FillResearchCellResult {
 
 export interface AnalyzeLiteratureGapRequest {
   papers: LiteratureGapPaperInput[];
+  customPrompt?: string;
 }
 
 export interface AnalyzeLiteratureGapResult {
@@ -105,6 +106,7 @@ interface ResearchSheetPageProps {
   onLinksChange: (links: ResearchSheetLink[]) => void;
   onFillCellsWithAi: (request: FillResearchCellsRequest) => Promise<FillResearchCellResult[]>;
   onAnalyzeLiteratureGap: (request: AnalyzeLiteratureGapRequest) => Promise<AnalyzeLiteratureGapResult>;
+  onOpenAiAssistant: () => void;
 }
 
 interface SelectedCell {
@@ -1009,69 +1011,29 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
             <button
               type="button"
               className="button-with-icon"
-              onClick={handleAnalyzeSelectedLiterature}
-              disabled={literatureInsightAction.disabled}
-              title="综合选中行论文，提炼领域核心缺口和 1 个可验证 idea"
+              onClick={props.onOpenAiAssistant}
+              title="在 AI 助手中管理大观分析、联网查新、提示词和历史结果"
             >
               <img className="button-icon" src={analysisIcon} alt="" />
-              <span>{literatureInsightAction.label}</span>
+              <span>AI 大观分析</span>
             </button>
           </div>
         </section>
 
-        <section className="literature-insight-progress" aria-live="polite">
+        <section className="literature-insight-progress research-insight-strip" aria-live="polite">
           <span>{literatureInsightAction.scopeText}</span>
           {isLiteratureInsightRunning ? <div className="indeterminate-progress" /> : null}
           {literatureInsightProgress ? <p>{literatureInsightProgress}</p> : null}
+          {literatureInsightHistory[0] ? (
+            <button type="button" className="ghost-button" onClick={props.onOpenAiAssistant}>
+              最近一次：{new Date(literatureInsightHistory[0].createdAt).toLocaleString()} / 查看结果
+            </button>
+          ) : (
+            <button type="button" className="ghost-button" onClick={props.onOpenAiAssistant}>
+              打开 AI 助手配置大观分析
+            </button>
+          )}
         </section>
-
-        {literatureInsightHistory.length > 0 ? (
-          <section className="literature-insight-history">
-            <label>
-              大观分析历史
-              <select
-                value={selectedInsightHistoryId || literatureInsightHistory[0]?.id || ''}
-                onChange={(event) => {
-                  const entry = literatureInsightHistory.find((item) => item.id === event.target.value);
-                  setSelectedInsightHistoryId(event.target.value);
-                  if (entry) {
-                    setLiteratureInsight(entry.result);
-                    setLiteratureInsightProgress('');
-                  }
-                }}
-              >
-                {literatureInsightHistory.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {new Date(entry.createdAt).toLocaleString()} · {entry.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <span>
-              {literatureInsightHistory[0]?.webSearchUsed ? '最近一次已启用 OpenAI 联网查新' : '最近一次未启用实时联网查新'}
-            </span>
-          </section>
-        ) : null}
-
-        {literatureInsight || literatureInsightProgress ? (
-          <section className="literature-insight-panel">
-            <header>
-              <strong>{literatureInsight ? 'AI 大观分析结果' : 'AI 大观分析进度'}</strong>
-              <button
-                type="button"
-                onClick={() => void navigator.clipboard.writeText(literatureInsight)}
-                disabled={!literatureInsight}
-              >
-                复制
-              </button>
-            </header>
-            {literatureInsight ? (
-              <InsightMarkdown text={literatureInsight} />
-            ) : (
-              <textarea value={literatureInsightProgress} readOnly />
-            )}
-          </section>
-        ) : null}
 
         <section className="research-format-toolbar" aria-label="表格格式工具栏">
           <label>

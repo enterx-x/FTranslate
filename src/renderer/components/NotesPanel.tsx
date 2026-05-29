@@ -39,13 +39,21 @@ export function NotesPanel(props: NotesPanelProps) {
           <img className="panel-title-icon" src={noteIcon} alt="" />
           <span>阅读笔记</span>
         </span>
-        <small>{wordCount > 0 ? `${wordCount} 字，已自动保存` : '记录想法、公式推导或复现计划'}</small>
+        <small>{wordCount > 0 ? `${wordCount} 字 · 已自动保存` : '记录想法、公式推导或复现计划'}</small>
       </summary>
-      <div className="notes-template-bar">
+
+      <div className="notes-editor-meta">
+        <span className="badge">Markdown</span>
+        <span className="badge success">自动保存</span>
+        <span className="subtle">{wordCount} 字</span>
+      </div>
+
+      <div className="notes-template-bar" aria-label="笔记模板">
         {NOTE_TEMPLATES.map((template) => (
           <button
             key={template.label}
             type="button"
+            className="notes-pill-button"
             onClick={() => insertTemplate(template.content)}
             title={`插入${template.label}模板`}
           >
@@ -54,6 +62,7 @@ export function NotesPanel(props: NotesPanelProps) {
         ))}
         <button
           type="button"
+          className="notes-pill-button"
           disabled={!props.notes.trim()}
           onClick={() => void navigator.clipboard.writeText(props.notes)}
           title="复制当前笔记"
@@ -61,12 +70,16 @@ export function NotesPanel(props: NotesPanelProps) {
           复制
         </button>
       </div>
-      <textarea
-        value={props.notes}
-        rows={10}
-        placeholder="写下这篇论文的关键结论、可复现实验、疑问或后续 idea。内容会自动保存到本机论文库。"
-        onChange={(event) => props.onChange(event.target.value)}
-      />
+
+      <label className="notes-editor-field">
+        <span>笔记内容</span>
+        <textarea
+          value={props.notes}
+          rows={10}
+          placeholder="写下这篇论文的关键结论、可复现实验、疑问或后续 idea。内容会自动保存到本机论文库。"
+          onChange={(event) => props.onChange(event.target.value)}
+        />
+      </label>
     </details>
   );
 }

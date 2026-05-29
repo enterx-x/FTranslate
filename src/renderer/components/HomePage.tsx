@@ -41,6 +41,13 @@ const editableFields: Array<{
 export function HomePage(props: HomePageProps) {
   const [editingPaperId, setEditingPaperId] = useState<string | null>(null);
   const [draftPaper, setDraftPaper] = useState<PaperRecord | null>(null);
+  const latestPaper = [...props.papers].sort((left, right) => {
+    const leftTime = left.lastOpenedAt ? new Date(left.lastOpenedAt).getTime() : 0;
+    const rightTime = right.lastOpenedAt ? new Date(right.lastOpenedAt).getTime() : 0;
+    return rightTime - leftTime;
+  })[0];
+  const notedPaperCount = props.papers.filter((paper) => paper.notes?.trim()).length;
+  const dualPdfCount = props.papers.filter((paper) => paper.translatedPdfPath).length;
 
   function startEdit(paper: PaperRecord): void {
     setEditingPaperId(paper.id);
@@ -84,6 +91,29 @@ export function HomePage(props: HomePageProps) {
             </button>
           </div>
         </header>
+
+        <section className="home-dashboard-stats" aria-label="工作台统计">
+          <article>
+            <span>已收录论文</span>
+            <strong>{props.papers.length}</strong>
+            <small>论文库主记录</small>
+          </article>
+          <article>
+            <span>双语 PDF</span>
+            <strong>{dualPdfCount}</strong>
+            <small>已绑定整体译文</small>
+          </article>
+          <article>
+            <span>阅读笔记</span>
+            <strong>{notedPaperCount}</strong>
+            <small>已有本地笔记</small>
+          </article>
+          <article>
+            <span>最近打开</span>
+            <strong>{latestPaper ? latestPaper.pdfName.replace(/\.pdf$/iu, '').slice(0, 18) : '暂无'}</strong>
+            <small>{latestPaper?.lastOpenedAt ? new Date(latestPaper.lastOpenedAt).toLocaleString() : '从新建项目开始'}</small>
+          </article>
+        </section>
 
         <section className="home-module-grid" aria-label="功能模块">
           <article className="home-module-card">

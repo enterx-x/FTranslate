@@ -14,6 +14,7 @@ import {
   type AiThinkingMode
 } from '../shared/aiTranslation';
 import { formatPdfTranslationProgressMessage } from '../shared/pdfTranslation';
+import type { AiAssistantFocus } from './components/AiAssistantPage';
 import type { AiFormState } from './components/AiModePanel';
 import { AppSidebar, type AppSidebarSection } from './components/AppSidebar';
 import { HomePage } from './components/HomePage';
@@ -103,7 +104,7 @@ interface RecentProject {
   aiCachePath?: string;
 }
 
-type AppView = 'home' | 'reader' | 'researchSheet';
+type AppView = 'home' | 'reader' | 'researchSheet' | 'aiAssistant';
 type ReaderMode = 'manual' | 'ai';
 type PdfViewMode = 'source' | 'parallel' | 'translated';
 type BuiltInProviderId = Exclude<AiProviderId, 'custom'>;
@@ -113,10 +114,15 @@ const ResearchSheetPage = lazy(async () => {
   const module = await import('./components/ResearchSheetPage');
   return { default: module.ResearchSheetPage };
 });
+const AiAssistantPage = lazy(async () => {
+  const module = await import('./components/AiAssistantPage');
+  return { default: module.AiAssistantPage };
+});
 
 export default function App() {
   const [view, setView] = useState<AppView>('home');
   const [homeSection, setHomeSection] = useState<'hub' | 'library'>('hub');
+  const [aiAssistantFocus, setAiAssistantFocus] = useState<AiAssistantFocus>('analysis');
   const [readerMode, setReaderMode] = useState<ReaderMode>('manual');
   const [paperLibrary, setPaperLibrary] = useState<PaperRecord[]>(() =>
     parsePaperLibrary(localStorage.getItem(PAPER_LIBRARY_KEY))
@@ -143,6 +149,7 @@ export default function App() {
   const [currentParagraphIndex, setCurrentParagraphIndex] = useState(0);
   const [aiParagraphIndex, setAiParagraphIndex] = useState(0);
   const [activeNotes, setActiveNotes] = useState('');
+  const [isPdfAiSettingsOpen, setIsPdfAiSettingsOpen] = useState(false);
   const [showTranslation, setShowTranslation] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editingText, setEditingText] = useState('');
@@ -1273,6 +1280,14 @@ export default function App() {
         })
       );
       const prompt = buildLiteratureGapPrompt({ papers: papersWithContext });
+      const userPrompt = request.customPrompt?.trim()
+        ? [
+            request.customPrompt.trim(),
+            '',
+            '以下是应用自动附加的论文上下文和既有分析约束，请一起参考：',
+            prompt.userPrompt
+          ].join('\n')
+        : prompt.userPrompt;
       const result = await window.electronAPI.analyzeLiteratureWithAi({
         papers: papersWithContext.map((item) => ({
           paperId: item.paper.id,
@@ -1280,7 +1295,7 @@ export default function App() {
           fallbackContextText: item.fallbackContextText ?? ''
         })),
         systemPrompt: prompt.systemPrompt,
-        userPrompt: prompt.userPrompt
+        userPrompt
       });
       const text = parseLiteratureGapResponse(result.text);
 
@@ -1339,16 +1354,28 @@ export default function App() {
   }
 
   function openReaderFromSidebar(): void {
-    if (pdf) {
-      setView('reader');
-      return;
-    }
+    setReaderMode('manual');
+    setIsPdfAiSettingsOpen(false);
+    setView('reader');
+  }
 
-    void handleOpenPdf();
+  function openAiFromSidebar(): void {
+    openAiAssistant('analysis');
   }
 
   function openResearchSheetFromSidebar(): void {
     void handleOpenResearchSheet();
+  }
+
+  function openAiAssistant(focus: AiAssistantFocus = 'analysis'): void {
+    setAiAssistantFocus(focus);
+    setView('aiAssistant');
+  }
+
+  function getCurrentModelOptions(): AiModelOption[] {
+    return aiForm.provider === 'custom'
+      ? []
+      : runtimeModelOptions[aiForm.provider] ?? AI_PROVIDER_MODEL_OPTIONS[aiForm.provider];
   }
 
   function getSidebarActiveSection(): AppSidebarSection {
@@ -1356,8 +1383,12 @@ export default function App() {
       return 'researchSheet';
     }
 
+    if (view === 'aiAssistant') {
+      return aiAssistantFocus === 'settings' ? 'settings' : 'ai';
+    }
+
     if (view === 'reader') {
-      return readerMode === 'ai' ? 'ai' : 'reader';
+      return 'reader';
     }
 
     return homeSection === 'library' ? 'library' : 'workspace';
@@ -1371,6 +1402,8 @@ export default function App() {
         onOpenLibrary={openLibrary}
         onOpenResearchSheet={openResearchSheetFromSidebar}
         onOpenReader={openReaderFromSidebar}
+        onOpenAi={openAiFromSidebar}
+        onOpenSettings={() => openAiAssistant('settings')}
       />
     );
   }
@@ -1417,6 +1450,41 @@ export default function App() {
               onWorkbookChange={setResearchWorkbook}
               onLinksChange={setResearchSheetLinks}
               onFillCellsWithAi={handleFillResearchCellsWithAi}
+              onAnalyzeLiteratureGap={handleAnalyzeLiteratureGap}
+              onOpenAiAssistant={() => openAiAssistant('analysis')}
+            />
+          </Suspense>
+          <footer className="status-bar">{statusMessage}</footer>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'aiAssistant') {
+    return (
+      <div className="app-shell desktop-shell ai-assistant-shell">
+        {renderSidebar()}
+        <div className="app-main">
+          <Suspense fallback={<main className="ai-assistant-loading">正在加载 AI 助手...</main>}>
+            <AiAssistantPage
+              papers={paperLibrary}
+              workbook={researchWorkbook}
+              links={researchSheetLinks}
+              activePaperId={activePaperId}
+              focus={aiAssistantFocus}
+              aiSettings={aiSettings}
+              aiBalance={aiBalance}
+              aiForm={aiForm}
+              modelOptions={getCurrentModelOptions()}
+              isBusy={isAiBusy}
+              onOpenResearchSheet={openResearchSheetFromSidebar}
+              onOpenPaper={handleOpenPaper}
+              onProviderChange={handleProviderChange}
+              onAiFormChange={handleAiFormChange}
+              onSaveSettings={handleSaveAiSettings}
+              onTestConnection={handleTestAiConnection}
+              onRefreshBalance={handleRefreshAiBalance}
+              onRefreshModels={handleRefreshAiModels}
               onAnalyzeLiteratureGap={handleAnalyzeLiteratureGap}
             />
           </Suspense>
@@ -1601,7 +1669,13 @@ export default function App() {
                 </p>
               ) : null}
             </section>
-            <details className="pdf-ai-settings">
+            <details
+              className="pdf-ai-settings"
+              open={isPdfAiSettingsOpen}
+              onToggle={(event) =>
+                setIsPdfAiSettingsOpen((event.currentTarget as HTMLDetailsElement).open)
+              }
+            >
               <summary>
                 <span className="summary-title-with-icon">
                   <img className="panel-title-icon" src={settingsIcon} alt="" />
@@ -1665,8 +1739,15 @@ export default function App() {
                   />
                 </label>
               </div>
-              <details className="ai-advanced-options">
-                <summary>API 高级选项</summary>
+              <details className="ai-advanced-options disclosure-card">
+                <summary>
+                  <span>API 高级设置</span>
+                  <span className="disclosure-state">
+                    <em className="when-closed">已收起</em>
+                    <em className="when-open">已展开</em>
+                  </span>
+                  <span className="disclosure-chevron" aria-hidden="true">⌄</span>
+                </summary>
                 <div className="pdf-ai-settings-grid">
                   <label>
                     思考模式
@@ -1681,21 +1762,25 @@ export default function App() {
                       ))}
                     </select>
                   </label>
-                  <label>
-                    OpenAI 推理强度
-                    <select
-                      value={aiForm.reasoningEffort ?? 'auto'}
-                      onChange={(event) =>
-                        handleAiFormChange({ reasoningEffort: event.target.value as AiReasoningEffort })
-                      }
-                    >
-                      {AI_REASONING_EFFORT_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  {aiForm.provider === 'openai' ? (
+                    <label>
+                      OpenAI 推理强度
+                      <select
+                        value={aiForm.reasoningEffort ?? 'auto'}
+                        onChange={(event) =>
+                          handleAiFormChange({ reasoningEffort: event.target.value as AiReasoningEffort })
+                        }
+                      >
+                        {AI_REASONING_EFFORT_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <p className="field-note">OpenAI 推理强度仅在 OpenAI Provider 下显示；当前 Provider 使用思考模式、Temperature 和 Top P。</p>
+                  )}
                   <label>
                     Temperature
                     <input
@@ -1768,6 +1853,9 @@ export default function App() {
                 </button>
                 <button type="button" disabled={isAiBusy} onClick={handleRefreshAiBalance}>
                   查询余额
+                </button>
+                <button type="button" className="secondary-button" onClick={() => openAiAssistant('settings')}>
+                  前往 AI 助手配置
                 </button>
               </div>
               {aiBalance ? <p className="pdf-ai-balance">{aiBalance.message}</p> : null}
