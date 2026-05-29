@@ -1,7 +1,5 @@
 import { useState } from 'react';
 import brandMark from '../assets/brand-mark.png';
-import workspaceIcon from '../assets/icons/premium/workspace.svg';
-import libraryIcon from '../assets/icons/premium/library.svg';
 import translateIcon from '../assets/icons/duotone/translate.svg';
 import libraryLineIcon from '../assets/icons/duotone/library.svg';
 import researchSheetIcon from '../assets/icons/duotone/research-sheet.svg';
@@ -88,8 +86,10 @@ export function HomePage(props: HomePageProps) {
 
         <section className="home-module-grid" aria-label="功能模块">
           <article className="home-module-card">
-            <img className="home-module-icon" src={workspaceIcon} alt="" />
-            <span className="home-module-kicker">Research Sheet</span>
+            <span className="home-module-kicker">
+              <img className="button-icon" src={researchSheetIcon} alt="" />
+              Research Sheet
+            </span>
             <h2>研究表格</h2>
             <p>像表格软件一样整理创新点、局限、方法、复现计划和后续 idea，支持格式、公式、导入导出和选区级 AI 填写。</p>
             <div className="home-module-meta">
@@ -106,8 +106,10 @@ export function HomePage(props: HomePageProps) {
           </article>
 
           <article className="home-module-card">
-            <img className="home-module-icon" src={libraryIcon} alt="" />
-            <span className="home-module-kicker">Paper Library</span>
+            <span className="home-module-kicker">
+              <img className="button-icon" src={libraryLineIcon} alt="" />
+              Paper Library
+            </span>
             <h2>论文库</h2>
             <p>快速浏览已打开论文的标题、作者、期刊、年份、文件状态和最近阅读位置，保持信息轻量清晰。</p>
             <div className="home-module-meta">
@@ -127,6 +129,33 @@ export function HomePage(props: HomePageProps) {
             </div>
           </article>
         </section>
+
+        <section className="home-overview-panel" aria-label="最近项目和工作台状态">
+          <div className="home-overview-head">
+            <div>
+              <span className="eyebrow">Recent Workspace</span>
+              <h2>最近研究进度</h2>
+            </div>
+            <span className="badge">已收录 {props.papers.length} 篇论文</span>
+          </div>
+          <div className="home-recent-list">
+            {props.papers.slice(0, 3).map((paper) => (
+              <button
+                key={paper.id}
+                type="button"
+                className="home-recent-item"
+                onClick={() => props.onOpenPaper(paper)}
+                title={paper.chineseTitle || paper.englishTitle || paper.pdfName}
+              >
+                <span>{paper.chineseTitle || paper.englishTitle || paper.pdfName}</span>
+                <small>{paper.journal || paper.year || paper.pdfName}</small>
+              </button>
+            ))}
+            {props.papers.length === 0 ? (
+              <p className="home-recent-empty">还没有最近项目，可以从“新建 PDF 翻译”开始。</p>
+            ) : null}
+          </div>
+        </section>
       </main>
     );
   }
@@ -135,7 +164,7 @@ export function HomePage(props: HomePageProps) {
     <main className="home-page paper-library-page">
       <header className="home-hero paper-library-hero">
         <div className="home-hero-brand">
-          <img className="home-header-mark" src={libraryIcon} alt="" />
+          <img className="home-header-mark" src={brandMark} alt="" />
           <div>
             <span className="eyebrow">Paper Library</span>
             <h1>论文库</h1>
@@ -160,7 +189,7 @@ export function HomePage(props: HomePageProps) {
 
       {props.papers.length === 0 ? (
         <section className="home-empty">
-          <img className="empty-state-icon" src={libraryIcon} alt="" />
+          <img className="empty-state-icon" src={libraryLineIcon} alt="" />
           <h2>还没有论文记录</h2>
           <p>点击“新建翻译项目”选择 PDF 即可加入论文库；手动段落翻译文件可以之后再导入。</p>
         </section>

@@ -2,6 +2,10 @@
 
 本项目是一个 Windows 桌面端学术 PDF 阅读和双语 PDF 生成工具。当前主流程是：打开英文 PDF，使用 PDFMathTranslate 生成整份译文 PDF，然后在阅读器层以“左侧英文原文、右侧中文译文”的左右同步模式阅读。
 
+## 视觉风格
+
+当前界面按 `ftranslate_ui_reference_images_only` 中的参考图做表现层重构：整体采用深色桌面外壳、白色圆角内容卡片、统一按钮系统、紧凑工具栏和清晰分栏。首页不再把 premium 图标当作卡片贴片使用，常规操作优先使用 16-18px 的 duotone 线性图标；PDF 阅读页、论文库和研究表格页都尽量保持同一套黑白灰生产力工具质感。
+
 ## 技术栈
 
 - Electron + React + TypeScript + Vite
