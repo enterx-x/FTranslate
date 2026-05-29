@@ -15,6 +15,7 @@ import {
 } from '../shared/aiTranslation';
 import { formatPdfTranslationProgressMessage } from '../shared/pdfTranslation';
 import type { AiFormState } from './components/AiModePanel';
+import { AppSidebar, type AppSidebarSection } from './components/AppSidebar';
 import { HomePage } from './components/HomePage';
 import { NotesPanel } from './components/NotesPanel';
 import { PdfViewer } from './components/PdfViewer';
@@ -115,6 +116,7 @@ const ResearchSheetPage = lazy(async () => {
 
 export default function App() {
   const [view, setView] = useState<AppView>('home');
+  const [homeSection, setHomeSection] = useState<'hub' | 'library'>('hub');
   const [readerMode, setReaderMode] = useState<ReaderMode>('manual');
   const [paperLibrary, setPaperLibrary] = useState<PaperRecord[]>(() =>
     parsePaperLibrary(localStorage.getItem(PAPER_LIBRARY_KEY))
@@ -1326,66 +1328,123 @@ export default function App() {
     return extractedPdfBlocks;
   }
 
+  function openWorkspace(): void {
+    setHomeSection('hub');
+    setView('home');
+  }
+
+  function openLibrary(): void {
+    setHomeSection('library');
+    setView('home');
+  }
+
+  function openReaderFromSidebar(): void {
+    if (pdf) {
+      setView('reader');
+      return;
+    }
+
+    void handleOpenPdf();
+  }
+
+  function openResearchSheetFromSidebar(): void {
+    void handleOpenResearchSheet();
+  }
+
+  function getSidebarActiveSection(): AppSidebarSection {
+    if (view === 'researchSheet') {
+      return 'researchSheet';
+    }
+
+    if (view === 'reader') {
+      return readerMode === 'ai' ? 'ai' : 'reader';
+    }
+
+    return homeSection === 'library' ? 'library' : 'workspace';
+  }
+
+  function renderSidebar() {
+    return (
+      <AppSidebar
+        activeSection={getSidebarActiveSection()}
+        onOpenWorkspace={openWorkspace}
+        onOpenLibrary={openLibrary}
+        onOpenResearchSheet={openResearchSheetFromSidebar}
+        onOpenReader={openReaderFromSidebar}
+      />
+    );
+  }
+
   if (view === 'home') {
     return (
-      <div className="app-shell home-shell">
-        <HomePage
-          papers={paperLibrary}
-          onNewProject={handleNewPdfTranslationProject}
-          onOpenPaper={handleOpenPaper}
-          onOpenResearchSheet={handleOpenResearchSheet}
-          onUpdatePaper={(paper) =>
-            setPaperLibrary((library) => library.map((item) => (item.id === paper.id ? paper : item)))
-          }
-          onRemovePaper={(paper) =>
-            setPaperLibrary((library) => library.filter((item) => item.id !== paper.id))
-          }
-        />
-        <footer className="status-bar">{statusMessage}</footer>
+      <div className="app-shell desktop-shell home-shell">
+        {renderSidebar()}
+        <div className="app-main">
+          <HomePage
+            papers={paperLibrary}
+            activeSection={homeSection}
+            onSectionChange={setHomeSection}
+            onNewProject={handleNewPdfTranslationProject}
+            onOpenPaper={handleOpenPaper}
+            onOpenResearchSheet={handleOpenResearchSheet}
+            onUpdatePaper={(paper) =>
+              setPaperLibrary((library) => library.map((item) => (item.id === paper.id ? paper : item)))
+            }
+            onRemovePaper={(paper) =>
+              setPaperLibrary((library) => library.filter((item) => item.id !== paper.id))
+            }
+          />
+          <footer className="status-bar">{statusMessage}</footer>
+        </div>
       </div>
     );
   }
 
   if (view === 'researchSheet') {
     return (
-      <div className="app-shell research-shell">
-        <Suspense fallback={<main className="research-sheet-loading">正在加载研究表格...</main>}>
-          <ResearchSheetPage
-            papers={paperLibrary}
-            workbook={researchWorkbook}
-            links={researchSheetLinks}
-            focusPaperId={researchFocusPaperId}
-            isAiBusy={isAiBusy}
-            onBackHome={() => setView('home')}
-            onOpenPaper={handleOpenPaper}
-            onWorkbookChange={setResearchWorkbook}
-            onLinksChange={setResearchSheetLinks}
-            onFillCellsWithAi={handleFillResearchCellsWithAi}
-            onAnalyzeLiteratureGap={handleAnalyzeLiteratureGap}
-          />
-        </Suspense>
-        <footer className="status-bar">{statusMessage}</footer>
+      <div className="app-shell desktop-shell research-shell">
+        {renderSidebar()}
+        <div className="app-main">
+          <Suspense fallback={<main className="research-sheet-loading">正在加载研究表格...</main>}>
+            <ResearchSheetPage
+              papers={paperLibrary}
+              workbook={researchWorkbook}
+              links={researchSheetLinks}
+              focusPaperId={researchFocusPaperId}
+              isAiBusy={isAiBusy}
+              onBackHome={openWorkspace}
+              onOpenPaper={handleOpenPaper}
+              onWorkbookChange={setResearchWorkbook}
+              onLinksChange={setResearchSheetLinks}
+              onFillCellsWithAi={handleFillResearchCellsWithAi}
+              onAnalyzeLiteratureGap={handleAnalyzeLiteratureGap}
+            />
+          </Suspense>
+          <footer className="status-bar">{statusMessage}</footer>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="app-shell">
-      <Toolbar
-        currentPage={currentPage}
-        pageCount={pageCount}
-        scale={scale}
-        onGoHome={() => setView('home')}
-        onNewProject={handleNewPdfTranslationProject}
-        onOpenPdf={handleOpenPdf}
-        onZoomIn={() => setScale((value) => Math.min(2.4, Number((value + 0.1).toFixed(2))))}
-        onZoomOut={() => setScale((value) => Math.max(0.6, Number((value - 0.1).toFixed(2))))}
-        onPreviousPage={() => handlePageChange(currentPage - 1)}
-        onNextPage={() => handlePageChange(currentPage + 1)}
-        onPageChange={handlePageChange}
-      />
+    <div className="app-shell desktop-shell reader-shell">
+      {renderSidebar()}
+      <div className="app-main reader-main">
+        <Toolbar
+          currentPage={currentPage}
+          pageCount={pageCount}
+          scale={scale}
+          onGoHome={openWorkspace}
+          onNewProject={handleNewPdfTranslationProject}
+          onOpenPdf={handleOpenPdf}
+          onZoomIn={() => setScale((value) => Math.min(2.4, Number((value + 0.1).toFixed(2))))}
+          onZoomOut={() => setScale((value) => Math.max(0.6, Number((value - 0.1).toFixed(2))))}
+          onPreviousPage={() => handlePageChange(currentPage - 1)}
+          onNextPage={() => handlePageChange(currentPage + 1)}
+          onPageChange={handlePageChange}
+        />
 
-      <main className={`split-layout${pdfViewMode === 'parallel' ? ' is-parallel-pdf' : ''}`}>
+        <main className={`split-layout${pdfViewMode === 'parallel' ? ' is-parallel-pdf' : ''}`}>
         <section className={`pdf-pane${pdfViewMode === 'parallel' ? ' is-parallel' : ''}`}>
           {pdfViewMode === 'parallel' && pdf && parallelTranslationPdf ? (
             <div className="parallel-pdf-viewer" aria-label="左右双语 PDF 阅读">
@@ -1718,7 +1777,8 @@ export default function App() {
         </section>
       </main>
 
-      <footer className="status-bar">{statusMessage}</footer>
+        <footer className="status-bar">{statusMessage}</footer>
+      </div>
     </div>
   );
 }

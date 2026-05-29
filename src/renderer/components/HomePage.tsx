@@ -10,6 +10,8 @@ import type { PaperRecord } from '../lib/papers';
 
 interface HomePageProps {
   papers: PaperRecord[];
+  activeSection: 'hub' | 'library';
+  onSectionChange: (section: 'hub' | 'library') => void;
   onNewProject: () => void;
   onOpenPaper: (paper: PaperRecord) => void;
   onOpenResearchSheet: (paper?: PaperRecord) => void;
@@ -37,7 +39,6 @@ const editableFields: Array<{
 ];
 
 export function HomePage(props: HomePageProps) {
-  const [activeSection, setActiveSection] = useState<'hub' | 'library'>('hub');
   const [editingPaperId, setEditingPaperId] = useState<string | null>(null);
   const [draftPaper, setDraftPaper] = useState<PaperRecord | null>(null);
 
@@ -64,7 +65,7 @@ export function HomePage(props: HomePageProps) {
     setDraftPaper((paper) => (paper ? { ...paper, [field]: value } : paper));
   }
 
-  if (activeSection === 'hub') {
+  if (props.activeSection === 'hub') {
     return (
       <main className="home-page home-hub-page">
         <header className="home-hero">
@@ -118,7 +119,7 @@ export function HomePage(props: HomePageProps) {
               <span className="badge">一键阅读</span>
             </div>
             <div className="home-module-actions">
-              <button type="button" className="primary-button button-with-icon" onClick={() => setActiveSection('library')}>
+              <button type="button" className="primary-button button-with-icon" onClick={() => props.onSectionChange('library')}>
                 <img className="button-icon" src={libraryLineIcon} alt="" />
                 <span>进入论文库</span>
               </button>
@@ -172,7 +173,7 @@ export function HomePage(props: HomePageProps) {
           </div>
         </div>
         <div className="home-header-actions">
-          <button type="button" className="secondary-button button-with-icon" onClick={() => setActiveSection('hub')}>
+          <button type="button" className="secondary-button button-with-icon" onClick={() => props.onSectionChange('hub')}>
             <img className="button-icon" src={backIcon} alt="" />
             <span>返回主页</span>
           </button>
