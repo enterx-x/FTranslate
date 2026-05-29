@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildLiteratureGapPrompt, parseLiteratureGapResponse } from './literatureInsight';
+import {
+  buildLiteratureGapPrompt,
+  describeLiteratureInsightAction,
+  parseLiteratureGapResponse
+} from './literatureInsight';
 import type { PaperRecord } from './papers';
 
 const paper: PaperRecord = {
@@ -46,5 +50,33 @@ describe('literature gap insight prompt', () => {
 
   it('cleans code fences from AI insight responses', () => {
     expect(parseLiteratureGapResponse('```markdown\n## 缺口\n内容\n```')).toBe('## 缺口\n内容');
+  });
+
+  it('describes progress and fallback scope for literature insight actions', () => {
+    expect(
+      describeLiteratureInsightAction({
+        selectedPaperCount: 0,
+        linkedPaperCount: 3,
+        isRunning: false,
+        isAiBusy: false
+      })
+    ).toMatchObject({
+      disabled: false,
+      label: 'AI 大观分析全部 3 篇',
+      scopeText: '未选中绑定行，将分析全部 3 篇已绑定论文。'
+    });
+
+    expect(
+      describeLiteratureInsightAction({
+        selectedPaperCount: 2,
+        linkedPaperCount: 3,
+        isRunning: true,
+        isAiBusy: true
+      })
+    ).toMatchObject({
+      disabled: true,
+      label: 'AI 大观分析中...',
+      scopeText: '正在综合分析 2 篇选中论文。'
+    });
   });
 });

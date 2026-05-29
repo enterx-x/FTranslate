@@ -39,7 +39,7 @@ describe('PDFMathTranslate command helpers', () => {
     expect(command.args).not.toContain('--no-dual');
     expect(command.env.OPENAI_BASE_URL).toBe('https://api.moonshot.cn/v1');
     expect(command.env.OPENAI_MODEL).toBe('kimi-k2.5');
-    expect(command.env.PDF_TRANSLATION_READER_OPENAI_TEMPERATURE).toBe('1');
+    expect(command.env.PDF_TRANSLATION_READER_OPENAI_TEMPERATURE).toBe('0.6');
     expect(command.env.PDF_TRANSLATION_READER_DISABLE_THINKING).toBe('1');
     expect(command.env.PDF_TRANSLATION_READER_OPENAI_TIMEOUT).toBe('120');
     expect(command.args).toEqual(expect.arrayContaining(['-t', '1']));
@@ -77,6 +77,23 @@ describe('PDFMathTranslate command helpers', () => {
     });
 
     expect(command.env.PDF_TRANSLATION_READER_OPENAI_TEMPERATURE).toBe('0');
+    expect(command.env.PDF_TRANSLATION_READER_DISABLE_THINKING).toBe('0');
+  });
+
+  it('keeps Kimi K2 thinking models at the provider-required temperature', () => {
+    const command = buildPdf2zhCommand({
+      executable: 'pdf2zh',
+      pdfPath: 'D:/papers/robot paper.pdf',
+      outputDir: 'C:/cache',
+      mode: 'dual',
+      settings: {
+        provider: 'kimi',
+        baseURL: 'https://api.moonshot.cn/v1',
+        model: 'kimi-k2-thinking'
+      }
+    });
+
+    expect(command.env.PDF_TRANSLATION_READER_OPENAI_TEMPERATURE).toBe('1');
     expect(command.env.PDF_TRANSLATION_READER_DISABLE_THINKING).toBe('0');
   });
 
@@ -142,6 +159,32 @@ describe('PDFMathTranslate command helpers', () => {
     expect(patched.source).toContain('PDF_TRANSLATION_READER_OPENAI_TIMEOUT');
     expect(patched.source).toContain('class AzureOpenAITranslator(BaseTranslator):');
     expect(patched.source).toContain('        self.options = {"temperature": 0}');
+  });
+
+  it('keeps the OpenAI translator runtime patch idempotent', () => {
+    const source = [
+      'class OpenAITranslator(BaseTranslator):',
+      '    def __init__(self):',
+      '        self.options = {"temperature": float(os.environ.get("PDF_TRANSLATION_READER_OPENAI_TEMPERATURE", "0"))}  # App runtime patch: provider-specific temperature',
+      '        if os.environ.get("PDF_TRANSLATION_READER_DISABLE_THINKING", "0") == "1":',
+      '            self.options["extra_body"] = {"thinking": {"type": "disabled"}}',
+      '        if os.environ.get("PDF_TRANSLATION_READER_DISABLE_THINKING", "0") == "1":',
+      '            self.options["extra_body"] = {"thinking": {"type": "disabled"}}',
+      '        self.client = openai.OpenAI(',
+      '            base_url=base_url or self.envs["OPENAI_BASE_URL"],',
+      '            api_key=api_key or self.envs["OPENAI_API_KEY"],',
+      '            timeout=float(os.environ.get("PDF_TRANSLATION_READER_OPENAI_TIMEOUT", "120")),',
+      '            max_retries=int(os.environ.get("PDF_TRANSLATION_READER_OPENAI_MAX_RETRIES", "1")),',
+      '        )',
+      '        self.add_cache_impact_parameters("temperature", self.options["temperature"])'
+    ].join('\n');
+
+    const patched = patchPdf2zhOpenAiTemperatureSource(source);
+
+    expect(patched.changed).toBe(true);
+    expect((patched.source.match(/PDF_TRANSLATION_READER_DISABLE_THINKING/gu) ?? []).length).toBe(1);
+    expect((patched.source.match(/extra_body/gu) ?? []).length).toBe(1);
+    expect(patched.source).toContain('provider-specific temperature');
   });
 
   it('derives stable dual and mono output paths from the source PDF name', () => {

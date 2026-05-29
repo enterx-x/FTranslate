@@ -203,7 +203,7 @@ async function waitForResearchSheetCanvas(client) {
       return { canvasCount: allCanvases.length, drawableCanvasCount: canvases.length, hasPaintedCanvas, hasMountedSurface };
     }`);
 
-    if (snapshot.hasPaintedCanvas || snapshot.hasMountedSurface) {
+    if (snapshot.hasPaintedCanvas) {
       return snapshot;
     }
 
@@ -214,6 +214,9 @@ async function waitForResearchSheetCanvas(client) {
     hasResearchPage: Boolean(document.querySelector('.research-sheet-page')),
     hasContainer: Boolean(document.querySelector('.univer-container')),
     canvasCount: document.querySelectorAll('.univer-container canvas').length,
+    tags: [...document.querySelectorAll('.univer-container *')]
+      .slice(0, 40)
+      .map((item) => [item.tagName.toLowerCase(), item.className || item.id || ''].join(':')),
     text: document.body.textContent?.slice(0, 1000) ?? ''
   })`);
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>

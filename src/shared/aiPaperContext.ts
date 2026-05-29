@@ -1,4 +1,8 @@
-import { type AiProviderSettings, normalizeAiProviderSettings } from './aiTranslation';
+import {
+  type AiProviderSettings,
+  normalizeAiProviderSettings,
+  resolveAiRuntimeOptions
+} from './aiTranslation';
 
 export type PaperContextStrategyMode = 'openai-pdf-input' | 'kimi-file-extract' | 'local-text';
 
@@ -29,6 +33,12 @@ export interface OpenAiPdfResponseRequest {
           }
       >;
     }>;
+    temperature?: number;
+    top_p?: number;
+    max_output_tokens?: number;
+    reasoning?: {
+      effort: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+    };
   };
 }
 
@@ -59,9 +69,10 @@ export function buildOpenAiPdfResponseRequest(
   prompt: string
 ): OpenAiPdfResponseRequest {
   const normalized = normalizeAiProviderSettings(settings);
+  const runtime = resolveAiRuntimeOptions(normalized);
   return {
     url: `${normalized.baseURL.replace(/\/+$/u, '')}/responses`,
-    body: {
+    body: withOpenAiRuntimeOptions({
       model: normalized.model,
       input: [
         {
@@ -78,7 +89,7 @@ export function buildOpenAiPdfResponseRequest(
           ]
         }
       ]
-    }
+    }, runtime)
   };
 }
 
@@ -89,9 +100,10 @@ export function buildOpenAiPdfDataResponseRequest(
   prompt: string
 ): OpenAiPdfResponseRequest {
   const normalized = normalizeAiProviderSettings(settings);
+  const runtime = resolveAiRuntimeOptions(normalized);
   return {
     url: `${normalized.baseURL.replace(/\/+$/u, '')}/responses`,
-    body: {
+    body: withOpenAiRuntimeOptions({
       model: normalized.model,
       input: [
         {
@@ -109,7 +121,7 @@ export function buildOpenAiPdfDataResponseRequest(
           ]
         }
       ]
-    }
+    }, runtime)
   };
 }
 
@@ -121,4 +133,26 @@ export function buildKimiFileExtractRequest(
   return {
     url: `${normalized.baseURL.replace(/\/+$/u, '')}/files/${encodeURIComponent(fileId)}/content`
   };
+}
+
+function withOpenAiRuntimeOptions(
+  body: OpenAiPdfResponseRequest['body'],
+  runtime: ReturnType<typeof resolveAiRuntimeOptions>
+): OpenAiPdfResponseRequest['body'] {
+  const next = { ...body };
+  next.temperature = runtime.temperature;
+
+  if (typeof runtime.topP === 'number') {
+    next.top_p = runtime.topP;
+  }
+
+  if (runtime.maxTokens) {
+    next.max_output_tokens = runtime.maxTokens;
+  }
+
+  if (runtime.reasoningEffort !== 'auto' && runtime.reasoningEffort !== 'none') {
+    next.reasoning = { effort: runtime.reasoningEffort };
+  }
+
+  return next;
 }

@@ -10,6 +10,7 @@ import {
 
 export const RESEARCH_WORKBOOK_KEY = 'pdfTranslationReader:researchWorkbook';
 export const RESEARCH_SHEET_LINKS_KEY = 'pdfTranslationReader:researchSheetLinks';
+const RESEARCH_ROW_ID_META_KEY = 'fTranslateRowId';
 
 export type ResearchColumnKey =
   | 'paper'
@@ -430,10 +431,16 @@ export function toUniverWorkbookData(workbook: ResearchWorkbook): IWorkbookData 
         defaultRowHeight: 28,
         mergeData: [],
         cellData,
-        rowData: workbook.rows.reduce<Record<number, { h: number }>>((rows, row, index) => {
+        rowData: workbook.rows.reduce<Record<number, { h?: number; [RESEARCH_ROW_ID_META_KEY]?: string }>>((rows, row, index) => {
           const height = row.height ?? (index === 0 ? 34 : undefined);
+          const rowData: { h?: number; [RESEARCH_ROW_ID_META_KEY]?: string } = {
+            [RESEARCH_ROW_ID_META_KEY]: row.id
+          };
           if (typeof height === 'number' && Number.isFinite(height) && height > 0) {
-            rows[index] = { h: height };
+            rowData.h = height;
+          }
+          if (rowData.h !== undefined || rowData[RESEARCH_ROW_ID_META_KEY]) {
+            rows[index] = rowData;
           }
           return rows;
         }, {}),
@@ -457,7 +464,7 @@ export function fromUniverWorkbookData(snapshot: IWorkbookData): ResearchWorkboo
     return buildDefaultResearchWorkbook();
   }
 
-  const rowCount = Math.max(1, Number(sheet.rowCount) || 1);
+  const rowCount = getMeaningfulRowCount(sheet);
   const columnCount = getMeaningfulColumnCount(sheet);
   const columns = Array.from({ length: columnCount }, (_, index) => {
     const fallback = RESEARCH_SHEET_COLUMNS[index];
@@ -469,7 +476,7 @@ export function fromUniverWorkbookData(snapshot: IWorkbookData): ResearchWorkboo
     };
   });
   const allRows = Array.from({ length: rowCount }, (_, rowIndex) => ({
-    id: rowIndex === 0 ? 'header' : `row-${rowIndex}`,
+    id: readRowId(sheet.rowData?.[rowIndex], rowIndex),
     height: Number(sheet.rowData?.[rowIndex]?.h) || undefined,
     cells: columns.map((_, columnIndex) => ({
       value: readCellText(sheet.cellData?.[rowIndex]?.[columnIndex]),
@@ -478,7 +485,12 @@ export function fromUniverWorkbookData(snapshot: IWorkbookData): ResearchWorkboo
   }));
   let lastUsedRowIndex = 0;
   allRows.forEach((row, index) => {
-    if (index === 0 || row.cells.some((cell) => cell.value.trim() || cell.style?.univerStyle)) {
+    if (
+      index === 0 ||
+      hasPersistedRowId(sheet.rowData?.[index], row.id) ||
+      typeof row.height === 'number' ||
+      row.cells.some((cell) => cell.value.trim() || cell.style?.univerStyle)
+    ) {
       lastUsedRowIndex = index;
     }
   });
@@ -504,12 +516,10 @@ export function appendResearchWorkbookSheets(
 ): ResearchWorkbook {
   const currentSnapshot = toUniverWorkbookData(currentWorkbook);
   const importedSnapshot = toUniverWorkbookData(importedWorkbook);
+  const styleMerge = mergeImportedSnapshotStyles(currentSnapshot.styles ?? {}, importedSnapshot);
   const nextSnapshot: IWorkbookData = {
     ...cloneWorkbookData(currentSnapshot),
-    styles: {
-      ...(currentSnapshot.styles ?? {}),
-      ...(importedSnapshot.styles ?? {})
-    },
+    styles: styleMerge.styles,
     sheets: {
       ...cloneWorkbookData(currentSnapshot).sheets
     },
@@ -529,6 +539,7 @@ export function appendResearchWorkbookSheets(
 
     const nextSheetId = makeUniqueSheetId(nextSnapshot, `imported-${Date.now()}-${index}`);
     const sheetCopy = cloneWorkbookData(importedSheet);
+    remapSheetStyleIds(sheetCopy, styleMerge.styleIdMap);
     sheetCopy.id = nextSheetId;
     sheetCopy.name = makeUniqueSheetName(importedSheet.name || `导入工作表 ${index + 1}`, usedNames);
     usedNames.add(sheetCopy.name);
@@ -618,6 +629,27 @@ function getMeaningfulColumnCount(sheet: IWorkbookData['sheets'][string]): numbe
 
   const highestUsedIndex = usedIndexes.size > 0 ? Math.max(...usedIndexes) : -1;
   return Math.max(RESEARCH_SHEET_COLUMNS.length, highestUsedIndex + 1);
+}
+
+function getMeaningfulRowCount(sheet: IWorkbookData['sheets'][string]): number {
+  const usedIndexes = new Set<number>();
+
+  Object.keys(sheet.rowData ?? {}).forEach((key) => {
+    const index = Number(key);
+    if (Number.isInteger(index) && index >= 0) {
+      usedIndexes.add(index);
+    }
+  });
+
+  Object.keys(sheet.cellData ?? {}).forEach((key) => {
+    const index = Number(key);
+    if (Number.isInteger(index) && index >= 0) {
+      usedIndexes.add(index);
+    }
+  });
+
+  const highestUsedIndex = usedIndexes.size > 0 ? Math.max(...usedIndexes) : -1;
+  return Math.max(1, Number(sheet.rowCount) || 1, highestUsedIndex + 1);
 }
 
 function parseRow(value: unknown): ResearchRow | null {
@@ -755,6 +787,25 @@ function readCellText(cell: ICellData | undefined): string {
   return '';
 }
 
+function hasPersistedRowId(
+  rowData: { h?: number; [RESEARCH_ROW_ID_META_KEY]?: unknown } | undefined,
+  rowId: string
+): boolean {
+  return typeof rowData?.[RESEARCH_ROW_ID_META_KEY] === 'string' && rowData[RESEARCH_ROW_ID_META_KEY] === rowId;
+}
+
+function readRowId(
+  rowData: { h?: number; [RESEARCH_ROW_ID_META_KEY]?: unknown } | undefined,
+  rowIndex: number
+): string {
+  const persistedRowId = rowData?.[RESEARCH_ROW_ID_META_KEY];
+  if (typeof persistedRowId === 'string' && persistedRowId) {
+    return persistedRowId;
+  }
+
+  return rowIndex === 0 ? 'header' : `row-${rowIndex}`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -765,6 +816,69 @@ function cloneUniverStyle(style: IStyleData): IStyleData {
 
 function cloneWorkbookData<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function mergeImportedSnapshotStyles(
+  currentStyles: NonNullable<IWorkbookData['styles']>,
+  importedSnapshot: IWorkbookData
+): {
+  styles: NonNullable<IWorkbookData['styles']>;
+  styleIdMap: Record<string, string>;
+} {
+  const styles = cloneWorkbookData(currentStyles);
+  const importedStyles = importedSnapshot.styles ?? {};
+  const styleIdMap: Record<string, string> = {};
+
+  Object.entries(importedStyles).forEach(([styleId, styleValue]) => {
+    const currentStyleValue = styles[styleId];
+    if (currentStyleValue === undefined) {
+      styles[styleId] = cloneWorkbookData(styleValue);
+      return;
+    }
+
+    if (JSON.stringify(currentStyleValue) === JSON.stringify(styleValue)) {
+      return;
+    }
+
+    const nextStyleId = makeUniqueStyleId(styles, styleId);
+    styles[nextStyleId] = cloneWorkbookData(styleValue);
+    styleIdMap[styleId] = nextStyleId;
+  });
+
+  return { styles, styleIdMap };
+}
+
+function makeUniqueStyleId(styles: NonNullable<IWorkbookData['styles']>, preferredId: string): string {
+  let suffix = 2;
+  let candidate = `${preferredId}-${suffix}`;
+  while (styles[candidate] !== undefined) {
+    suffix += 1;
+    candidate = `${preferredId}-${suffix}`;
+  }
+  return candidate;
+}
+
+function remapSheetStyleIds(
+  sheet: IWorkbookData['sheets'][string],
+  styleIdMap: Record<string, string>
+): void {
+  if (Object.keys(styleIdMap).length === 0) {
+    return;
+  }
+
+  Object.values(sheet.cellData ?? {}).forEach((row) => {
+    Object.values(row ?? {}).forEach((cell) => {
+      const typedCell = cell as ICellData | undefined;
+      if (!typedCell || typeof typedCell.s !== 'string') {
+        return;
+      }
+
+      const remappedStyleId = styleIdMap[typedCell.s];
+      if (remappedStyleId) {
+        typedCell.s = remappedStyleId;
+      }
+    });
+  });
 }
 
 function makeUniqueSheetId(snapshot: IWorkbookData, preferredId: string): string {

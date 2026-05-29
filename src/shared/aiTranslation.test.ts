@@ -7,9 +7,11 @@ import {
   applyAiTranslationResult,
   buildGenericChatCompletionRequest,
   buildChatCompletionRequest,
+  describeAiRuntimeOptions,
   mergeAiModelOptions,
   parseAiModelsResponse,
   parseAiBalanceResponse,
+  resolveAiRuntimeOptions,
   shouldTranslateItem
 } from './aiTranslation';
 
@@ -86,7 +88,7 @@ describe('AI translation helpers', () => {
 
     expect(request.url).toBe('https://api.moonshot.cn/v1/chat/completions');
     expect(request.body.model).toBe('kimi-k2.5');
-    expect(request.body.temperature).toBeUndefined();
+    expect(request.body.temperature).toBe(0.6);
     expect(request.body.thinking).toEqual({ type: 'disabled' });
   });
 
@@ -106,8 +108,25 @@ describe('AI translation helpers', () => {
     );
 
     expect(request.body.model).toBe('kimi-k2.6');
-    expect(request.body.temperature).toBeUndefined();
+    expect(request.body.temperature).toBe(0.6);
     expect(request.body.thinking).toEqual({ type: 'disabled' });
+  });
+
+  it('can enable Kimi thinking mode with the provider-required temperature', () => {
+    const request = buildGenericChatCompletionRequest(
+      {
+        ...AI_PROVIDER_PRESETS.kimi,
+        thinkingMode: 'enabled'
+      },
+      {
+        systemPrompt: 'Analyze deeply.',
+        userPrompt: 'Find the core limitation.'
+      }
+    );
+
+    expect(request.body.temperature).toBe(1);
+    expect(request.body.top_p).toBe(0.95);
+    expect(request.body.thinking).toEqual({ type: 'enabled' });
   });
 
   it('normalizes Kimi API host to include the required v1 path', () => {
@@ -127,7 +146,7 @@ describe('AI translation helpers', () => {
 
     expect(request.url).toBe('https://api.moonshot.cn/v1/chat/completions');
     expect(request.body.model).toBe('kimi-k2.5');
-    expect(request.body.temperature).toBeUndefined();
+    expect(request.body.temperature).toBe(0.6);
     expect(request.body.thinking).toEqual({ type: 'disabled' });
   });
 
@@ -148,6 +167,35 @@ describe('AI translation helpers', () => {
 
     expect(request.url).toBe('https://api.moonshot.cn/v1/chat/completions');
     expect(request.body.model).toBe('kimi-k2.5');
+  });
+
+  it('maps optional runtime fields to OpenAI-compatible request bodies', () => {
+    const request = buildGenericChatCompletionRequest(
+      {
+        provider: 'openai',
+        baseURL: 'https://api.openai.com/v1',
+        model: 'gpt-5',
+        reasoningEffort: 'medium',
+        temperature: 0.4,
+        maxTokens: 2048
+      },
+      {
+        systemPrompt: 'You are concise.',
+        userPrompt: 'Summarize.'
+      }
+    );
+
+    expect(request.body.temperature).toBe(0.4);
+    expect(request.body.max_completion_tokens).toBe(2048);
+    expect(request.body.reasoning_effort).toBe('medium');
+  });
+
+  it('describes resolved API runtime options for the settings UI', () => {
+    const runtimeOptions = resolveAiRuntimeOptions(AI_PROVIDER_PRESETS.kimi);
+
+    expect(runtimeOptions.temperature).toBe(0.6);
+    expect(runtimeOptions.thinkingMode).toBe('disabled');
+    expect(describeAiRuntimeOptions(AI_PROVIDER_PRESETS.kimi)).toContain('temperature=0.6');
   });
 
   it('builds provider-specific balance requests where supported', () => {

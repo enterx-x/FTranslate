@@ -15,6 +15,7 @@ import {
   normalizeAiProviderSettings,
   parseAiModelsResponse,
   parseAiBalanceResponse,
+  resolveAiRuntimeOptions,
   shouldTranslateItem,
   AI_PROVIDER_MODEL_OPTIONS,
   type AiProviderId,
@@ -1508,6 +1509,13 @@ async function loadStoredAiSettings(): Promise<StoredAiSettings> {
       provider: parseProvider(parsed.provider) ?? fallback.provider,
       baseURL: typeof parsed.baseURL === 'string' && parsed.baseURL ? parsed.baseURL : fallback.baseURL,
       model: typeof parsed.model === 'string' && parsed.model ? parsed.model : fallback.model,
+      thinkingMode: typeof parsed.thinkingMode === 'string' ? parsed.thinkingMode : undefined,
+      reasoningEffort: typeof parsed.reasoningEffort === 'string' ? parsed.reasoningEffort : undefined,
+      temperature: readOptionalNumber(parsed.temperature),
+      topP: readOptionalNumber(parsed.topP),
+      maxTokens: readOptionalNumber(parsed.maxTokens),
+      timeoutSeconds: readOptionalNumber(parsed.timeoutSeconds),
+      maxRetries: readOptionalNumber(parsed.maxRetries),
       encryptedApiKey: typeof parsed.encryptedApiKey === 'string' ? parsed.encryptedApiKey : undefined
     });
   } catch {
@@ -1521,6 +1529,13 @@ async function saveStoredAiSettings(request: AiSettingsRequest): Promise<StoredA
     provider: parseProvider(request.provider) ?? existing.provider,
     baseURL: request.baseURL.trim() || existing.baseURL,
     model: request.model.trim() || existing.model,
+    thinkingMode: request.thinkingMode ?? existing.thinkingMode,
+    reasoningEffort: request.reasoningEffort ?? existing.reasoningEffort,
+    temperature: request.temperature ?? existing.temperature,
+    topP: request.topP ?? existing.topP,
+    maxTokens: request.maxTokens ?? existing.maxTokens,
+    timeoutSeconds: request.timeoutSeconds ?? existing.timeoutSeconds,
+    maxRetries: request.maxRetries ?? existing.maxRetries,
     encryptedApiKey:
       request.apiKey && request.apiKey.trim()
         ? encryptApiKey(request.apiKey.trim())
@@ -1547,8 +1562,26 @@ function toAiSettingsView(settings: StoredAiSettings): AiSettingsView {
     provider: settings.provider,
     baseURL: settings.baseURL,
     model: settings.model,
+    thinkingMode: settings.thinkingMode,
+    reasoningEffort: settings.reasoningEffort,
+    temperature: settings.temperature,
+    topP: settings.topP,
+    maxTokens: settings.maxTokens,
+    timeoutSeconds: settings.timeoutSeconds,
+    maxRetries: settings.maxRetries,
     apiKeyConfigured: Boolean(settings.encryptedApiKey)
   };
+}
+
+function readOptionalNumber(value: unknown): number | undefined {
+  const numberValue =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim()
+        ? Number(value)
+        : Number.NaN;
+
+  return Number.isFinite(numberValue) ? numberValue : undefined;
 }
 
 function parseProvider(value: unknown): AiProviderId | null {
@@ -1600,7 +1633,7 @@ async function translateWithAi(request: AiTranslationItem & { force?: boolean })
   }
 
   const chatRequest = buildChatCompletionRequest(settings, request);
-  const aiTranslation = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey);
+  const aiTranslation = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey, settings);
   return {
     ...applyAiTranslationResult(request, aiTranslation, settings),
     skipped: false
@@ -1616,7 +1649,7 @@ async function completeWithAi(request: AiCompleteRequest): Promise<string> {
   }
 
   const chatRequest = buildGenericChatCompletionRequest(settings, request);
-  return executeChatCompletion(chatRequest.url, chatRequest.body, apiKey);
+  return executeChatCompletion(chatRequest.url, chatRequest.body, apiKey, settings);
 }
 
 async function fillSheetCellWithAi(
@@ -1674,7 +1707,7 @@ async function fillSheetCellsWithAi(
     systemPrompt: request.systemPrompt,
     userPrompt: mergeSheetCellPrompt(request, paperContext)
   });
-  const text = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey);
+  const text = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey, normalizedSettings);
 
   return {
     text,
@@ -1751,7 +1784,9 @@ async function analyzeLiteratureWithAi(
     let extractedText = '';
     let cached = false;
 
-    if (strategy.mode === 'kimi-file-extract') {
+    if (!paper.pdfPath.trim()) {
+      extractedText = paper.fallbackContextText;
+    } else if (strategy.mode === 'kimi-file-extract') {
       const contextResult = await getKimiPaperContext(normalizedSettings, apiKey, paper.pdfPath);
       extractedText = contextResult.text;
       cached = contextResult.cached;
@@ -1777,7 +1812,7 @@ async function analyzeLiteratureWithAi(
     systemPrompt: request.systemPrompt,
     userPrompt: mergeLiteratureInsightPrompt(request, contexts.join('\n\n'))
   });
-  const text = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey);
+  const text = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey, normalizedSettings);
 
   return {
     text,
@@ -1802,7 +1837,7 @@ async function testAiConnection(): Promise<AiConnectionTestResult> {
     translation: '',
     type: 'paragraph'
   });
-  const message = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey);
+  const message = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey, settings);
   return {
     ok: true,
     message: message || '连接成功'
@@ -1891,16 +1926,31 @@ async function getAiModels(): Promise<AiModelsView> {
 async function executeChatCompletion(
   url: string,
   body: ReturnType<typeof buildChatCompletionRequest>['body'],
-  apiKey: string
+  apiKey: string,
+  settings?: AiProviderSettings
 ): Promise<string> {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify(body)
+  const runtimeOptions = resolveAiRuntimeOptions(settings ?? {
+    provider: 'custom',
+    baseURL: url,
+    model: body.model
   });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), runtimeOptions.timeoutSeconds * 1000);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   const responseText = await response.text();
   if (!response.ok) {

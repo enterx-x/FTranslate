@@ -1,4 +1,13 @@
-import { shouldTranslateItem, type AiModelOption, type AiProviderId } from '../../shared/aiTranslation';
+import {
+  AI_REASONING_EFFORT_OPTIONS,
+  AI_THINKING_MODE_OPTIONS,
+  describeAiRuntimeOptions,
+  shouldTranslateItem,
+  type AiModelOption,
+  type AiProviderId,
+  type AiReasoningEffort,
+  type AiThinkingMode
+} from '../../shared/aiTranslation';
 import {
   getAiQueueSections,
   getAiQueueStats,
@@ -14,6 +23,13 @@ export interface AiFormState {
   provider: AiProviderId;
   baseURL: string;
   model: string;
+  thinkingMode?: AiThinkingMode;
+  reasoningEffort?: AiReasoningEffort;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  timeoutSeconds?: number;
+  maxRetries?: number;
   apiKey: string;
 }
 
@@ -184,6 +200,98 @@ export function AiModePanel(props: AiModePanelProps) {
             />
           </label>
         </div>
+        <details className="ai-advanced-options">
+          <summary>API 高级选项</summary>
+          <div className="ai-settings-grid">
+            <label>
+              <span>思考模式</span>
+              <select
+                value={props.aiForm.thinkingMode ?? 'auto'}
+                disabled={props.isBusy}
+                onChange={(event) => props.onAiFormChange({ thinkingMode: event.target.value as AiThinkingMode })}
+              >
+                {AI_THINKING_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>OpenAI 推理强度</span>
+              <select
+                value={props.aiForm.reasoningEffort ?? 'auto'}
+                disabled={props.isBusy}
+                onChange={(event) => props.onAiFormChange({ reasoningEffort: event.target.value as AiReasoningEffort })}
+              >
+                {AI_REASONING_EFFORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Temperature</span>
+              <input
+                type="number"
+                min="0"
+                max="2"
+                step="0.1"
+                value={props.aiForm.temperature ?? ''}
+                disabled={props.isBusy}
+                onChange={(event) => props.onAiFormChange({ temperature: readOptionalNumber(event.target.value) })}
+              />
+            </label>
+            <label>
+              <span>Top P</span>
+              <input
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                value={props.aiForm.topP ?? ''}
+                disabled={props.isBusy}
+                onChange={(event) => props.onAiFormChange({ topP: readOptionalNumber(event.target.value) })}
+              />
+            </label>
+            <label>
+              <span>Max tokens</span>
+              <input
+                type="number"
+                min="1"
+                step="256"
+                value={props.aiForm.maxTokens ?? ''}
+                disabled={props.isBusy}
+                onChange={(event) => props.onAiFormChange({ maxTokens: readOptionalNumber(event.target.value) })}
+              />
+            </label>
+            <label>
+              <span>超时 / 重试</span>
+              <div className="inline-number-pair">
+                <input
+                  aria-label="超时秒数"
+                  type="number"
+                  min="10"
+                  step="10"
+                  value={props.aiForm.timeoutSeconds ?? ''}
+                  disabled={props.isBusy}
+                  onChange={(event) => props.onAiFormChange({ timeoutSeconds: readOptionalNumber(event.target.value) })}
+                />
+                <input
+                  aria-label="重试次数"
+                  type="number"
+                  min="0"
+                  max="8"
+                  value={props.aiForm.maxRetries ?? ''}
+                  disabled={props.isBusy}
+                  onChange={(event) => props.onAiFormChange({ maxRetries: readOptionalNumber(event.target.value) })}
+                />
+              </div>
+            </label>
+          </div>
+          <p className="subtle">{describeAiRuntimeOptions(props.aiForm)}</p>
+        </details>
         <div className="panel-actions">
           <button type="button" disabled={props.isBusy} onClick={props.onSaveSettings}>
             保存 AI 设置
@@ -351,4 +459,14 @@ export function AiModePanel(props: AiModePanelProps) {
       </section>
     </div>
   );
+}
+
+function readOptionalNumber(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const numberValue = Number(trimmed);
+  return Number.isFinite(numberValue) ? numberValue : undefined;
 }

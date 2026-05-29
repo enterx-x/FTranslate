@@ -1,10 +1,19 @@
 export type AiProviderId = 'openai' | 'deepseek' | 'kimi' | 'custom';
 export type AiTranslatableBlockType = 'heading' | 'paragraph' | 'formula' | 'caption';
+export type AiThinkingMode = 'auto' | 'enabled' | 'disabled';
+export type AiReasoningEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 export interface AiProviderSettings {
   provider: AiProviderId;
   baseURL: string;
   model: string;
+  thinkingMode?: AiThinkingMode;
+  reasoningEffort?: AiReasoningEffort;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  timeoutSeconds?: number;
+  maxRetries?: number;
 }
 
 export interface AiModelOption {
@@ -36,8 +45,12 @@ export interface ChatCompletionRequest {
     }>;
     temperature?: number;
     thinking?: {
-      type: 'disabled';
+      type: 'enabled' | 'disabled';
     };
+    top_p?: number;
+    max_tokens?: number;
+    max_completion_tokens?: number;
+    reasoning_effort?: Exclude<AiReasoningEffort, 'auto'>;
   };
 }
 
@@ -119,6 +132,95 @@ export const AI_PROVIDER_MODEL_OPTIONS: Record<Exclude<AiProviderId, 'custom'>, 
   ]
 };
 
+export interface ResolvedAiRuntimeOptions {
+  thinkingMode: AiThinkingMode;
+  reasoningEffort: AiReasoningEffort;
+  temperature: number;
+  topP?: number;
+  maxTokens?: number;
+  timeoutSeconds: number;
+  maxRetries: number;
+}
+
+export const AI_THINKING_MODE_OPTIONS: Array<{ value: AiThinkingMode; label: string }> = [
+  { value: 'auto', label: '自动' },
+  { value: 'disabled', label: '关闭思考' },
+  { value: 'enabled', label: '开启思考' }
+];
+
+export const AI_REASONING_EFFORT_OPTIONS: Array<{ value: AiReasoningEffort; label: string }> = [
+  { value: 'auto', label: '自动' },
+  { value: 'none', label: '不使用推理' },
+  { value: 'minimal', label: 'minimal' },
+  { value: 'low', label: 'low' },
+  { value: 'medium', label: 'medium' },
+  { value: 'high', label: 'high' },
+  { value: 'xhigh', label: 'xhigh' }
+];
+
+export function resolveAiRuntimeOptions(settings: AiProviderSettings): ResolvedAiRuntimeOptions {
+  const normalizedSettings = normalizeAiProviderSettings(settings);
+  const isKimiK2 = isKimiK2Model(normalizedSettings);
+  const isKimiThinkingModel = isKimiK2 && normalizedSettings.model.toLowerCase().includes('thinking');
+  const explicitThinking = normalizedSettings.thinkingMode ?? 'auto';
+  const thinkingMode: AiThinkingMode =
+    isKimiK2 && explicitThinking === 'auto'
+      ? isKimiThinkingModel
+        ? 'enabled'
+        : 'disabled'
+      : explicitThinking;
+  const defaultTemperature = isKimiK2
+    ? thinkingMode === 'enabled'
+      ? 1
+      : 0.6
+    : normalizedSettings.provider === 'openai'
+      ? 0.2
+      : 0.2;
+
+  return {
+    thinkingMode,
+    reasoningEffort: normalizedSettings.reasoningEffort ?? 'auto',
+    temperature: isKimiK2 ? defaultTemperature : normalizedSettings.temperature ?? defaultTemperature,
+    topP: isKimiK2 ? 0.95 : normalizedSettings.topP,
+    maxTokens: normalizedSettings.maxTokens,
+    timeoutSeconds: normalizedSettings.timeoutSeconds ?? 120,
+    maxRetries: normalizedSettings.maxRetries ?? 1
+  };
+}
+
+export function withDefaultAiRuntimeOptions(settings: AiProviderSettings): AiProviderSettings {
+  const normalizedSettings = normalizeAiProviderSettings(settings);
+  const runtime = resolveAiRuntimeOptions(normalizedSettings);
+
+  return {
+    ...normalizedSettings,
+    thinkingMode: normalizedSettings.thinkingMode ?? runtime.thinkingMode,
+    reasoningEffort: normalizedSettings.reasoningEffort ?? runtime.reasoningEffort,
+    temperature: normalizedSettings.temperature ?? runtime.temperature,
+    topP: normalizedSettings.topP ?? runtime.topP,
+    maxTokens: normalizedSettings.maxTokens,
+    timeoutSeconds: normalizedSettings.timeoutSeconds ?? runtime.timeoutSeconds,
+    maxRetries: normalizedSettings.maxRetries ?? runtime.maxRetries
+  };
+}
+
+export function describeAiRuntimeOptions(settings: AiProviderSettings): string {
+  const normalizedSettings = normalizeAiProviderSettings(settings);
+  const runtime = resolveAiRuntimeOptions(normalizedSettings);
+
+  if (isKimiK2Model(normalizedSettings)) {
+    return runtime.thinkingMode === 'enabled'
+      ? 'Kimi K2 系列开启思考时使用 temperature=1，适合复杂分析；生成双语 PDF 会同步传给 pdf2zh。'
+      : 'Kimi K2 系列关闭思考时使用 temperature=0.6、top_p=0.95，避免 invalid temperature，并会向 API 传 thinking disabled。';
+  }
+
+  if (normalizedSettings.provider === 'openai') {
+    return `OpenAI 会使用 temperature=${runtime.temperature}，reasoning=${runtime.reasoningEffort}，PDF/表格分析会按该推理强度请求。`;
+  }
+
+  return `当前请求会使用 temperature=${runtime.temperature}${runtime.topP ? `，top_p=${runtime.topP}` : ''}，超时 ${runtime.timeoutSeconds}s，重试 ${runtime.maxRetries} 次。`;
+}
+
 export function buildChatCompletionRequest(
   settings: AiProviderSettings,
   item: AiTranslationItem
@@ -143,14 +245,7 @@ export function buildChatCompletionRequest(
     ]
   };
 
-  if (
-    normalizedSettings.provider === 'kimi' &&
-    normalizedSettings.model.toLowerCase().startsWith('kimi-k2')
-  ) {
-    body.thinking = { type: 'disabled' };
-  } else {
-    body.temperature = 0.2;
-  }
+  applyRuntimeOptionsToChatBody(body, normalizedSettings);
 
   return {
     url: buildChatCompletionsUrl(normalizedSettings.baseURL),
@@ -177,14 +272,7 @@ export function buildGenericChatCompletionRequest(
     ]
   };
 
-  if (
-    normalizedSettings.provider === 'kimi' &&
-    normalizedSettings.model.toLowerCase().startsWith('kimi-k2')
-  ) {
-    body.thinking = { type: 'disabled' };
-  } else {
-    body.temperature = 0.2;
-  }
+  applyRuntimeOptionsToChatBody(body, normalizedSettings);
 
   return {
     url: buildChatCompletionsUrl(normalizedSettings.baseURL),
@@ -342,8 +430,53 @@ export function normalizeAiProviderSettings(settings: AiProviderSettings): AiPro
   return {
     provider: settings.provider,
     baseURL: normalizedBaseURL,
-    model: normalizedModel
+    model: normalizedModel,
+    thinkingMode: normalizeThinkingMode(settings.thinkingMode),
+    reasoningEffort: normalizeReasoningEffort(settings.reasoningEffort),
+    temperature: normalizeNumberOption(settings.temperature, 0, 2),
+    topP: normalizeNumberOption(settings.topP, 0, 1),
+    maxTokens: normalizeIntegerOption(settings.maxTokens, 1, 1_000_000),
+    timeoutSeconds: normalizeIntegerOption(settings.timeoutSeconds, 10, 1800),
+    maxRetries: normalizeIntegerOption(settings.maxRetries, 0, 8)
   };
+}
+
+function applyRuntimeOptionsToChatBody(
+  body: ChatCompletionRequest['body'],
+  settings: AiProviderSettings
+): void {
+  const normalizedSettings = normalizeAiProviderSettings(settings);
+  const runtime = resolveAiRuntimeOptions(normalizedSettings);
+
+  body.temperature = runtime.temperature;
+
+  if (typeof runtime.topP === 'number') {
+    body.top_p = runtime.topP;
+  }
+
+  if (normalizedSettings.provider === 'kimi' && isKimiK2Model(normalizedSettings)) {
+    body.thinking = { type: runtime.thinkingMode === 'enabled' ? 'enabled' : 'disabled' };
+  }
+
+  if (runtime.maxTokens) {
+    if (normalizedSettings.provider === 'openai') {
+      body.max_completion_tokens = runtime.maxTokens;
+    } else {
+      body.max_tokens = runtime.maxTokens;
+    }
+  }
+
+  if (
+    normalizedSettings.provider === 'openai' &&
+    runtime.reasoningEffort !== 'auto' &&
+    runtime.reasoningEffort !== 'none'
+  ) {
+    body.reasoning_effort = runtime.reasoningEffort;
+  }
+}
+
+export function isKimiK2Model(settings: AiProviderSettings): boolean {
+  return settings.provider === 'kimi' && settings.model.trim().toLowerCase().startsWith('kimi-k2');
 }
 
 function normalizeAiBaseURL(provider: AiProviderId, baseURL: string, fallback: string): string {
@@ -366,6 +499,42 @@ function normalizeAiModel(provider: AiProviderId, model: string, fallback: strin
   }
 
   return trimmed || fallback.trim();
+}
+
+function normalizeThinkingMode(value: unknown): AiThinkingMode | undefined {
+  return value === 'auto' || value === 'enabled' || value === 'disabled' ? value : undefined;
+}
+
+function normalizeReasoningEffort(value: unknown): AiReasoningEffort | undefined {
+  return value === 'auto' ||
+    value === 'none' ||
+    value === 'minimal' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high' ||
+    value === 'xhigh'
+    ? value
+    : undefined;
+}
+
+function normalizeNumberOption(value: unknown, min: number, max: number): number | undefined {
+  const numericValue =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim()
+        ? Number(value)
+        : Number.NaN;
+
+  if (!Number.isFinite(numericValue)) {
+    return undefined;
+  }
+
+  return Math.min(max, Math.max(min, numericValue));
+}
+
+function normalizeIntegerOption(value: unknown, min: number, max: number): number | undefined {
+  const numericValue = normalizeNumberOption(value, min, max);
+  return typeof numericValue === 'number' ? Math.round(numericValue) : undefined;
 }
 
 function normalizeKimiBaseURL(baseURL: string): string {

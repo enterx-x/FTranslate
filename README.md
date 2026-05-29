@@ -71,9 +71,9 @@ py -3.12 -m pip install pdf2zh
 
 API Key 只保存在本机 Electron 配置中，并且只通过子进程环境变量传给 PDFMathTranslate，不写入命令行参数或日志。
 
-Kimi `kimi-k2.5` 这类模型只接受 `temperature=1`。应用使用私有 `pdf2zh` 运行时时会自动补丁其 OpenAI-compatible 翻译器，并通过环境变量传入 Kimi 需要的温度参数；OpenAI、DeepSeek 和 Custom provider 仍使用默认 `temperature=0`。
+Kimi K2.5 非思考模式使用 `temperature=0.6`、`top_p=0.95`，开启思考时使用 `temperature=1`。应用使用私有 `pdf2zh` 运行时时会自动补丁其 OpenAI-compatible 翻译器，并通过环境变量传入 Kimi 需要的温度、思考模式、超时和重试参数；OpenAI、DeepSeek 和 Custom provider 的 PDF 翻译默认仍使用确定性的 `temperature=0`。
 
-针对 Kimi K2 系列，应用还会禁用 `thinking`、把 PDFMathTranslate 调用限制为单线程，并设置 API 超时和重试次数，避免任务长时间停在 `0%` 或因为模型参数不兼容直接失败。长 PDF 翻译仍然可能耗时较久，任务运行期间状态栏会定期输出心跳进度和最后一条日志。
+`PDF 翻译 API` 和 `AI 设置` 里都提供 `API 高级选项`：思考模式、OpenAI 推理强度、temperature、top_p、max tokens、超时秒数和重试次数。Kimi K2 系列在关闭思考时会显式传入 `thinking disabled`，避免 `invalid temperature`；长 PDF 翻译仍然可能耗时较久，任务运行期间状态栏会定期输出心跳进度和最后一条日志。
 
 双语 PDF 缓存位置：
 

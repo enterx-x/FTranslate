@@ -1,4 +1,4 @@
-import type { AiProviderSettings } from './aiTranslation';
+import { isKimiK2Model, resolveAiRuntimeOptions, type AiProviderSettings } from './aiTranslation';
 
 export type PdfTranslationEngine = 'pdfmathtranslate';
 export type PdfTranslationOutputMode = 'dual' | 'mono';
@@ -67,9 +67,12 @@ export function buildPdf2zhCommand(input: PdfTranslationCommandInput): PdfTransl
     args.push('--ignore-cache');
   }
 
-  const isKimiK2 =
-    input.settings.provider === 'kimi' &&
-    input.settings.model.trim().toLowerCase().startsWith('kimi-k2');
+  const runtimeOptions = resolveAiRuntimeOptions(input.settings);
+  const disableKimiThinking = isKimiK2Model(input.settings) && runtimeOptions.thinkingMode !== 'enabled';
+  const pdfTranslationTemperature =
+    !isKimiK2Model(input.settings) && input.settings.temperature === undefined
+      ? 0
+      : runtimeOptions.temperature;
 
   return {
     command: input.executable,
@@ -77,12 +80,10 @@ export function buildPdf2zhCommand(input: PdfTranslationCommandInput): PdfTransl
     env: {
       OPENAI_BASE_URL: input.settings.baseURL.replace(/\/+$/u, ''),
       OPENAI_MODEL: input.settings.model,
-      // PDFMathTranslate 1.9.x 内部把 OpenAI-compatible translator 的 temperature 固定为 0。
-      // Kimi K2.5/K2.6 只允许 temperature=1，因此主进程会给私有 sidecar 打补丁读取此环境变量。
-      PDF_TRANSLATION_READER_OPENAI_TEMPERATURE: input.settings.provider === 'kimi' ? '1' : '0',
-      PDF_TRANSLATION_READER_DISABLE_THINKING: isKimiK2 ? '1' : '0',
-      PDF_TRANSLATION_READER_OPENAI_TIMEOUT: '120',
-      PDF_TRANSLATION_READER_OPENAI_MAX_RETRIES: '1'
+      PDF_TRANSLATION_READER_OPENAI_TEMPERATURE: String(pdfTranslationTemperature),
+      PDF_TRANSLATION_READER_DISABLE_THINKING: disableKimiThinking ? '1' : '0',
+      PDF_TRANSLATION_READER_OPENAI_TIMEOUT: String(runtimeOptions.timeoutSeconds),
+      PDF_TRANSLATION_READER_OPENAI_MAX_RETRIES: String(runtimeOptions.maxRetries)
     }
   };
 }
@@ -100,9 +101,9 @@ export function patchPdf2zhOpenAiTemperatureSource(source: string): { source: st
   const after = source.slice(openAiClassEnd);
 
   let patchedClass = openAiClass.replace(
-    /^(\s*)self\.options\s*=\s*\{"temperature":\s*(?:0|float\(os\.environ\.get\("PDF_TRANSLATION_READER_OPENAI_TEMPERATURE", "0"\)\))\}[^\n]*/mu,
+    /^(\s*)self\.options\s*=\s*\{"temperature":\s*(?:0|float\(os\.environ\.get\("PDF_TRANSLATION_READER_OPENAI_TEMPERATURE", "0"\)\))\}[^\n]*(?:\n\1if os\.environ\.get\("PDF_TRANSLATION_READER_DISABLE_THINKING", "0"\) == "1":\n\1    self\.options\["extra_body"\] = \{"thinking": \{"type": "disabled"\}\})*/mu,
     [
-      '$1self.options = {"temperature": float(os.environ.get("PDF_TRANSLATION_READER_OPENAI_TEMPERATURE", "0"))}  # App runtime patch: Kimi K2 requires temperature=1',
+      '$1self.options = {"temperature": float(os.environ.get("PDF_TRANSLATION_READER_OPENAI_TEMPERATURE", "0"))}  # App runtime patch: provider-specific temperature',
       '$1if os.environ.get("PDF_TRANSLATION_READER_DISABLE_THINKING", "0") == "1":',
       '$1    self.options["extra_body"] = {"thinking": {"type": "disabled"}}'
     ].join('\n')

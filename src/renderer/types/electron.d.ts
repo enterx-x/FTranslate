@@ -24,11 +24,20 @@ export interface ProjectLoadResult {
 }
 
 export type AiProviderId = 'openai' | 'deepseek' | 'kimi' | 'custom';
+export type AiThinkingMode = 'auto' | 'enabled' | 'disabled';
+export type AiReasoningEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 export interface AiSettingsView {
   provider: AiProviderId;
   baseURL: string;
   model: string;
+  thinkingMode?: AiThinkingMode;
+  reasoningEffort?: AiReasoningEffort;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  timeoutSeconds?: number;
+  maxRetries?: number;
   apiKeyConfigured: boolean;
 }
 
@@ -135,6 +144,13 @@ export interface ElectronApi {
     provider: AiProviderId;
     baseURL: string;
     model: string;
+    thinkingMode?: AiThinkingMode;
+    reasoningEffort?: AiReasoningEffort;
+    temperature?: number;
+    topP?: number;
+    maxTokens?: number;
+    timeoutSeconds?: number;
+    maxRetries?: number;
     apiKey?: string;
   }) => Promise<AiSettingsView>;
   translateWithAi: (request: {

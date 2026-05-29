@@ -136,6 +136,57 @@ describe('research workbook model', () => {
     expect(roundTripSheet.rowData?.[2]?.h).toBe(72);
   });
 
+  it('keeps blank tail rows when the user only changed their row heights', () => {
+    const univerData = toUniverWorkbookData(buildDefaultResearchWorkbook());
+    const sheet = univerData.sheets[univerData.sheetOrder[0]];
+    sheet.rowData = {
+      ...(sheet.rowData ?? {}),
+      5: { h: 64 }
+    };
+
+    const restored = fromUniverWorkbookData(univerData);
+    const roundTrip = toUniverWorkbookData(restored);
+    const roundTripSheet = roundTrip.sheets[roundTrip.sheetOrder[0]];
+
+    expect(restored.rows).toHaveLength(6);
+    expect(restored.rows[5].height).toBe(64);
+    expect(roundTripSheet.rowData?.[5]?.h).toBe(64);
+  });
+
+  it('stores stable row ids in snapshot metadata so bindings survive row insertions', () => {
+    const seeded = ensurePaperRow(buildDefaultResearchWorkbook(), [], basePaper);
+    const workbook = {
+      ...seeded.workbook,
+      rows: seeded.workbook.rows.map((row, index) =>
+        index === seeded.rowIndex ? { ...row, id: 'linked-paper-1' } : row
+      )
+    };
+    const univerData = toUniverWorkbookData(workbook);
+    const sheet = univerData.sheets[univerData.sheetOrder[0]];
+    const originalRowData = sheet.rowData ?? {};
+    const originalCellData = sheet.cellData ?? {};
+
+    expect((originalRowData[1] as { fTranslateRowId?: string } | undefined)?.fTranslateRowId).toBe('linked-paper-1');
+
+    sheet.rowCount = (sheet.rowCount ?? 0) + 1;
+    sheet.rowData = {
+      ...originalRowData,
+      1: {},
+      2: originalRowData[1]
+    };
+    sheet.cellData = {
+      ...originalCellData,
+      1: {},
+      2: originalCellData[1]
+    };
+
+    const restored = fromUniverWorkbookData(univerData);
+
+    expect(restored.rows[1].id).toBe('row-1');
+    expect(restored.rows[2].id).toBe('linked-paper-1');
+    expect(getResearchCellText(restored, 2, 0)).toBe(basePaper.pdfName);
+  });
+
   it('preserves user-created columns when loading the local research workbook', () => {
     const workbook = buildDefaultResearchWorkbook();
     const parsed = parseResearchWorkbook(JSON.stringify({
@@ -187,6 +238,18 @@ describe('research workbook model', () => {
     expect(getResearchCellText(restored, 1, 3)).toBe('kept value');
   });
 
+  it('restores used rows even when snapshot rowCount is smaller than the actual data', () => {
+    const workbook = setResearchCellText(buildDefaultResearchWorkbook(), 5, 3, 'deep row value');
+    const univerData = toUniverWorkbookData(workbook);
+    const sheet = univerData.sheets[univerData.sheetOrder[0]];
+    sheet.rowCount = 2;
+
+    const restored = fromUniverWorkbookData(univerData);
+
+    expect(restored.rows).toHaveLength(6);
+    expect(getResearchCellText(restored, 5, 3)).toBe('deep row value');
+  });
+
   it('appends imported Excel sheets without replacing the current workbook', () => {
     const current = setResearchCellText(buildDefaultResearchWorkbook(), 1, 3, '保留当前工作表');
     const imported = setResearchCellText(
@@ -207,5 +270,93 @@ describe('research workbook model', () => {
     expect(snapshot.sheets[snapshot.sheetOrder[1]].name).toBe('外部文献总览');
     expect(getResearchCellText(merged, 1, 3)).toBe('保留当前工作表');
     expect(snapshot.sheets[snapshot.sheetOrder[1]].cellData?.[1]?.[3]?.v).toBe('导入工作表内容');
+  });
+  it('remaps imported style ids so existing workbook formatting is not overwritten', () => {
+    const current = fromUniverWorkbookData({
+      id: 'research-workbook',
+      name: 'current-book',
+      appVersion: '0.24.0',
+      locale: 'zhCN',
+      styles: {
+        sharedStyle: { cl: { rgb: '#ff0000' } }
+      },
+      sheetOrder: ['sheet-1'],
+      sheets: {
+        'sheet-1': {
+          id: 'sheet-1',
+          name: 'current-sheet',
+          cellData: {
+            0: { 0: { v: 'Header', t: 1 } },
+            1: { 0: { v: 'current', t: 1, s: 'sharedStyle' } }
+          },
+          rowData: {
+            0: { fTranslateRowId: 'header' },
+            1: { fTranslateRowId: 'row-1' }
+          },
+          columnData: { 0: { w: 180 } },
+          rowCount: 20,
+          columnCount: 10,
+          zoomRatio: 1,
+          scrollTop: 0,
+          scrollLeft: 0,
+          defaultColumnWidth: 120,
+          defaultRowHeight: 28,
+          mergeData: [],
+          rowHeader: { width: 46 },
+          columnHeader: { height: 26 },
+          showGridlines: 1,
+          rightToLeft: 0
+        }
+      }
+    } as never);
+    const imported = fromUniverWorkbookData({
+      id: 'research-workbook',
+      name: 'imported-book',
+      appVersion: '0.24.0',
+      locale: 'zhCN',
+      styles: {
+        sharedStyle: { cl: { rgb: '#0000ff' } }
+      },
+      sheetOrder: ['sheet-1'],
+      sheets: {
+        'sheet-1': {
+          id: 'sheet-1',
+          name: 'imported-sheet',
+          cellData: {
+            0: { 0: { v: 'Header', t: 1 } },
+            1: { 0: { v: 'imported', t: 1, s: 'sharedStyle' } }
+          },
+          rowData: {
+            0: { fTranslateRowId: 'header' },
+            1: { fTranslateRowId: 'row-1' }
+          },
+          columnData: { 0: { w: 180 } },
+          rowCount: 20,
+          columnCount: 10,
+          zoomRatio: 1,
+          scrollTop: 0,
+          scrollLeft: 0,
+          defaultColumnWidth: 120,
+          defaultRowHeight: 28,
+          mergeData: [],
+          rowHeader: { width: 46 },
+          columnHeader: { height: 26 },
+          showGridlines: 1,
+          rightToLeft: 0
+        }
+      }
+    } as never);
+
+    const merged = appendResearchWorkbookSheets(current, imported);
+    const snapshot = toUniverWorkbookData(merged);
+    const currentSheet = snapshot.sheets[snapshot.sheetOrder[0]];
+    const importedSheet = snapshot.sheets[snapshot.sheetOrder[1]];
+    const currentStyleId = currentSheet.cellData?.[1]?.[0]?.s;
+    const importedStyleId = importedSheet.cellData?.[1]?.[0]?.s;
+
+    expect(currentStyleId).toBe('sharedStyle');
+    expect(snapshot.styles?.[String(currentStyleId)]).toMatchObject({ cl: { rgb: '#ff0000' } });
+    expect(importedStyleId).not.toBe(currentStyleId);
+    expect(snapshot.styles?.[String(importedStyleId)]).toMatchObject({ cl: { rgb: '#0000ff' } });
   });
 });

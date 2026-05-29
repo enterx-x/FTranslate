@@ -15,6 +15,63 @@ export interface LiteratureGapPrompt {
   userPrompt: string;
 }
 
+export interface LiteratureInsightActionInput {
+  selectedPaperCount: number;
+  linkedPaperCount: number;
+  isRunning: boolean;
+  isAiBusy: boolean;
+}
+
+export interface LiteratureInsightActionState {
+  disabled: boolean;
+  label: string;
+  scopeText: string;
+}
+
+export function describeLiteratureInsightAction(input: LiteratureInsightActionInput): LiteratureInsightActionState {
+  const activeCount = input.selectedPaperCount > 0 ? input.selectedPaperCount : input.linkedPaperCount;
+
+  if (input.isRunning) {
+    return {
+      disabled: true,
+      label: 'AI 大观分析中...',
+      scopeText: activeCount > 0
+        ? `正在综合分析 ${activeCount} 篇${input.selectedPaperCount > 0 ? '选中' : '已绑定'}论文。`
+        : '正在等待论文上下文。'
+    };
+  }
+
+  if (activeCount === 0) {
+    return {
+      disabled: true,
+      label: 'AI 大观分析',
+      scopeText: '请先选中已绑定论文的行，或在表格中至少绑定一篇论文。'
+    };
+  }
+
+  if (input.isAiBusy) {
+    return {
+      disabled: true,
+      label: 'AI 忙碌中',
+      scopeText: '当前有其它 AI 任务在运行，请稍后再做大观分析。'
+    };
+  }
+
+  if (input.selectedPaperCount > 0) {
+    return {
+      disabled: false,
+      label: `AI 大观分析 ${input.selectedPaperCount} 篇`,
+      scopeText: `将分析 ${input.selectedPaperCount} 篇选中论文。`
+    };
+  }
+
+  return {
+    disabled: false,
+    label: `AI 大观分析全部 ${input.linkedPaperCount} 篇`,
+    scopeText: `未选中绑定行，将分析全部 ${input.linkedPaperCount} 篇已绑定论文。`
+  };
+}
+
 export function buildLiteratureGapPrompt(input: BuildLiteratureGapPromptInput): LiteratureGapPrompt {
   return {
     systemPrompt: [

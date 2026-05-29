@@ -2,10 +2,16 @@ import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
   AI_PROVIDER_PRESETS,
   AI_PROVIDER_MODEL_OPTIONS,
+  AI_REASONING_EFFORT_OPTIONS,
+  AI_THINKING_MODE_OPTIONS,
+  describeAiRuntimeOptions,
   mergeAiModelOptions,
   shouldTranslateItem,
+  withDefaultAiRuntimeOptions,
   type AiModelOption,
-  type AiProviderId
+  type AiProviderId,
+  type AiReasoningEffort,
+  type AiThinkingMode
 } from '../shared/aiTranslation';
 import type { AiFormState } from './components/AiModePanel';
 import { HomePage } from './components/HomePage';
@@ -131,12 +137,10 @@ export default function App() {
   const [runtimeModelOptions, setRuntimeModelOptions] = useState<
     Partial<Record<BuiltInProviderId, AiModelOption[]>>
   >({});
-  const [aiForm, setAiForm] = useState<AiFormState>({
-    provider: AI_PROVIDER_PRESETS.deepseek.provider,
-    baseURL: AI_PROVIDER_PRESETS.deepseek.baseURL,
-    model: AI_PROVIDER_PRESETS.deepseek.model,
+  const [aiForm, setAiForm] = useState<AiFormState>(() => ({
+    ...withDefaultAiRuntimeOptions(AI_PROVIDER_PRESETS.deepseek),
     apiKey: ''
-  });
+  }));
   const [isAiBusy, setIsAiBusy] = useState(false);
   const [isPdfTranslationBusy, setIsPdfTranslationBusy] = useState(false);
   const [pdfTranslationEngine, setPdfTranslationEngine] =
@@ -153,9 +157,7 @@ export default function App() {
       .then((settings) => {
         setAiSettings(settings);
         setAiForm({
-          provider: settings.provider,
-          baseURL: settings.baseURL,
-          model: settings.model,
+          ...withDefaultAiRuntimeOptions(settings),
           apiKey: ''
         });
         setAiBalance(null);
@@ -694,17 +696,44 @@ export default function App() {
     const preset = AI_PROVIDER_PRESETS[provider];
     setAiForm((value) => ({
       ...value,
-      provider,
-      baseURL: preset.baseURL,
-      model: preset.model
+      ...withDefaultAiRuntimeOptions({
+        provider,
+        baseURL: preset.baseURL,
+        model: preset.model
+      })
     }));
   }
 
   function handleAiFormChange(patch: Partial<AiFormState>): void {
-    if (patch.provider || patch.baseURL || patch.model || patch.apiKey) {
+    if (
+      patch.provider ||
+      patch.baseURL ||
+      patch.model ||
+      patch.apiKey ||
+      patch.thinkingMode ||
+      patch.reasoningEffort ||
+      patch.temperature !== undefined ||
+      patch.topP !== undefined ||
+      patch.maxTokens !== undefined
+    ) {
       setAiBalance(null);
     }
-    setAiForm((value) => ({ ...value, ...patch }));
+    setAiForm((value) => {
+      const next = { ...value, ...patch };
+      if (patch.provider || patch.model || patch.thinkingMode) {
+        const nextDefaults = withDefaultAiRuntimeOptions({
+          ...next,
+          temperature: undefined,
+          topP: undefined
+        });
+        return {
+          ...next,
+          ...nextDefaults,
+          apiKey: next.apiKey
+        };
+      }
+      return next;
+    });
   }
 
   async function handleSaveAiSettings(): Promise<void> {
@@ -714,9 +743,7 @@ export default function App() {
       setAiSettings(settings);
       setAiBalance(null);
       setAiForm({
-        provider: settings.provider,
-        baseURL: settings.baseURL,
-        model: settings.model,
+        ...withDefaultAiRuntimeOptions(settings),
         apiKey: ''
       });
       setStatusMessage('AI 设置已保存。');
@@ -1476,6 +1503,97 @@ export default function App() {
                   />
                 </label>
               </div>
+              <details className="ai-advanced-options">
+                <summary>API 高级选项</summary>
+                <div className="pdf-ai-settings-grid">
+                  <label>
+                    思考模式
+                    <select
+                      value={aiForm.thinkingMode ?? 'auto'}
+                      onChange={(event) => handleAiFormChange({ thinkingMode: event.target.value as AiThinkingMode })}
+                    >
+                      {AI_THINKING_MODE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    OpenAI 推理强度
+                    <select
+                      value={aiForm.reasoningEffort ?? 'auto'}
+                      onChange={(event) =>
+                        handleAiFormChange({ reasoningEffort: event.target.value as AiReasoningEffort })
+                      }
+                    >
+                      {AI_REASONING_EFFORT_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Temperature
+                    <input
+                      type="number"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      value={aiForm.temperature ?? ''}
+                      onChange={(event) => handleAiFormChange({ temperature: readOptionalNumberInput(event.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Top P
+                    <input
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={aiForm.topP ?? ''}
+                      onChange={(event) => handleAiFormChange({ topP: readOptionalNumberInput(event.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Max tokens
+                    <input
+                      type="number"
+                      min="1"
+                      step="256"
+                      value={aiForm.maxTokens ?? ''}
+                      onChange={(event) => handleAiFormChange({ maxTokens: readOptionalNumberInput(event.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    超时 / 重试
+                    <div className="inline-number-pair">
+                      <input
+                        aria-label="超时秒数"
+                        type="number"
+                        min="10"
+                        step="10"
+                        value={aiForm.timeoutSeconds ?? ''}
+                        onChange={(event) =>
+                          handleAiFormChange({ timeoutSeconds: readOptionalNumberInput(event.target.value) })
+                        }
+                      />
+                      <input
+                        aria-label="重试次数"
+                        type="number"
+                        min="0"
+                        max="8"
+                        value={aiForm.maxRetries ?? ''}
+                        onChange={(event) =>
+                          handleAiFormChange({ maxRetries: readOptionalNumberInput(event.target.value) })
+                        }
+                      />
+                    </div>
+                  </label>
+                </div>
+                <p className="subtle">{describeAiRuntimeOptions(aiForm)}</p>
+              </details>
               <div className="pdf-ai-settings-actions">
                 <button type="button" disabled={isAiBusy} onClick={handleSaveAiSettings}>
                   保存设置
@@ -1576,6 +1694,16 @@ function cleanAiCellText(value: string): string {
     .replace(/^```(?:markdown|text)?\s*/iu, '')
     .replace(/```$/u, '')
     .trim();
+}
+
+function readOptionalNumberInput(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const numberValue = Number(trimmed);
+  return Number.isFinite(numberValue) ? numberValue : undefined;
 }
 
 function hashText(value: string): string {

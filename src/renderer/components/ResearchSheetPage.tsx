@@ -31,7 +31,10 @@ import {
   type ResearchWorkbook
 } from '../lib/researchWorkbook';
 import type { PaperRecord } from '../lib/papers';
-import type { LiteratureGapPaperInput } from '../lib/literatureInsight';
+import {
+  describeLiteratureInsightAction,
+  type LiteratureGapPaperInput
+} from '../lib/literatureInsight';
 
 export interface FillResearchCellTarget {
   rowIndex: number;
@@ -143,6 +146,8 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const [hasCopiedFormat, setHasCopiedFormat] = useState(false);
   const [localMessage, setLocalMessage] = useState('');
   const [literatureInsight, setLiteratureInsight] = useState('');
+  const [literatureInsightProgress, setLiteratureInsightProgress] = useState('');
+  const [isLiteratureInsightRunning, setIsLiteratureInsightRunning] = useState(false);
 
   const selectedRowId = getRowId(workbookModelRef.current, selectedCell.rowIndex);
   const linkedPaperId = props.links.find((link) => link.rowId === selectedRowId)?.paperId ?? '';
@@ -179,8 +184,24 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const selectedLiteratureCount = useMemo(() => getSelectedLiteraturePapers().length, [
     props.links,
     props.papers,
+    props.workbook,
     selectedRanges
   ]);
+  const linkedLiteratureCount = useMemo(() => getAllLinkedLiteraturePapers().length, [
+    props.links,
+    props.papers,
+    props.workbook
+  ]);
+  const literatureInsightAction = useMemo(
+    () =>
+      describeLiteratureInsightAction({
+        selectedPaperCount: selectedLiteratureCount,
+        linkedPaperCount: linkedLiteratureCount,
+        isRunning: isLiteratureInsightRunning,
+        isAiBusy: props.isAiBusy
+      }),
+    [isLiteratureInsightRunning, linkedLiteratureCount, props.isAiBusy, selectedLiteratureCount]
+  );
 
   const statusText = useMemo(() => {
     if (selectedCell.rowIndex === 0) {
@@ -203,58 +224,96 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
       return;
     }
 
-    const instance = createUniver({
-      theme: defaultTheme,
-      locale: LocaleType.ZH_CN,
-      locales: {
-        [LocaleType.ZH_CN]: zhCN
-      },
-      presets: [
-        UniverSheetsCorePreset({
-          container: containerRef.current,
-          header: false,
-          toolbar: true,
-          formulaBar: true,
-          footer: {
-            sheetBar: true,
-            statisticBar: true,
-            zoomSlider: true
-          }
-        })
-      ]
-    });
-    const workbookHandle = instance.univerAPI.createWorkbook(toUniverWorkbookData(props.workbook));
-    univerRef.current = instance;
-    workbookHandleRef.current = workbookHandle;
-    registerNativeContextMenus(instance);
+    let disposed = false;
+    let frameId = 0;
+    let commandDisposable: { dispose: () => void } | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    let updateSelectionLater: (() => number) | null = null;
 
-    const commandDisposable = instance.univerAPI.onCommandExecuted(() => {
-      scheduleWorkbookSave();
-      updateSelectionFromUniver();
-    });
-
-    const container = containerRef.current;
-    const updateSelectionLater = () => window.setTimeout(updateSelectionFromUniver, 0);
-    container.addEventListener('mouseup', updateSelectionLater);
-    container.addEventListener('keyup', updateSelectionLater);
-
-    const focusedPaperId = props.focusPaperId;
-    if (focusedPaperId) {
-      const targetLink = props.links.find((link) => link.paperId === focusedPaperId);
-      const targetRow = targetLink
-        ? props.workbook.rows.findIndex((row) => row.id === targetLink.rowId)
-        : -1;
-      if (targetRow > 0) {
-        workbookHandle.getActiveSheet().getRange(targetRow, 0).activate();
-        setSelectedCell({ rowIndex: targetRow, columnIndex: 0 });
-        setSelectedRanges([{ startRow: targetRow, endRow: targetRow, startColumn: 0, endColumn: 0 }]);
+    const initializeWhenSized = (attempt = 0): void => {
+      const container = containerRef.current;
+      if (!container || disposed || univerRef.current) {
+        return;
       }
-    }
+
+      const rect = container.getBoundingClientRect();
+      if ((rect.width < 320 || rect.height < 260) && attempt < 30) {
+        frameId = window.requestAnimationFrame(() => initializeWhenSized(attempt + 1));
+        return;
+      }
+
+      initializeUniver(container);
+    };
+
+    const initializeUniver = (container: HTMLDivElement): void => {
+      const instance = createUniver({
+        theme: defaultTheme,
+        locale: LocaleType.ZH_CN,
+        locales: {
+          [LocaleType.ZH_CN]: zhCN
+        },
+        presets: [
+          UniverSheetsCorePreset({
+            container,
+            header: false,
+            toolbar: true,
+            formulaBar: true,
+            footer: {
+              sheetBar: true,
+              statisticBar: true,
+              zoomSlider: true
+            }
+          })
+        ]
+      });
+      const workbookHandle = instance.univerAPI.createWorkbook(toUniverWorkbookData(props.workbook));
+      univerRef.current = instance;
+      workbookHandleRef.current = workbookHandle;
+      registerNativeContextMenus(instance);
+
+      commandDisposable = instance.univerAPI.onCommandExecuted(() => {
+        scheduleWorkbookSave();
+        updateSelectionFromUniver();
+      });
+
+      updateSelectionLater = () => window.setTimeout(updateSelectionFromUniver, 0);
+      container.addEventListener('mouseup', updateSelectionLater);
+      container.addEventListener('keyup', updateSelectionLater);
+      resizeObserver = new ResizeObserver(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+      resizeObserver.observe(container);
+      window.requestAnimationFrame(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+
+      const focusedPaperId = props.focusPaperId;
+      if (focusedPaperId) {
+        const targetLink = props.links.find((link) => link.paperId === focusedPaperId);
+        const targetRow = targetLink
+          ? props.workbook.rows.findIndex((row) => row.id === targetLink.rowId)
+          : -1;
+        if (targetRow > 0) {
+          workbookHandle.getActiveSheet().getRange(targetRow, 0).activate();
+          setSelectedCell({ rowIndex: targetRow, columnIndex: 0 });
+          setSelectedRanges([{ startRow: targetRow, endRow: targetRow, startColumn: 0, endColumn: 0 }]);
+        }
+      }
+    };
+
+    frameId = window.requestAnimationFrame(() => initializeWhenSized());
 
     return () => {
-      commandDisposable.dispose();
-      container.removeEventListener('mouseup', updateSelectionLater);
-      container.removeEventListener('keyup', updateSelectionLater);
+      disposed = true;
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      commandDisposable?.dispose();
+      resizeObserver?.disconnect();
+      if (containerRef.current && updateSelectionLater) {
+        containerRef.current.removeEventListener('mouseup', updateSelectionLater);
+        containerRef.current.removeEventListener('keyup', updateSelectionLater);
+      }
       if (saveTimerRef.current) {
         window.clearTimeout(saveTimerRef.current);
       }
@@ -295,17 +354,37 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   }
 
   async function handleAnalyzeSelectedLiterature(): Promise<void> {
-    const papers = getSelectedLiteraturePapers();
+    const selectedPapers = getSelectedLiteraturePapers();
+    const papers = selectedPapers.length > 0 ? selectedPapers : getAllLinkedLiteraturePapers();
     if (papers.length === 0) {
-      setLocalMessage('请先选中至少一行已绑定论文的单元格，再做 AI 大观分析。');
+      setLocalMessage('请先选中有内容的表格行，或至少绑定一篇论文后再做 AI 大观分析。');
       return;
     }
 
-    setLocalMessage(`AI 正在综合分析 ${papers.length} 篇论文...`);
-    const text = await props.onAnalyzeLiteratureGap({ papers });
-    if (text.trim()) {
-      setLiteratureInsight(text);
-      setLocalMessage(`AI 已完成 ${papers.length} 篇论文的大观分析。`);
+    const startedAt = Date.now();
+    setIsLiteratureInsightRunning(true);
+    setLiteratureInsight('');
+    setLiteratureInsightProgress(`正在准备 ${papers.length} 篇论文/表格行的上下文...`);
+    const timer = window.setInterval(() => {
+      const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+      setLiteratureInsightProgress(`AI 大观分析运行中 ${elapsedSeconds}s：正在读取 PDF 缓存、表格信息和笔记。`);
+    }, 1000);
+
+    try {
+      setLocalMessage(`AI 正在综合分析 ${papers.length} 篇论文/表格行...`);
+      const text = await props.onAnalyzeLiteratureGap({ papers });
+      if (text.trim()) {
+        setLiteratureInsight(text);
+        setLocalMessage(`AI 已完成 ${papers.length} 篇论文/表格行的大观分析。`);
+        setLiteratureInsightProgress('');
+      } else {
+        setLiteratureInsightProgress('AI 大观分析没有返回内容；请检查 API 设置或选择包含论文/表格内容的行。');
+      }
+    } catch (error) {
+      setLiteratureInsightProgress(`AI 大观分析失败：${String(error)}`);
+    } finally {
+      window.clearInterval(timer);
+      setIsLiteratureInsightRunning(false);
     }
   }
 
@@ -625,18 +704,38 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     });
 
     return [...rows]
-      .map((rowIndex) => {
-        const paper = getLinkedPaperForRow(rowIndex);
-        if (!paper) {
-          return null;
-        }
-
-        return {
-          paper,
-          rowValues: getResearchRowValues(workbook, rowIndex)
-        };
-      })
+      .map((rowIndex) => buildLiteratureInputForRow(workbook, rowIndex, true))
       .filter((item): item is LiteratureGapPaperInput => Boolean(item));
+  }
+
+  function getAllLinkedLiteraturePapers(): LiteratureGapPaperInput[] {
+    const workbook = workbookModelRef.current;
+
+    return workbook.rows
+      .map((_row, rowIndex) => (rowIndex > 0 ? buildLiteratureInputForRow(workbook, rowIndex, false) : null))
+      .filter((item): item is LiteratureGapPaperInput => Boolean(item));
+  }
+
+  function buildLiteratureInputForRow(
+    workbook: ResearchWorkbook,
+    rowIndex: number,
+    allowUnboundRow: boolean
+  ): LiteratureGapPaperInput | null {
+    const rowValues = getResearchRowValues(workbook, rowIndex);
+    const paper = getLinkedPaperForRow(rowIndex);
+
+    if (paper) {
+      return { paper, rowValues };
+    }
+
+    if (!allowUnboundRow || !Object.values(rowValues).some((value) => value.trim())) {
+      return null;
+    }
+
+    return {
+      paper: createSheetRowPaper(rowIndex, rowValues),
+      rowValues
+    };
   }
 
   function getLinkedPaperForRow(rowIndex: number): PaperRecord | null {
@@ -742,8 +841,8 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
           <button type="button" className="icon-button" onClick={handleExportExcel} title="导出 Excel" aria-label="导出 Excel">
             ⇩
           </button>
-          <button type="button" className="icon-button" onClick={props.onBackHome} title="返回主页" aria-label="返回主页">
-            ⌂
+          <button type="button" onClick={props.onBackHome} title="返回主页" aria-label="返回主页">
+            主页
           </button>
         </div>
       </header>
@@ -792,26 +891,33 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
             <button
               type="button"
               onClick={handleAnalyzeSelectedLiterature}
-              disabled={selectedLiteratureCount === 0 || props.isAiBusy}
+              disabled={literatureInsightAction.disabled}
               title="综合选中行论文，提炼领域核心缺口和 1 个可验证 idea"
             >
-              AI 大观分析
+              {literatureInsightAction.label}
             </button>
           </div>
         </section>
 
-        {literatureInsight ? (
+        <section className="literature-insight-progress" aria-live="polite">
+          <span>{literatureInsightAction.scopeText}</span>
+          {isLiteratureInsightRunning ? <div className="indeterminate-progress" /> : null}
+          {literatureInsightProgress ? <p>{literatureInsightProgress}</p> : null}
+        </section>
+
+        {literatureInsight || literatureInsightProgress ? (
           <section className="literature-insight-panel">
             <header>
-              <strong>AI 大观分析结果</strong>
+              <strong>{literatureInsight ? 'AI 大观分析结果' : 'AI 大观分析进度'}</strong>
               <button
                 type="button"
                 onClick={() => void navigator.clipboard.writeText(literatureInsight)}
+                disabled={!literatureInsight}
               >
                 复制
               </button>
             </header>
-            <textarea value={literatureInsight} readOnly />
+            <textarea value={literatureInsight || literatureInsightProgress} readOnly />
           </section>
         ) : null}
 
@@ -941,6 +1047,26 @@ function normalizeUniverRange(
 
 function getRowId(workbook: ResearchWorkbook, rowIndex: number): string {
   return workbook.rows[rowIndex]?.id ?? `row-${rowIndex}`;
+}
+
+function createSheetRowPaper(rowIndex: number, rowValues: Record<string, string>): PaperRecord {
+  const englishTitle = rowValues['英文标题'] || rowValues['论文'] || `表格第 ${rowIndex + 1} 行`;
+
+  return {
+    id: `sheet-row-${rowIndex}`,
+    pdfPath: '',
+    pdfName: rowValues['论文'] || `表格第 ${rowIndex + 1} 行`,
+    translationPath: '',
+    translationName: '',
+    chineseTitle: rowValues['中文标题'] || '',
+    englishTitle,
+    journal: rowValues['期刊/会议'] || rowValues['期刊'] || '',
+    authors: rowValues['作者'] || '',
+    year: rowValues['年份'] || '',
+    notes: rowValues['备注'] || '',
+    lastOpenedAt: new Date(0).toISOString(),
+    lastPage: 1
+  };
 }
 
 function countSelectedCells(ranges: SelectedRange[]): number {
