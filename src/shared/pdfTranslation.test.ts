@@ -4,6 +4,7 @@ import {
   buildPdfTranslationOutputPaths,
   buildPdfTranslationSourceHash,
   findReusablePdfTranslationRecord,
+  formatPdfTranslationProgressMessage,
   patchPdf2zhOpenAiTemperatureSource,
   sanitizePdfTranslationLog
 } from './pdfTranslation';
@@ -247,6 +248,15 @@ describe('PDFMathTranslate command helpers', () => {
 
     expect(sanitizePdfTranslationLog('failed with sk-secret-token', 'sk-secret-token')).toBe(
       'failed with [REDACTED_API_KEY]'
+    );
+  });
+
+  it('formats terminal tqdm progress into readable UI text', () => {
+    expect(formatPdfTranslationProgressMessage('0%| |0/8 [00:00<?, ?it/s]')).toBe(
+      'PDF 翻译进度：0%，0/8 页'
+    );
+    expect(formatPdfTranslationProgressMessage('\r 62%|██████▏|5/8 [01:02<00:30, 10.1s/it]')).toBe(
+      'PDF 翻译进度：62%，5/8 页'
     );
   });
 

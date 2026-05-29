@@ -181,6 +181,28 @@ export function sanitizePdfTranslationLog(value: string, apiKey?: string): strin
   return sanitized.replace(/sk-[A-Za-z0-9_-]{8,}/gu, '[REDACTED_API_KEY]');
 }
 
+export function formatPdfTranslationProgressMessage(value: string): string {
+  const cleaned = value
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/gu, '')
+    .replace(/\r/gu, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .at(-1);
+
+  if (!cleaned) {
+    return '';
+  }
+
+  const tqdmMatch = cleaned.match(/(\d{1,3})%\|.*?\|\s*(\d+)\s*\/\s*(\d+)/u);
+  if (tqdmMatch) {
+    const percent = Math.min(100, Math.max(0, Number(tqdmMatch[1])));
+    return `PDF 翻译进度：${percent}%，${tqdmMatch[2]}/${tqdmMatch[3]} 页`;
+  }
+
+  return cleaned.replace(/\s+/gu, ' ');
+}
+
 function getFileStem(filePath: string): string {
   const fileName = filePath.replace(/\\/gu, '/').split('/').pop() || 'translated';
   return fileName.replace(/\.[^.]+$/u, '') || 'translated';

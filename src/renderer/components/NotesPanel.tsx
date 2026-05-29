@@ -1,3 +1,5 @@
+import noteIcon from '../assets/icons/duotone/note.svg';
+
 interface NotesPanelProps {
   notes: string;
   onChange: (value: string) => void;
@@ -33,7 +35,10 @@ export function NotesPanel(props: NotesPanelProps) {
   return (
     <details className="notes-panel" open>
       <summary>
-        <span>阅读笔记</span>
+        <span className="summary-title-with-icon">
+          <img className="panel-title-icon" src={noteIcon} alt="" />
+          <span>阅读笔记</span>
+        </span>
         <small>{wordCount > 0 ? `${wordCount} 字，已自动保存` : '记录想法、公式推导或复现计划'}</small>
       </summary>
       <div className="notes-template-bar">

@@ -5,6 +5,8 @@ dist-electron/
 
 .tmp*/
 .tmp-*/
+ftranslate_cool_icon_pack/
+ftranslate_ui_reference_images_only/
 *.log
 npm-debug.log*
 yarn-debug.log*

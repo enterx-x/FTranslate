@@ -11,6 +11,14 @@
 - Univer `0.24.0` 用于独立研究表格
 - electron-builder 生成 Windows NSIS 安装包
 
+## UI 与图标
+
+- UI 采用统一的黑白灰桌面软件风格，少量蓝紫渐变只作为图标和强调状态使用。
+- `src/renderer/styles/global.css` 中集中维护主题变量、按钮、badge、卡片、工具栏和右侧面板样式。
+- `src/renderer/assets/icons/premium/` 放置大入口卡片和空状态使用的 premium 图标。
+- `src/renderer/assets/icons/duotone/` 放置工具栏、按钮、面板标题和状态操作使用的线性图标。
+- 按钮分为主按钮、次按钮、ghost 按钮、危险按钮和纯图标按钮；复杂业务操作保留“图标 + 文字”，避免纯图标降低可读性。
+
 ## 运行
 
 ```bash
@@ -41,6 +49,8 @@ npm run dist
 5. 再次打开同一篇论文时，如果 PDF 文件大小和修改时间没有变化，会复用本机缓存的双语 PDF，避免重复扣 token。
 
 如果上一次生成失败或想绕过旧缓存，点击 `重新生成` 会强制让 PDFMathTranslate 忽略已有缓存重新跑。应用会优先使用 `*-mono.pdf` 作为右侧中文 PDF，同时保留 `*-dual.pdf` 用于导出。生成完成后可以点击 `导出双语 PDF`，把当前绑定的双语 PDF 另存到任意位置。也可以点击 `导入中文/双语 PDF`，把其它工具已经生成的中文或双语 PDF 绑定到当前论文记录中。
+
+PDFMathTranslate 的终端进度会在 UI 中被整理为可读状态，例如 `PDF 翻译进度：62%，5/8 页`，不再直接显示 tqdm 里的 `<?, ?it/s]` 等终端控制文本。参考文献部分默认仍交给 PDFMathTranslate 保持原 PDF 结构；如果引擎无法稳定翻译参考文献，建议保留原文或导入外部已校对的中文/双语 PDF。
 
 ## PDFMathTranslate 引擎
 

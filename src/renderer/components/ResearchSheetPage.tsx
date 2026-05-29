@@ -19,6 +19,14 @@ import '@univerjs/preset-sheets-core/lib/index.css';
 import '@univerjs/preset-sheets-conditional-formatting/lib/index.css';
 import '@univerjs/preset-sheets-data-validation/lib/index.css';
 import brandMark from '../assets/brand-mark.png';
+import uploadIcon from '../assets/icons/duotone/upload.svg';
+import downloadIcon from '../assets/icons/duotone/download.svg';
+import homeIcon from '../assets/icons/duotone/home.svg';
+import aiFillIcon from '../assets/icons/duotone/ai-fill.svg';
+import analysisIcon from '../assets/icons/duotone/analysis.svg';
+import pdfReaderIcon from '../assets/icons/duotone/pdf-reader.svg';
+import saveIcon from '../assets/icons/duotone/save.svg';
+import refreshIcon from '../assets/icons/duotone/refresh.svg';
 import { MathText } from './MathText';
 import {
   RESEARCH_SHEET_LINKS_KEY,
@@ -148,6 +156,7 @@ const DEFAULT_SELECTED_RANGE: SelectedRange = {
   startColumn: 3,
   endColumn: 3
 };
+const RESEARCH_UNIVER_CONTAINER_ID = 'ftranslate-research-univer-container';
 
 export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -259,7 +268,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   }, []);
 
   useEffect(() => {
-    if (!containerRef.current || univerRef.current) {
+    if (univerRef.current) {
       return;
     }
 
@@ -271,7 +280,13 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
 
     const initializeWhenSized = (attempt = 0): void => {
       const container = containerRef.current;
-      if (!container || disposed || univerRef.current) {
+      if (disposed || univerRef.current) {
+        return;
+      }
+      if (!container) {
+        if (attempt < 60) {
+          frameId = window.requestAnimationFrame(() => initializeWhenSized(attempt + 1));
+        }
         return;
       }
 
@@ -293,7 +308,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
         },
         presets: [
           UniverSheetsCorePreset({
-            container,
+            container: RESEARCH_UNIVER_CONTAINER_ID,
             header: false,
             toolbar: true,
             formulaBar: true,
@@ -933,13 +948,14 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
         </div>
         <div className="research-sheet-actions">
           <button type="button" className="icon-button" onClick={handleImportExcel} title="导入 Excel" aria-label="导入 Excel">
-            ⇧
+            <img className="button-icon" src={uploadIcon} alt="" />
           </button>
           <button type="button" className="icon-button" onClick={handleExportExcel} title="导出 Excel" aria-label="导出 Excel">
-            ⇩
+            <img className="button-icon" src={downloadIcon} alt="" />
           </button>
-          <button type="button" onClick={props.onBackHome} title="返回主页" aria-label="返回主页">
-            主页
+          <button type="button" className="button-with-icon" onClick={props.onBackHome} title="返回主页" aria-label="返回主页">
+            <img className="button-icon" src={homeIcon} alt="" />
+            <span>主页</span>
           </button>
         </div>
       </header>
@@ -965,33 +981,40 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
             </select>
             <button
               type="button"
+              className="secondary-button button-with-icon"
               onClick={handleToggleBindSelectedRow}
               disabled={!canToggleBinding}
             >
-              {bindButtonLabel}
+              <img className="button-icon" src={saveIcon} alt="" />
+              <span>{bindButtonLabel}</span>
             </button>
             <button
               type="button"
+              className="secondary-button button-with-icon"
               onClick={() => linkedPaper && props.onOpenPaper(linkedPaper)}
               disabled={!linkedPaper}
             >
-              打开行论文
+              <img className="button-icon" src={pdfReaderIcon} alt="" />
+              <span>打开行论文</span>
             </button>
             <button
               type="button"
-              className="primary-button"
+              className="primary-button button-with-icon"
               onClick={handleFillSelectedCells}
               disabled={aiTargetCount === 0 || props.isAiBusy}
             >
-              {props.isAiBusy ? 'AI 填写中...' : aiTargetCount > 1 ? `AI 填选区 ${aiTargetCount} 格` : 'AI 填此单元格'}
+              <img className="button-icon" src={aiFillIcon} alt="" />
+              <span>{props.isAiBusy ? 'AI 填写中...' : aiTargetCount > 1 ? `AI 填选区 ${aiTargetCount} 格` : 'AI 填此单元格'}</span>
             </button>
             <button
               type="button"
+              className="button-with-icon"
               onClick={handleAnalyzeSelectedLiterature}
               disabled={literatureInsightAction.disabled}
               title="综合选中行论文，提炼领域核心缺口和 1 个可验证 idea"
             >
-              {literatureInsightAction.label}
+              <img className="button-icon" src={analysisIcon} alt="" />
+              <span>{literatureInsightAction.label}</span>
             </button>
           </div>
         </section>
@@ -1067,10 +1090,10 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
             </select>
           </label>
           <button type="button" className="icon-button" onClick={handleCopyFormat} title="复制格式" aria-label="复制格式">
-            ⧉
+            <img className="button-icon" src={saveIcon} alt="" />
           </button>
           <button type="button" className="icon-button" onClick={handlePasteCopiedFormat} disabled={!hasCopiedFormat} title="粘贴格式" aria-label="粘贴格式">
-            ▣
+            <img className="button-icon" src={refreshIcon} alt="" />
           </button>
           <button
             type="button"
@@ -1132,7 +1155,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
         </section>
 
         <section className="research-sheet-surface">
-          <div ref={containerRef} className="univer-container" />
+          <div ref={containerRef} id={RESEARCH_UNIVER_CONTAINER_ID} className="univer-container" />
         </section>
       </section>
     </main>

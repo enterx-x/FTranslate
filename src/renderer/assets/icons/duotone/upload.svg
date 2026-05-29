@@ -1,0 +1,13 @@
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g_upload" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#60a5fa"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <g stroke="url(#g_upload)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M12 15V4.8"/>
+  <path d="m8.3 8.5 3.7-3.7 3.7 3.7"/>
+  <path d="M5 15.5v2.7c0 1 .8 1.8 1.8 1.8h10.4c1 0 1.8-.8 1.8-1.8v-2.7"/>
+  </g>
+</svg>

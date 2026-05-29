@@ -1,0 +1,12 @@
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g_ai_fill" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#60a5fa"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <g stroke="url(#g_ai_fill)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M12 3.5 13.4 8c.2.7.8 1.2 1.5 1.5l4.6 1.5-4.6 1.5c-.7.2-1.2.8-1.5 1.5L12 18l-1.4-4.5c-.2-.7-.8-1.2-1.5-1.5L4.5 11l4.6-1.5c.7-.2 1.2-.8 1.5-1.5L12 3.5Z"/>
+  <path d="M18.2 15.5 19 17.2l1.7.8-1.7.7-.8 1.8-.8-1.8-1.7-.7 1.7-.8.8-1.7Z"/>
+  </g>
+</svg>

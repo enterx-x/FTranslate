@@ -13,12 +13,19 @@ import {
   type AiReasoningEffort,
   type AiThinkingMode
 } from '../shared/aiTranslation';
+import { formatPdfTranslationProgressMessage } from '../shared/pdfTranslation';
 import type { AiFormState } from './components/AiModePanel';
 import { HomePage } from './components/HomePage';
 import { NotesPanel } from './components/NotesPanel';
 import { PdfViewer } from './components/PdfViewer';
 import type { PdfViewportState } from './lib/pdfViewportSync';
 import { Toolbar } from './components/Toolbar';
+import translateIcon from './assets/icons/duotone/translate.svg';
+import uploadIcon from './assets/icons/duotone/upload.svg';
+import downloadIcon from './assets/icons/duotone/download.svg';
+import refreshIcon from './assets/icons/duotone/refresh.svg';
+import searchIcon from './assets/icons/duotone/search.svg';
+import settingsIcon from './assets/icons/duotone/settings.svg';
 import {
   buildAiCacheDocument,
   cloneJsonDocumentForAi,
@@ -42,6 +49,7 @@ import {
   type ResearchSheetLink,
   type ResearchWorkbook
 } from './lib/researchWorkbook';
+import { buildFreshPdfSessionState } from './lib/projectSession';
 import { buildSheetCellsPrompt, parseSheetCellsAiResponse } from './lib/sheetCellAi';
 import {
   exportBilingualMarkdown,
@@ -186,7 +194,7 @@ export default function App() {
 
   useEffect(() => {
     return window.electronAPI.onPdfTranslationProgress((progress: PdfTranslationProgress) => {
-      setPdfTranslationStatus(progress.message);
+      setPdfTranslationStatus(formatPdfTranslationProgressMessage(progress.message));
       if (progress.status === 'running') {
         setIsPdfTranslationBusy(true);
       }
@@ -409,6 +417,14 @@ export default function App() {
       }
 
       applyPdfPayload(payload);
+      const freshSession = buildFreshPdfSessionState();
+      setTranslationDocument(freshSession.translationDocument);
+      setAiCacheDocument(freshSession.aiCacheDocument);
+      setCurrentParagraphIndex(freshSession.currentParagraphIndex);
+      setAiParagraphIndex(freshSession.aiParagraphIndex);
+      setShowTranslation(freshSession.showTranslation);
+      setIsEditing(freshSession.isEditing);
+      setEditingText(freshSession.editingText);
       setActivePaperId(null);
       setActiveNotes('');
       setStatusMessage(`已打开 PDF：${payload.fileName}`);
@@ -600,8 +616,14 @@ export default function App() {
 
     try {
       applyPdfPayload(pdfPayload);
-      setTranslationDocument(null);
-      setAiCacheDocument(null);
+      const freshSession = buildFreshPdfSessionState();
+      setTranslationDocument(freshSession.translationDocument);
+      setAiCacheDocument(freshSession.aiCacheDocument);
+      setCurrentParagraphIndex(freshSession.currentParagraphIndex);
+      setAiParagraphIndex(freshSession.aiParagraphIndex);
+      setShowTranslation(freshSession.showTranslation);
+      setIsEditing(freshSession.isEditing);
+      setEditingText(freshSession.editingText);
       setTranslatedPdf(null);
       setTranslatedMonoPdf(null);
       setPdfViewMode('source');
@@ -1439,7 +1461,10 @@ export default function App() {
           <div className="side-panel">
             <section className="whole-pdf-panel" aria-label="整体双语 PDF">
               <div className="whole-pdf-header">
-                <strong>整体 PDF 阅读</strong>
+                <strong className="summary-title-with-icon">
+                  <img className="panel-title-icon" src={translateIcon} alt="" />
+                  <span>整体 PDF 阅读</span>
+                </strong>
                 <span>
                   {pdfViewMode === 'translated' && translatedPdf
                     ? `正在显示：${translatedPdf.fileName}`
@@ -1477,26 +1502,33 @@ export default function App() {
                 </div>
                 <button
                   type="button"
+                  className="primary-button button-with-icon"
                   disabled={!pdf || isPdfTranslationBusy}
                   onClick={() => handleGenerateBilingualPdf(false)}
                 >
-                  生成双语 PDF
+                  <img className="button-icon" src={translateIcon} alt="" />
+                  <span>生成双语 PDF</span>
                 </button>
                 <button
                   type="button"
+                  className="secondary-button button-with-icon"
                   disabled={!pdf || isPdfTranslationBusy}
                   onClick={() => handleGenerateBilingualPdf(true)}
                 >
-                  重新生成
+                  <img className="button-icon" src={refreshIcon} alt="" />
+                  <span>重新生成</span>
                 </button>
-                <button type="button" disabled={isPdfTranslationBusy} onClick={handleImportTranslatedPdf}>
-                  导入中文/双语 PDF
+                <button type="button" className="secondary-button button-with-icon" disabled={isPdfTranslationBusy} onClick={handleImportTranslatedPdf}>
+                  <img className="button-icon" src={uploadIcon} alt="" />
+                  <span>导入中文/双语 PDF</span>
                 </button>
-                <button type="button" disabled={!translatedPdf || isPdfTranslationBusy} onClick={handleExportTranslatedPdf}>
-                  导出双语 PDF
+                <button type="button" className="secondary-button button-with-icon" disabled={!translatedPdf || isPdfTranslationBusy} onClick={handleExportTranslatedPdf}>
+                  <img className="button-icon" src={downloadIcon} alt="" />
+                  <span>导出双语 PDF</span>
                 </button>
-                <button type="button" disabled={isPdfTranslationBusy} onClick={handleCheckPdfTranslationEngine}>
-                  检查引擎
+                <button type="button" className="ghost-button button-with-icon" disabled={isPdfTranslationBusy} onClick={handleCheckPdfTranslationEngine}>
+                  <img className="button-icon" src={searchIcon} alt="" />
+                  <span>检查引擎</span>
                 </button>
               </div>
               <p>
@@ -1512,7 +1544,10 @@ export default function App() {
             </section>
             <details className="pdf-ai-settings">
               <summary>
-                <span>PDF 翻译 API</span>
+                <span className="summary-title-with-icon">
+                  <img className="panel-title-icon" src={settingsIcon} alt="" />
+                  <span>PDF 翻译 API</span>
+                </span>
                 <small>
                   {aiSettings
                     ? `${aiSettings.provider} / ${aiSettings.model}，API Key ${aiSettings.apiKeyConfigured ? '已保存' : '未保存'}`
