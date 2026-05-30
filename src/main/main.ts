@@ -36,6 +36,7 @@ import {
   buildPdfTranslationOutputPaths,
   buildPdfTranslationSourceHash,
   findReusablePdfTranslationRecord,
+  formatPdfTranslationProgressMessage,
   normalizePdfTranslationRecordFields,
   patchPdf2zhOpenAiTemperatureSource,
   sanitizePdfTranslationLog,
@@ -809,7 +810,9 @@ async function runPdfTranslationProcess(
     };
 
     const handleChunk = (chunk: Buffer): void => {
-      const message = sanitizePdfTranslationLog(chunk.toString('utf8'), options.apiKey).trim();
+      const message = formatPdfTranslationProgressMessage(
+        sanitizePdfTranslationLog(chunk.toString('utf8'), options.apiKey)
+      ).trim();
       if (!message) {
         return;
       }
@@ -2588,7 +2591,9 @@ function registerIpcHandlers(): void {
       sendPdfTranslationProgress({
         paperId: request.paperId,
         status: 'failed',
-        message: String(error)
+        message: formatPdfTranslationProgressMessage(
+          sanitizePdfTranslationLog(error instanceof Error ? error.message : String(error), '')
+        )
       });
       throw error;
     }

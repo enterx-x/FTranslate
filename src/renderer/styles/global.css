@@ -5768,3 +5768,213 @@ button:disabled,
     overflow: auto;
   }
 }
+
+/* Responsive hardening: keep the desktop shell stable across DPI and external displays. */
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+:root {
+  --sidebar-width: clamp(132px, 9vw, 156px);
+  --page-padding: clamp(14px, 1.45vw, 24px);
+  --panel-min-width: 280px;
+  --panel-max-width: 360px;
+  --content-max-width: 1440px;
+}
+
+body {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+body.is-resizing-layout {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.is-resizing-layout * {
+  cursor: col-resize !important;
+}
+
+.app-main,
+.desktop-main,
+.home-page,
+.settings-page,
+.ai-assistant-page,
+.knowledge-graph-page {
+  min-width: 0;
+}
+
+.settings-layout {
+  grid-template-columns: clamp(220px, 18vw, 252px) minmax(0, 1fr);
+}
+
+.settings-nav {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.settings-nav button {
+  justify-content: flex-start;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-form-grid,
+.settings-path-grid,
+.settings-toggle-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  min-width: 15px;
+  min-height: 15px;
+  accent-color: var(--accent);
+}
+
+.ai-assistant-layout.is-resizable {
+  grid-template-columns: minmax(0, calc(var(--ai-main-ratio, 68%) - 5px)) 10px minmax(280px, 1fr) !important;
+}
+
+.layout-resize-handle {
+  display: block;
+  touch-action: none;
+}
+
+.layout-resize-handle::after {
+  background: #e5e7eb;
+  opacity: 0.72;
+}
+
+.layout-resize-handle:hover::after,
+body.is-resizing-layout .layout-resize-handle::after {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.home-dashboard-stats {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.home-module-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+}
+
+.home-module-card {
+  min-height: clamp(180px, 24vh, 220px);
+}
+
+.home-recent-list {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.knowledge-graph-layout {
+  grid-template-columns: clamp(220px, 18vw, 260px) minmax(0, 1fr) clamp(280px, 22vw, 340px);
+}
+
+.knowledge-detail-panel,
+.knowledge-filter-panel {
+  min-width: 0;
+}
+
+.knowledge-graph-svg {
+  min-height: clamp(430px, 64vh, 660px);
+}
+
+.graph-cluster {
+  pointer-events: none;
+}
+
+.graph-cluster-halo {
+  opacity: 0.16;
+  fill-opacity: 0.12;
+  stroke: #a5b4fc;
+  stroke-width: 1.2;
+  stroke-dasharray: 6 8;
+}
+
+.graph-cluster-label {
+  fill: #4f46e5;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0;
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+.graph-detail-fold {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fbfcfe;
+  padding: 10px 12px;
+}
+
+.graph-detail-fold summary {
+  cursor: pointer;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.graph-detail-fold .row-detail-list {
+  margin-top: 10px;
+}
+
+@media (max-width: 1280px) {
+  :root {
+    --page-padding: 14px;
+  }
+
+  .home-page,
+  .settings-page,
+  .ai-assistant-page,
+  .knowledge-graph-page {
+    padding-inline: 14px;
+  }
+
+  .knowledge-graph-layout {
+    grid-template-columns: 220px minmax(0, 1fr) 280px;
+  }
+}
+
+@media (max-width: 1120px) {
+  .ai-assistant-layout.is-resizable,
+  .knowledge-graph-layout,
+  .settings-layout {
+    grid-template-columns: 1fr !important;
+  }
+
+  .layout-resize-handle {
+    display: none;
+  }
+
+  .knowledge-detail-panel {
+    max-height: 360px;
+  }
+}
+
+@media (max-height: 800px) {
+  .home-module-card {
+    min-height: 170px;
+  }
+
+  .ai-work-card,
+  .knowledge-filter-panel,
+  .knowledge-detail-panel {
+    padding: 12px;
+  }
+
+  .knowledge-graph-svg {
+    min-height: 390px;
+  }
+}

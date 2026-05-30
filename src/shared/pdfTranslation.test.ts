@@ -275,6 +275,25 @@ describe('PDFMathTranslate command helpers', () => {
     );
   });
 
+  it('formats provider errors into readable PDF translation messages', () => {
+    expect(formatPdfTranslationProgressMessage("{'message': 'content_filter'}")).toBe(
+      'PDF 翻译被模型内容安全策略拦截（content_filter）。建议换用更适合长文档翻译的模型，或关闭思考模式后重新生成。'
+    );
+    expect(formatPdfTranslationProgressMessage("invalid temperature: only 0.6 is allowed for this model")).toBe(
+      '当前模型限制 temperature 参数。请在 PDF 翻译 API 高级选项中使用该模型允许的数值，例如 Kimi K2.5 非思考模式通常为 0.6。'
+    );
+  });
+
+  it('detects provider errors before trailing stack lines', () => {
+    expect(
+      formatPdfTranslationProgressMessage(
+        "OpenAIError: {'message': 'content_filter'}\n    at translatePage (worker.js:12:4)"
+      )
+    ).toBe(
+      'PDF 翻译被模型内容安全策略拦截（content_filter）。建议换用更适合长文档翻译的模型，或关闭思考模式后重新生成。'
+    );
+  });
+
   it('selects reusable translated PDF cache records by source hash and mode', () => {
     const reusable = findReusablePdfTranslationRecord(
       [

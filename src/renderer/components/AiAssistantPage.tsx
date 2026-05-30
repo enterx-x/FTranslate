@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   AI_REASONING_EFFORT_OPTIONS,
   AI_THINKING_MODE_OPTIONS,
@@ -29,6 +29,7 @@ import {
   type ResearchSheetLink,
   type ResearchWorkbook
 } from '../lib/researchWorkbook';
+import { clampPanelRatio, getPanelRatioFromPointer } from '../lib/responsiveLayout';
 import type { PaperRecord } from '../lib/papers';
 import type { AiBalanceResult, AiSettingsView } from '../types/electron';
 import type { AnalyzeLiteratureGapRequest, AnalyzeLiteratureGapResult } from './ResearchSheetPage';
@@ -150,7 +151,7 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
   const [isResultExpanded, setIsResultExpanded] = useState(false);
   const [mainRatio, setMainRatio] = useState(() => {
     const stored = Number(localStorage.getItem('pdfTranslationReader:aiAssistantMainRatio'));
-    return Number.isFinite(stored) ? Math.min(0.78, Math.max(0.56, stored)) : 0.68;
+    return clampPanelRatio(stored);
   });
 
   const linkedInputs = useMemo(
@@ -278,22 +279,32 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
   }
 
   function handleLayoutResizeStart(event: ReactPointerEvent<HTMLDivElement>): void {
+    event.preventDefault();
     const container = event.currentTarget.parentElement;
     if (!container) {
       return;
     }
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    document.body.classList.add('is-resizing-layout');
     const rect = container.getBoundingClientRect();
     const move = (moveEvent: PointerEvent) => {
-      const nextRatio = Math.min(0.78, Math.max(0.56, (moveEvent.clientX - rect.left) / rect.width));
+      const nextRatio = getPanelRatioFromPointer({
+        clientX: moveEvent.clientX,
+        left: rect.left,
+        width: rect.width
+      });
       setMainRatio(nextRatio);
       localStorage.setItem('pdfTranslationReader:aiAssistantMainRatio', String(nextRatio));
     };
     const stop = () => {
+      document.body.classList.remove('is-resizing-layout');
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
   }
 
   return (
@@ -334,8 +345,8 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
       <section
         className="ai-assistant-layout is-resizable"
         style={{
-          gridTemplateColumns: `minmax(520px, ${mainRatio}fr) 10px minmax(300px, ${1 - mainRatio}fr)`
-        }}
+          '--ai-main-ratio': `${mainRatio * 100}%`
+        } as CSSProperties}
       >
         <div className="ai-assistant-main-column">
           <section className="ai-work-card ai-analysis-workspace" id="ai-analysis-workspace">
@@ -517,7 +528,10 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
           aria-orientation="vertical"
           title="拖拽调整 AI 助手左右栏宽度，双击恢复默认"
           onPointerDown={handleLayoutResizeStart}
-          onDoubleClick={() => setMainRatio(0.68)}
+          onDoubleClick={() => {
+            setMainRatio(0.68);
+            localStorage.setItem('pdfTranslationReader:aiAssistantMainRatio', '0.68');
+          }}
         />
 
         <aside className="ai-assistant-side-column">

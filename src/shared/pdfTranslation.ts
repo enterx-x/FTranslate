@@ -191,16 +191,25 @@ export function sanitizePdfTranslationLog(value: string, apiKey?: string): strin
 }
 
 export function formatPdfTranslationProgressMessage(value: string): string {
-  const cleaned = value
+  const lines = value
     .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/gu, '')
     .replace(/\r/gu, '\n')
     .split('\n')
     .map((line) => line.trim())
-    .filter(Boolean)
-    .at(-1);
+    .filter(Boolean);
+  const cleaned = lines.at(-1);
 
   if (!cleaned) {
     return '';
+  }
+
+  const normalized = lines.join('\n').toLowerCase();
+  if (normalized.includes('content_filter')) {
+    return 'PDF 翻译被模型内容安全策略拦截（content_filter）。建议换用更适合长文档翻译的模型，或关闭思考模式后重新生成。';
+  }
+
+  if (normalized.includes('invalid temperature')) {
+    return '当前模型限制 temperature 参数。请在 PDF 翻译 API 高级选项中使用该模型允许的数值，例如 Kimi K2.5 非思考模式通常为 0.6。';
   }
 
   const tqdmMatch = cleaned.match(/(\d{1,3})%\|.*?\|\s*(\d+)\s*\/\s*(\d+)/u);

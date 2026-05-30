@@ -20,6 +20,11 @@ import {
   type KnowledgeGraphNode,
   type KnowledgeGraphNodeType
 } from '../lib/knowledgeGraph';
+import {
+  getKnowledgeGraphClusterRegions,
+  layoutClusteredKnowledgeGraph,
+  type PositionedKnowledgeGraphNode
+} from '../lib/knowledgeGraphLayout';
 import type { PaperRecord } from '../lib/papers';
 import { getResearchRowValues, type ResearchSheetLink, type ResearchWorkbook } from '../lib/researchWorkbook';
 import { MarkdownDocument } from './MarkdownDocument';
@@ -37,11 +42,7 @@ type GraphSource = 'merged' | 'workbook' | 'library';
 type GraphKind = 'all' | 'paper-method' | 'topic' | 'author' | 'timeline';
 type LabelStrategy = 'core' | 'hover' | 'all';
 
-interface PositionedNode extends KnowledgeGraphNode {
-  x: number;
-  y: number;
-  radius: number;
-}
+type PositionedNode = PositionedKnowledgeGraphNode;
 
 interface GraphTransform {
   scale: number;
@@ -114,9 +115,13 @@ export function KnowledgeGraphPage(props: KnowledgeGraphPageProps) {
     [graph, selectedTypes, searchText, graphKind, maxNodes, hiddenNodeIds]
   );
   const positionedNodes = useMemo(
-    () => layoutNeuronGraph(filteredGraph.nodes, filteredGraph.edges, 920, 560),
+    () => layoutClusteredKnowledgeGraph(filteredGraph.nodes, filteredGraph.edges, 980, 620),
     [filteredGraph.nodes, filteredGraph.edges]
   );
+  const clusterRegions = useMemo(() => {
+    const activeClusterIds = [...new Set(positionedNodes.map((node) => node.clusterId))];
+    return getKnowledgeGraphClusterRegions(980, 620, activeClusterIds);
+  }, [positionedNodes]);
   const nodeMap = new Map(positionedNodes.map((node) => [node.id, node]));
   const selectedNode = nodeMap.get(selectedNodeId) ?? positionedNodes[0] ?? null;
   const activeNodeId = hoveredNodeId || selectedNode?.id || '';
@@ -351,7 +356,7 @@ export function KnowledgeGraphPage(props: KnowledgeGraphPageProps) {
             <svg
               ref={svgRef}
               className="knowledge-graph-svg"
-              viewBox="0 0 920 560"
+              viewBox="0 0 980 620"
               role="img"
               aria-label="文献知识图谱"
               onWheel={handleWheel}
@@ -367,8 +372,23 @@ export function KnowledgeGraphPage(props: KnowledgeGraphPageProps) {
                   </feMerge>
                 </filter>
               </defs>
-              <rect width="920" height="560" rx="18" fill="#fbfcff" />
+              <rect width="980" height="620" rx="18" fill="#fbfcff" />
               <g transform={`translate(${transform.x} ${transform.y}) scale(${transform.scale})`}>
+                {clusterRegions.map((cluster) => (
+                  <g key={cluster.id} className="graph-cluster">
+                    <ellipse
+                      className="graph-cluster-halo"
+                      cx={cluster.x}
+                      cy={cluster.y}
+                      rx={cluster.rx}
+                      ry={cluster.ry}
+                      fill={cluster.color}
+                    />
+                    <text className="graph-cluster-label" x={cluster.x} y={cluster.y - cluster.ry - 8} textAnchor="middle">
+                      {cluster.title}
+                    </text>
+                  </g>
+                ))}
                 {visibleEdges.map((edge) => {
                   const sourceNode = nodeMap.get(edge.source);
                   const targetNode = nodeMap.get(edge.target);
@@ -436,7 +456,7 @@ export function KnowledgeGraphPage(props: KnowledgeGraphPageProps) {
               onHideNode={(nodeId) => setHiddenNodeIds((ids) => [...ids, nodeId])}
               onFocusNode={(nodeId) => {
                 const node = nodeMap.get(nodeId);
-                if (node) setTransform({ scale: 1.25, x: 460 - node.x * 1.25, y: 280 - node.y * 1.25 });
+                if (node) setTransform({ scale: 1.25, x: 490 - node.x * 1.25, y: 310 - node.y * 1.25 });
               }}
             />
           ) : null}
@@ -483,6 +503,14 @@ function GraphNodeDetails(props: {
   const rowIndex = props.workbook.rows.findIndex((row) => row.id === rowId);
   const rowValues = rowIndex > 0 ? getResearchRowValues(props.workbook, rowIndex) : null;
   const noteCount = relatedPapers.filter((paper) => paper.notes.trim()).length;
+  const connectionCount = props.graph.edges.filter(
+    (edge) => edge.source === props.node?.id || edge.target === props.node?.id
+  ).length;
+  const rowEntries = rowValues ? Object.entries(rowValues).filter(([, value]) => value.trim()) : [];
+  const summaryRowEntries = pickPriorityRowEntries(rowEntries, props.node.type);
+  const detailRowEntries = rowEntries.filter(
+    ([key]) => !summaryRowEntries.some(([summaryKey]) => summaryKey === key)
+  );
 
   return (
     <div className="knowledge-node-detail">
@@ -490,29 +518,43 @@ function GraphNodeDetails(props: {
         <span className="badge" style={{ background: NODE_STYLE[props.node.type].soft, color: NODE_STYLE[props.node.type].color }}>
           {NODE_TYPE_OPTIONS.find((option) => option.value === props.node?.type)?.label}
         </span>
-        <span className="subtle">{props.node.count > 1 ? `出现 ${props.node.count} 次` : '单次出现'}</span>
+        {props.node.count > 1 ? <span className="subtle">出现 {props.node.count} 次</span> : null}
       </div>
       <h2>{props.node.label}</h2>
-      <div className="graph-detail-stats">
-        <span>相关论文 <strong>{relatedPapers.length}</strong></span>
-        <span>关联笔记 <strong>{noteCount}</strong></span>
-        <span>连接 <strong>{props.graph.edges.filter((edge) => edge.source === props.node?.id || edge.target === props.node?.id).length}</strong></span>
-      </div>
+      {relatedPapers.length > 0 || noteCount > 0 || connectionCount > 1 ? (
+        <div className="graph-detail-stats">
+          {relatedPapers.length > 0 ? <span>相关论文 <strong>{relatedPapers.length}</strong></span> : null}
+          {noteCount > 0 ? <span>关联笔记 <strong>{noteCount}</strong></span> : null}
+          {connectionCount > 1 ? <span>连接 <strong>{connectionCount}</strong></span> : null}
+        </div>
+      ) : null}
 
-      {rowValues ? (
+      {summaryRowEntries.length > 0 ? (
         <section>
           <strong>核心信息</strong>
           <div className="row-detail-list">
-            {Object.entries(rowValues).map(([key, value]) =>
-              value.trim() ? (
-                <p key={key}>
-                  <span>{key}</span>
-                  <em><MarkdownDocument text={value} /></em>
-                </p>
-              ) : null
-            )}
+            {summaryRowEntries.map(([key, value]) => (
+              <p key={key}>
+                <span>{key}</span>
+                <em><MarkdownDocument text={value} /></em>
+              </p>
+            ))}
           </div>
         </section>
+      ) : null}
+
+      {detailRowEntries.length > 0 ? (
+        <details className="graph-detail-fold">
+          <summary>完整表格行信息</summary>
+          <div className="row-detail-list">
+            {detailRowEntries.map(([key, value]) => (
+              <p key={key}>
+                <span>{key}</span>
+                <em><MarkdownDocument text={value} /></em>
+              </p>
+            ))}
+          </div>
+        </details>
       ) : null}
 
       {relatedPapers.length > 0 ? (
@@ -541,6 +583,34 @@ function GraphNodeDetails(props: {
       </div>
     </div>
   );
+}
+
+function pickPriorityRowEntries(
+  entries: Array<[string, string]>,
+  nodeType: KnowledgeGraphNodeType
+): Array<[string, string]> {
+  const priority =
+    nodeType === 'paper'
+      ? ['中文标题', '英文标题', '年份', '期刊', '期刊/会议', '作者', '研究场景', '研究方法', 'RL 算法', '是否使用 PINN', '评价指标', '核心创新点', '局限性']
+      : ['研究场景', '研究方法', 'RL 算法', '关键词', '评价指标', '核心创新点', '局限性', '可借鉴点'];
+  const picked: Array<[string, string]> = [];
+  priority.forEach((keyPattern) => {
+    const matched = entries.find(([key]) => key.toLowerCase().includes(keyPattern.toLowerCase()));
+    if (matched && !picked.some(([key]) => key === matched[0])) {
+      picked.push(matched);
+    }
+  });
+
+  entries.slice(0, 8).forEach((entry) => {
+    if (picked.length >= 8) {
+      return;
+    }
+    if (!picked.some(([key]) => key === entry[0])) {
+      picked.push(entry);
+    }
+  });
+
+  return picked.slice(0, 8);
 }
 
 function GraphContextMenu(props: {
@@ -600,65 +670,6 @@ function filterGraph(
   };
 }
 
-function layoutNeuronGraph(nodes: KnowledgeGraphNode[], edges: KnowledgeGraphEdge[], width: number, height: number): PositionedNode[] {
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const paperNodes = nodes.filter((node) => node.type === 'paper');
-  const nonPaperNodes = nodes.filter((node) => node.type !== 'paper');
-  const mainPaper = paperNodes[0];
-  const positioned: PositionedNode[] = [];
-
-  if (mainPaper) {
-    positioned.push({
-      ...mainPaper,
-      x: centerX,
-      y: centerY,
-      radius: 26 + Math.min(10, mainPaper.count)
-    });
-  }
-
-  paperNodes.slice(1).forEach((node, index) => {
-    const angle = (-Math.PI / 2) + (Math.PI * 2 * index) / Math.max(1, paperNodes.length - 1);
-    const radius = Math.min(width, height) * 0.24;
-    positioned.push({
-      ...node,
-      x: centerX + Math.cos(angle) * radius,
-      y: centerY + Math.sin(angle) * radius,
-      radius: 18 + Math.min(6, node.count)
-    });
-  });
-
-  nonPaperNodes.forEach((node, index) => {
-    const typeIndex = NODE_TYPE_OPTIONS.findIndex((option) => option.value === node.type);
-    const ring = 190 + (typeIndex % 3) * 44;
-    const angle = (-Math.PI / 2) + (Math.PI * 2 * (index + typeIndex * 0.4)) / Math.max(1, nonPaperNodes.length);
-    const jitter = Math.sin(index * 1.7) * 16;
-    positioned.push({
-      ...node,
-      x: centerX + Math.cos(angle) * (ring + jitter),
-      y: centerY + Math.sin(angle) * (ring + jitter),
-      radius: node.type === 'method' || node.type === 'keyword' ? 17 + Math.min(8, node.count) : 11 + Math.min(5, node.count)
-    });
-  });
-
-  return spreadConnectedNodes(positioned, edges);
-}
-
-function spreadConnectedNodes(nodes: PositionedNode[], edges: KnowledgeGraphEdge[]): PositionedNode[] {
-  const nodeMap = new Map(nodes.map((node) => [node.id, { ...node }]));
-  for (const edge of edges.slice(0, 120)) {
-    const source = nodeMap.get(edge.source);
-    const target = nodeMap.get(edge.target);
-    if (!source || !target || source.type !== 'paper') continue;
-    const dx = target.x - source.x;
-    const dy = target.y - source.y;
-    const distance = Math.max(1, Math.hypot(dx, dy));
-    target.x += (dx / distance) * Math.min(22, edge.weight * 3);
-    target.y += (dy / distance) * Math.min(22, edge.weight * 3);
-  }
-  return [...nodeMap.values()];
-}
-
 function getNeighborIds(edges: KnowledgeGraphEdge[], nodeId: string): Set<string> {
   const neighbors = new Set<string>();
   if (!nodeId) return neighbors;
@@ -691,7 +702,10 @@ function shouldShowLabel(
   if (strategy === 'all') return true;
   if (isSelected || isHovered) return true;
   if (strategy === 'hover') return isNeighbor;
-  return node.type === 'paper' || (node.count >= 2 && (node.type === 'method' || node.type === 'keyword'));
+  return (
+    node.type === 'paper' ||
+    (node.count >= 4 && (node.type === 'method' || node.type === 'keyword' || node.type === 'scene'))
+  );
 }
 
 function openNode(

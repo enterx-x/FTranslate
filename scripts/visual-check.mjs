@@ -116,12 +116,18 @@ async function createCdpClient(webSocketUrl) {
 
   let id = 0;
   const callbacks = new Map();
+  const events = [];
   socket.addEventListener('message', (event) => {
     const payload = JSON.parse(event.data);
     if (payload.id && callbacks.has(payload.id)) {
       const { resolve, reject } = callbacks.get(payload.id);
       callbacks.delete(payload.id);
       payload.error ? reject(new Error(payload.error.message)) : resolve(payload.result);
+    } else if (payload.method === 'Runtime.consoleAPICalled' || payload.method === 'Runtime.exceptionThrown') {
+      events.push(payload);
+      if (events.length > 100) {
+        events.shift();
+      }
     }
   });
 
@@ -133,7 +139,8 @@ async function createCdpClient(webSocketUrl) {
     },
     close() {
       socket.close();
-    }
+    },
+    events
   };
 }
 
@@ -148,7 +155,7 @@ async function evaluateJson(client, expression) {
 async function waitForAppReady(client) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => ({
-      ready: Boolean(document.querySelector('.home-page, .split-layout, .research-sheet-page')),
+      ready: Boolean(document.querySelector('.home-page, .split-layout, .research-sheet-page, .ai-assistant-page, .knowledge-graph-page')),
       text: document.body.textContent ?? ''
     })`);
     if (snapshot.ready) {
@@ -214,6 +221,11 @@ async function waitForResearchSheetCanvas(client) {
     hasResearchPage: Boolean(document.querySelector('.research-sheet-page')),
     hasContainer: Boolean(document.querySelector('.univer-container')),
     canvasCount: document.querySelectorAll('.univer-container canvas').length,
+    initState: document.querySelector('.univer-container')?.dataset.univerInitState ?? '',
+    containerRect: (() => {
+      const rect = document.querySelector('.univer-container')?.getBoundingClientRect();
+      return rect ? { width: rect.width, height: rect.height, x: rect.x, y: rect.y } : null;
+    })(),
     tags: [...document.querySelectorAll('.univer-container *')]
       .slice(0, 40)
       .map((item) => [item.tagName.toLowerCase(), item.className || item.id || ''].join(':')),
@@ -222,7 +234,12 @@ async function waitForResearchSheetCanvas(client) {
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'research-sheet-canvas-timeout.png'), Buffer.from(shot.data, 'base64'))
   );
-  throw new Error(`Research sheet canvas did not paint visible grid content: ${JSON.stringify(snapshot)}`);
+  throw new Error(
+    `Research sheet canvas did not paint visible grid content: ${JSON.stringify({
+      snapshot,
+      events: client.events.slice(-12)
+    })}`
+  );
 }
 
 async function waitForPdfCanvas(client) {
@@ -267,6 +284,20 @@ async function clickButtonByText(client, text) {
   }`);
   if (!clicked) {
     throw new Error(`Button not found: ${text}`);
+  }
+  await wait(700);
+}
+
+async function clickSidebarItem(client, title) {
+  const clicked = await evaluateJson(client, `() => {
+    const title = ${JSON.stringify(title)};
+    const button = [...document.querySelectorAll('.app-sidebar-link, button')]
+      .find((item) => item.getAttribute('title') === title || (item.textContent ?? '').trim() === title);
+    button?.click();
+    return Boolean(button);
+  }`);
+  if (!clicked) {
+    throw new Error(`Sidebar item not found: ${title}`);
   }
   await wait(700);
 }
@@ -557,6 +588,93 @@ async function runWholePdfReaderScenario(client) {
   return { wholePdf, legacyPanels };
 }
 
+async function runAiAssistantScenario(client) {
+  await clickSidebarItem(client, 'AI 助手');
+  await waitForAppReady(client);
+
+  const before = await evaluateJson(client, `() => {
+    const page = document.querySelector('.ai-assistant-page');
+    const layout = document.querySelector('.ai-assistant-layout');
+    const handle = document.querySelector('.layout-resize-handle');
+    const main = document.querySelector('.ai-assistant-main-column');
+    const side = document.querySelector('.ai-assistant-side-column');
+    const handleRect = handle?.getBoundingClientRect();
+    const layoutRect = layout?.getBoundingClientRect();
+    return {
+      hasAiAssistant: Boolean(page && layout && main && side),
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+      bodyIsResizing: document.body.classList.contains('is-resizing-layout'),
+      layoutColumns: layout ? getComputedStyle(layout).gridTemplateColumns : '',
+      handleVisible: Boolean(handle && getComputedStyle(handle).display !== 'none' && handleRect && handleRect.width > 0),
+      mainWidth: main?.getBoundingClientRect().width ?? 0,
+      sideWidth: side?.getBoundingClientRect().width ?? 0,
+      layoutWidth: layoutRect?.width ?? 0,
+      handle: handleRect
+        ? { x: handleRect.left + handleRect.width / 2, y: handleRect.top + handleRect.height / 2 }
+        : null
+    };
+  }`);
+
+  if (!before.hasAiAssistant) {
+    throw new Error(`aiAssistant: expected AI assistant layout, got ${JSON.stringify(before)}`);
+  }
+
+  if (before.handleVisible && before.handle) {
+    const targetX = Math.min(before.handle.x + 120, before.handle.x + before.layoutWidth * 0.18);
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: before.handle.x,
+      y: before.handle.y,
+      button: 'left',
+      buttons: 1,
+      clickCount: 1
+    });
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: targetX,
+      y: before.handle.y,
+      button: 'left',
+      buttons: 1
+    });
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: targetX,
+      y: before.handle.y,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1
+    });
+    await wait(500);
+  }
+
+  const after = await evaluateJson(client, `() => {
+    const layout = document.querySelector('.ai-assistant-layout');
+    const main = document.querySelector('.ai-assistant-main-column');
+    const side = document.querySelector('.ai-assistant-side-column');
+    return {
+      hasAiAssistant: Boolean(document.querySelector('.ai-assistant-page') && layout && main && side),
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+      bodyIsResizing: document.body.classList.contains('is-resizing-layout'),
+      layoutColumns: layout ? getComputedStyle(layout).gridTemplateColumns : '',
+      mainWidth: main?.getBoundingClientRect().width ?? 0,
+      sideWidth: side?.getBoundingClientRect().width ?? 0
+    };
+  }`);
+
+  if (!after.hasAiAssistant || after.hasHorizontalOverflow || after.bodyIsResizing) {
+    throw new Error(`aiAssistant: layout overflow or resize state leaked, got ${JSON.stringify({ before, after })}`);
+  }
+  if (before.handleVisible && Math.abs(after.mainWidth - before.mainWidth) < 20) {
+    throw new Error(`aiAssistant: drag handle did not resize columns, got ${JSON.stringify({ before, after })}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'ai-assistant.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  return { before, after };
+}
+
 async function main() {
   if (!existsSync(exe)) {
     throw new Error(`Packaged executable not found. Run npm run dist first: ${exe}`);
@@ -612,8 +730,9 @@ async function main() {
     const home = await runHomeScenario(client);
     const researchSheet = await runResearchSheetScenario(client);
     const wholePdfReader = await runWholePdfReaderScenario(client);
+    const aiAssistant = await runAiAssistantScenario(client);
     client.close();
-    console.log(JSON.stringify({ pdfPath, home, researchSheet, wholePdfReader, outputDir }, null, 2));
+    console.log(JSON.stringify({ pdfPath, home, researchSheet, wholePdfReader, aiAssistant, outputDir }, null, 2));
   } finally {
     appProcess.kill();
     await wait(500);

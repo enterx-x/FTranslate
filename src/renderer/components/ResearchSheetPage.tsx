@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   BooleanNumber,
   createUniver,
@@ -261,11 +261,11 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     return `当前选区 ${selectedRangeLabel}（${selectedCellCount} 格），当前行已绑定 ${linkedPaper.chineseTitle || linkedPaper.englishTitle || linkedPaper.pdfName}`;
   }, [linkedPaper, selectedCell.rowIndex, selectedCellCount, selectedRangeLabel]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     workbookModelRef.current = props.workbook;
   }, [props.workbook]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const restored = readStoredLiteratureInsightState();
     if (restored) {
       applyLiteratureInsightState(restored);
@@ -275,13 +275,14 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     setSelectedInsightHistoryId(restoredHistory[0]?.id ?? '');
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (univerRef.current) {
       return;
     }
 
     let disposed = false;
     let frameId = 0;
+    let retryTimerId = 0;
     let commandDisposable: { dispose: () => void } | null = null;
     let resizeObserver: ResizeObserver | null = null;
     let updateSelectionLater: (() => number) | null = null;
@@ -299,12 +300,25 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
       }
 
       const rect = container.getBoundingClientRect();
-      if ((rect.width < 320 || rect.height < 260) && attempt < 30) {
-        frameId = window.requestAnimationFrame(() => initializeWhenSized(attempt + 1));
+      container.dataset.univerInitState = `waiting:${attempt}:${Math.round(rect.width)}x${Math.round(rect.height)}`;
+      if ((rect.width < 320 || rect.height < 260) && attempt < 120) {
+        retryTimerId = window.setTimeout(() => {
+          frameId = window.requestAnimationFrame(() => initializeWhenSized(attempt + 1));
+        }, 50);
         return;
       }
 
-      initializeUniver(container);
+      try {
+        container.dataset.univerInitState = `initializing:${attempt}:${Math.round(rect.width)}x${Math.round(rect.height)}`;
+        initializeUniver(container);
+        container.dataset.univerInitState = 'ready';
+      } catch (error) {
+        container.dataset.univerInitState = `error:${attempt}`;
+        console.error('Failed to initialize research sheet Univer surface.', error);
+        if (attempt < 120) {
+          retryTimerId = window.setTimeout(() => initializeWhenSized(attempt + 1), 250);
+        }
+      }
     };
 
     const initializeUniver = (container: HTMLDivElement): void => {
@@ -316,7 +330,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
         },
         presets: [
           UniverSheetsCorePreset({
-            container: RESEARCH_UNIVER_CONTAINER_ID,
+            container,
             header: false,
             toolbar: true,
             formulaBar: true,
@@ -374,6 +388,9 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
       disposed = true;
       if (frameId) {
         window.cancelAnimationFrame(frameId);
+      }
+      if (retryTimerId) {
+        window.clearTimeout(retryTimerId);
       }
       commandDisposable?.dispose();
       resizeObserver?.disconnect();
