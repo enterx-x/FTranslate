@@ -23,6 +23,7 @@ type SettingsCategory =
   | 'sheet'
   | 'notes'
   | 'graph'
+  | 'presentation'
   | 'export'
   | 'data';
 
@@ -33,25 +34,28 @@ interface SettingsPageProps {
 
 const categories: Array<{ id: SettingsCategory; title: string; caption: string }> = [
   { id: 'general', title: '通用设置', caption: '主题、缩放、首页和自动保存' },
-  { id: 'pdf', title: 'PDF 阅读设置', caption: '阅读模式、缩放、参考文献策略' },
+  { id: 'pdf', title: 'PDF 阅读设置', caption: '阅读模式、缩放和参考文献策略' },
   { id: 'ai', title: 'AI 设置', caption: 'Provider、模型和高级参数入口' },
   { id: 'web', title: '联网查新设置', caption: '查新范围和引用格式' },
   { id: 'sheet', title: '研究表格设置', caption: '公式、行高、预览和缩放' },
   { id: 'notes', title: '笔记设置', caption: 'Markdown、公式和自动关联' },
   { id: 'graph', title: '知识图谱设置', caption: '默认来源、节点和标签策略' },
-  { id: 'export', title: '导出与路径', caption: 'PDF、双语 PDF、图谱和笔记路径' },
+  { id: 'presentation', title: '组会 PPT 设置', caption: '极简风格、页数、语言、图表和导出偏好' },
+  { id: 'export', title: '导出与路径', caption: 'PDF、双语 PDF、图谱、PPT 和笔记路径' },
   { id: 'data', title: '数据与缓存', caption: '本地存储、缓存和危险操作' }
 ];
 
 const exportPathFields: Array<{ key: keyof ExportPathSettings; label: string; hint: string }> = [
-  { key: 'defaultExportPath', label: '默认导出路径', hint: '未指定时使用系统保存对话框' },
+  { key: 'defaultExportPath', label: '默认导出路径', hint: '未指定时继续使用系统保存对话框' },
   { key: 'pdfExportPath', label: 'PDF 导出路径', hint: '原文 PDF 或副本导出目录' },
   { key: 'bilingualPdfExportPath', label: '双语 PDF 导出路径', hint: 'PDFMathTranslate 输出或手动导出的目录' },
   { key: 'translationJsonExportPath', label: '翻译 JSON 导出路径', hint: 'AI 缓存和段落译文 JSON' },
   { key: 'knowledgeGraphImageExportPath', label: '知识图谱图片导出路径', hint: 'SVG/PNG 图谱图片' },
   { key: 'knowledgeGraphJsonExportPath', label: '知识图谱 JSON 导出路径', hint: '图谱节点和边数据' },
-  { key: 'notesExportPath', label: '笔记导出路径', hint: 'Markdown/文本笔记导出目录' },
-  { key: 'researchSheetExportPath', label: '研究表格导出路径', hint: 'Excel 工作簿导出目录' }
+  { key: 'notesExportPath', label: '笔记导出路径', hint: 'Markdown 或纯文本笔记导出目录' },
+  { key: 'researchSheetExportPath', label: '研究表格导出路径', hint: 'Excel 工作簿导出目录' },
+  { key: 'pptExportPath', label: '组会 PPT 导出路径', hint: 'PPTX、Markdown 大纲和 JSON 草稿目录' },
+  { key: 'pptAssetCachePath', label: 'PPT 图片素材缓存路径', hint: '后续图表截图、裁剪图和临时素材目录' }
 ];
 
 export function SettingsPage(props: SettingsPageProps) {
@@ -90,7 +94,7 @@ export function SettingsPage(props: SettingsPageProps) {
           <div>
             <span className="eyebrow">Settings</span>
             <h1>设置</h1>
-            <p>集中管理导出路径、PDF 阅读、AI 参数、研究表格、笔记和知识图谱偏好。</p>
+            <p>集中管理导出路径、PDF 阅读、AI 参数、研究表格、笔记、知识图谱和组会 PPT 偏好。</p>
           </div>
         </div>
         <div className="page-header-actions">
@@ -128,7 +132,7 @@ export function SettingsPage(props: SettingsPageProps) {
             <SettingsCard
               title="导出与路径"
               badge="本机 localStorage"
-              description="第一版先保存路径偏好；导出时仍会兼容现有保存对话框。后续可接入系统目录选择器。"
+              description="第一版先保存路径偏好；导出时仍兼容现有保存对话框。目录选择器后续可接入 Electron dialog。"
             >
               <div className="settings-path-grid">
                 {exportPathFields.map((field) => (
@@ -147,7 +151,7 @@ export function SettingsPage(props: SettingsPageProps) {
                       <button
                         type="button"
                         className="icon-button"
-                        title="目录选择器 TODO：后续接入 Electron dialog"
+                        title="TODO：接入 Electron 目录选择器"
                         aria-label="选择目录"
                         disabled
                       >
@@ -260,8 +264,153 @@ export function SettingsPage(props: SettingsPageProps) {
             </SettingsCard>
           ) : null}
 
+          {activeCategory === 'presentation' ? (
+            <SettingsCard
+              title="组会 PPT 设置"
+              badge="第一阶段：大纲 + 预览 + Markdown"
+              description="PPT 生成优先使用 PDF 原文。当前稳定版本先输出结构化草稿、HTML 预览、JSON 和 Markdown，PPTX 导出作为后续阶段接入。"
+            >
+              <div className="settings-form-grid">
+                <label>
+                  默认 PPT 风格
+                  <select
+                    value={settings.presentation.defaultStyle}
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        presentation: {
+                          ...current.presentation,
+                          defaultStyle: event.target.value as AppSettings['presentation']['defaultStyle']
+                        }
+                      }))
+                    }
+                  >
+                    <option value="minimal-seminar">研究生组会极简风</option>
+                    <option value="formal-academic">正式学术汇报</option>
+                    <option value="literature-review">文献综述</option>
+                    <option value="proposal">开题汇报</option>
+                  </select>
+                </label>
+                <label>
+                  默认页数
+                  <select
+                    value={settings.presentation.defaultSlideCount}
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        presentation: {
+                          ...current.presentation,
+                          defaultSlideCount: event.target.value as AppSettings['presentation']['defaultSlideCount']
+                        }
+                      }))
+                    }
+                  >
+                    <option value="8">8 页</option>
+                    <option value="10">10 页</option>
+                    <option value="12">12 页</option>
+                    <option value="auto">自动</option>
+                  </select>
+                </label>
+                <label>
+                  默认语言
+                  <select
+                    value={settings.presentation.defaultLanguage}
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        presentation: {
+                          ...current.presentation,
+                          defaultLanguage: event.target.value as AppSettings['presentation']['defaultLanguage']
+                        }
+                      }))
+                    }
+                  >
+                    <option value="zh-CN">中文</option>
+                    <option value="en-US">英文</option>
+                    <option value="bilingual">中英混合</option>
+                  </select>
+                </label>
+                <label>
+                  默认汇报人
+                  <input
+                    value={settings.presentation.defaultSpeakerName}
+                    placeholder="可为空"
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        presentation: { ...current.presentation, defaultSpeakerName: event.target.value }
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+              <div className="settings-toggle-grid">
+                <CheckboxSetting
+                  label="导出 Markdown 大纲"
+                  checked={settings.presentation.exportMarkdownOutline}
+                  onChange={(checked) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      presentation: { ...current.presentation, exportMarkdownOutline: checked }
+                    }))
+                  }
+                />
+                <CheckboxSetting
+                  label="保留 AI 生成中间 JSON"
+                  checked={settings.presentation.keepIntermediateJson}
+                  onChange={(checked) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      presentation: { ...current.presentation, keepIntermediateJson: checked }
+                    }))
+                  }
+                />
+                <CheckboxSetting
+                  label="抓取论文原文图表"
+                  checked={settings.presentation.extractOriginalFigures}
+                  onChange={(checked) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      presentation: { ...current.presentation, extractOriginalFigures: checked }
+                    }))
+                  }
+                />
+                <CheckboxSetting
+                  label="优先使用论文原图"
+                  checked={settings.presentation.preferOriginalFigures}
+                  onChange={(checked) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      presentation: { ...current.presentation, preferOriginalFigures: checked }
+                    }))
+                  }
+                />
+                <CheckboxSetting
+                  label="自动截取关键段落"
+                  checked={settings.presentation.extractKeyParagraphs}
+                  onChange={(checked) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      presentation: { ...current.presentation, extractKeyParagraphs: checked }
+                    }))
+                  }
+                />
+                <CheckboxSetting
+                  label="生成 speaker notes"
+                  checked={settings.presentation.generateSpeakerNotes}
+                  onChange={(checked) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      presentation: { ...current.presentation, generateSpeakerNotes: checked }
+                    }))
+                  }
+                />
+              </div>
+            </SettingsCard>
+          ) : null}
+
           {activeCategory === 'sheet' ? (
-            <SettingsCard title="研究表格设置" badge="公式帮助已折叠" description="表格本体仍由 Univer 管理，这里只保存默认偏好。">
+            <SettingsCard title="研究表格设置" badge="公式帮助已折叠" description="表格主体由 Univer 管理，这里只保存默认偏好。">
               <div className="settings-form-grid">
                 <label>
                   默认字号
@@ -421,7 +570,7 @@ export function SettingsPage(props: SettingsPageProps) {
           ) : null}
 
           {activeCategory === 'notes' ? (
-            <SettingsCard title="笔记设置" badge="Markdown + 公式" description="笔记编辑区支持源码/预览，预览使用 Markdown 和 KaTeX 渲染。">
+            <SettingsCard title="笔记设置" badge="Markdown + 公式" description="笔记编辑区支持源码和预览，预览使用 Markdown 和 KaTeX 渲染。">
               <div className="settings-toggle-grid">
                 <CheckboxSetting
                   label="Markdown 预览"

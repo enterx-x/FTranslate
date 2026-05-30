@@ -22,6 +22,8 @@ describe('app settings', () => {
 
     expect(settings.exportPaths.bilingualPdfExportPath).toBe('D:/exports/bilingual');
     expect(settings.exportPaths.askBeforeExport).toBe(true);
+    expect(settings.exportPaths.pptExportPath).toBe('');
+    expect(settings.presentation.defaultStyle).toBe('minimal-seminar');
     expect(settings.pdf.referenceTranslationStrategy).toBe('keep-original');
     expect(settings.layout.aiAssistantMainRatio).toBe(0.78);
   });

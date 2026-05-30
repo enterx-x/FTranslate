@@ -7,6 +7,7 @@ describe('AppSidebar navigation targets', () => {
     ['library', 'library'],
     ['researchSheet', 'researchSheet'],
     ['knowledgeGraph', 'knowledgeGraph'],
+    ['presentation', 'presentation'],
     ['reader', 'reader'],
     ['ai', 'ai'],
     ['settings', 'settings']

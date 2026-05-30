@@ -17,6 +17,7 @@ interface HomePageProps {
   onOpenPaper: (paper: PaperRecord) => void;
   onOpenResearchSheet: (paper?: PaperRecord) => void;
   onOpenKnowledgeGraph: () => void;
+  onOpenPresentationGenerator: () => void;
   knowledgeGraphStats: {
     paperCount: number;
     nodeCount: number;
@@ -164,6 +165,26 @@ export function HomePage(props: HomePageProps) {
               <button type="button" className="primary-button button-with-icon" onClick={props.onOpenKnowledgeGraph}>
                 <img className="button-icon" src={graphIcon} alt="" />
                 <span>打开知识图谱</span>
+              </button>
+            </div>
+          </article>
+
+          <article className="home-module-card">
+            <span className="home-module-kicker">
+              <img className="button-icon" src={translateIcon} alt="" />
+              Seminar PPT
+            </span>
+            <h2>组会 PPT 生成</h2>
+            <p>基于当前 PDF 原文抽取标题、关键章节、图表 caption 和来源页码，先生成研究生组会极简风格的大纲、HTML 预览和 Markdown 文件。</p>
+            <div className="home-module-meta">
+              <span className="badge">PDF 原文优先</span>
+              <span className="badge">可编辑大纲</span>
+              <span className="badge">Markdown 导出</span>
+            </div>
+            <div className="home-module-actions">
+              <button type="button" className="primary-button button-with-icon" onClick={props.onOpenPresentationGenerator}>
+                <img className="button-icon" src={translateIcon} alt="" />
+                <span>打开 PPT 生成器</span>
               </button>
             </div>
           </article>

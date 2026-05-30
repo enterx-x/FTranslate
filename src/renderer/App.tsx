@@ -20,6 +20,11 @@ import { AppSidebar, type AppSidebarSection } from './components/AppSidebar';
 import { HomePage } from './components/HomePage';
 import { buildKnowledgeGraph } from './lib/knowledgeGraph';
 import { APP_SETTINGS_KEY, describeReferenceStrategy, parseAppSettings } from './lib/appSettings';
+import {
+  buildPresentationDraft,
+  serializePresentationMarkdown,
+  type PresentationDraft
+} from './lib/presentationOutline';
 import { NotesPanel } from './components/NotesPanel';
 import { PdfViewer } from './components/PdfViewer';
 import type { PdfViewportState } from './lib/pdfViewportSync';
@@ -107,7 +112,7 @@ interface RecentProject {
   aiCachePath?: string;
 }
 
-type AppView = 'home' | 'reader' | 'researchSheet' | 'aiAssistant' | 'knowledgeGraph' | 'settings';
+type AppView = 'home' | 'reader' | 'researchSheet' | 'aiAssistant' | 'knowledgeGraph' | 'presentation' | 'settings';
 type ReaderMode = 'manual' | 'ai';
 type PdfViewMode = 'source' | 'parallel' | 'translated';
 type BuiltInProviderId = Exclude<AiProviderId, 'custom'>;
@@ -124,6 +129,10 @@ const AiAssistantPage = lazy(async () => {
 const KnowledgeGraphPage = lazy(async () => {
   const module = await import('./components/KnowledgeGraphPage');
   return { default: module.KnowledgeGraphPage };
+});
+const PresentationPage = lazy(async () => {
+  const module = await import('./components/PresentationPage');
+  return { default: module.PresentationPage };
 });
 const SettingsPage = lazy(async () => {
   const module = await import('./components/SettingsPage');
@@ -149,6 +158,7 @@ export default function App() {
   const [pdf, setPdf] = useState<PdfState | null>(null);
   const [translatedPdf, setTranslatedPdf] = useState<PdfState | null>(null);
   const [translatedMonoPdf, setTranslatedMonoPdf] = useState<PdfState | null>(null);
+  const [presentationDraft, setPresentationDraft] = useState<PresentationDraft | null>(null);
   const [pdfViewMode, setPdfViewMode] = useState<PdfViewMode>('source');
   const [pdfViewportState, setPdfViewportState] = useState<PdfViewportState | null>(null);
   const [translationDocument, setTranslationDocument] = useState<TranslationDocument | null>(null);
@@ -595,6 +605,71 @@ export default function App() {
       setStatusMessage(`双语 PDF 已导出：${result.fileName}`);
     } catch (error) {
       setStatusMessage(`导出双语 PDF 失败：${String(error)}`);
+    }
+  }
+
+  function handleGeneratePresentationFromCurrentPdf(): void {
+    if (!pdf) {
+      setStatusMessage('请先打开原文 PDF，再生成组会 PPT。');
+      setView('reader');
+      return;
+    }
+
+    const paper = ensureActivePaperForCurrentPdf();
+    if (!paper) {
+      setStatusMessage('无法建立论文记录，暂不能生成组会 PPT。');
+      return;
+    }
+
+    const draft = buildPresentationDraft({
+      papers: [paper],
+      blocks: extractedPdfBlocks,
+      targetSlideCount: 9
+    });
+    setPresentationDraft(draft);
+    setView('presentation');
+    setStatusMessage(
+      extractedPdfBlocks.length > 0
+        ? `已生成 ${draft.slides.length} 页组会 PPT 草稿。`
+        : 'PDF 文本尚未提取完成，已生成基础 PPT 草稿并保留缺失提示。'
+    );
+  }
+
+  async function handleExportPresentationMarkdown(draft: PresentationDraft): Promise<void> {
+    try {
+      const result = await window.electronAPI.saveTextFile({
+        content: serializePresentationMarkdown(draft),
+        defaultFileName: buildPresentationExportFileName(draft.title, 'md'),
+        extension: 'md'
+      });
+
+      if (!result) {
+        setStatusMessage('已取消导出组会 PPT Markdown 大纲。');
+        return;
+      }
+
+      setStatusMessage(`组会 PPT Markdown 已导出：${result.fileName}`);
+    } catch (error) {
+      setStatusMessage(`导出组会 PPT Markdown 失败：${String(error)}`);
+    }
+  }
+
+  async function handleExportPresentationJson(draft: PresentationDraft): Promise<void> {
+    try {
+      const result = await window.electronAPI.saveTextFile({
+        content: JSON.stringify(draft, null, 2),
+        defaultFileName: buildPresentationExportFileName(draft.title, 'json'),
+        extension: 'json'
+      });
+
+      if (!result) {
+        setStatusMessage('已取消导出组会 PPT JSON 大纲。');
+        return;
+      }
+
+      setStatusMessage(`组会 PPT JSON 已导出：${result.fileName}`);
+    } catch (error) {
+      setStatusMessage(`导出组会 PPT JSON 失败：${String(error)}`);
     }
   }
 
@@ -1409,6 +1484,14 @@ export default function App() {
     setView('knowledgeGraph');
   }
 
+  function openPresentationGenerator(): void {
+    if (presentationDraft) {
+      setView('presentation');
+      return;
+    }
+    handleGeneratePresentationFromCurrentPdf();
+  }
+
   function openAiAssistant(focus: AiAssistantFocus = 'analysis'): void {
     setAiAssistantFocus(focus);
     setView('aiAssistant');
@@ -1431,6 +1514,10 @@ export default function App() {
 
     if (view === 'knowledgeGraph') {
       return 'knowledgeGraph';
+    }
+
+    if (view === 'presentation') {
+      return 'presentation';
     }
 
     if (view === 'aiAssistant') {
@@ -1456,6 +1543,7 @@ export default function App() {
         onOpenLibrary={openLibrary}
         onOpenResearchSheet={openResearchSheetFromSidebar}
         onOpenKnowledgeGraph={openKnowledgeGraph}
+        onOpenPresentation={openPresentationGenerator}
         onOpenReader={openReaderFromSidebar}
         onOpenAi={openAiFromSidebar}
         onOpenSettings={openSettings}
@@ -1476,6 +1564,7 @@ export default function App() {
             onOpenPaper={handleOpenPaper}
             onOpenResearchSheet={handleOpenResearchSheet}
             onOpenKnowledgeGraph={openKnowledgeGraph}
+            onOpenPresentationGenerator={openPresentationGenerator}
             knowledgeGraphStats={knowledgeGraphSummary}
             onUpdatePaper={(paper) =>
               setPaperLibrary((library) => library.map((item) => (item.id === paper.id ? paper : item)))
@@ -1565,6 +1654,27 @@ export default function App() {
               onBackHome={openWorkspace}
               onOpenPaper={handleOpenPaper}
               onOpenResearchSheet={handleOpenResearchSheet}
+            />
+          </Suspense>
+          <footer className="status-bar">{statusMessage}</footer>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'presentation') {
+    return (
+      <div className="app-shell desktop-shell presentation-shell">
+        {renderSidebar()}
+        <div className="app-main">
+          <Suspense fallback={<main className="presentation-loading">正在加载组会 PPT 生成器...</main>}>
+            <PresentationPage
+              draft={presentationDraft}
+              onBackHome={openWorkspace}
+              onOpenReader={openReaderFromSidebar}
+              onRegenerate={handleGeneratePresentationFromCurrentPdf}
+              onExportMarkdown={handleExportPresentationMarkdown}
+              onExportJson={handleExportPresentationJson}
             />
           </Suspense>
           <footer className="status-bar">{statusMessage}</footer>
@@ -1747,6 +1857,10 @@ export default function App() {
                 <button type="button" className="secondary-button button-with-icon" disabled={!translatedPdf || isPdfTranslationBusy} onClick={handleExportTranslatedPdf}>
                   <img className="button-icon" src={downloadIcon} alt="" />
                   <span>导出双语 PDF</span>
+                </button>
+                <button type="button" className="secondary-button button-with-icon" disabled={!pdf} onClick={handleGeneratePresentationFromCurrentPdf}>
+                  <img className="button-icon" src={translateIcon} alt="" />
+                  <span>生成组会 PPT</span>
                 </button>
                 <button type="button" className="ghost-button button-with-icon" disabled={isPdfTranslationBusy} onClick={handleCheckPdfTranslationEngine}>
                   <img className="button-icon" src={searchIcon} alt="" />
@@ -2003,6 +2117,16 @@ function buildPdfExportFileName(sourceName?: string): string {
   }
 
   return sourceName.replace(/\.[^.]+$/, '') + '-bilingual.pdf';
+}
+
+function buildPresentationExportFileName(title: string, extension: 'json' | 'md'): string {
+  const safeTitle = title
+    .replace(/[\\/:*?"<>|]+/gu, '-')
+    .replace(/\s+/gu, '-')
+    .replace(/-+/gu, '-')
+    .replace(/^-|-$/gu, '')
+    .slice(0, 80);
+  return `${safeTitle || 'seminar-presentation'}-slides.${extension}`;
 }
 
 function readLegacyPapersWithSheetCells(

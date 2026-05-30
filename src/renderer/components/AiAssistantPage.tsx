@@ -121,6 +121,14 @@ const promptTemplates: Array<{ key: string; label: string; scenario: string; des
     description: '基于真实缺口生成一个可验证研究 idea。',
     content:
       '请基于真实缺口提出 1 个可验证 idea，必须回答明确科学问题、技术路线、实验方案、失败诊断和与已有工作的差异。'
+  },
+  {
+    key: 'seminar-ppt',
+    label: '组会 PPT 生成',
+    scenario: 'PPT',
+    description: '根据 PDF 原文结构化内容生成研究生组会极简风格 PPT 大纲 JSON。',
+    content:
+      '你是一个研究生组会 PPT 生成助手。请根据论文 PDF 原文解析结果、关键段落、图表候选、研究表格字段和用户笔记，生成极简学术汇报 PPT 大纲。每页只表达一个核心观点，最多 5 个 bullet。优先使用原文方法图、实验结果图和关键表格。所有内容必须能追溯到 PDF 页码、章节或图表 caption。不要编造原文没有的信息。输出严格 JSON，不要输出 Markdown 解释。'
   }
 ];
 

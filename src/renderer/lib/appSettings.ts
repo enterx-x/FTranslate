@@ -14,6 +14,8 @@ export interface ExportPathSettings {
   knowledgeGraphJsonExportPath: string;
   notesExportPath: string;
   researchSheetExportPath: string;
+  pptExportPath: string;
+  pptAssetCachePath: string;
   askBeforeExport: boolean;
   createFolderByPaperTitle: boolean;
   createDateSubfolder: boolean;
@@ -67,6 +69,18 @@ export interface AppSettings {
     neuronLayout: boolean;
     showAuthorNodes: boolean;
     showYearNodes: boolean;
+  };
+  presentation: {
+    defaultStyle: 'minimal-seminar' | 'formal-academic' | 'literature-review' | 'proposal';
+    defaultSlideCount: '8' | '10' | '12' | 'auto';
+    defaultLanguage: 'zh-CN' | 'en-US' | 'bilingual';
+    exportMarkdownOutline: boolean;
+    keepIntermediateJson: boolean;
+    extractOriginalFigures: boolean;
+    preferOriginalFigures: boolean;
+    extractKeyParagraphs: boolean;
+    defaultSpeakerName: string;
+    generateSpeakerNotes: boolean;
   };
   exportPaths: ExportPathSettings;
   layout: {
@@ -127,6 +141,18 @@ export function buildDefaultAppSettings(): AppSettings {
       showAuthorNodes: false,
       showYearNodes: true
     },
+    presentation: {
+      defaultStyle: 'minimal-seminar',
+      defaultSlideCount: '10',
+      defaultLanguage: 'zh-CN',
+      exportMarkdownOutline: true,
+      keepIntermediateJson: true,
+      extractOriginalFigures: true,
+      preferOriginalFigures: true,
+      extractKeyParagraphs: true,
+      defaultSpeakerName: '',
+      generateSpeakerNotes: true
+    },
     exportPaths: {
       defaultExportPath: '',
       pdfExportPath: '',
@@ -136,6 +162,8 @@ export function buildDefaultAppSettings(): AppSettings {
       knowledgeGraphJsonExportPath: '',
       notesExportPath: '',
       researchSheetExportPath: '',
+      pptExportPath: '',
+      pptAssetCachePath: '',
       askBeforeExport: true,
       createFolderByPaperTitle: true,
       createDateSubfolder: false
@@ -199,6 +227,10 @@ export function mergeAppSettings(defaults: AppSettings, value: unknown): AppSett
     knowledgeGraph: {
       ...defaults.knowledgeGraph,
       ...pickObject(value.knowledgeGraph)
+    },
+    presentation: {
+      ...defaults.presentation,
+      ...pickObject(value.presentation)
     },
     exportPaths: {
       ...defaults.exportPaths,
