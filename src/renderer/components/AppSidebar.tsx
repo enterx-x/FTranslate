@@ -92,7 +92,7 @@ export function AppSidebar(props: AppSidebarProps) {
             type="button"
             className={`app-sidebar-link${props.activeSection === item.section ? ' active' : ''}${item.isUtility ? ' utility' : ''}`}
             onClick={() => handleNavigate(item.section)}
-            title={item.section === 'settings' ? '打开 AI 助手中的 API 与高级设置' : item.label}
+            title={item.label}
           >
             <img className="button-icon" src={item.icon} alt="" />
             <span>{item.label}</span>

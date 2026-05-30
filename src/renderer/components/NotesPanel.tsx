@@ -1,6 +1,7 @@
+import { useState } from 'react';
 import noteIcon from '../assets/icons/duotone/note.svg';
 import type { PaperRecord } from '../lib/papers';
-import { MathText } from './MathText';
+import { MarkdownDocument } from './MarkdownDocument';
 
 interface NotesPanelProps {
   notes: string;
@@ -12,6 +13,8 @@ interface NotesPanelProps {
   onOpenPaper?: () => void;
   onOpenResearchSheet?: () => void;
 }
+
+type NoteMode = 'edit' | 'preview' | 'split';
 
 const NOTE_TEMPLATES = [
   {
@@ -45,6 +48,9 @@ const NOTE_TEMPLATES = [
 ];
 
 export function NotesPanel(props: NotesPanelProps) {
+  const [mode, setMode] = useState<NoteMode>('edit');
+  const [showFormulaHelp, setShowFormulaHelp] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const wordCount = props.notes.trim() ? props.notes.trim().length : 0;
 
   function insertTemplate(content: string): void {
@@ -52,8 +58,30 @@ export function NotesPanel(props: NotesPanelProps) {
     props.onChange(`${prefix}${content}`);
   }
 
+  const editor = (
+    <label className="notes-editor-field">
+      <span>笔记内容</span>
+      <textarea
+        value={props.notes}
+        rows={10}
+        placeholder="写下这篇论文的关键结论、可复现实验、疑问或后续 idea。内容会自动保存到本机论文库。"
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+    </label>
+  );
+  const preview = (
+    <section className="notes-preview-card">
+      <strong>文档预览</strong>
+      {props.notes.trim() ? (
+        <MarkdownDocument text={props.notes} />
+      ) : (
+        <p className="empty-hint">切换到预览后会把 Markdown 和公式渲染成文档效果。</p>
+      )}
+    </section>
+  );
+
   return (
-    <details className="notes-panel" open>
+    <details className={`notes-panel${isExpanded ? ' notes-panel-expanded' : ''}`} open>
       <summary>
         <span className="summary-title-with-icon">
           <img className="panel-title-icon" src={noteIcon} alt="" />
@@ -64,12 +92,25 @@ export function NotesPanel(props: NotesPanelProps) {
 
       <div className="notes-editor-meta">
         <span className="badge">Markdown</span>
-        <span className="badge">公式 $...$ / $$...$$</span>
         <span className="badge success">自动保存</span>
         <span className="subtle">{wordCount} 字</span>
         {props.paper ? <span className="subtle">关联：{props.paper.chineseTitle || props.paper.englishTitle || props.paper.pdfName}</span> : null}
         {props.pdfPage ? <span className="subtle">第 {props.pdfPage} 页</span> : null}
+        <button type="button" className="ghost-button compact-button" onClick={() => setShowFormulaHelp((value) => !value)}>
+          公式帮助
+        </button>
+        <button type="button" className="ghost-button compact-button" onClick={() => setIsExpanded((value) => !value)}>
+          {isExpanded ? '收起' : '放大查看'}
+        </button>
       </div>
+      {showFormulaHelp ? (
+        <div className="formula-help-popover">
+          <strong>公式写法</strong>
+          <p>行内公式：<code>$E=mc^2$</code></p>
+          <p>块级公式：<code>$$L = L_data + lambda L_physics$$</code></p>
+          <p>编辑时显示源码，预览或详情查看时自动渲染；复制按钮仍复制原始 Markdown。</p>
+        </div>
+      ) : null}
 
       <div className="notes-template-bar" aria-label="笔记模板">
         {NOTE_TEMPLATES.map((template) => (
@@ -88,30 +129,30 @@ export function NotesPanel(props: NotesPanelProps) {
           className="notes-pill-button"
           disabled={!props.notes.trim()}
           onClick={() => void navigator.clipboard.writeText(props.notes)}
-          title="复制当前笔记"
+          title="复制 Markdown 源码"
         >
-          复制
+          复制源码
         </button>
       </div>
 
-      <label className="notes-editor-field">
-        <span>笔记内容</span>
-        <textarea
-          value={props.notes}
-          rows={10}
-          placeholder="写下这篇论文的关键结论、可复现实验、疑问或后续 idea。内容会自动保存到本机论文库。"
-          onChange={(event) => props.onChange(event.target.value)}
-        />
-      </label>
-      <div className="notes-formula-hint">
-        支持公式渲染：行内公式写作 <code>$E=mc^2$</code>，块级公式写作 <code>$$L = L_data + λL_physics$$</code>。
+      <div className="segmented-control notes-mode-switch" role="group" aria-label="笔记显示模式">
+        {(['edit', 'preview', 'split'] as NoteMode[]).map((item) => (
+          <button
+            key={item}
+            type="button"
+            className={mode === item ? 'active' : ''}
+            onClick={() => setMode(item)}
+          >
+            {item === 'edit' ? '编辑' : item === 'preview' ? '预览' : '分屏'}
+          </button>
+        ))}
       </div>
-      {props.notes.trim() ? (
-        <section className="notes-preview-card">
-          <strong>笔记预览</strong>
-          <MathText text={props.notes} />
-        </section>
-      ) : null}
+
+      <div className={`notes-editor-layout mode-${mode}`}>
+        {mode === 'preview' ? preview : editor}
+        {mode === 'split' ? preview : null}
+      </div>
+
       {props.linkedRowValues ? (
         <section className="notes-link-card">
           <header>

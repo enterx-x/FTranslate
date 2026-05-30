@@ -28,6 +28,7 @@ import pdfReaderIcon from '../assets/icons/duotone/pdf-reader.svg';
 import saveIcon from '../assets/icons/duotone/save.svg';
 import refreshIcon from '../assets/icons/duotone/refresh.svg';
 import { MathText } from './MathText';
+import { MarkdownDocument } from './MarkdownDocument';
 import {
   RESEARCH_SHEET_LINKS_KEY,
   RESEARCH_WORKBOOK_KEY,
@@ -183,6 +184,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const [fillColor, setFillColor] = useState('#ffffff');
   const [hasCopiedFormat, setHasCopiedFormat] = useState(false);
   const [localMessage, setLocalMessage] = useState('');
+  const [showFormulaHelp, setShowFormulaHelp] = useState(false);
   const [literatureInsight, setLiteratureInsight] = useState('');
   const [literatureInsightProgress, setLiteratureInsightProgress] = useState('');
   const [literatureInsightHistory, setLiteratureInsightHistory] = useState<LiteratureInsightHistoryEntry[]>([]);
@@ -1043,9 +1045,13 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
 
         <section className="literature-insight-progress research-insight-strip research-context-strip" aria-live="polite">
           <span>{literatureInsightAction.scopeText}</span>
-          <span className="formula-help-inline">
-            公式：行内 <code>$E=mc^2$</code>，块级 <code>$$L=L_data+λL_physics$$</code>
-          </span>
+          <button
+            type="button"
+            className="ghost-button compact-button"
+            onClick={() => setShowFormulaHelp((value) => !value)}
+          >
+            公式帮助
+          </button>
           {isLiteratureInsightRunning ? <div className="indeterminate-progress" /> : null}
           {literatureInsightProgress ? <p>{literatureInsightProgress}</p> : null}
           {literatureInsightHistory[0] ? (
@@ -1058,6 +1064,14 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
             </button>
           )}
         </section>
+        {showFormulaHelp ? (
+          <section className="formula-help-popover research-formula-help" role="note">
+            <strong>公式写法</strong>
+            <p>行内公式：<code>$E=mc^2$</code></p>
+            <p>块级公式：<code>$$L = L_data + lambda L_physics$$</code></p>
+            <p>编辑单元格时保留源码，单元格预览、笔记和 AI 结果会渲染公式。</p>
+          </section>
+        ) : null}
 
         <section className="research-format-toolbar" aria-label="表格格式工具栏">
           <label>
@@ -1171,7 +1185,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
             {linkedPaper?.notes.trim() ? (
               <section className="row-linked-notes">
                 <strong>关联笔记</strong>
-                <MathText text={linkedPaper.notes} />
+                <MarkdownDocument text={linkedPaper.notes} />
               </section>
             ) : null}
             <div className="row-detail-actions">

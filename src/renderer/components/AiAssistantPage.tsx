@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   AI_REASONING_EFFORT_OPTIONS,
   AI_THINKING_MODE_OPTIONS,
@@ -81,29 +81,43 @@ const DEFAULT_ANALYSIS_PROMPT = [
   '请结合最新文献与公开资料（如开启联网查新），给出结构化、深入的分析结果。'
 ].join('\n');
 
-const promptTemplates: Array<{ key: string; label: string; content: string }> = [
-  { key: 'default', label: '默认模板', content: DEFAULT_ANALYSIS_PROMPT },
+const promptTemplates: Array<{ key: string; label: string; scenario: string; description: string; content: string }> = [
+  {
+    key: 'default',
+    label: '默认模板',
+    scenario: '通用',
+    description: '适合快速获得领域脉络、挑战和未来方向。',
+    content: DEFAULT_ANALYSIS_PROMPT
+  },
   {
     key: 'deep',
     label: '深度分析',
+    scenario: '综述',
+    description: '强调共同问题、方法谱系和长期未解科学问题。',
     content:
       '请做一次深度领域分析：先总结共同问题，再归纳方法谱系，最后指出真正长期未解决的科学问题。避免堆模块、换名词或蹭热点。'
   },
   {
     key: 'novelty',
     label: '查新分析',
+    scenario: '查新',
+    description: '优先判断 idea 是否已经被公开工作覆盖。',
     content:
       '请优先判断这些论文背后的 idea 是否已经被公开工作覆盖；如果无法联网，请明确标注未实时查新，并只基于输入文献做保守结论。'
   },
   {
     key: 'topic',
     label: '课题相关性',
+    scenario: '选题',
+    description: '围绕 RL、PINNs、CBF、MPC、路径规划和机器人导航分析。',
     content:
       '请围绕我的研究方向：RL、PINNs、路径规划、安全约束、CBF、MPC 和机器人导航，分析这些论文与可做课题的关系。'
   },
   {
     key: 'idea',
     label: '专利/idea 分析',
+    scenario: 'idea',
+    description: '基于真实缺口生成一个可验证研究 idea。',
     content:
       '请基于真实缺口提出 1 个可验证 idea，必须回答明确科学问题、技术路线、实验方案、失败诊断和与已有工作的差异。'
   }
@@ -131,6 +145,13 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
   const [selectedHistoryId, setSelectedHistoryId] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(props.focus === 'settings');
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState('default');
+  const [isPromptExpanded, setIsPromptExpanded] = useState(false);
+  const [isResultExpanded, setIsResultExpanded] = useState(false);
+  const [mainRatio, setMainRatio] = useState(() => {
+    const stored = Number(localStorage.getItem('pdfTranslationReader:aiAssistantMainRatio'));
+    return Number.isFinite(stored) ? Math.min(0.78, Math.max(0.56, stored)) : 0.68;
+  });
 
   const linkedInputs = useMemo(
     () => buildLinkedLiteratureInputs(props.workbook, props.links, props.papers),
@@ -141,6 +162,7 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
     () => resolveAnalysisInputs(analysisTarget, props.papers, linkedInputs, activePaper),
     [activePaper, analysisTarget, linkedInputs, props.papers]
   );
+  const selectedTemplate = promptTemplates.find((template) => template.key === selectedTemplateKey) ?? promptTemplates[0];
 
   useEffect(() => {
     const restoredState = normalizeLiteratureInsightRunState(
@@ -246,6 +268,34 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
     }
   }
 
+  function handleUseTemplate(templateKey: string): void {
+    const template = promptTemplates.find((item) => item.key === templateKey);
+    if (!template) {
+      return;
+    }
+    setSelectedTemplateKey(template.key);
+    setAnalysisPrompt(template.content);
+  }
+
+  function handleLayoutResizeStart(event: ReactPointerEvent<HTMLDivElement>): void {
+    const container = event.currentTarget.parentElement;
+    if (!container) {
+      return;
+    }
+    const rect = container.getBoundingClientRect();
+    const move = (moveEvent: PointerEvent) => {
+      const nextRatio = Math.min(0.78, Math.max(0.56, (moveEvent.clientX - rect.left) / rect.width));
+      setMainRatio(nextRatio);
+      localStorage.setItem('pdfTranslationReader:aiAssistantMainRatio', String(nextRatio));
+    };
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+  }
+
   return (
     <main className="ai-assistant-page">
       <header className="ai-assistant-header">
@@ -272,7 +322,7 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
             onClick={() => {
               setAnalysisResult('');
               setAnalysisProgress('');
-              setAnalysisPrompt(DEFAULT_ANALYSIS_PROMPT);
+              handleUseTemplate('default');
             }}
           >
             <img className="button-icon" src={analysisIcon} alt="" />
@@ -281,7 +331,12 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
         </div>
       </header>
 
-      <section className="ai-assistant-layout">
+      <section
+        className="ai-assistant-layout is-resizable"
+        style={{
+          gridTemplateColumns: `minmax(520px, ${mainRatio}fr) 10px minmax(300px, ${1 - mainRatio}fr)`
+        }}
+      >
         <div className="ai-assistant-main-column">
           <section className="ai-work-card ai-analysis-workspace" id="ai-analysis-workspace">
             <div className="ai-card-header">
@@ -335,12 +390,17 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
               </label>
             </div>
 
-            <label className="ai-prompt-editor">
-              <span>分析提示词（支持手动编辑）</span>
+            <label className={`ai-prompt-editor${isPromptExpanded ? ' is-expanded' : ''}`.trim()}>
+              <span className="ai-prompt-title-row">
+                <span>分析提示词（支持手动编辑）</span>
+                <button type="button" className="ghost-button compact-button" onClick={() => setIsPromptExpanded((value) => !value)}>
+                  {isPromptExpanded ? '收起编辑器' : '放大编辑'}
+                </button>
+              </span>
               <textarea
                 value={analysisPrompt}
                 onChange={(event) => setAnalysisPrompt(event.target.value)}
-                rows={7}
+                rows={isPromptExpanded ? 13 : 7}
               />
             </label>
 
@@ -349,8 +409,8 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
                 <button
                   key={template.key}
                   type="button"
-                  className={template.content === analysisPrompt ? 'secondary-button is-active' : 'secondary-button'}
-                  onClick={() => setAnalysisPrompt(template.content)}
+                  className={template.key === selectedTemplateKey ? 'secondary-button is-active' : 'secondary-button'}
+                  onClick={() => handleUseTemplate(template.key)}
                 >
                   {template.label}
                 </button>
@@ -386,7 +446,7 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
             <div className="ai-card-header">
               <strong>分析结果</strong>
               <div className="ai-card-actions">
-                <span className="badge">{analysisProgress ? '生成中' : analysisResult ? '自动保存中' : '待分析'}</span>
+                <span className="badge">{analysisProgress ? '生成中' : analysisResult ? '已保存' : '待分析'}</span>
                 <button
                   type="button"
                   className="secondary-button button-with-icon"
@@ -395,6 +455,14 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
                 >
                   <img className="button-icon" src={saveIcon} alt="" />
                   <span>复制结果</span>
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!analysisResult}
+                  onClick={() => setIsResultExpanded(true)}
+                >
+                  全屏查看
                 </button>
               </div>
             </div>
@@ -442,6 +510,15 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
             )}
           </section>
         </div>
+
+        <div
+          className="layout-resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          title="拖拽调整 AI 助手左右栏宽度，双击恢复默认"
+          onPointerDown={handleLayoutResizeStart}
+          onDoubleClick={() => setMainRatio(0.68)}
+        />
 
         <aside className="ai-assistant-side-column">
           <section className="ai-work-card ai-api-card" id="ai-settings-panel">
@@ -534,7 +611,9 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
               </span>
               <em>{advancedOpen ? '已展开' : '已收起'}</em>
             </button>
-            {advancedOpen ? (
+            {!advancedOpen ? (
+              <p className="subtle">当前摘要：{describeAiRuntimeOptions(props.aiForm)}</p>
+            ) : (
               <>
                 <div className="ai-settings-grid">
                   <label>
@@ -634,7 +713,7 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
                   保存设置
                 </button>
               </>
-            ) : null}
+            )}
           </section>
 
           <section className="ai-work-card ai-search-card">
@@ -681,21 +760,85 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
           <section className="ai-work-card ai-template-card">
             <div className="ai-card-header">
               <strong>提示词模板</strong>
-              <button type="button" className="ghost-button" onClick={() => setAnalysisPrompt(DEFAULT_ANALYSIS_PROMPT)}>
+              <button type="button" className="ghost-button" onClick={() => handleUseTemplate('default')}>
                 恢复默认
               </button>
             </div>
             <div className="ai-template-list">
               {promptTemplates.map((template) => (
-                <button key={template.key} type="button" onClick={() => setAnalysisPrompt(template.content)}>
+                <button
+                  key={template.key}
+                  type="button"
+                  className={template.key === selectedTemplateKey ? 'active' : ''}
+                  onClick={() => handleUseTemplate(template.key)}
+                >
                   <strong>{template.label}</strong>
-                  <span>{template.content.slice(0, 34)}...</span>
+                  <em>{template.scenario}</em>
+                  <span>{template.description}</span>
                 </button>
               ))}
+            </div>
+            <article className="ai-template-preview">
+              <div>
+                <strong>{selectedTemplate.label}</strong>
+                <span className="badge">{selectedTemplate.scenario}</span>
+              </div>
+              <p>{selectedTemplate.description}</p>
+              <pre>{selectedTemplate.content}</pre>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void navigator.clipboard.writeText(selectedTemplate.content)}
+              >
+                复制模板
+              </button>
+            </article>
+          </section>
+
+          <section className="ai-work-card ai-quick-card">
+            <div className="ai-card-header">
+              <strong>快捷入口</strong>
+            </div>
+            <div className="ai-settings-actions">
+              <button type="button" className="secondary-button" onClick={props.onOpenResearchSheet}>
+                打开研究表格
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!activePaper}
+                onClick={() => activePaper && props.onOpenPaper(activePaper)}
+              >
+                打开当前论文
+              </button>
             </div>
           </section>
         </aside>
       </section>
+
+      {isResultExpanded ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => setIsResultExpanded(false)}>
+          <section className="document-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="document-modal-header">
+              <div>
+                <span className="eyebrow">Rendered Markdown</span>
+                <h2>AI 大观分析结果</h2>
+              </div>
+              <div className="ai-card-actions">
+                <button type="button" className="secondary-button" onClick={() => void navigator.clipboard.writeText(analysisResult)}>
+                  复制源码
+                </button>
+                <button type="button" className="primary-button" onClick={() => setIsResultExpanded(false)}>
+                  关闭
+                </button>
+              </div>
+            </div>
+            <div className="document-modal-body">
+              <InsightMarkdown text={analysisResult} />
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

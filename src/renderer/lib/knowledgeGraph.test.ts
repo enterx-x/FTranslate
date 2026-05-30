@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildKnowledgeGraph } from './knowledgeGraph';
+import { buildKnowledgeGraph, downloadKnowledgeGraphJson, type KnowledgeGraphData } from './knowledgeGraph';
 import type { PaperRecord } from './papers';
 import {
   buildDefaultResearchWorkbook,
@@ -101,5 +101,60 @@ describe('buildKnowledgeGraph', () => {
     expect(graph.stats.paperCount).toBe(1);
     expect(graph.nodes.some((node) => node.type === 'author' && node.label === 'Author C')).toBe(true);
     expect(graph.nodes.some((node) => node.type === 'method' && node.label === 'CBF')).toBe(true);
+  });
+
+  it('downloads knowledge graph JSON instead of only copying it to the clipboard', async () => {
+    let clicked = 0;
+    let revokedUrl = '';
+    let capturedBlob: { size: number; type: string } | null = null;
+    const link = {
+      href: '',
+      download: '',
+      click: () => {
+        clicked += 1;
+      }
+    };
+    class FakeBlob {
+      size: number;
+      type: string;
+
+      constructor(parts: unknown[], options?: { type?: string }) {
+        this.size = String(parts[0] ?? '').length;
+        this.type = options?.type ?? '';
+      }
+    }
+    const graph: KnowledgeGraphData = {
+      nodes: [{ id: 'paper:1', type: 'paper', label: 'Paper 1', count: 1, paperIds: ['paper-1'], rowIds: [] }],
+      edges: [],
+      stats: {
+        paperCount: 1,
+        nodeCount: 1,
+        edgeCount: 0,
+        topKeywords: [],
+        topMethods: []
+      }
+    };
+
+    const json = downloadKnowledgeGraphJson(graph, {
+      BlobCtor: FakeBlob as unknown as typeof Blob,
+      createDownloadLink: () => link,
+      createObjectUrl: (blob) => {
+        capturedBlob = blob as unknown as { size: number; type: string };
+        return 'blob:knowledge-graph';
+      },
+      revokeObjectUrl: (url) => {
+        revokedUrl = url;
+      }
+    });
+
+    expect(json).toContain('"label": "Paper 1"');
+    expect(link.href).toBe('blob:knowledge-graph');
+    expect(link.download).toBe('ftranslate-knowledge-graph.json');
+    expect(clicked).toBe(1);
+    expect(revokedUrl).toBe('blob:knowledge-graph');
+    expect(capturedBlob).not.toBeNull();
+    const blob: { size: number; type: string } = capturedBlob ?? { size: 0, type: '' };
+    expect(blob.size).toBeGreaterThan(0);
+    expect(blob.type).toBe('application/json;charset=utf-8');
   });
 });

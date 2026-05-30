@@ -36,6 +36,7 @@ import {
   buildPdfTranslationOutputPaths,
   buildPdfTranslationSourceHash,
   findReusablePdfTranslationRecord,
+  normalizePdfTranslationRecordFields,
   patchPdf2zhOpenAiTemperatureSource,
   sanitizePdfTranslationLog,
   type PdfTranslationInvocation,
@@ -888,9 +889,9 @@ async function readPdfTranslationMetadata(paperId: string): Promise<PdfTranslati
       return null;
     }
 
-    return {
+    const normalized = normalizePdfTranslationRecordFields({
       translatedPdfPath: parsed.translatedPdfPath,
-      translatedPdfName: parsed.translatedPdfName || path.basename(parsed.translatedPdfPath),
+      translatedPdfName: parsed.translatedPdfName,
       translatedMonoPdfPath: typeof parsed.translatedMonoPdfPath === 'string' ? parsed.translatedMonoPdfPath : undefined,
       translatedMonoPdfName:
         typeof parsed.translatedMonoPdfName === 'string' ? parsed.translatedMonoPdfName : undefined,
@@ -900,6 +901,11 @@ async function readPdfTranslationMetadata(paperId: string): Promise<PdfTranslati
       translatedAt: parsed.translatedAt || new Date().toISOString(),
       translatedProvider: parseProvider(parsed.translatedProvider) ?? 'custom',
       translatedModel: parsed.translatedModel || ''
+    });
+
+    return {
+      ...normalized,
+      translatedPdfName: normalized.translatedPdfName || path.basename(parsed.translatedPdfPath)
     };
   } catch {
     return null;

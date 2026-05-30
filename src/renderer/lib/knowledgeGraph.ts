@@ -54,6 +54,19 @@ export interface BuildKnowledgeGraphInput {
   maxNodes?: number;
 }
 
+interface KnowledgeGraphDownloadLink {
+  href: string;
+  download: string;
+  click(): void;
+}
+
+interface DownloadKnowledgeGraphJsonDependencies {
+  BlobCtor: typeof Blob;
+  createDownloadLink(): KnowledgeGraphDownloadLink;
+  createObjectUrl(blob: Blob): string;
+  revokeObjectUrl(url: string): void;
+}
+
 interface GraphPaperEntry {
   id: string;
   rowId: string;
@@ -104,6 +117,21 @@ const METHOD_HINTS = [
   'A*',
   'MCTS'
 ];
+
+const READABLE_FIELD_ALIASES = {
+  chineseTitle: ['中文标题', '题名', '标题', 'Chinese Title'],
+  englishTitle: ['英文标题', 'English Title', 'Title'],
+  authors: ['作者', 'Authors', 'Author'],
+  year: ['年份', 'Year'],
+  venue: ['期刊/会议', '期刊', '会议', '来源', 'Journal', 'Conference', 'Venue'],
+  keywords: ['关键词', '关键字', 'Keywords', 'Keyword'],
+  methods: ['方法', '研究方法', '算法', 'RL算法', 'PINN融合方式', 'Method', 'Algorithm'],
+  scenes: ['研究场景', '场景', '环境类型', '任务', '应用场景', 'Scenario', 'Environment', 'Task'],
+  metrics: ['评价指标', '指标/结果', '指标', '结果', 'Metrics', 'Result'],
+  limitations: ['局限点', '局限性', '未来方向', '疑问', 'Limitations', 'Future Work']
+} as const;
+
+const KNOWLEDGE_GRAPH_JSON_FILE_NAME = 'ftranslate-knowledge-graph.json';
 
 export function buildKnowledgeGraph(input: BuildKnowledgeGraphInput): KnowledgeGraphData {
   const entries = buildPaperEntries(input);
@@ -156,6 +184,26 @@ export function buildKnowledgeGraph(input: BuildKnowledgeGraphInput): KnowledgeG
   };
 }
 
+export function downloadKnowledgeGraphJson(
+  graph: KnowledgeGraphData,
+  dependencies: DownloadKnowledgeGraphJsonDependencies = {
+    BlobCtor: Blob,
+    createDownloadLink: () => document.createElement('a'),
+    createObjectUrl: (blob) => URL.createObjectURL(blob),
+    revokeObjectUrl: (url) => URL.revokeObjectURL(url)
+  }
+): string {
+  const json = JSON.stringify(graph, null, 2);
+  const blob = new dependencies.BlobCtor([json], { type: 'application/json;charset=utf-8' });
+  const url = dependencies.createObjectUrl(blob);
+  const link = dependencies.createDownloadLink();
+  link.href = url;
+  link.download = KNOWLEDGE_GRAPH_JSON_FILE_NAME;
+  link.click();
+  dependencies.revokeObjectUrl(url);
+  return json;
+}
+
 function buildPaperEntries(input: BuildKnowledgeGraphInput): GraphPaperEntry[] {
   const source = input.source ?? 'merged';
   const paperById = new Map(input.papers.map((paper) => [paper.id, paper]));
@@ -168,9 +216,13 @@ function buildPaperEntries(input: BuildKnowledgeGraphInput): GraphPaperEntry[] {
       const link = input.links.find((item) => item.rowId === row.id);
       const paper = link ? paperById.get(link.paperId) : undefined;
       const firstCell = getResearchCellText(input.workbook, rowIndex, 0);
-      const chineseTitle = pickField(rowValues, FIELD_ALIASES.chineseTitle) || paper?.chineseTitle || firstCell;
-      const englishTitle = pickField(rowValues, FIELD_ALIASES.englishTitle) || paper?.englishTitle || '';
-      const title = chineseTitle || englishTitle || paper?.pdfName || firstCell;
+      const chineseTitle = firstReadable(
+        pickField(rowValues, READABLE_FIELD_ALIASES.chineseTitle),
+        paper?.chineseTitle,
+        firstCell
+      );
+      const englishTitle = firstReadable(pickField(rowValues, READABLE_FIELD_ALIASES.englishTitle), paper?.englishTitle);
+      const title = firstReadable(chineseTitle, englishTitle, paper?.pdfName, firstCell);
       if (!title.trim()) {
         return;
       }
@@ -182,14 +234,14 @@ function buildPaperEntries(input: BuildKnowledgeGraphInput): GraphPaperEntry[] {
         title: title.trim(),
         chineseTitle,
         englishTitle,
-        authors: pickField(rowValues, FIELD_ALIASES.authors) || paper?.authors || '',
-        year: pickField(rowValues, FIELD_ALIASES.year) || paper?.year || '',
-        venue: pickField(rowValues, FIELD_ALIASES.venue) || paper?.journal || '',
-        keywords: pickField(rowValues, FIELD_ALIASES.keywords),
-        methods: pickField(rowValues, FIELD_ALIASES.methods),
-        scenes: pickField(rowValues, FIELD_ALIASES.scenes),
-        metrics: pickField(rowValues, FIELD_ALIASES.metrics),
-        limitations: pickField(rowValues, FIELD_ALIASES.limitations)
+        authors: firstReadable(pickField(rowValues, READABLE_FIELD_ALIASES.authors), paper?.authors),
+        year: firstReadable(pickField(rowValues, READABLE_FIELD_ALIASES.year), paper?.year),
+        venue: firstReadable(pickField(rowValues, READABLE_FIELD_ALIASES.venue), paper?.journal),
+        keywords: firstReadable(pickField(rowValues, READABLE_FIELD_ALIASES.keywords)),
+        methods: firstReadable(pickField(rowValues, READABLE_FIELD_ALIASES.methods)),
+        scenes: firstReadable(pickField(rowValues, READABLE_FIELD_ALIASES.scenes)),
+        metrics: firstReadable(pickField(rowValues, READABLE_FIELD_ALIASES.metrics)),
+        limitations: firstReadable(pickField(rowValues, READABLE_FIELD_ALIASES.limitations))
       });
     });
   }
@@ -203,12 +255,12 @@ function buildPaperEntries(input: BuildKnowledgeGraphInput): GraphPaperEntry[] {
         id: paper.id,
         rowId: '',
         rowIndex: -1,
-        title: paper.chineseTitle || paper.englishTitle || paper.pdfName,
-        chineseTitle: paper.chineseTitle,
-        englishTitle: paper.englishTitle,
-        authors: paper.authors,
-        year: paper.year,
-        venue: paper.journal,
+        title: firstReadable(paper.chineseTitle, paper.englishTitle, paper.pdfName),
+        chineseTitle: firstReadable(paper.chineseTitle),
+        englishTitle: firstReadable(paper.englishTitle),
+        authors: firstReadable(paper.authors),
+        year: firstReadable(paper.year),
+        venue: firstReadable(paper.journal),
         keywords: '',
         methods: paper.notes,
         scenes: '',
@@ -246,14 +298,16 @@ function addValueNodes(
   label: string
 ): void {
   values.slice(0, type === 'author' ? 8 : 10).forEach((value) => {
+    const cleanedValue = cleanGraphText(value);
+    if (!cleanedValue) return;
     const node = ensureNode(nodes, {
-      id: `${type}:${normalizeNodeId(value)}`,
+      id: `${type}:${normalizeNodeId(cleanedValue)}`,
       type,
-      label: value,
+      label: cleanedValue,
       paperId: paperNode.paperIds[0] ?? '',
       rowId: paperNode.rowIds[0] ?? ''
     });
-    addEdge(edges, paperNode.id, node.id, label);
+    addEdge(edges, paperNode.id, node.id, getReadableEdgeLabel(type, label));
   });
 }
 
@@ -299,12 +353,13 @@ function addCoOccurrenceEdges(
   type: KnowledgeGraphNodeType,
   label: string
 ): void {
+  const readableLabel = type === 'method' ? '共现方法' : type === 'keyword' ? '共现关键词' : label;
   const typedNodes = [...nodes.values()].filter((node) => node.type === type && node.paperIds.length > 1);
   typedNodes.forEach((node, index) => {
     typedNodes.slice(index + 1).forEach((other) => {
       const sharedPaperCount = node.paperIds.filter((paperId) => other.paperIds.includes(paperId)).length;
       if (sharedPaperCount > 0) {
-        addEdge(edges, node.id, other.id, label);
+        addEdge(edges, node.id, other.id, readableLabel);
       }
     });
   });
@@ -356,6 +411,38 @@ function normalizeLabel(value: string): string {
 
 function normalizeNodeId(value: string): string {
   return value.toLowerCase().trim().replace(/\s+/gu, ' ');
+}
+
+function firstReadable(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const cleaned = cleanGraphText(value ?? '');
+    if (cleaned) return cleaned;
+  }
+  return '';
+}
+
+function cleanGraphText(value: string): string {
+  const normalized = value.replace(/\uFFFD/gu, '').replace(/\s+/gu, ' ').trim();
+  if (!normalized) return '';
+  const questionCount = (normalized.match(/\?/gu) ?? []).length;
+  if (questionCount >= Math.max(3, normalized.length * 0.35)) {
+    return '';
+  }
+  return normalized;
+}
+
+function getReadableEdgeLabel(type: KnowledgeGraphNodeType, fallback: string): string {
+  const labels: Partial<Record<KnowledgeGraphNodeType, string>> = {
+    author: '作者',
+    year: '年份',
+    venue: '期刊/会议',
+    keyword: '关键词',
+    method: '方法',
+    scene: '场景',
+    metric: '指标',
+    limitation: '局限'
+  };
+  return labels[type] ?? fallback;
 }
 
 function escapeRegExp(value: string): string {

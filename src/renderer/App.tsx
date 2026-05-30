@@ -19,6 +19,7 @@ import type { AiFormState } from './components/AiModePanel';
 import { AppSidebar, type AppSidebarSection } from './components/AppSidebar';
 import { HomePage } from './components/HomePage';
 import { buildKnowledgeGraph } from './lib/knowledgeGraph';
+import { APP_SETTINGS_KEY, describeReferenceStrategy, parseAppSettings } from './lib/appSettings';
 import { NotesPanel } from './components/NotesPanel';
 import { PdfViewer } from './components/PdfViewer';
 import type { PdfViewportState } from './lib/pdfViewportSync';
@@ -106,7 +107,7 @@ interface RecentProject {
   aiCachePath?: string;
 }
 
-type AppView = 'home' | 'reader' | 'researchSheet' | 'aiAssistant' | 'knowledgeGraph';
+type AppView = 'home' | 'reader' | 'researchSheet' | 'aiAssistant' | 'knowledgeGraph' | 'settings';
 type ReaderMode = 'manual' | 'ai';
 type PdfViewMode = 'source' | 'parallel' | 'translated';
 type BuiltInProviderId = Exclude<AiProviderId, 'custom'>;
@@ -123,6 +124,10 @@ const AiAssistantPage = lazy(async () => {
 const KnowledgeGraphPage = lazy(async () => {
   const module = await import('./components/KnowledgeGraphPage');
   return { default: module.KnowledgeGraphPage };
+});
+const SettingsPage = lazy(async () => {
+  const module = await import('./components/SettingsPage');
+  return { default: module.SettingsPage };
 });
 
 export default function App() {
@@ -200,6 +205,10 @@ export default function App() {
         maxNodes: 160
       }).stats,
     [paperLibrary, researchWorkbook, researchSheetLinks]
+  );
+  const appSettings = useMemo(
+    () => parseAppSettings(localStorage.getItem(APP_SETTINGS_KEY)),
+    [view]
   );
 
   useEffect(() => {
@@ -1405,6 +1414,10 @@ export default function App() {
     setView('aiAssistant');
   }
 
+  function openSettings(): void {
+    setView('settings');
+  }
+
   function getCurrentModelOptions(): AiModelOption[] {
     return aiForm.provider === 'custom'
       ? []
@@ -1421,7 +1434,11 @@ export default function App() {
     }
 
     if (view === 'aiAssistant') {
-      return aiAssistantFocus === 'settings' ? 'settings' : 'ai';
+      return 'ai';
+    }
+
+    if (view === 'settings') {
+      return 'settings';
     }
 
     if (view === 'reader') {
@@ -1441,7 +1458,7 @@ export default function App() {
         onOpenKnowledgeGraph={openKnowledgeGraph}
         onOpenReader={openReaderFromSidebar}
         onOpenAi={openAiFromSidebar}
-        onOpenSettings={() => openAiAssistant('settings')}
+        onOpenSettings={openSettings}
       />
     );
   }
@@ -1551,6 +1568,22 @@ export default function App() {
             />
           </Suspense>
           <footer className="status-bar">{statusMessage}</footer>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'settings') {
+    return (
+      <div className="app-shell desktop-shell settings-shell">
+        {renderSidebar()}
+        <div className="app-main">
+          <Suspense fallback={<main className="settings-loading">正在加载设置...</main>}>
+            <SettingsPage
+              onBackHome={openWorkspace}
+              onOpenAiAssistant={() => openAiAssistant('settings')}
+            />
+          </Suspense>
         </div>
       </div>
     );
@@ -1730,6 +1763,9 @@ export default function App() {
                   安装命令：<code>{pdfTranslationEngine?.installCommand ?? 'uv tool install pdf2zh'}</code>
                 </p>
               ) : null}
+              <p className="reference-strategy-hint">
+                参考文献策略：{describeReferenceStrategy(appSettings.pdf.referenceTranslationStrategy)}
+              </p>
             </section>
             <details
               className="pdf-ai-settings"

@@ -239,15 +239,16 @@ function normalizePaperRecord(value: unknown): PaperRecord | null {
   return {
     id: toText(record.id) || createPaperId(pdfPath, translationPath),
     pdfPath,
-    pdfName: toText(record.pdfName) || stripExtension(pdfPath),
+    pdfName: toText(record.pdfName) || getBaseName(pdfPath),
     translationPath,
-    translationName: toText(record.translationName) || (translationPath ? stripExtension(translationPath) : ''),
+    translationName: toText(record.translationName) || (translationPath ? getBaseName(translationPath) : ''),
     aiCachePath: toText(record.aiCachePath) || undefined,
-    aiCacheName: toText(record.aiCacheName) || undefined,
+    aiCacheName: toText(record.aiCacheName) || getOptionalBaseName(record.aiCachePath),
     translatedPdfPath: toText(record.translatedPdfPath) || undefined,
-    translatedPdfName: toText(record.translatedPdfName) || undefined,
+    translatedPdfName: toText(record.translatedPdfName) || getOptionalBaseName(record.translatedPdfPath),
     translatedMonoPdfPath: toText(record.translatedMonoPdfPath) || undefined,
-    translatedMonoPdfName: toText(record.translatedMonoPdfName) || undefined,
+    translatedMonoPdfName:
+      toText(record.translatedMonoPdfName) || getOptionalBaseName(record.translatedMonoPdfPath),
     translatedPdfMode: parseTranslatedPdfMode(record.translatedPdfMode),
     translationEngine: parseTranslationEngine(record.translationEngine),
     translationSourceHash: toText(record.translationSourceHash) || undefined,
@@ -293,8 +294,17 @@ function getFirstTranslationText(document: TranslationDocument): string {
 }
 
 function stripExtension(fileName: string): string {
-  const normalized = fileName.replace(/\\/g, '/').split('/').pop() ?? fileName;
+  const normalized = getBaseName(fileName);
   return normalized.replace(/\.[^.]+$/, '');
+}
+
+function getBaseName(filePath: string): string {
+  return filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
+}
+
+function getOptionalBaseName(value: unknown): string | undefined {
+  const filePath = toText(value);
+  return filePath ? getBaseName(filePath) : undefined;
 }
 
 function createPaperId(pdfPath: string, translationPath: string): string {

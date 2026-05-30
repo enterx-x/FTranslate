@@ -59,6 +59,15 @@ export function findReusablePdfTranslationRecord<T extends PdfTranslationRecordF
   ) ?? null;
 }
 
+export function normalizePdfTranslationRecordFields<T extends PdfTranslationRecordFields>(record: T): T {
+  return {
+    ...record,
+    translatedPdfName: record.translatedPdfName || getOptionalPdfBaseName(record.translatedPdfPath),
+    translatedMonoPdfName:
+      record.translatedMonoPdfName || getOptionalPdfBaseName(record.translatedMonoPdfPath)
+  };
+}
+
 export function buildPdf2zhCommand(input: PdfTranslationCommandInput): PdfTranslationCommand {
   const args =
     input.invocation === 'python-module'
@@ -206,6 +215,10 @@ export function formatPdfTranslationProgressMessage(value: string): string {
 function getFileStem(filePath: string): string {
   const fileName = filePath.replace(/\\/gu, '/').split('/').pop() || 'translated';
   return fileName.replace(/\.[^.]+$/u, '') || 'translated';
+}
+
+function getOptionalPdfBaseName(filePath?: string): string | undefined {
+  return filePath?.replace(/\\/gu, '/').split('/').pop() || undefined;
 }
 
 function joinPath(dir: string, fileName: string): string {

@@ -88,6 +88,29 @@ describe('paper library metadata', () => {
     expect(parsed[0].translationPath).toBe('');
   });
 
+  it('restores missing legacy file names from paths without dropping extensions', () => {
+    const parsed = parsePaperLibrary(
+      JSON.stringify([
+        {
+          id: 'paper-legacy-1',
+          pdfPath: 'D:/papers/robot.paper.v2.pdf',
+          translationPath: 'D:/translations/robot.paper.v2.dual.json',
+          chineseTitle: '',
+          englishTitle: '',
+          journal: '',
+          authors: '',
+          year: '',
+          notes: '',
+          lastOpenedAt: '2026-05-29T10:00:00.000Z',
+          lastPage: 1
+        }
+      ])
+    );
+
+    expect(parsed[0].pdfName).toBe('robot.paper.v2.pdf');
+    expect(parsed[0].translationName).toBe('robot.paper.v2.dual.json');
+  });
+
   it('upserts records by pdf and translation path while preserving edited metadata', () => {
     const document = parseTranslationFile('中文译文。', 'translation.md', 'D:/translation.md');
     const first = buildPaperRecord({
@@ -211,6 +234,35 @@ describe('paper library metadata', () => {
     expect(updated.translatedPdfPath).toBe('D:/cache/new-paper-dual.pdf');
     expect(updated.translationPath).toBe('D:/translation.md');
     expect(updated.translatedProvider).toBe('openai');
+  });
+
+  it('restores missing cache and translated PDF names from stored paths', () => {
+    const parsed = parsePaperLibrary(
+      JSON.stringify([
+        {
+          id: 'paper-legacy-assets-1',
+          pdfPath: 'D:/paper.pdf',
+          pdfName: 'paper.pdf',
+          translationPath: 'D:/translation.md',
+          translationName: 'translation.md',
+          aiCachePath: 'D:/cache/paper-ai-cache.json',
+          translatedPdfPath: 'D:/cache/paper.dual.version.pdf',
+          translatedMonoPdfPath: 'D:/cache/paper.mono.version.pdf',
+          chineseTitle: '中文标题',
+          englishTitle: 'English Title',
+          journal: '',
+          authors: '',
+          year: '',
+          notes: '',
+          lastOpenedAt: '2026-05-30T08:00:00.000Z',
+          lastPage: 2
+        }
+      ])
+    );
+
+    expect(parsed[0].aiCacheName).toBe('paper-ai-cache.json');
+    expect(parsed[0].translatedPdfName).toBe('paper.dual.version.pdf');
+    expect(parsed[0].translatedMonoPdfName).toBe('paper.mono.version.pdf');
   });
 
   it('keeps paper records focused on metadata and ignores legacy spreadsheet cells', () => {

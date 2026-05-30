@@ -5,6 +5,7 @@ import {
   buildPdfTranslationSourceHash,
   findReusablePdfTranslationRecord,
   formatPdfTranslationProgressMessage,
+  normalizePdfTranslationRecordFields,
   patchPdf2zhOpenAiTemperatureSource,
   sanitizePdfTranslationLog
 } from './pdfTranslation';
@@ -215,6 +216,20 @@ describe('PDFMathTranslate command helpers', () => {
 
     expect(output.dualPdfPath).toBe('D:/cache/2604.15483v2-dual.pdf');
     expect(output.monoPdfPath).toBe('D:/cache/2604.15483v2-mono.pdf');
+  });
+
+  it('restores missing translated PDF names from stored paths', () => {
+    expect(
+      normalizePdfTranslationRecordFields({
+        translatedPdfPath: 'D:/cache/paper.dual.version.pdf',
+        translatedMonoPdfPath: 'D:/cache/paper.mono.version.pdf',
+        translationSourceHash: 'hash-1',
+        translatedPdfMode: 'dual'
+      })
+    ).toMatchObject({
+      translatedPdfName: 'paper.dual.version.pdf',
+      translatedMonoPdfName: 'paper.mono.version.pdf'
+    });
   });
 
   it('hashes source identity and redacts secrets from process logs', () => {
