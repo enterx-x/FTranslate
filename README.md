@@ -174,6 +174,7 @@ PDF 阅读页包含轻量笔记编辑器：
 
 - 从当前 PDF 的文本块生成组会 PPT 草稿；
 - 抽取 Abstract、Introduction、Method、Experiments、Conclusion 等章节信息；
+- 默认生成 12 页组会结构：封面、论文信息、背景、Related Work、方法、公式、实验、结果、创新、局限、启发和总结；
 - 识别 Fig. / Figure / Table caption 作为图表候选；
 - 跳过 References / Bibliography 作为默认策略；
 - 生成结构化 PPT 大纲 JSON；
@@ -261,6 +262,8 @@ npm run visual:check
 ```text
 .tmp-visual-check/
 ```
+
+当前视觉检查会覆盖首页、论文库、研究表格、PDF 阅读、组会 PPT、AI 助手和设置页；失败时会保留对应截图，便于继续定位布局或渲染问题。
 
 可指定论文：
 

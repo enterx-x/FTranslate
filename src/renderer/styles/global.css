@@ -6293,3 +6293,507 @@ body.is-resizing-layout .layout-resize-handle::after {
     min-height: 82px;
   }
 }
+
+/* Final visual regression pass: keep the app-shell compact and prevent old
+   duplicated page styles from stretching dashboard/settings/PPT views. */
+.home-page.home-hub-page {
+  display: grid;
+  grid-template-rows: auto auto auto auto;
+  align-content: start;
+  gap: 12px;
+  height: 100%;
+  overflow: auto;
+  padding: 16px 18px 22px;
+}
+
+.home-page .home-hero {
+  min-height: 0;
+  padding: 13px 16px;
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(248, 249, 252, 0.98), rgba(255, 255, 255, 0.98)),
+    radial-gradient(circle at 96% 0%, rgba(109, 93, 252, 0.12), transparent 30%);
+}
+
+.home-page .home-header-mark {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 0;
+  object-fit: contain;
+}
+
+.home-page .home-hero h1 {
+  margin: 1px 0 3px;
+  font-size: clamp(18px, 1.45vw, 23px);
+  letter-spacing: 0;
+}
+
+.home-page .home-hero p {
+  max-width: 780px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.home-page .home-dashboard-stats {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 9px;
+}
+
+.home-page .home-dashboard-stats article {
+  min-height: 72px;
+  padding: 10px 12px;
+  border-radius: 13px;
+}
+
+.home-page .home-dashboard-stats strong {
+  margin: 4px 0 1px;
+  font-size: 19px;
+}
+
+.home-page .home-module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(235px, 1fr));
+  gap: 10px;
+  max-width: none;
+  min-height: 0;
+}
+
+.home-page .home-module-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 176px;
+  max-height: none;
+  padding: 13px 14px;
+  border-radius: 15px;
+  overflow: hidden;
+}
+
+.home-page .home-module-card::after {
+  display: none;
+}
+
+.home-page .home-module-kicker {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.home-page .home-module-card h2 {
+  margin: 8px 0 6px;
+  font-size: 17px;
+}
+
+.home-page .home-module-card p {
+  display: -webkit-box;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #4d5668;
+  font-size: 12px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.home-page .home-module-meta {
+  margin-top: 10px;
+}
+
+.home-page .home-module-actions {
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+.home-page .home-overview-panel {
+  min-height: 0;
+  padding: 12px;
+  border-radius: 15px;
+}
+
+.home-page .home-overview-head {
+  margin-bottom: 9px;
+}
+
+.home-page .home-recent-list {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 9px;
+}
+
+.home-page .home-recent-item {
+  min-height: 54px;
+  padding: 9px 11px;
+}
+
+.settings-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  height: 100%;
+  padding: 14px 16px 18px;
+  overflow: hidden;
+}
+
+.settings-header {
+  padding: 12px 14px;
+  border-radius: 16px;
+}
+
+.settings-header .panel-title-icon {
+  width: 34px;
+  height: 34px;
+}
+
+.settings-header h1 {
+  margin: 1px 0 3px;
+  font-size: 23px;
+}
+
+.settings-header p {
+  max-width: 780px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.settings-layout {
+  grid-template-columns: clamp(210px, 16vw, 245px) minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+}
+
+.settings-nav {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  padding: 9px;
+  overflow: auto;
+}
+
+.settings-nav button {
+  display: grid;
+  justify-items: start;
+  min-height: 46px;
+  height: auto;
+  padding: 7px 10px;
+  border-radius: 11px;
+  line-height: 1.25;
+  text-align: left;
+}
+
+.settings-nav button strong,
+.settings-nav button span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-nav button strong {
+  font-size: 13px;
+}
+
+.settings-nav button span {
+  color: #697386;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.settings-nav button.active span {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.settings-content {
+  padding: 12px;
+}
+
+.settings-card {
+  margin-bottom: 10px;
+  padding: 14px;
+  border-radius: 15px;
+}
+
+.settings-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.settings-card h2 {
+  margin: 0 0 5px;
+  font-size: 17px;
+}
+
+.settings-card header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.settings-form-grid,
+.settings-path-grid {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px 12px;
+}
+
+.settings-toggle-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 12px;
+}
+
+.settings-card label {
+  min-width: 0;
+}
+
+.settings-card input,
+.settings-card select,
+.settings-card textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.checkbox-line {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.research-sheet-surface {
+  position: relative;
+}
+
+.research-sheet-engine-status {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: grid;
+  gap: 4px;
+  max-width: 360px;
+  padding: 12px 14px;
+  border: 1px solid #f3c7c7;
+  border-radius: 12px;
+  background: rgba(255, 250, 250, 0.96);
+  color: #8a1f1f;
+  box-shadow: var(--shadow-sm);
+  z-index: 5;
+}
+
+.research-sheet-engine-status span {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.presentation-thumbs button {
+  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-areas:
+    "index title"
+    "index type"
+    "index summary";
+  min-height: 72px;
+}
+
+.presentation-thumbs em {
+  grid-area: summary;
+  display: -webkit-box;
+  overflow: hidden;
+  color: #697386;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ppt-slide-preview {
+  align-content: start;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.ppt-slide-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ppt-slide-confidence {
+  color: #667085;
+  font-size: 12px;
+}
+
+.ppt-slide-body {
+  display: grid;
+  gap: 14px;
+  min-height: 0;
+}
+
+.ppt-slide-preview ul {
+  padding-left: 18px;
+}
+
+.ppt-slide-preview li {
+  padding-left: 2px;
+}
+
+.ppt-figure-strip div.muted-figure {
+  opacity: 0.55;
+}
+
+.presentation-card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+@media (max-width: 1400px) {
+  .home-page.home-hub-page {
+    padding: 12px 14px 18px;
+  }
+
+  .home-page .home-module-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .home-page .home-module-card {
+    min-height: 164px;
+  }
+
+  .settings-page {
+    padding: 12px;
+  }
+}
+
+@media (max-height: 820px) {
+  .home-page .home-hero {
+    padding: 10px 13px;
+  }
+
+  .home-page .home-dashboard-stats article {
+    min-height: 62px;
+    padding: 8px 10px;
+  }
+
+  .home-page .home-module-card {
+    min-height: 150px;
+  }
+
+  .home-page .home-module-card p {
+    -webkit-line-clamp: 2;
+  }
+
+  .settings-header {
+    padding: 10px 12px;
+  }
+}
+
+/* Final dashboard correction: keep the home modules dense and readable on 1366px-class screens. */
+.home-page.home-hub-page .home-module-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.home-page.home-hub-page .home-module-card {
+  min-height: 198px;
+}
+
+.home-page.home-hub-page .home-module-card p {
+  display: block !important;
+  min-height: 48px;
+  max-height: 54px;
+  overflow: hidden;
+  color: #475165;
+  opacity: 1;
+}
+
+@media (max-width: 1280px) {
+  .home-page.home-hub-page .home-module-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Final homepage/settings polish: reduce the blank-card feeling while keeping
+   the existing App Shell and page logic untouched. */
+.home-page.home-hub-page {
+  gap: 10px;
+}
+
+.home-page.home-hub-page .home-module-card {
+  min-height: 184px;
+  padding: 14px 15px;
+  border-color: #dde3ed;
+}
+
+.home-page.home-hub-page .home-module-card h2 {
+  margin-top: 7px;
+  margin-bottom: 7px;
+}
+
+.home-page.home-hub-page .home-module-card p {
+  min-height: 42px;
+  max-height: 60px;
+  line-height: 1.48;
+}
+
+.home-page.home-hub-page .home-module-meta {
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.home-page.home-hub-page .home-module-actions {
+  padding-top: 8px;
+}
+
+.settings-page .settings-header {
+  padding: 12px 16px;
+  border-radius: 16px;
+}
+
+.settings-page .settings-header .panel-title-icon {
+  width: 38px;
+  height: 38px;
+}
+
+.settings-page .settings-header h1 {
+  font-size: 23px;
+}
+
+.settings-page .settings-header p {
+  max-width: 820px;
+  font-size: 12px;
+}
+
+.settings-page .settings-layout {
+  grid-template-columns: clamp(218px, 16vw, 240px) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.settings-page .settings-content {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.settings-page .settings-card {
+  min-height: min(560px, calc(100vh - 198px));
+  padding: 18px;
+  border-radius: 16px;
+}
+
+.settings-page .settings-card > header {
+  align-items: flex-start;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #edf0f5;
+}
+
+.settings-page .settings-path-grid {
+  grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+  gap: 14px 16px;
+}
+
+.settings-page .path-input-row input {
+  min-width: 0;
+}

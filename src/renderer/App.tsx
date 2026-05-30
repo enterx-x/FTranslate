@@ -624,7 +624,7 @@ export default function App() {
     const draft = buildPresentationDraft({
       papers: [paper],
       blocks: extractedPdfBlocks,
-      targetSlideCount: 9
+      targetSlideCount: 12
     });
     setPresentationDraft(draft);
     setView('presentation');

@@ -98,6 +98,7 @@ export function AppSidebar(props: AppSidebarProps) {
           <button
             key={item.section}
             type="button"
+            data-sidebar-section={item.section}
             className={`app-sidebar-link${props.activeSection === item.section ? ' active' : ''}${item.isUtility ? ' utility' : ''}`}
             onClick={() => handleNavigate(item.section)}
             title={item.label}

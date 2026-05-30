@@ -191,6 +191,8 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
   const [selectedInsightHistoryId, setSelectedInsightHistoryId] = useState('');
   const [isLiteratureInsightRunning, setIsLiteratureInsightRunning] = useState(false);
   const [showRowDetail, setShowRowDetail] = useState(false);
+  const [univerMountState, setUniverMountState] = useState('waiting');
+  const [univerError, setUniverError] = useState('');
   const literatureInsightStateRef = useRef<LiteratureInsightRunState | null>(null);
 
   const selectedRowId = getRowId(workbookModelRef.current, selectedCell.rowIndex);
@@ -277,15 +279,47 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
 
   useLayoutEffect(() => {
     if (univerRef.current) {
+      setUniverMountState('ready:existing');
       return;
     }
 
     let disposed = false;
     let frameId = 0;
     let retryTimerId = 0;
+    let canvasWatchTimerId = 0;
     let commandDisposable: { dispose: () => void } | null = null;
     let resizeObserver: ResizeObserver | null = null;
     let updateSelectionLater: (() => number) | null = null;
+
+    const updateMountState = (container: HTMLDivElement | null, state: string, error = ''): void => {
+      if (disposed) {
+        return;
+      }
+      if (container) {
+        container.dataset.univerInitState = state;
+        container.dataset.univerError = error;
+      }
+      setUniverMountState(state);
+      setUniverError(error);
+    };
+
+    const watchForCanvas = (container: HTMLDivElement, attempt = 0): void => {
+      if (disposed) {
+        return;
+      }
+      const canvasCount = container.querySelectorAll('canvas').length;
+      if (canvasCount > 0) {
+        updateMountState(container, `painted:${canvasCount}`);
+        window.dispatchEvent(new Event('resize'));
+        return;
+      }
+      if (attempt >= 90) {
+        updateMountState(container, 'ready:no-canvas', 'Univer 已初始化，但 9 秒内没有绘制 canvas。');
+        return;
+      }
+      window.dispatchEvent(new Event('resize'));
+      canvasWatchTimerId = window.setTimeout(() => watchForCanvas(container, attempt + 1), 100);
+    };
 
     const initializeWhenSized = (attempt = 0): void => {
       const container = containerRef.current;
@@ -300,7 +334,7 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
       }
 
       const rect = container.getBoundingClientRect();
-      container.dataset.univerInitState = `waiting:${attempt}:${Math.round(rect.width)}x${Math.round(rect.height)}`;
+      updateMountState(container, `waiting:${attempt}:${Math.round(rect.width)}x${Math.round(rect.height)}`);
       if ((rect.width < 320 || rect.height < 260) && attempt < 120) {
         retryTimerId = window.setTimeout(() => {
           frameId = window.requestAnimationFrame(() => initializeWhenSized(attempt + 1));
@@ -309,11 +343,13 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
       }
 
       try {
-        container.dataset.univerInitState = `initializing:${attempt}:${Math.round(rect.width)}x${Math.round(rect.height)}`;
+        updateMountState(container, `initializing:${attempt}:${Math.round(rect.width)}x${Math.round(rect.height)}`);
         initializeUniver(container);
-        container.dataset.univerInitState = 'ready';
+        updateMountState(container, 'ready');
+        watchForCanvas(container);
       } catch (error) {
-        container.dataset.univerInitState = `error:${attempt}`;
+        const message = error instanceof Error ? error.message : String(error);
+        updateMountState(container, `error:${attempt}`, message);
         console.error('Failed to initialize research sheet Univer surface.', error);
         if (attempt < 120) {
           retryTimerId = window.setTimeout(() => initializeWhenSized(attempt + 1), 250);
@@ -382,7 +418,10 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
       }
     };
 
+    // Electron 打包环境中首帧有时不会按预期触发，立即尝试并保留 raf/timer 双兜底。
+    initializeWhenSized();
     frameId = window.requestAnimationFrame(() => initializeWhenSized());
+    retryTimerId = window.setTimeout(() => initializeWhenSized(), 120);
 
     return () => {
       disposed = true;
@@ -391,6 +430,9 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
       }
       if (retryTimerId) {
         window.clearTimeout(retryTimerId);
+      }
+      if (canvasWatchTimerId) {
+        window.clearTimeout(canvasWatchTimerId);
       }
       commandDisposable?.dispose();
       resizeObserver?.disconnect();
@@ -1172,7 +1214,19 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
         </section>
 
         <section className="research-sheet-surface">
-          <div ref={containerRef} id={RESEARCH_UNIVER_CONTAINER_ID} className="univer-container" />
+          <div
+            ref={containerRef}
+            id={RESEARCH_UNIVER_CONTAINER_ID}
+            className="univer-container"
+            data-univer-init-state={univerMountState}
+            data-univer-error={univerError}
+          />
+          {univerMountState.startsWith('error') || univerMountState === 'ready:no-canvas' ? (
+            <div className="research-sheet-engine-status" data-state={univerMountState}>
+              <strong>研究表格画布暂未绘制</strong>
+              <span>{univerError || 'Univer 初始化完成但未检测到 canvas。请稍等或重新进入研究表格。'}</span>
+            </div>
+          ) : null}
         </section>
         {selectedCellText.trim() ? (
           <section className="formula-preview-strip">

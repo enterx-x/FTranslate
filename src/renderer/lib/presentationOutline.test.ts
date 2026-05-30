@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ExtractedPdfBlock } from './pdfTextStructure';
-import { buildPresentationDraft, serializePresentationMarkdown } from './presentationOutline';
+import { buildLocalPresentationDraft, buildPresentationDraft, serializePresentationMarkdown } from './presentationOutline';
 import type { PaperRecord } from './papers';
 
 function block(partial: Partial<ExtractedPdfBlock> & Pick<ExtractedPdfBlock, 'original'>): ExtractedPdfBlock {
@@ -80,11 +80,146 @@ describe('presentationOutline', () => {
     expect(draft.figures[0]).toMatchObject({
       imageId: 'fig-3-1',
       pageNumber: 3,
-      suggestedSlide: 'method'
+      suggestedSlide: 'method',
+      selected: true
     });
     expect(draft.slides.some((slide) => slide.type === 'method')).toBe(true);
     expect(draft.slides.every((slide) => slide.sourceRefs.every((ref) => ref.section !== 'References'))).toBe(true);
     expect(draft.slides.some((slide) => slide.sourceRefs.some((ref) => ref.pageNumber === 6))).toBe(true);
+  });
+
+  it('creates chapter-driven slides with multiple bullets and source refs', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [paper({ englishTitle: 'Robot Foundation Model' })],
+      blocks: [
+        block({
+          section: 'Abstract',
+          page: 1,
+          original:
+            'The paper introduces a generalist robot model. It follows diverse language instructions in unseen environments. It uses context conditioning to steer behavior.'
+        }),
+        block({
+          section: 'I. INTRODUCTION',
+          page: 2,
+          original:
+            'Foundation models emerge from large and diverse datasets. Prior robot policies remain limited by narrow task distributions and weak generalization.'
+        }),
+        block({
+          section: 'I. INTRODUCTION',
+          page: 2,
+          original:
+            'The central problem is how to transfer broad web and robot data into reliable embodied behavior without task-specific fine-tuning.'
+        }),
+        block({
+          section: 'II. RELATED WORK',
+          page: 3,
+          original:
+            'Vision-language-action models have improved instruction following. Existing approaches still struggle with long-horizon dexterous manipulation.'
+        }),
+        block({
+          section: 'III. METHOD',
+          page: 4,
+          original:
+            'The model uses a VLA backbone, high-level policy prompts, subgoal images, and episode metadata as conditioning signals.'
+        }),
+        block({
+          type: 'formula',
+          section: 'III. METHOD',
+          page: 4,
+          original: 'L = L_{data} + lambda L_{policy} + beta L_{subgoal}'
+        }),
+        block({
+          type: 'caption',
+          section: 'III. METHOD',
+          page: 4,
+          original: 'Fig. 2. Architecture overview of the VLA policy and world model.'
+        }),
+        block({
+          section: 'IV. EXPERIMENTS',
+          page: 6,
+          original:
+            'The experiments evaluate dexterous tasks across multiple robot platforms. The model improves out-of-the-box success rate and compositional generalization.'
+        }),
+        block({
+          type: 'caption',
+          section: 'IV. EXPERIMENTS',
+          page: 7,
+          original: 'Table 1. Quantitative comparison with specialist policies and imitation learning baselines.'
+        }),
+        block({
+          section: 'References',
+          page: 12,
+          original: '[1] Doe et al. Prior work. 2025.'
+        })
+      ],
+      targetSlideCount: 12
+    });
+
+    const slideTypes = draft.slides.map((slide) => slide.type);
+
+    expect(draft.slides).toHaveLength(12);
+    expect(slideTypes).toContain('relatedWork');
+    expect(slideTypes).toContain('formula');
+    expect(draft.slides.every((slide) => slide.confidence === 'local')).toBe(true);
+    expect(draft.slides.every((slide) => slide.bullets.length <= 5)).toBe(true);
+    expect(draft.slides.every((slide) => slide.sourceRefs.every((ref) => ref.section !== 'References'))).toBe(true);
+
+    const background = draft.slides.find((slide) => slide.type === 'background');
+    expect(background?.bullets.length).toBeGreaterThanOrEqual(3);
+    expect(background?.sourceRefs.map((ref) => ref.pageNumber)).toContain(2);
+
+    const method = draft.slides.find((slide) => slide.type === 'method');
+    expect(method?.figures[0]).toMatchObject({
+      suggestedSlide: 'method',
+      selected: true,
+      suggestedReason: expect.stringContaining('方法')
+    });
+
+    const experiments = draft.slides.find((slide) => slide.type === 'experiments');
+    expect(experiments?.figures[0]).toMatchObject({
+      suggestedSlide: 'experiments',
+      selected: true
+    });
+  });
+
+  it('keeps a stable slide even when experiments are missing', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [paper()],
+      blocks: [
+        block({ section: 'Abstract', page: 1, original: 'This paper studies safe path planning.' }),
+        block({ section: 'Method', page: 3, original: 'The method combines RL and CBF for safety.' })
+      ],
+      targetSlideCount: 12
+    });
+
+    const experiments = draft.slides.find((slide) => slide.type === 'experiments');
+    expect(experiments?.bullets[0]).toContain('原文未明确说明');
+    expect(experiments?.sourceRefs).toHaveLength(0);
+  });
+
+  it('keeps conclusion-oriented slides when the requested outline is short', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [paper()],
+      blocks: [
+        block({ section: 'Abstract', page: 1, original: 'This paper studies safe robot navigation in crowds.' }),
+        block({ section: 'Introduction', page: 2, original: 'The planning problem requires safe motion under uncertainty.' }),
+        block({ section: 'Method', page: 3, original: 'The method combines reinforcement learning with a CBF safety filter.' }),
+        block({ section: 'Experiments', page: 5, original: 'Experiments compare success rate and collision rate against baselines.' }),
+        block({ section: 'Results', page: 6, original: 'The proposed method reduces constraint violations in dense scenes.' }),
+        block({ section: 'Limitations', page: 8, original: 'The method still depends on reliable obstacle state estimation.' }),
+        block({ section: 'Conclusion', page: 9, original: 'The paper suggests safe RL is useful for navigation reproducibility.' })
+      ],
+      targetSlideCount: 8
+    });
+
+    const slideTypes = draft.slides.map((slide) => slide.type);
+
+    expect(draft.slides).toHaveLength(8);
+    expect(slideTypes).toEqual(
+      expect.arrayContaining(['cover', 'info', 'background', 'method', 'experiments', 'results', 'limitations', 'summary'])
+    );
+    expect(slideTypes).not.toContain('relatedWork');
+    expect(slideTypes).not.toContain('formula');
   });
 
   it('serializes slide sources and figure captions into markdown', () => {

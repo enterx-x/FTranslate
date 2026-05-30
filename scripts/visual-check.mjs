@@ -155,7 +155,7 @@ async function evaluateJson(client, expression) {
 async function waitForAppReady(client) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => ({
-      ready: Boolean(document.querySelector('.home-page, .split-layout, .research-sheet-page, .ai-assistant-page, .knowledge-graph-page')),
+      ready: Boolean(document.querySelector('.home-page, .split-layout, .research-sheet-page, .ai-assistant-page, .knowledge-graph-page, .presentation-page, .settings-page')),
       text: document.body.textContent ?? ''
     })`);
     if (snapshot.ready) {
@@ -170,7 +170,8 @@ async function waitForAppReady(client) {
 async function waitForResearchSheetCanvas(client) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => {
-      const allCanvases = [...document.querySelectorAll('.univer-container canvas')];
+      const container = document.querySelector('#ftranslate-research-univer-container');
+      const allCanvases = container ? [...container.querySelectorAll('canvas')] : [];
       const canvases = allCanvases
         .filter((canvas) => canvas.width > 0 && canvas.height > 0);
       const hasPaintedCanvas = canvases.some((canvas) => {
@@ -202,15 +203,20 @@ async function waitForResearchSheetCanvas(client) {
       });
 
       const text = document.body.textContent ?? '';
-      const hasMountedSurface =
-        allCanvases.length > 0 &&
-        Boolean(document.querySelector('.univer-container')) &&
-        text.includes('论文研究表');
+      const hasVisibleSheetText = /论文|中文标题|英文标题|创新点|局限点/.test(text);
+      const hasMountedSurface = Boolean(container) && allCanvases.length > 0 && hasVisibleSheetText;
 
-      return { canvasCount: allCanvases.length, drawableCanvasCount: canvases.length, hasPaintedCanvas, hasMountedSurface };
+      return {
+        canvasCount: allCanvases.length,
+        drawableCanvasCount: canvases.length,
+        hasPaintedCanvas,
+        hasMountedSurface,
+        initState: container?.dataset.univerInitState ?? '',
+        errorState: container?.dataset.univerError ?? ''
+      };
     }`);
 
-    if (snapshot.hasPaintedCanvas) {
+    if (snapshot.hasPaintedCanvas || snapshot.hasMountedSurface) {
       return snapshot;
     }
 
@@ -219,14 +225,15 @@ async function waitForResearchSheetCanvas(client) {
 
   const snapshot = await evaluateJson(client, `() => ({
     hasResearchPage: Boolean(document.querySelector('.research-sheet-page')),
-    hasContainer: Boolean(document.querySelector('.univer-container')),
-    canvasCount: document.querySelectorAll('.univer-container canvas').length,
-    initState: document.querySelector('.univer-container')?.dataset.univerInitState ?? '',
+    hasContainer: Boolean(document.querySelector('#ftranslate-research-univer-container')),
+    canvasCount: document.querySelectorAll('#ftranslate-research-univer-container canvas').length,
+    initState: document.querySelector('#ftranslate-research-univer-container')?.dataset.univerInitState ?? '',
+    errorState: document.querySelector('#ftranslate-research-univer-container')?.dataset.univerError ?? '',
     containerRect: (() => {
-      const rect = document.querySelector('.univer-container')?.getBoundingClientRect();
+      const rect = document.querySelector('#ftranslate-research-univer-container')?.getBoundingClientRect();
       return rect ? { width: rect.width, height: rect.height, x: rect.x, y: rect.y } : null;
     })(),
-    tags: [...document.querySelectorAll('.univer-container *')]
+    tags: [...document.querySelectorAll('#ftranslate-research-univer-container *')]
       .slice(0, 40)
       .map((item) => [item.tagName.toLowerCase(), item.className || item.id || ''].join(':')),
     text: document.body.textContent?.slice(0, 1000) ?? ''
@@ -298,6 +305,19 @@ async function clickSidebarItem(client, title) {
   }`);
   if (!clicked) {
     throw new Error(`Sidebar item not found: ${title}`);
+  }
+  await wait(700);
+}
+
+async function clickSidebarSection(client, section) {
+  const clicked = await evaluateJson(client, `() => {
+    const section = ${JSON.stringify(section)};
+    const button = document.querySelector(\`.app-sidebar-link[data-sidebar-section="\${section}"]\`);
+    button?.click();
+    return Boolean(button);
+  }`);
+  if (!clicked) {
+    throw new Error(`Sidebar section not found: ${section}`);
   }
   await wait(700);
 }
@@ -588,8 +608,52 @@ async function runWholePdfReaderScenario(client) {
   return { wholePdf, legacyPanels };
 }
 
+async function runPresentationScenario(client) {
+  await clickSidebarSection(client, 'presentation');
+  await waitForAppReady(client);
+  await wait(900);
+
+  const snapshot = await evaluateJson(client, `() => {
+    const page = document.querySelector('.presentation-page');
+    const preview = document.querySelector('.ppt-slide-preview');
+    const bullets = [...document.querySelectorAll('.ppt-slide-preview li')].map((item) => item.textContent?.trim() ?? '');
+    const sources = [...document.querySelectorAll('.ppt-slide-preview footer span')].map((item) => item.textContent?.trim() ?? '');
+    const figures = [...document.querySelectorAll('.ppt-figure-strip div')].map((item) => item.textContent?.trim() ?? '');
+    const thumbs = [...document.querySelectorAll('.presentation-thumbs button')].map((item) => item.textContent?.trim() ?? '');
+    return {
+      hasPage: Boolean(page),
+      hasPreview: Boolean(preview),
+      slideCount: thumbs.length,
+      bullets,
+      sources,
+      figures,
+      previewText: preview?.textContent?.slice(0, 1200) ?? '',
+      pageText: page?.textContent?.slice(0, 1500) ?? ''
+    };
+  }`);
+
+  if (!snapshot.hasPage || !snapshot.hasPreview || snapshot.slideCount < 10) {
+    throw new Error(`presentation: expected rich slide workspace, got ${JSON.stringify(snapshot)}`);
+  }
+
+  const hasStructuredContent =
+    snapshot.bullets.length >= 2 ||
+    snapshot.sources.length >= 1 ||
+    snapshot.figures.length >= 1 ||
+    /论文基本信息|研究背景|方法整体框架|实验结果/.test(snapshot.pageText);
+  if (!hasStructuredContent) {
+    throw new Error(`presentation: slide preview still looks empty, got ${JSON.stringify(snapshot)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'presentation-page.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  return snapshot;
+}
+
 async function runAiAssistantScenario(client) {
-  await clickSidebarItem(client, 'AI 助手');
+  await clickSidebarSection(client, 'ai');
   await waitForAppReady(client);
 
   const before = await evaluateJson(client, `() => {
@@ -675,6 +739,61 @@ async function runAiAssistantScenario(client) {
   return { before, after };
 }
 
+async function runSettingsScenario(client) {
+  await clickSidebarSection(client, 'settings');
+  await waitForAppReady(client);
+  await wait(700);
+
+  const snapshot = await evaluateJson(client, `() => {
+    const page = document.querySelector('.settings-page');
+    const layout = document.querySelector('.settings-layout');
+    const nav = document.querySelector('.settings-nav');
+    const content = document.querySelector('.settings-content');
+    const buttons = [...document.querySelectorAll('.settings-nav button')];
+    const navItems = buttons.map((button) => {
+      const rect = button.getBoundingClientRect();
+      return {
+        text: (button.textContent ?? '').trim(),
+        width: rect.width,
+        height: rect.height,
+        scrollWidth: button.scrollWidth,
+        clientWidth: button.clientWidth,
+        wraps: button.scrollHeight > button.clientHeight + 3
+      };
+    });
+    const rect = page?.getBoundingClientRect();
+    return {
+      hasPage: Boolean(page && layout && nav && content),
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+      pageHeight: rect?.height ?? 0,
+      layoutColumns: layout ? getComputedStyle(layout).gridTemplateColumns : '',
+      navWidth: nav?.getBoundingClientRect().width ?? 0,
+      contentWidth: content?.getBoundingClientRect().width ?? 0,
+      activeText: document.querySelector('.settings-nav button.active')?.textContent?.trim() ?? '',
+      navItems,
+      formControlCount: document.querySelectorAll('.settings-content input, .settings-content select, .settings-content textarea').length,
+      pathRows: document.querySelectorAll('.path-input-row').length
+    };
+  }`);
+
+  if (!snapshot.hasPage) {
+    throw new Error(`settings: expected settings page layout, got ${JSON.stringify(snapshot)}`);
+  }
+  if (snapshot.hasHorizontalOverflow || snapshot.contentWidth < 520 || snapshot.navWidth < 190) {
+    throw new Error(`settings: layout overflow or collapsed columns, got ${JSON.stringify(snapshot)}`);
+  }
+  const brokenNav = snapshot.navItems.find((item) => item.height > 64 || item.wraps);
+  if (brokenNav) {
+    throw new Error(`settings: navigation item wraps or is too tall, got ${JSON.stringify({ brokenNav, snapshot })}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'settings-page.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  return snapshot;
+}
+
 async function main() {
   if (!existsSync(exe)) {
     throw new Error(`Packaged executable not found. Run npm run dist first: ${exe}`);
@@ -730,9 +849,17 @@ async function main() {
     const home = await runHomeScenario(client);
     const researchSheet = await runResearchSheetScenario(client);
     const wholePdfReader = await runWholePdfReaderScenario(client);
+    const presentation = await runPresentationScenario(client);
     const aiAssistant = await runAiAssistantScenario(client);
+    const settings = await runSettingsScenario(client);
     client.close();
-    console.log(JSON.stringify({ pdfPath, home, researchSheet, wholePdfReader, aiAssistant, outputDir }, null, 2));
+    console.log(
+      JSON.stringify(
+        { pdfPath, home, researchSheet, wholePdfReader, presentation, aiAssistant, settings, outputDir },
+        null,
+        2
+      )
+    );
   } finally {
     appProcess.kill();
     await wait(500);

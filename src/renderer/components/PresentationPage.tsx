@@ -79,7 +79,7 @@ export function PresentationPage(props: PresentationPageProps) {
         </header>
         <section className="empty-state presentation-empty">
           <h2>暂无 PPT 草稿</h2>
-          <p>第一阶段会从 PDF.js 文本层提取标题、章节、关键段落和 Fig./Table caption，生成可编辑的大纲和 HTML 预览。</p>
+          <p>第一阶段会从 PDF.js 文本层提取标题、章节、关键段落和 Fig./Table caption，生成可编辑的大纲、HTML 预览和 Markdown。</p>
         </section>
       </main>
     );
@@ -124,7 +124,8 @@ export function PresentationPage(props: PresentationPageProps) {
             >
               <span>{index + 1}</span>
               <strong>{slide.title}</strong>
-              <small>{slide.type}</small>
+              <small>{slide.section ?? slide.type}</small>
+              <em>{slide.bullets[0] ?? '封面 / 占位页'}</em>
             </button>
           ))}
         </aside>
@@ -148,28 +149,33 @@ export function PresentationPage(props: PresentationPageProps) {
           </div>
 
           {previewMode === 'slide' && selectedSlide ? (
-            <article className="ppt-slide-preview">
-              <span className="ppt-slide-kicker">{selectedSlide.type}</span>
+            <article className={`ppt-slide-preview ppt-slide-${selectedSlide.type}`}>
+              <header className="ppt-slide-topline">
+                <span className="ppt-slide-kicker">{selectedSlide.section ?? selectedSlide.type}</span>
+                <span className="ppt-slide-confidence">{selectedSlide.confidence === 'ai-enhanced' ? 'AI 增强' : '本地草稿'}</span>
+              </header>
               <h2>{selectedSlide.title}</h2>
               {selectedSlide.subtitle ? <p className="ppt-slide-subtitle">{selectedSlide.subtitle}</p> : null}
-              <ul>
-                {selectedSlide.bullets.map((bullet, index) => (
-                  <li key={`${selectedSlide.id}-bullet-${index}`}>{bullet}</li>
-                ))}
-              </ul>
-              {selectedSlide.figures.length > 0 ? (
-                <div className="ppt-figure-strip">
-                  {selectedSlide.figures.map((figure) => (
-                    <div key={figure.imageId}>
-                      <strong>{figure.imageId}</strong>
-                      <span>{figure.caption}</span>
-                      <small>p. {figure.pageNumber}</small>
-                    </div>
+              <div className="ppt-slide-body">
+                <ul>
+                  {selectedSlide.bullets.map((bullet, index) => (
+                    <li key={`${selectedSlide.id}-bullet-${index}`}>{bullet}</li>
                   ))}
-                </div>
-              ) : null}
+                </ul>
+                {selectedSlide.figures.length > 0 ? (
+                  <div className="ppt-figure-strip">
+                    {selectedSlide.figures.map((figure) => (
+                      <div key={figure.imageId} className={figure.selected === false ? 'muted-figure' : ''}>
+                        <strong>{figure.imageId}</strong>
+                        <span>{figure.caption}</span>
+                        <small>p. {figure.pageNumber} · {figure.suggestedReason ?? figure.suggestedSlide}</small>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <footer>
-                {selectedSlide.sourceRefs.slice(0, 2).map((ref, index) => (
+                {selectedSlide.sourceRefs.slice(0, 3).map((ref, index) => (
                   <span key={`${selectedSlide.id}-ref-${index}`}>来源：p. {ref.pageNumber} · {ref.section}</span>
                 ))}
               </footer>
@@ -183,7 +189,10 @@ export function PresentationPage(props: PresentationPageProps) {
           {selectedSlide ? (
             <>
               <section className="presentation-card">
-                <h2>当前页内容</h2>
+                <div className="presentation-card-title-row">
+                  <h2>当前页内容</h2>
+                  <span className="badge">{selectedSlide.type}</span>
+                </div>
                 <label>
                   标题
                   <input value={selectedSlide.title} onChange={(event) => updateSlide({ title: event.target.value })} />
@@ -226,7 +235,7 @@ export function PresentationPage(props: PresentationPageProps) {
                     {draft.figures.map((figure) => (
                       <article key={figure.imageId}>
                         <strong>{figure.caption}</strong>
-                        <span>p. {figure.pageNumber} · 建议用于 {figure.suggestedSlide}</span>
+                        <span>p. {figure.pageNumber} · 建议：{figure.suggestedReason ?? figure.suggestedSlide}</span>
                       </article>
                     ))}
                   </div>
