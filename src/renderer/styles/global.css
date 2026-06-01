@@ -6797,3 +6797,272 @@ body.is-resizing-layout .layout-resize-handle::after {
 .settings-page .path-input-row input {
   min-width: 0;
 }
+
+/* Final visual pass for the dashboard/settings/PPT surfaces. These scoped
+   overrides keep the existing handlers and storage untouched while reducing
+   the oversized blank-card feel reported during visual review. */
+.home-page.home-hub-page {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 14px 18px 18px;
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.78), rgba(238, 241, 246, 0.92)),
+    var(--app-bg);
+}
+
+.home-page.home-hub-page .home-hero {
+  align-items: center;
+  min-height: 86px;
+  padding: 16px 20px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background:
+    radial-gradient(circle at 92% 20%, rgba(124, 58, 237, 0.14), transparent 28%),
+    linear-gradient(135deg, #ffffff 0%, #f9fafc 62%, #f3f1ff 100%);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+}
+
+.home-page.home-hub-page .home-header-mark {
+  width: 28px;
+  height: 28px;
+}
+
+.home-page.home-hub-page .home-hero h1 {
+  font-size: clamp(20px, 1.6vw, 26px);
+}
+
+.home-page.home-hub-page .home-dashboard-stats {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.home-page.home-hub-page .home-dashboard-stats article {
+  min-height: 68px;
+  padding: 10px 13px;
+  border-color: rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.home-page.home-hub-page .home-module-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.home-page.home-hub-page .home-module-card {
+  min-height: 172px;
+  padding: 15px;
+  border-color: rgba(15, 23, 42, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98)),
+    #ffffff;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.07);
+}
+
+.home-page.home-hub-page .home-module-card p {
+  max-height: 58px;
+  color: #475467;
+}
+
+.home-page.home-hub-page .home-overview-panel {
+  padding: 13px 15px;
+  border-color: rgba(15, 23, 42, 0.09);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+}
+
+.home-page.home-hub-page .home-recent-list {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.settings-page {
+  gap: 12px;
+  padding: 14px 18px 18px;
+}
+
+.settings-page .settings-header {
+  min-height: 86px;
+  padding: 16px 20px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background:
+    radial-gradient(circle at 94% 18%, rgba(124, 58, 237, 0.1), transparent 26%),
+    #ffffff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.07);
+}
+
+.settings-page .settings-header .panel-title-icon {
+  width: 30px;
+  height: 30px;
+}
+
+.settings-page .settings-layout {
+  grid-template-columns: clamp(216px, 15vw, 238px) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.settings-page .settings-nav {
+  padding: 10px;
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+}
+
+.settings-page .settings-nav button {
+  min-height: 42px;
+  padding: 7px 10px;
+  border-radius: 10px;
+}
+
+.settings-page .settings-card {
+  min-height: min(520px, calc(100vh - 188px));
+  padding: 18px 20px;
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+}
+
+.presentation-workbench {
+  grid-template-columns: minmax(188px, 0.74fr) minmax(520px, 2.15fr) minmax(320px, 0.95fr);
+}
+
+.ppt-slide-preview {
+  width: min(820px, 96%);
+  padding: clamp(24px, 3vw, 42px);
+  align-content: start;
+}
+
+.ppt-slide-preview h2 {
+  margin-bottom: 12px;
+  font-size: clamp(25px, 2.6vw, 38px);
+}
+
+.ppt-slide-preview ul {
+  gap: 7px;
+  font-size: clamp(14px, 1.25vw, 17px);
+  line-height: 1.42;
+}
+
+.ppt-slide-preview li {
+  max-width: 96%;
+}
+
+.ppt-figure-strip {
+  margin-top: 12px;
+}
+
+.ppt-slide-preview footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid #edf0f5;
+}
+
+@media (max-width: 1460px) {
+  .home-page.home-hub-page .home-module-grid,
+  .home-page.home-hub-page .home-dashboard-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .presentation-workbench {
+    grid-template-columns: minmax(170px, 0.8fr) minmax(440px, 1.9fr) minmax(300px, 1fr);
+  }
+}
+
+@media (max-height: 820px) {
+  .home-page.home-hub-page .home-module-card {
+    min-height: 152px;
+  }
+
+  .home-page.home-hub-page .home-module-card p {
+    max-height: 42px;
+  }
+
+  .settings-page .settings-card {
+    min-height: min(480px, calc(100vh - 174px));
+  }
+}
+
+/* Dashboard stability pass: the previous 1460px rule made the dashboard fall
+   back to two columns on common 1366px screens, pushing "最近研究进度" below the
+   viewport. Keep the workstation overview dense unless the window is truly
+   narrow. */
+@media (max-width: 1460px) {
+  .home-page.home-hub-page .home-dashboard-stats {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .home-page.home-hub-page .home-module-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1180px) {
+  .home-page.home-hub-page .home-dashboard-stats {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .home-page.home-hub-page .home-module-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .home-page.home-hub-page .home-dashboard-stats {
+    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  }
+
+  .home-page.home-hub-page .home-module-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-height: 820px) and (min-width: 981px) {
+  .home-page.home-hub-page {
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 12px;
+  }
+
+  .home-page.home-hub-page .home-hero {
+    min-height: 72px;
+    padding: 10px 16px;
+  }
+
+  .home-page.home-hub-page .home-dashboard-stats article {
+    min-height: 58px;
+    padding: 8px 11px;
+  }
+
+  .home-page.home-hub-page .home-module-card {
+    min-height: 136px;
+    padding: 11px 12px;
+  }
+
+  .home-page.home-hub-page .home-module-card h2 {
+    margin: 5px 0;
+    font-size: 15px;
+  }
+
+  .home-page.home-hub-page .home-module-card p {
+    max-height: 36px;
+    line-height: 1.45;
+  }
+
+  .home-page.home-hub-page .home-module-meta {
+    margin-top: 6px;
+  }
+
+  .home-page.home-hub-page .home-module-actions {
+    padding-top: 6px;
+  }
+
+  .home-page.home-hub-page .home-overview-panel {
+    padding: 10px 12px;
+  }
+
+  .home-page.home-hub-page .home-recent-item {
+    min-height: 48px;
+  }
+}
+
+.settings-page .settings-header {
+  min-height: 76px;
+}
+
+.settings-page .settings-card {
+  min-height: 0;
+}

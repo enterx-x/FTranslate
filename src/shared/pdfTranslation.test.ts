@@ -17,6 +17,7 @@ describe('PDFMathTranslate command helpers', () => {
       pdfPath: 'D:/papers/robot paper.pdf',
       outputDir: 'C:/Users/me/AppData/Roaming/PDF Translation Reader/translations/paper-1',
       mode: 'dual',
+      promptPath: 'C:/cache/ftranslate-pdf2zh-prompt.txt',
       settings: {
         provider: 'kimi',
         baseURL: 'https://api.moonshot.cn/v1',
@@ -35,7 +36,9 @@ describe('PDFMathTranslate command helpers', () => {
         '-lo',
         'zh',
         '-o',
-        'C:/Users/me/AppData/Roaming/PDF Translation Reader/translations/paper-1'
+        'C:/Users/me/AppData/Roaming/PDF Translation Reader/translations/paper-1',
+        '--prompt',
+        'C:/cache/ftranslate-pdf2zh-prompt.txt'
       ])
     );
     expect(command.args).not.toContain('--no-mono');
@@ -45,6 +48,8 @@ describe('PDFMathTranslate command helpers', () => {
     expect(command.env.PDF_TRANSLATION_READER_OPENAI_TEMPERATURE).toBe('0.6');
     expect(command.env.PDF_TRANSLATION_READER_DISABLE_THINKING).toBe('1');
     expect(command.env.PDF_TRANSLATION_READER_OPENAI_TIMEOUT).toBe('120');
+    expect(command.env.PYTHONUTF8).toBe('1');
+    expect(command.env.PYTHONIOENCODING).toBe('utf-8');
     expect(command.args).toEqual(expect.arrayContaining(['-t', '1']));
     expect(command.args.join(' ')).not.toContain('sk-');
   });
@@ -272,6 +277,9 @@ describe('PDFMathTranslate command helpers', () => {
     );
     expect(formatPdfTranslationProgressMessage('\r 62%|██████▏|5/8 [01:02<00:30, 10.1s/it]')).toBe(
       'PDF 翻译进度：62%，5/8 页'
+    );
+    expect(formatPdfTranslationProgressMessage('0%|| 0/8 [00:00<?, ?it/s]')).toBe(
+      'PDF 翻译进度：0%，0/8 页'
     );
   });
 

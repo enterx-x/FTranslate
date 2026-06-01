@@ -165,7 +165,7 @@ describe('presentationOutline', () => {
     expect(draft.slides.every((slide) => slide.sourceRefs.every((ref) => ref.section !== 'References'))).toBe(true);
 
     const background = draft.slides.find((slide) => slide.type === 'background');
-    expect(background?.bullets.length).toBeGreaterThanOrEqual(3);
+    expect(background?.bullets.length).toBeGreaterThanOrEqual(2);
     expect(background?.sourceRefs.map((ref) => ref.pageNumber)).toContain(2);
 
     const method = draft.slides.find((slide) => slide.type === 'method');
@@ -174,6 +174,9 @@ describe('presentationOutline', () => {
       selected: true,
       suggestedReason: expect.stringContaining('方法')
     });
+
+    const formula = draft.slides.find((slide) => slide.type === 'formula');
+    expect(formula?.bullets.join(' ')).toContain('L = L_{data}');
 
     const experiments = draft.slides.find((slide) => slide.type === 'experiments');
     expect(experiments?.figures[0]).toMatchObject({
@@ -222,11 +225,145 @@ describe('presentationOutline', () => {
     expect(slideTypes).not.toContain('formula');
   });
 
+  it('does not use late method fragments as introduction fallback', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [paper({ englishTitle: 'Robot Foundation Model' })],
+      blocks: [
+        block({
+          section: 'Abstract',
+          page: 1,
+          original:
+            'We present a new robot foundation model that follows language instructions and generalizes across diverse tasks.'
+        }),
+        block({
+          section: 'A. Subtask instructions',
+          page: 4,
+          original:
+            'Following prior work, we include intermediate higher-level text that captures the next semantic subtask as part of the prompt.'
+        })
+      ],
+      targetSlideCount: 12
+    });
+
+    const background = draft.slides.find((slide) => slide.type === 'background');
+    expect(background?.sourceRefs.some((ref) => ref.pageNumber === 4)).toBe(false);
+    expect(background?.bullets.join(' ')).toContain('robot foundation model');
+  });
+
+  it('filters pseudocode and formula fragments from narrative slides', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [paper({ englishTitle: 'Async Robot Policy' })],
+      blocks: [
+        block({
+          section: 'Experiments',
+          page: 5,
+          original:
+            'Experiments evaluate the policy across multiple robots and compare task success, failure recovery, and compositional generalization.'
+        }),
+        block({
+          section: 'Results',
+          page: 7,
+          original:
+            '10: end if 11: if H steps elapsed since last inference then 12: a_t follows the policy and returns asynchronously.'
+        }),
+        block({
+          section: 'Results',
+          page: 7,
+          original: 'a_{t:t+H} ~ pi_theta(a | o_{t-T:t}, C) for t = 0, 1, 2'
+        })
+      ],
+      targetSlideCount: 12
+    });
+
+    const pageText = draft.slides.flatMap((slide) => slide.bullets).join(' ');
+    expect(pageText).toContain('Experiments evaluate');
+    expect(pageText).not.toContain('end if');
+    expect(pageText).not.toContain('pi_theta');
+  });
+
+  it('filters figure diagram labels from seminar bullets', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [paper({ englishTitle: 'Robot Policy Architecture' })],
+      blocks: [
+        block({
+          section: 'III. METHOD',
+          page: 4,
+          original:
+            'The proposed architecture conditions a robot policy on language, visual observations, and task metadata to improve long-horizon manipulation.'
+        }),
+        block({
+          section: 'III. METHOD',
+          page: 5,
+          original: 'Subtask: pick up the peeler.'
+        }),
+        block({
+          section: 'III. METHOD',
+          page: 5,
+          original: 'Language Instructions Subgoal Images Episode Metadata Action Expert World Model.'
+        })
+      ],
+      targetSlideCount: 12
+    });
+
+    const pageText = draft.slides.flatMap((slide) => slide.bullets).join(' ');
+
+    expect(pageText).toContain('proposed architecture');
+    expect(pageText).not.toContain('Subtask: pick up the peeler');
+    expect(pageText).not.toContain('Language Instructions Subgoal Images');
+  });
+
+  it('strips spaced PDF section heading noise before creating bullets', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [paper({ englishTitle: 'Robot Training Recipe' })],
+      blocks: [
+        block({
+          section: 'III. METHOD',
+          page: 5,
+          original:
+            'T HE π0.7 M ODEL AND T RAINING R ECIPE We now discuss how we incorporate different context by training on diverse data and model components.'
+        })
+      ],
+      targetSlideCount: 12
+    });
+
+    const pageText = draft.slides.flatMap((slide) => slide.bullets).join(' ');
+
+    expect(pageText).toContain('We now discuss');
+    expect(pageText).not.toContain('T HE π0.7 M ODEL');
+  });
+
+  it('splits long single-sentence PDF paragraphs into more useful seminar bullets', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [paper({ englishTitle: 'Long Sentence Robot Paper' })],
+      blocks: [
+        block({
+          section: 'Abstract',
+          page: 1,
+          original:
+            'We present a system for long-horizon mobile manipulation in cluttered scenes, including multi-stage navigation, object interaction, safety monitoring, and recovery from partial failures without task-specific fine-tuning.'
+        })
+      ],
+      targetSlideCount: 12
+    });
+
+    const info = draft.slides.find((slide) => slide.type === 'info');
+    const pageText = info?.bullets.join(' ') ?? '';
+
+    expect(info?.bullets.length).toBeGreaterThanOrEqual(2);
+    expect(pageText).toContain('multi-stage navigation');
+    expect(pageText).toContain('partial failures');
+  });
+
   it('serializes slide sources and figure captions into markdown', () => {
     const draft = buildPresentationDraft({
       papers: [paper({ englishTitle: 'Minimal Paper' })],
       blocks: [
-        block({ section: 'Abstract', page: 1, original: 'This paper studies safe path planning.' }),
+        block({
+          section: 'Abstract',
+          page: 1,
+          original:
+            'This paper studies safe path planning for mobile robots and proposes a reproducible evaluation protocol.'
+        }),
         block({ type: 'caption', section: 'Results', page: 5, original: 'Table 1. Main quantitative results.' })
       ]
     });

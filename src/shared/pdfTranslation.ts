@@ -12,6 +12,7 @@ export interface PdfTranslationCommandInput {
   outputDir: string;
   mode: PdfTranslationOutputMode;
   ignoreCache?: boolean;
+  promptPath?: string;
   settings: AiProviderSettings;
 }
 
@@ -92,6 +93,10 @@ export function buildPdf2zhCommand(input: PdfTranslationCommandInput): PdfTransl
     args.push('--ignore-cache');
   }
 
+  if (input.promptPath) {
+    args.push('--prompt', input.promptPath);
+  }
+
   const runtimeOptions = resolveAiRuntimeOptions(input.settings);
   const disableKimiThinking = isKimiK2Model(input.settings) && runtimeOptions.thinkingMode !== 'enabled';
   const pdfTranslationTemperature =
@@ -108,7 +113,12 @@ export function buildPdf2zhCommand(input: PdfTranslationCommandInput): PdfTransl
       PDF_TRANSLATION_READER_OPENAI_TEMPERATURE: String(pdfTranslationTemperature),
       PDF_TRANSLATION_READER_DISABLE_THINKING: disableKimiThinking ? '1' : '0',
       PDF_TRANSLATION_READER_OPENAI_TIMEOUT: String(runtimeOptions.timeoutSeconds),
-      PDF_TRANSLATION_READER_OPENAI_MAX_RETRIES: String(runtimeOptions.maxRetries)
+      PDF_TRANSLATION_READER_OPENAI_MAX_RETRIES: String(runtimeOptions.maxRetries),
+      // Windows 上 Python 子进程默认可能使用系统代码页输出 tqdm / 错误信息。
+      // 强制 UTF-8 能减少进度条和模型错误在 Electron UI 中显示成乱码的概率。
+      PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONLEGACYWINDOWSSTDIO: '0'
     }
   };
 }
@@ -212,7 +222,9 @@ export function formatPdfTranslationProgressMessage(value: string): string {
     return '当前模型限制 temperature 参数。请在 PDF 翻译 API 高级选项中使用该模型允许的数值，例如 Kimi K2.5 非思考模式通常为 0.6。';
   }
 
-  const tqdmMatch = cleaned.match(/(\d{1,3})%\|.*?\|\s*(\d+)\s*\/\s*(\d+)/u);
+  const tqdmMatch =
+    cleaned.match(/(\d{1,3})%\|.*?\|\s*(\d+)\s*\/\s*(\d+)/u) ??
+    cleaned.match(/(\d{1,3})%[^\d\r\n]*(\d+)\s*\/\s*(\d+)/u);
   if (tqdmMatch) {
     const percent = Math.min(100, Math.max(0, Number(tqdmMatch[1])));
     return `PDF 翻译进度：${percent}%，${tqdmMatch[2]}/${tqdmMatch[3]} 页`;

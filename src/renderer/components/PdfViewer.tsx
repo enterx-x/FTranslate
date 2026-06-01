@@ -16,11 +16,8 @@ import {
   getWheelZoomScale,
   type PdfZoomAnchor
 } from '../lib/pdfInteraction';
-import {
-  buildPdfDocumentOutline,
-  type ExtractedPdfBlock,
-  type PositionedPdfTextItem
-} from '../lib/pdfTextStructure';
+import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
+import { extractPdfBlocksFromDocument } from '../lib/pdfOutlineExtraction';
 import { buildHighlightOverlayLines, type HighlightRectLike } from '../lib/pdfHighlightOverlay';
 import { buildOfficialFindFragments } from '../lib/pdfFindQuery';
 import {
@@ -280,7 +277,7 @@ export function PdfViewer(props: PdfViewerProps) {
             setFindReadyToken((value) => value + 1);
           }
         });
-        void extractPdfOutline(pdfDocument, () => cancelled).then((outline) => {
+        void extractPdfBlocksFromDocument(pdfDocument, () => cancelled).then((outline) => {
           if (!cancelled) {
             propsRef.current.onExtractedTextReady?.(outline);
           }
@@ -908,60 +905,6 @@ function getHighlightRectKey(rect: HighlightRectLike): string {
   return [rect.left, rect.top, rect.right, rect.bottom]
     .map((value) => Math.round(value * 2) / 2)
     .join(':');
-}
-
-async function extractPdfOutline(
-  pdfDocument: PDFDocumentProxy,
-  isCancelled: () => boolean
-): Promise<ExtractedPdfBlock[]> {
-  const outlinePages: Array<{ page: number; items: PositionedPdfTextItem[] }> = [];
-
-  for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
-    if (isCancelled()) {
-      return [];
-    }
-
-    const page = await pdfDocument.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 1 });
-    const textContent = await page.getTextContent();
-    outlinePages.push({
-      page: pageNumber,
-      items: toPositionedTextItems(textContent.items, viewport, pageNumber)
-    });
-  }
-
-  return buildPdfDocumentOutline(outlinePages);
-}
-
-function toPositionedTextItems(
-  items: unknown[],
-  viewport: pdfjsLib.PageViewport,
-  pageNumber: number
-): PositionedPdfTextItem[] {
-  return items
-    .map((item) => {
-      const record = item as {
-        str?: string;
-        transform?: number[];
-        width?: number;
-        height?: number;
-      };
-
-      if (!record.str?.trim() || !record.transform || record.transform.length < 6) {
-        return null;
-      }
-
-      const [x, y] = viewport.convertToViewportPoint(record.transform[4], record.transform[5]);
-      return {
-        str: record.str,
-        x,
-        y,
-        width: Math.max(1, record.width ?? 1),
-        height: Math.max(1, record.height ?? 1),
-        page: pageNumber
-      };
-    })
-    .filter((item): item is PositionedPdfTextItem => Boolean(item));
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {

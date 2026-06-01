@@ -72,6 +72,8 @@ dist/PDF Translation Reader Setup 0.1.0.exe
 
 PDFMathTranslate sidecar 会优先查找系统中的 `pdf2zh` / `pdf2zh_next`。如果找不到，会尝试在 Electron 用户数据目录中创建私有 Python 翻译环境。
 
+生成双语 PDF 时，应用会为 pdf2zh 写入一个本地学术翻译 prompt，用来约束模型保留公式占位符、引用编号、Fig./Table 编号、DOI、URL 和 References / Bibliography 条目结构。Windows 子进程会强制使用 UTF-8 环境，减少进度条和接口错误在界面中显示乱码。
+
 默认双语 PDF 缓存位置：
 
 ```text
@@ -172,7 +174,7 @@ PDF 阅读页包含轻量笔记编辑器：
 
 已支持：
 
-- 从当前 PDF 的文本块生成组会 PPT 草稿；
+- 从当前 PDF 的文本块生成组会 PPT 草稿；如果缓存中的文本块尚未就绪，会主动用 PDF.js 从当前 PDF 重新抽取正文、章节和 Fig. / Figure / Table caption；
 - 抽取 Abstract、Introduction、Method、Experiments、Conclusion 等章节信息；
 - 默认生成 12 页组会结构：封面、论文信息、背景、Related Work、方法、公式、实验、结果、创新、局限、启发和总结；
 - 识别 Fig. / Figure / Table caption 作为图表候选；

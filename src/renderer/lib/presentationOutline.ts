@@ -343,7 +343,7 @@ function buildContentSlide(options: {
   fallback: string;
   speakerNote: string;
 }): PresentationSlide {
-  const bullets = refsToBullets(options.refs);
+  const bullets = refsToBullets(options.refs, { allowFormulaText: options.type === 'formula' });
 
   return {
     id: options.id,
@@ -406,6 +406,7 @@ function bucketSections(blocks: ExtractedPdfBlock[]): SectionBuckets {
   blocks
     .filter((block) => block.type === 'paragraph' || block.type === 'formula')
     .filter((block) => !isReferenceSection(block.section))
+    .filter((block) => isUsablePresentationNarrativeBlock(block))
     .forEach((block) => {
       const ref = toSourceRef(block);
       const sectionText = `${block.section} ${block.original}`;
@@ -428,10 +429,14 @@ function bucketSections(blocks: ExtractedPdfBlock[]): SectionBuckets {
         buckets.conclusion.refs.push(ref);
       } else if (INTRO_SECTION_PATTERN.test(sectionText)) {
         buckets.introduction.refs.push(ref);
-      } else if (buckets.introduction.refs.length < 4) {
+      } else if (block.page <= 2 && buckets.introduction.refs.length < 4) {
         buckets.introduction.refs.push(ref);
       }
     });
+
+  if (buckets.introduction.refs.length === 0 && buckets.abstract.refs.length > 0) {
+    buckets.introduction.refs.push(...buckets.abstract.refs.slice(0, 3));
+  }
 
   // 实验和结果章节在论文里经常合并，互相补位可以让组会页更稳定。
   if (buckets.results.refs.length === 0 && buckets.experiments.refs.length > 0) {
@@ -452,7 +457,7 @@ function toSourceRef(block: ExtractedPdfBlock): PresentationSourceRef {
   return {
     pageNumber: block.page,
     section: block.section || `Page ${block.page}`,
-    text: normalizeInlineText(block.original, 360)
+    text: normalizeInlineText(stripSpacedHeadingPrefix(block.original), 360)
   };
 }
 
@@ -460,7 +465,7 @@ function pickRefs(buckets: SectionBucket[], limit: number): PresentationSourceRe
   const refs: PresentationSourceRef[] = [];
 
   buckets.forEach((bucket) => {
-    bucket.refs.forEach((ref) => {
+    [...bucket.refs].sort((left, right) => scorePresentationRef(right) - scorePresentationRef(left)).forEach((ref) => {
       if (refs.length < limit && !refs.some((item) => item.text === ref.text && item.pageNumber === ref.pageNumber)) {
         refs.push(ref);
       }
@@ -478,9 +483,14 @@ function pickFigures(
   return figures.filter((figure) => figure.suggestedSlide === type).slice(0, limit);
 }
 
-function refsToBullets(refs: PresentationSourceRef[]): string[] {
+function refsToBullets(
+  refs: PresentationSourceRef[],
+  options: { allowFormulaText?: boolean } = {}
+): string[] {
   return refs.flatMap((ref) =>
-    splitIntoShortBullets(ref.text).map((bullet) => `${bullet}（p. ${ref.pageNumber}）`)
+    splitIntoShortBullets(ref.text)
+      .filter((bullet) => isUsefulBulletText(bullet) || (options.allowFormulaText && isUsefulFormulaText(bullet)))
+      .map((bullet) => `${bullet}（p. ${ref.pageNumber}）`)
   );
 }
 
@@ -491,8 +501,46 @@ function splitIntoShortBullets(text: string): string[] {
     .map((sentence) => sentence.trim())
     .filter(Boolean);
 
-  const chunks = sentences.length > 0 ? sentences : [normalized];
+  const chunks = sentences.length > 1 ? sentences : splitLongSentenceIntoBulletChunks(sentences[0] ?? normalized);
   return chunks.slice(0, 2).map((chunk) => normalizeInlineText(chunk, 150));
+}
+
+function splitLongSentenceIntoBulletChunks(sentence: string): string[] {
+  const normalized = sentence.trim();
+  if (normalized.length <= 145) {
+    return [normalized];
+  }
+
+  const clauses = normalized
+    .split(/(?<=,|;|；)\s+|\s+(?:and|but|while|whereas|because|including|without)\s+/iu)
+    .map((clause) => clause.trim())
+    .filter((clause) => clause.length >= 18);
+
+  if (clauses.length <= 1) {
+    return [normalized];
+  }
+
+  const chunks: string[] = [];
+  let current = '';
+
+  clauses.forEach((clause) => {
+    const next = current ? `${current} ${clause}` : clause;
+    if (next.length <= 135) {
+      current = next;
+      return;
+    }
+
+    if (current) {
+      chunks.push(current);
+    }
+    current = clause;
+  });
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks.length > 0 ? chunks : [normalized];
 }
 
 function limitBullets(bullets: string[], limit: number): string[] {
@@ -507,6 +555,126 @@ function isUsablePresentationBlock(block: ExtractedPdfBlock): boolean {
     return normalizeInlineText(block.original, 999).length >= 4;
   }
   return normalizeInlineText(block.original, 999).length >= 12;
+}
+
+function isUsablePresentationNarrativeBlock(block: ExtractedPdfBlock): boolean {
+  const text = normalizeInlineText(block.original, 1200);
+
+  if (block.type === 'formula') {
+    return isUsefulFormulaText(text);
+  }
+
+  if (text.length < 55 || countTextWords(text) < 8) {
+    return false;
+  }
+
+  if (
+    CAPTION_PATTERN.test(text) ||
+    looksLikePseudoCode(text) ||
+    looksLikeFormulaFragment(text) ||
+    looksLikeFigureLabel(text) ||
+    looksLikeDiagramLabelText(text)
+  ) {
+    return false;
+  }
+
+  return /[.!?。！？]/u.test(text) || countTextWords(text) >= 16;
+}
+
+function isUsefulFormulaText(text: string): boolean {
+  if (looksLikePseudoCode(text) || looksLikeDiagramLabelText(text)) {
+    return false;
+  }
+
+  return /[=+\-*/^_{}]/u.test(text) && countTextWords(text) <= 28;
+}
+
+function isUsefulBulletText(text: string): boolean {
+  const normalized = normalizeInlineText(text, 300);
+  const words = countTextWords(normalized);
+  return (
+    normalized.length >= 24 &&
+    words >= 7 &&
+    !looksLikePseudoCode(normalized) &&
+    !looksLikeFormulaFragment(normalized) &&
+    !looksLikeFigureLabel(normalized) &&
+    !looksLikeDiagramLabelText(normalized)
+  );
+}
+
+function scorePresentationRef(ref: PresentationSourceRef): number {
+  const text = ref.text.toLowerCase();
+  let score = 0;
+
+  if (/\b(we|this paper|our|propose|present|introduce|evaluate|experiment|result|method|model|framework|baseline|improve|challenge)\b/u.test(text)) {
+    score += 4;
+  }
+  if (/\b(problem|limitation|existing|prior|generalization|performance|dataset|task|robot|policy|training)\b/u.test(text)) {
+    score += 2;
+  }
+  if (ref.text.length >= 90 && ref.text.length <= 280) {
+    score += 2;
+  }
+  if (
+    looksLikePseudoCode(ref.text) ||
+    looksLikeFormulaFragment(ref.text) ||
+    looksLikeFigureLabel(ref.text) ||
+    looksLikeDiagramLabelText(ref.text)
+  ) {
+    score -= 8;
+  }
+  if (ref.pageNumber <= 2) {
+    score += 1;
+  }
+
+  return score;
+}
+
+function looksLikePseudoCode(text: string): boolean {
+  const normalized = text.trim();
+  return (
+    /^\d+\s*:/u.test(normalized) ||
+    /\b(end\s+if|for\s+\w+\s*=|if\s+.+\s+then|async|timer elapsed|non-blocking|return\s+)/iu.test(normalized) ||
+    /[▷▶]/u.test(normalized)
+  );
+}
+
+function looksLikeFormulaFragment(text: string): boolean {
+  const symbols = (text.match(/[=<>≤≥≈∼∑∏√^_{}[\]|\\]/gu) ?? []).length;
+  const words = countTextWords(text);
+  return symbols >= 4 && symbols > words * 0.35;
+}
+
+function looksLikeFigureLabel(text: string): boolean {
+  const words = countTextWords(text);
+  if (words > 14) {
+    return false;
+  }
+
+  return /\b(prompt|metadata|subgoal|image|episode|expert|observation|memory|world)\b/iu.test(text);
+}
+
+function looksLikeDiagramLabelText(text: string): boolean {
+  const normalized = normalizeInlineText(text, 500).toLowerCase();
+  const words = countTextWords(normalized);
+  const labelMatches =
+    normalized.match(
+      /\b(subtask|task instruction|prompt|metadata|action expert|world model|high-level policy|language instructions|subgoal images|observation memory|robot data|non-robot data|autonomous data|egocentric human data|demonstration data|episode metadata|quality|actions|noise|current observation)\b/giu
+    ) ?? [];
+  const academicCue =
+    /\b(we|our|this paper|propose|present|introduce|evaluate|experiment|result|method|training|dataset|performance|generalization|capabilities|tasks|robotic foundation model)\b/iu.test(
+      normalized
+    );
+
+  if (words <= 16 && labelMatches.length >= 1 && !academicCue) {
+    return true;
+  }
+
+  return words <= 34 && labelMatches.length >= 3 && !academicCue;
+}
+
+function countTextWords(text: string): number {
+  return text.match(/[\p{L}\p{N}]+/gu)?.length ?? 0;
 }
 
 function isReferenceSection(section: string): boolean {
@@ -539,6 +707,29 @@ function normalizeInlineText(text: string, maxLength: number): string {
     return normalized;
   }
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function stripSpacedHeadingPrefix(text: string): string {
+  const normalized = normalizeInlineText(text, 1200);
+  const match = normalized.match(
+    /^(.{8,120}?)(\b(?:We|In|The|This|Our|To|For|During|After|At|Although|Because|Experiments|Evaluation)\b.+)$/u
+  );
+
+  if (!match) {
+    return normalized;
+  }
+
+  const [, prefix, body] = match;
+  const letters = prefix.match(/\p{L}/gu) ?? [];
+  const lowerLetters = prefix.match(/\p{Ll}/gu) ?? [];
+  const upperLetters = prefix.match(/\p{Lu}/gu) ?? [];
+  const hasSpacedTitleNoise = /(?:\b[A-Z]\s+[A-Z]|\b[A-Z]{2,}\b|\b[IVX]+\.)/u.test(prefix);
+
+  if (letters.length >= 5 && hasSpacedTitleNoise && upperLetters.length >= lowerLetters.length) {
+    return body.trim();
+  }
+
+  return normalized;
 }
 
 function getPaperTitle(paper: PaperRecord | undefined): string {

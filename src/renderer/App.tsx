@@ -27,6 +27,7 @@ import {
 } from './lib/presentationOutline';
 import { NotesPanel } from './components/NotesPanel';
 import { PdfViewer } from './components/PdfViewer';
+import { extractPdfBlocksFromData } from './lib/pdfOutlineExtraction';
 import type { PdfViewportState } from './lib/pdfViewportSync';
 import { Toolbar } from './components/Toolbar';
 import translateIcon from './assets/icons/duotone/translate.svg';
@@ -185,6 +186,7 @@ export default function App() {
   }));
   const [isAiBusy, setIsAiBusy] = useState(false);
   const [isPdfTranslationBusy, setIsPdfTranslationBusy] = useState(false);
+  const [isPresentationGenerating, setIsPresentationGenerating] = useState(false);
   const [pdfTranslationEngine, setPdfTranslationEngine] =
     useState<PdfTranslationEngineResult | null>(null);
   const [pdfTranslationStatus, setPdfTranslationStatus] = useState('');
@@ -546,7 +548,8 @@ export default function App() {
       setStatusMessage(result.message);
       setPdfTranslationStatus(result.message);
     } catch (error) {
-      const message = `生成双语 PDF 失败：${String(error)}`;
+      const detail = formatPdfTranslationProgressMessage(String(error)) || String(error);
+      const message = `生成双语 PDF 失败：${detail}`;
       setStatusMessage(message);
       setPdfTranslationStatus(message);
     } finally {
@@ -608,7 +611,7 @@ export default function App() {
     }
   }
 
-  function handleGeneratePresentationFromCurrentPdf(): void {
+  async function handleGeneratePresentationFromCurrentPdf(): Promise<void> {
     if (!pdf) {
       setStatusMessage('请先打开原文 PDF，再生成组会 PPT。');
       setView('reader');
@@ -621,18 +624,39 @@ export default function App() {
       return;
     }
 
-    const draft = buildPresentationDraft({
-      papers: [paper],
-      blocks: extractedPdfBlocks,
-      targetSlideCount: 12
-    });
-    setPresentationDraft(draft);
-    setView('presentation');
-    setStatusMessage(
-      extractedPdfBlocks.length > 0
-        ? `已生成 ${draft.slides.length} 页组会 PPT 草稿。`
-        : 'PDF 文本尚未提取完成，已生成基础 PPT 草稿并保留缺失提示。'
-    );
+    try {
+      setIsPresentationGenerating(true);
+      setStatusMessage('正在从当前 PDF 提取正文、章节和图表 caption...');
+      let blocks = extractedPdfBlocks;
+      if (blocks.length === 0) {
+        blocks = await extractPdfBlocksFromData(pdf.data);
+        setExtractedPdfBlocks(blocks);
+      }
+
+      const draft = buildPresentationDraft({
+        papers: [paper],
+        blocks,
+        targetSlideCount: 12
+      });
+      setPresentationDraft(draft);
+      setView('presentation');
+      setStatusMessage(
+        blocks.length > 0
+          ? `已从当前 PDF 提取 ${blocks.length} 个正文/图表块，并生成 ${draft.slides.length} 页组会 PPT 草稿。`
+          : '未能从当前 PDF 提取可用正文；已生成带缺失提示的基础 PPT 草稿，请确认 PDF 是否可复制文本。'
+      );
+    } catch (error) {
+      const draft = buildPresentationDraft({
+        papers: [paper],
+        blocks: extractedPdfBlocks,
+        targetSlideCount: 12
+      });
+      setPresentationDraft(draft);
+      setView('presentation');
+      setStatusMessage(`PDF 正文提取失败，已生成基础 PPT 草稿：${String(error)}`);
+    } finally {
+      setIsPresentationGenerating(false);
+    }
   }
 
   async function handleExportPresentationMarkdown(draft: PresentationDraft): Promise<void> {
@@ -1489,7 +1513,7 @@ export default function App() {
       setView('presentation');
       return;
     }
-    handleGeneratePresentationFromCurrentPdf();
+    void handleGeneratePresentationFromCurrentPdf();
   }
 
   function openAiAssistant(focus: AiAssistantFocus = 'analysis'): void {
@@ -1858,9 +1882,9 @@ export default function App() {
                   <img className="button-icon" src={downloadIcon} alt="" />
                   <span>导出双语 PDF</span>
                 </button>
-                <button type="button" className="secondary-button button-with-icon" disabled={!pdf} onClick={handleGeneratePresentationFromCurrentPdf}>
+                <button type="button" className="secondary-button button-with-icon" disabled={!pdf || isPresentationGenerating} onClick={handleGeneratePresentationFromCurrentPdf}>
                   <img className="button-icon" src={translateIcon} alt="" />
-                  <span>生成组会 PPT</span>
+                  <span>{isPresentationGenerating ? '正在生成 PPT...' : '生成组会 PPT'}</span>
                 </button>
                 <button type="button" className="ghost-button button-with-icon" disabled={isPdfTranslationBusy} onClick={handleCheckPdfTranslationEngine}>
                   <img className="button-icon" src={searchIcon} alt="" />

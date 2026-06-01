@@ -23,12 +23,12 @@ type PreviewMode = 'slide' | 'markdown';
 
 export function PresentationPage(props: PresentationPageProps) {
   const [draft, setDraft] = useState<PresentationDraft | null>(props.draft);
-  const [selectedSlideId, setSelectedSlideId] = useState(props.draft?.slides[0]?.id ?? '');
+  const [selectedSlideId, setSelectedSlideId] = useState(getDefaultSlideId(props.draft));
   const [previewMode, setPreviewMode] = useState<PreviewMode>('slide');
 
   useEffect(() => {
     setDraft(props.draft);
-    setSelectedSlideId(props.draft?.slides[0]?.id ?? '');
+    setSelectedSlideId(getDefaultSlideId(props.draft));
   }, [props.draft]);
 
   const selectedSlide = useMemo(
@@ -247,4 +247,8 @@ export function PresentationPage(props: PresentationPageProps) {
       </section>
     </main>
   );
+}
+
+function getDefaultSlideId(draft: PresentationDraft | null): string {
+  return draft?.slides.find((slide) => slide.type === 'background')?.id ?? draft?.slides[0]?.id ?? '';
 }

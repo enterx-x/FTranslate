@@ -120,7 +120,8 @@ async function createCdpClient(webSocketUrl) {
   socket.addEventListener('message', (event) => {
     const payload = JSON.parse(event.data);
     if (payload.id && callbacks.has(payload.id)) {
-      const { resolve, reject } = callbacks.get(payload.id);
+      const { resolve, reject, timer } = callbacks.get(payload.id);
+      clearTimeout(timer);
       callbacks.delete(payload.id);
       payload.error ? reject(new Error(payload.error.message)) : resolve(payload.result);
     } else if (payload.method === 'Runtime.consoleAPICalled' || payload.method === 'Runtime.exceptionThrown') {
@@ -130,12 +131,27 @@ async function createCdpClient(webSocketUrl) {
       }
     }
   });
+  socket.addEventListener('close', () => {
+    const error = new Error('Electron debug socket closed before visual check completed.');
+    for (const { reject, timer } of callbacks.values()) {
+      clearTimeout(timer);
+      reject(error);
+    }
+    callbacks.clear();
+  });
 
   return {
-    send(method, params = {}) {
+    send(method, params = {}, timeoutMs = 10000) {
       id += 1;
       socket.send(JSON.stringify({ id, method, params }));
-      return new Promise((resolve, reject) => callbacks.set(id, { resolve, reject }));
+      return new Promise((resolve, reject) => {
+        const requestId = id;
+        const timer = setTimeout(() => {
+          callbacks.delete(requestId);
+          reject(new Error(`Timed out waiting for CDP response: ${method}`));
+        }, timeoutMs);
+        callbacks.set(requestId, { resolve, reject, timer });
+      });
     },
     close() {
       socket.close();
@@ -251,26 +267,45 @@ async function waitForResearchSheetCanvas(client) {
 
 async function waitForPdfCanvas(client) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
-    const snapshot = await evaluateJson(client, `() => ({
-      hasCanvas: [...document.querySelectorAll('.pdf-js-viewer-container canvas')]
-        .some((canvas) => canvas.width > 0 && canvas.height > 0),
-      canvasCount: document.querySelectorAll('.pdf-js-viewer-container canvas').length,
-      text: document.querySelector('.whole-pdf-panel')?.textContent ?? ''
-    })`);
+    const snapshot = await evaluateJson(client, `() => {
+      const root = document.querySelector('.pdf-js-viewer-container') ?? document.querySelector('.pdf-viewer-shell');
+      const canvases = [...(root?.querySelectorAll('canvas') ?? [])];
+      const pages = [...(root?.querySelectorAll('.page') ?? [])];
+      const textSpans = [...(root?.querySelectorAll('.textLayer span') ?? [])];
+      const hasCanvas = canvases.some((canvas) => canvas.width > 0 && canvas.height > 0);
+      const hasVisiblePage = pages.some((page) => {
+        const rect = page.getBoundingClientRect();
+        return rect.width > 120 && rect.height > 120;
+      });
+      const hasVisibleTextLayer = textSpans.some((span) => (span.textContent ?? '').trim().length > 0);
+      return {
+        hasCanvas,
+        hasRenderablePdf: hasCanvas || (hasVisiblePage && hasVisibleTextLayer),
+        canvasCount: canvases.length,
+        pageCount: pages.length,
+        textSpanCount: textSpans.length,
+        text: document.querySelector('.whole-pdf-panel')?.textContent ?? ''
+      };
+    }`);
 
-    if (snapshot.hasCanvas) {
+    if (snapshot.hasRenderablePdf) {
       return snapshot;
     }
 
     await wait(250);
   }
 
-  const snapshot = await evaluateJson(client, `() => ({
-    hasCanvas: Boolean(document.querySelector('.pdf-js-viewer-container canvas')),
-    canvasCount: document.querySelectorAll('.pdf-js-viewer-container canvas').length,
-    pdfText: document.querySelector('.pdf-pane')?.textContent?.slice(0, 500) ?? '',
-    panelText: document.querySelector('.whole-pdf-panel')?.textContent ?? ''
-  })`);
+  const snapshot = await evaluateJson(client, `() => {
+    const root = document.querySelector('.pdf-js-viewer-container') ?? document.querySelector('.pdf-viewer-shell');
+    return {
+      hasCanvas: Boolean(root?.querySelector('canvas')),
+      canvasCount: root?.querySelectorAll('canvas').length ?? 0,
+      pageCount: root?.querySelectorAll('.page').length ?? 0,
+      textSpanCount: root?.querySelectorAll('.textLayer span').length ?? 0,
+      pdfText: document.querySelector('.pdf-pane')?.textContent?.slice(0, 500) ?? '',
+      panelText: document.querySelector('.whole-pdf-panel')?.textContent ?? ''
+    };
+  }`);
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'whole-pdf-canvas-timeout.png'), Buffer.from(shot.data, 'base64'))
   );
@@ -572,7 +607,7 @@ async function runWholePdfReaderScenario(client) {
     panelText: document.querySelector('.whole-pdf-panel')?.textContent ?? '',
     activeToggle: [...document.querySelectorAll('.pdf-view-toggle button')]
       .find((button) => button.classList.contains('active'))?.textContent?.trim() ?? '',
-    hasPdfCanvas: ${JSON.stringify(pdfCanvasStatus.hasCanvas)},
+    hasPdfCanvas: ${JSON.stringify(pdfCanvasStatus.hasRenderablePdf)},
     pdfCanvasCount: ${JSON.stringify(pdfCanvasStatus.canvasCount)},
     hasGenerateButton: [...document.querySelectorAll('.whole-pdf-panel button')]
       .some((button) => /生成双语 PDF/.test(button.textContent ?? '')),
@@ -610,27 +645,31 @@ async function runWholePdfReaderScenario(client) {
 
 async function runPresentationScenario(client) {
   await clickSidebarSection(client, 'presentation');
-  await waitForAppReady(client);
-  await wait(900);
-
-  const snapshot = await evaluateJson(client, `() => {
-    const page = document.querySelector('.presentation-page');
-    const preview = document.querySelector('.ppt-slide-preview');
-    const bullets = [...document.querySelectorAll('.ppt-slide-preview li')].map((item) => item.textContent?.trim() ?? '');
-    const sources = [...document.querySelectorAll('.ppt-slide-preview footer span')].map((item) => item.textContent?.trim() ?? '');
-    const figures = [...document.querySelectorAll('.ppt-figure-strip div')].map((item) => item.textContent?.trim() ?? '');
-    const thumbs = [...document.querySelectorAll('.presentation-thumbs button')].map((item) => item.textContent?.trim() ?? '');
-    return {
-      hasPage: Boolean(page),
-      hasPreview: Boolean(preview),
-      slideCount: thumbs.length,
-      bullets,
-      sources,
-      figures,
-      previewText: preview?.textContent?.slice(0, 1200) ?? '',
-      pageText: page?.textContent?.slice(0, 1500) ?? ''
-    };
-  }`);
+  let snapshot = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    snapshot = await evaluateJson(client, `() => {
+      const page = document.querySelector('.presentation-page');
+      const preview = document.querySelector('.ppt-slide-preview');
+      const bullets = [...document.querySelectorAll('.ppt-slide-preview li')].map((item) => item.textContent?.trim() ?? '');
+      const sources = [...document.querySelectorAll('.ppt-slide-preview footer span')].map((item) => item.textContent?.trim() ?? '');
+      const figures = [...document.querySelectorAll('.ppt-figure-strip div')].map((item) => item.textContent?.trim() ?? '');
+      const thumbs = [...document.querySelectorAll('.presentation-thumbs button')].map((item) => item.textContent?.trim() ?? '');
+      return {
+        hasPage: Boolean(page),
+        hasPreview: Boolean(preview),
+        slideCount: thumbs.length,
+        bullets,
+        sources,
+        figures,
+        previewText: preview?.textContent?.slice(0, 1200) ?? '',
+        pageText: page?.textContent?.slice(0, 1500) ?? ''
+      };
+    }`);
+    if (snapshot.hasPage && snapshot.hasPreview && snapshot.slideCount >= 10) {
+      break;
+    }
+    await wait(250);
+  }
 
   if (!snapshot.hasPage || !snapshot.hasPreview || snapshot.slideCount < 10) {
     throw new Error(`presentation: expected rich slide workspace, got ${JSON.stringify(snapshot)}`);
@@ -866,7 +905,13 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+const keepAlive = setInterval(() => {}, 1000);
+
+try {
+  await main();
+} catch (error) {
   console.error(error);
   process.exitCode = 1;
-});
+} finally {
+  clearInterval(keepAlive);
+}

@@ -230,6 +230,8 @@ interface PdfTranslationRuntime {
   installCommand: string;
 }
 
+const PDF2ZH_PROMPT_FILE_NAME = 'ftranslate-pdf2zh-prompt.txt';
+
 interface PdfTranslationRequest {
   paperId: string;
   pdfPath: string;
@@ -441,6 +443,7 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
   }
 
   await fs.mkdir(outputDir, { recursive: true });
+  const promptPath = await writePdf2zhPromptFile(outputDir);
   const engine = await ensurePdfTranslationRuntime(request.paperId, settings);
   sendPdfTranslationProgress({
     paperId: request.paperId,
@@ -455,6 +458,7 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
     outputDir,
     mode: outputMode,
     ignoreCache: request.force,
+    promptPath,
     settings
   });
 
@@ -672,6 +676,31 @@ async function patchPrivatePdf2zhTemperatureOption(
   await fs.writeFile(translatorPath, patchResult.source, 'utf8');
 }
 
+async function writePdf2zhPromptFile(outputDir: string): Promise<string> {
+  const promptPath = path.join(outputDir, PDF2ZH_PROMPT_FILE_NAME);
+  await fs.writeFile(promptPath, buildPdf2zhAcademicPrompt(), 'utf8');
+  return promptPath;
+}
+
+function buildPdf2zhAcademicPrompt(): string {
+  return [
+    'You are a professional academic paper translation engine.',
+    'Translate the following source text from $lang_in to $lang_out.',
+    'Rules:',
+    '1. Output only the translated text. Do not add explanations, Markdown fences, comments, or prefixes.',
+    '2. Preserve all formula placeholders exactly, including {v1}, {{v1}}, <v1>, inline LaTeX, equation numbers, and symbols.',
+    '3. Preserve citation markers exactly, including [1], [2, 3], [12-15], (Smith et al., 2023), DOI, arXiv IDs, URLs, and table/figure numbers.',
+    '4. If the source text is a References/Bibliography section or a single bibliography entry, return the original text unchanged.',
+    '5. Keep list numbers, bullet markers, line-break intent, section labels, Fig./Figure/Table captions, and punctuation structure as stable as possible.',
+    '6. Prefer concise Chinese academic wording. Do not invent information that is not present in the source text.',
+    '',
+    'Source Text:',
+    '$text',
+    '',
+    'Translated Text:'
+  ].join('\n');
+}
+
 function getPdfTranslationInstallCommand(): string {
   return 'uv tool install pdf2zh 或 py -3.12 -m pip install pdf2zh';
 }
@@ -788,6 +817,9 @@ async function runPdfTranslationProcess(
       cwd: options.cwd,
       env: {
         ...process.env,
+        PYTHONUTF8: '1',
+        PYTHONIOENCODING: 'utf-8',
+        PYTHONLEGACYWINDOWSSTDIO: '0',
         ...options.env
       },
       windowsHide: true
