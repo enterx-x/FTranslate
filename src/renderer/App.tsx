@@ -363,6 +363,14 @@ export default function App() {
     return nextPdf;
   }
 
+  function isSamePdfFilePath(left?: string | null, right?: string | null): boolean {
+    if (!left || !right) {
+      return false;
+    }
+
+    return left.trim().toLowerCase() === right.trim().toLowerCase();
+  }
+
   function applyTranslationPayload(payload: TextFilePayload): TranslationDocument {
     const document = parseTranslationFile(payload.content, payload.fileName, payload.filePath);
     setTranslationDocument(document);
@@ -417,7 +425,15 @@ export default function App() {
         return;
       }
 
-      applyPdfPayload(result.pdf, paper.lastPage, { keepTranslatedPdf: Boolean(result.translatedPdf) });
+      const hasDistinctTranslatedPdf = Boolean(
+        result.translatedPdf && !isSamePdfFilePath(result.translatedPdf.filePath, result.pdf.filePath)
+      );
+      const hasDistinctTranslatedMonoPdf = Boolean(
+        result.translatedMonoPdf && !isSamePdfFilePath(result.translatedMonoPdf.filePath, result.pdf.filePath)
+      );
+      const hasReadableTranslatedPdf = hasDistinctTranslatedPdf || hasDistinctTranslatedMonoPdf;
+
+      applyPdfPayload(result.pdf, paper.lastPage, { keepTranslatedPdf: hasReadableTranslatedPdf });
       if (result.translation) {
         applyTranslationPayload(result.translation);
       } else {
@@ -431,7 +447,7 @@ export default function App() {
           setStatusMessage('AI 缓存不是 JSON 翻译数组，已只打开手动翻译文件。');
         }
       }
-      if (result.translatedPdf) {
+      if (result.translatedPdf && hasReadableTranslatedPdf) {
         applyTranslatedPdfPayload(result.translatedPdf, result.translatedMonoPdf);
       }
       const updated = updatePaperRecord(paper, {
@@ -444,7 +460,7 @@ export default function App() {
       setActiveNotes(paper.notes ?? '');
       setView('reader');
       setStatusMessage(
-        result.translatedPdf
+        hasReadableTranslatedPdf
           ? `已打开论文并切换到双语 PDF：${paper.chineseTitle || paper.englishTitle}`
           : result.aiCache
             ? `已打开论文并自动导入 AI 缓存：${paper.chineseTitle || paper.englishTitle}`
@@ -561,6 +577,11 @@ export default function App() {
     try {
       const payload = await window.electronAPI.openTranslatedPdf();
       if (!payload) {
+        return;
+      }
+
+      if (pdf && isSamePdfFilePath(payload.filePath, pdf.filePath)) {
+        setStatusMessage('导入的中文/双语 PDF 与当前原文 PDF 是同一个文件，已取消绑定，避免误显示为双语 PDF。');
         return;
       }
 

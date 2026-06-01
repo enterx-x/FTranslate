@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -81,6 +81,12 @@ async function resolveVisualCheckPdfPath() {
   const fallbackPdfPath = path.join(outputDir, 'visual-check-fallback.pdf');
   await writeFile(fallbackPdfPath, createFallbackPdfBuffer());
   return fallbackPdfPath;
+}
+
+async function prepareVisualTranslatedPdf(sourcePdfPath) {
+  const translatedPdfPath = path.join(outputDir, 'visual-check-dual.pdf');
+  await copyFile(sourcePdfPath, translatedPdfPath);
+  return translatedPdfPath;
 }
 
 async function fetchJson(url) {
@@ -607,6 +613,7 @@ async function runWholePdfReaderScenario(client) {
     panelText: document.querySelector('.whole-pdf-panel')?.textContent ?? '',
     activeToggle: [...document.querySelectorAll('.pdf-view-toggle button')]
       .find((button) => button.classList.contains('active'))?.textContent?.trim() ?? '',
+    displayedStatus: document.querySelector('.whole-pdf-header > span')?.textContent?.trim() ?? '',
     hasPdfCanvas: ${JSON.stringify(pdfCanvasStatus.hasRenderablePdf)},
     pdfCanvasCount: ${JSON.stringify(pdfCanvasStatus.canvasCount)},
     hasGenerateButton: [...document.querySelectorAll('.whole-pdf-panel button')]
@@ -615,7 +622,14 @@ async function runWholePdfReaderScenario(client) {
       .some((button) => /导入中文\\/双语 PDF/.test(button.textContent ?? ''))
   })`);
 
-  if (!wholePdf.hasPanel || wholePdf.activeToggle !== '双语 PDF' || !wholePdf.hasPdfCanvas || !wholePdf.hasGenerateButton || !wholePdf.hasImportButton) {
+  if (
+    !wholePdf.hasPanel ||
+    wholePdf.activeToggle !== '双语 PDF' ||
+    !/visual-check-dual\.pdf/.test(wholePdf.displayedStatus) ||
+    !wholePdf.hasPdfCanvas ||
+    !wholePdf.hasGenerateButton ||
+    !wholePdf.hasImportButton
+  ) {
     throw new Error(`wholePdf: expected translated PDF as primary reading surface, got ${JSON.stringify(wholePdf)}`);
   }
 
@@ -842,6 +856,7 @@ async function main() {
   await rm(visualUserDataDir, { recursive: true, force: true });
   await mkdir(visualUserDataDir, { recursive: true });
   const pdfPath = await resolveVisualCheckPdfPath();
+  const translatedPdfPath = await prepareVisualTranslatedPdf(pdfPath);
 
   const translationPath = path.join(outputDir, 'visual-check.json');
   await writeFile(
@@ -874,7 +889,7 @@ async function main() {
     await client.send('Runtime.enable');
     await client.send('Page.enable');
     await loadPaperRecord(client, translationPath, {
-      translatedPdfPath: pdfPath,
+      translatedPdfPath,
       translatedPdfName: 'visual-check-dual.pdf',
       translatedPdfMode: 'dual',
       translationEngine: 'pdfmathtranslate',
