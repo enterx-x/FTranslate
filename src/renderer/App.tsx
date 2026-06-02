@@ -25,6 +25,8 @@ import {
   serializePresentationMarkdown,
   type PresentationDraft
 } from './lib/presentationOutline';
+import { arrayBufferToBase64 } from './lib/binaryEncoding';
+import { createPresentationPptxBuffer } from './lib/presentationPptx';
 import { NotesPanel } from './components/NotesPanel';
 import { PdfViewer } from './components/PdfViewer';
 import { extractPdfBlocksFromData } from './lib/pdfOutlineExtraction';
@@ -715,6 +717,26 @@ export default function App() {
       setStatusMessage(`组会 PPT JSON 已导出：${result.fileName}`);
     } catch (error) {
       setStatusMessage(`导出组会 PPT JSON 失败：${String(error)}`);
+    }
+  }
+
+  async function handleExportPresentationPptx(draft: PresentationDraft): Promise<void> {
+    try {
+      setStatusMessage('正在生成可编辑 PowerPoint 文件...');
+      const buffer = await createPresentationPptxBuffer(draft);
+      const result = await window.electronAPI.exportPptx({
+        contentBase64: arrayBufferToBase64(buffer),
+        defaultFileName: buildPresentationExportFileName(draft.title, 'pptx')
+      });
+
+      if (!result) {
+        setStatusMessage('已取消导出组会 PPTX。');
+        return;
+      }
+
+      setStatusMessage(`组会 PPTX 已导出：${result.fileName}`);
+    } catch (error) {
+      setStatusMessage(`导出组会 PPTX 失败：${String(error)}`);
     }
   }
 
@@ -1720,6 +1742,7 @@ export default function App() {
               onRegenerate={handleGeneratePresentationFromCurrentPdf}
               onExportMarkdown={handleExportPresentationMarkdown}
               onExportJson={handleExportPresentationJson}
+              onExportPptx={handleExportPresentationPptx}
             />
           </Suspense>
           <footer className="status-bar">{statusMessage}</footer>
@@ -2164,7 +2187,7 @@ function buildPdfExportFileName(sourceName?: string): string {
   return sourceName.replace(/\.[^.]+$/, '') + '-bilingual.pdf';
 }
 
-function buildPresentationExportFileName(title: string, extension: 'json' | 'md'): string {
+function buildPresentationExportFileName(title: string, extension: 'json' | 'md' | 'pptx'): string {
   const safeTitle = title
     .replace(/[\\/:*?"<>|]+/gu, '-')
     .replace(/\s+/gu, '-')

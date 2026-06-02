@@ -175,7 +175,7 @@ export function HomePage(props: HomePageProps) {
               Seminar PPT
             </span>
             <h2>组会 PPT 生成</h2>
-            <p>基于当前 PDF 原文抽取标题、关键章节、图表 caption 和来源页码，先生成研究生组会极简风格的大纲、HTML 预览和 Markdown 文件。</p>
+            <p>基于当前 PDF 原文抽取标题、关键章节、图表 caption 和来源页码，生成完整学术组会 PPT 大纲、预览、Markdown 和 PPTX。</p>
             <div className="home-module-meta">
               <span className="badge">PDF 原文优先</span>
               <span className="badge">可编辑大纲</span>

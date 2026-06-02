@@ -40,7 +40,7 @@ const categories: Array<{ id: SettingsCategory; title: string; caption: string }
   { id: 'sheet', title: '研究表格设置', caption: '公式、行高、预览和缩放' },
   { id: 'notes', title: '笔记设置', caption: 'Markdown、公式和自动关联' },
   { id: 'graph', title: '知识图谱设置', caption: '默认来源、节点和标签策略' },
-  { id: 'presentation', title: '组会 PPT 设置', caption: '极简风格、页数、语言、图表和导出偏好' },
+  { id: 'presentation', title: '组会 PPT 设置', caption: '学术组会风格、页数、语言、图表和导出偏好' },
   { id: 'export', title: '导出与路径', caption: 'PDF、双语 PDF、图谱、PPT 和笔记路径' },
   { id: 'data', title: '数据与缓存', caption: '本地存储、缓存和危险操作' }
 ];
@@ -285,7 +285,7 @@ export function SettingsPage(props: SettingsPageProps) {
                       }))
                     }
                   >
-                    <option value="minimal-seminar">研究生组会极简风</option>
+                    <option value="minimal-seminar">研究生组会完整学术风</option>
                     <option value="formal-academic">正式学术汇报</option>
                     <option value="literature-review">文献综述</option>
                     <option value="proposal">开题汇报</option>

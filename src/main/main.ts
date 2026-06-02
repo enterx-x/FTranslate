@@ -63,6 +63,12 @@ interface SaveTextRequest {
   extension: 'json' | 'md';
 }
 
+interface SaveBinaryRequest {
+  filePath?: string;
+  contentBase64: string;
+  defaultFileName: string;
+}
+
 interface ResearchWorkbookExcelRequest {
   workbook: ResearchWorkbookExcelPayload;
 }
@@ -2787,6 +2793,25 @@ function registerIpcHandlers(): void {
     }
 
     await fs.writeFile(result.filePath, request.content, 'utf8');
+    return {
+      filePath: result.filePath,
+      fileName: path.basename(result.filePath)
+    };
+  });
+
+  ipcMain.handle('file:export-pptx', async (_event, request: SaveBinaryRequest) => {
+    const result = await dialog.showSaveDialog({
+      title: '导出组会 PPT',
+      defaultPath: request.filePath ?? request.defaultFileName,
+      filters: [{ name: 'PowerPoint Presentation', extensions: ['pptx'] }]
+    });
+
+    if (result.canceled || !result.filePath) {
+      return null;
+    }
+
+    const buffer = Buffer.from(request.contentBase64, 'base64');
+    await fs.writeFile(result.filePath, buffer);
     return {
       filePath: result.filePath,
       fileName: path.basename(result.filePath)

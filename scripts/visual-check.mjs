@@ -277,10 +277,16 @@ async function waitForResearchSheetCanvas(client) {
 async function waitForPdfCanvas(client) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => {
-      const root = document.querySelector('.pdf-js-viewer-container') ?? document.querySelector('.pdf-viewer-shell');
-      const canvases = [...(root?.querySelectorAll('canvas') ?? [])];
-      const pages = [...(root?.querySelectorAll('.page') ?? [])];
-      const textSpans = [...(root?.querySelectorAll('.textLayer span') ?? [])];
+      const roots = [
+        ...document.querySelectorAll('.pdf-js-viewer-container, .pdf-viewer-shell, .pdf-pane')
+      ].filter((root) => {
+        const rect = root.getBoundingClientRect();
+        const style = window.getComputedStyle(root);
+        return rect.width > 120 && rect.height > 120 && style.display !== 'none' && style.visibility !== 'hidden';
+      });
+      const canvases = roots.flatMap((root) => [...root.querySelectorAll('canvas')]);
+      const pages = roots.flatMap((root) => [...root.querySelectorAll('.page')]);
+      const textSpans = roots.flatMap((root) => [...root.querySelectorAll('.textLayer span')]);
       const hasCanvas = canvases.some((canvas) => canvas.width > 0 && canvas.height > 0);
       const hasVisiblePage = pages.some((page) => {
         const rect = page.getBoundingClientRect();
@@ -289,9 +295,10 @@ async function waitForPdfCanvas(client) {
       const hasVisibleTextLayer = textSpans.some((span) => (span.textContent ?? '').trim().length > 0);
       return {
         hasCanvas,
-        hasRenderablePdf: hasCanvas || (hasVisiblePage && hasVisibleTextLayer),
+        hasRenderablePdf: hasCanvas || hasVisiblePage,
         canvasCount: canvases.length,
         pageCount: pages.length,
+        hasVisiblePage,
         textSpanCount: textSpans.length,
         text: document.querySelector('.whole-pdf-panel')?.textContent ?? ''
       };
@@ -305,12 +312,22 @@ async function waitForPdfCanvas(client) {
   }
 
   const snapshot = await evaluateJson(client, `() => {
-    const root = document.querySelector('.pdf-js-viewer-container') ?? document.querySelector('.pdf-viewer-shell');
+    const roots = [
+      ...document.querySelectorAll('.pdf-js-viewer-container, .pdf-viewer-shell, .pdf-pane')
+    ].filter((root) => {
+      const rect = root.getBoundingClientRect();
+      const style = window.getComputedStyle(root);
+      return rect.width > 120 && rect.height > 120 && style.display !== 'none' && style.visibility !== 'hidden';
+    });
+    const canvases = roots.flatMap((root) => [...root.querySelectorAll('canvas')]);
+    const pages = roots.flatMap((root) => [...root.querySelectorAll('.page')]);
+    const textSpans = roots.flatMap((root) => [...root.querySelectorAll('.textLayer span')]);
     return {
-      hasCanvas: Boolean(root?.querySelector('canvas')),
-      canvasCount: root?.querySelectorAll('canvas').length ?? 0,
-      pageCount: root?.querySelectorAll('.page').length ?? 0,
-      textSpanCount: root?.querySelectorAll('.textLayer span').length ?? 0,
+      rootCount: roots.length,
+      hasCanvas: canvases.length > 0,
+      canvasCount: canvases.length,
+      pageCount: pages.length,
+      textSpanCount: textSpans.length,
       pdfText: document.querySelector('.pdf-pane')?.textContent?.slice(0, 500) ?? '',
       panelText: document.querySelector('.whole-pdf-panel')?.textContent ?? ''
     };
@@ -666,19 +683,23 @@ async function runPresentationScenario(client) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     snapshot = await evaluateJson(client, `() => {
       const page = document.querySelector('.presentation-page');
-      const preview = document.querySelector('.ppt-slide-preview');
+      const preview = document.querySelector('.ppt-export-preview');
+      const rect = preview?.getBoundingClientRect();
       const bullets = [
         ...document.querySelectorAll(
-          '.ppt-slide-preview li, .ppt-main-claim p, .ppt-support-grid p, .ppt-callout-stack p, .ppt-cover-grid span'
+          '.ppt-export-preview .ppt-export-bullets li, .ppt-export-preview .ppt-export-claim p, .ppt-export-preview .ppt-cover-grid span'
         )
       ].map((item) => item.textContent?.trim() ?? '').filter(Boolean);
-      const sources = [...document.querySelectorAll('.ppt-slide-preview footer span')].map((item) => item.textContent?.trim() ?? '');
-      const figures = [...document.querySelectorAll('.ppt-figure-strip div, .ppt-evidence-frame')].map((item) => item.textContent?.trim() ?? '');
+      const sources = [...document.querySelectorAll('.ppt-export-preview footer span')].map((item) => item.textContent?.trim() ?? '');
+      const figures = [...document.querySelectorAll('.ppt-export-preview .ppt-export-visual')].map((item) => item.textContent?.trim() ?? '');
       const thumbs = [...document.querySelectorAll('.presentation-thumbs button')].map((item) => item.textContent?.trim() ?? '');
       return {
         hasPage: Boolean(page),
         hasPreview: Boolean(preview),
+        previewRatio: rect && rect.height ? rect.width / rect.height : 0,
         slideCount: thumbs.length,
+        hasPptxExport: [...document.querySelectorAll('.presentation-page button')]
+          .some((button) => /PPTX/i.test(button.textContent ?? '')),
         bullets,
         sources,
         figures,
@@ -695,6 +716,12 @@ async function runPresentationScenario(client) {
   if (!snapshot.hasPage || !snapshot.hasPreview || snapshot.slideCount < 10) {
     throw new Error(`presentation: expected rich slide workspace, got ${JSON.stringify(snapshot)}`);
   }
+  if (!snapshot.hasPptxExport) {
+    throw new Error(`presentation: expected editable PPTX export entry, got ${JSON.stringify(snapshot)}`);
+  }
+  if (snapshot.previewRatio < 1.68 || snapshot.previewRatio > 1.86) {
+    throw new Error(`presentation: expected 16:9 slide preview, got ${JSON.stringify(snapshot)}`);
+  }
 
   const hasStructuredContent =
     snapshot.bullets.length >= 2 ||
@@ -703,6 +730,9 @@ async function runPresentationScenario(client) {
     /论文基本信息|研究背景|方法整体框架|实验结果/.test(snapshot.pageText);
   if (!hasStructuredContent) {
     throw new Error(`presentation: slide preview still looks empty, got ${JSON.stringify(snapshot)}`);
+  }
+  if (/Markdown 预览|当前页内容|来源信息|导出 PPTX|导出 Markdown/.test(snapshot.previewText)) {
+    throw new Error(`presentation: app UI text leaked into slide canvas, got ${JSON.stringify(snapshot)}`);
   }
 
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>

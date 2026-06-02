@@ -126,9 +126,9 @@ const promptTemplates: Array<{ key: string; label: string; scenario: string; des
     key: 'seminar-ppt',
     label: '组会 PPT 生成',
     scenario: 'PPT',
-    description: '根据 PDF 原文结构化内容生成研究生组会极简风格 PPT 大纲 JSON。',
+    description: '根据 PDF 原文结构化内容生成研究生组会完整学术风格 PPT 大纲 JSON。',
     content:
-      '你是一个研究生组会 PPT 生成助手。请根据论文 PDF 原文解析结果、关键段落、图表候选、研究表格字段和用户笔记，生成极简学术汇报 PPT 大纲。每页只表达一个核心观点，最多 5 个 bullet。优先使用原文方法图、实验结果图和关键表格。所有内容必须能追溯到 PDF 页码、章节或图表 caption。不要编造原文没有的信息。输出严格 JSON，不要输出 Markdown 解释。'
+      '你是一个研究生组会 PPT 生成助手。请根据论文 PDF 原文解析结果、关键段落、图表候选、研究表格字段和用户笔记，生成完整学术汇报 PPT 大纲。每页必须有明确标题、核心结论、来源页码和讲稿备注；方法、实验和结果页优先使用原文方法图、实验结果图和关键表格。所有内容必须能追溯到 PDF 页码、章节或图表 caption。不要编造原文没有的信息。输出严格 JSON，不要输出 Markdown 解释。'
   }
 ];
 

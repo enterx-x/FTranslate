@@ -89,6 +89,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   }) => ipcRenderer.invoke('file:save-translation-cache', request),
   exportMarkdown: (request: { filePath?: string; content: string; defaultFileName: string }) =>
     ipcRenderer.invoke('file:export-markdown', request),
+  exportPptx: (request: { filePath?: string; contentBase64: string; defaultFileName: string }) =>
+    ipcRenderer.invoke('file:export-pptx', request),
   exportPdf: (request: { sourcePath: string; defaultFileName: string }) =>
     ipcRenderer.invoke('file:export-pdf', request),
   exportResearchWorkbookExcel: (request: { workbook: unknown }) =>

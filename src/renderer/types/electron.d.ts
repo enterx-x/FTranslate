@@ -214,6 +214,11 @@ export interface ElectronApi {
     content: string;
     defaultFileName: string;
   }) => Promise<SaveTextResult | null>;
+  exportPptx: (request: {
+    filePath?: string;
+    contentBase64: string;
+    defaultFileName: string;
+  }) => Promise<SaveTextResult | null>;
   exportPdf: (request: {
     sourcePath: string;
     defaultFileName: string;

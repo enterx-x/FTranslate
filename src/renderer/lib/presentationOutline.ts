@@ -216,7 +216,7 @@ export function buildLocalPresentationDraft(input: BuildPresentationDraftInput):
   return {
     id: `presentation-${paper?.id ?? 'current'}-${Date.now()}`,
     title,
-    subtitle: '研究生组会极简风格 PPT 草稿',
+    subtitle: '研究生组会完整学术风格 PPT 草稿',
     sourcePapers: input.papers.map((item) => ({
       paperId: item.id,
       title: getPaperTitle(item),

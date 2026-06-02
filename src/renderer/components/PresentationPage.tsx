@@ -5,6 +5,7 @@ import {
   type PresentationDraft,
   type PresentationSlide
 } from '../lib/presentationOutline';
+import { buildPptxSlidePlan } from '../lib/presentationPptx';
 import backIcon from '../assets/icons/duotone/back.svg';
 import downloadIcon from '../assets/icons/duotone/download.svg';
 import refreshIcon from '../assets/icons/duotone/refresh.svg';
@@ -17,6 +18,7 @@ interface PresentationPageProps {
   onRegenerate: () => void;
   onExportMarkdown: (draft: PresentationDraft) => void;
   onExportJson: (draft: PresentationDraft) => void;
+  onExportPptx: (draft: PresentationDraft) => void;
 }
 
 type PreviewMode = 'slide' | 'markdown';
@@ -35,14 +37,12 @@ export function PresentationPage(props: PresentationPageProps) {
     () => draft?.slides.find((slide) => slide.id === selectedSlideId) ?? draft?.slides[0] ?? null,
     [draft, selectedSlideId]
   );
+  const slidePlans = useMemo(() => (draft ? buildPptxSlidePlan(draft) : []), [draft]);
+  const selectedPlan = selectedSlide
+    ? slidePlans.find((plan) => plan.id === selectedSlide.id) ?? slidePlans[0] ?? null
+    : null;
   const markdownPreview = draft ? serializePresentationMarkdown(draft) : '';
-  const previewBullets = selectedSlide?.bullets.map(formatSlidePreviewText).filter(Boolean) ?? [];
-  const primaryPoint = previewBullets[0] ?? selectedSlide?.subtitle ?? '原文未明确说明。';
-  const supportPoints = selectedSlide ? buildPreviewSupportCards(selectedSlide, previewBullets) : [];
-  const hiddenBulletCount = selectedSlide ? Math.max(0, selectedSlide.bullets.length - 4) : 0;
   const previewSourceRefs = selectedSlide?.sourceRefs.slice(0, 2) ?? [];
-  const previewFigure = selectedSlide?.figures.find((figure) => figure.selected !== false) ?? selectedSlide?.figures[0] ?? null;
-  const slideLayout = selectedSlide ? getPreviewLayout(selectedSlide) : 'discussion';
 
   function updateSlide(patch: Partial<PresentationSlide>): void {
     if (!draft || !selectedSlide) {
@@ -113,9 +113,13 @@ export function PresentationPage(props: PresentationPageProps) {
             <img className="button-icon" src={saveIcon} alt="" />
             <span>导出 JSON</span>
           </button>
-          <button type="button" className="primary-button button-with-icon" onClick={() => props.onExportMarkdown(draft)}>
+          <button type="button" className="secondary-button button-with-icon" onClick={() => props.onExportMarkdown(draft)}>
             <img className="button-icon" src={downloadIcon} alt="" />
             <span>导出 Markdown</span>
+          </button>
+          <button type="button" className="primary-button button-with-icon" onClick={() => props.onExportPptx(draft)}>
+            <img className="button-icon" src={downloadIcon} alt="" />
+            <span>导出 PPTX</span>
           </button>
         </div>
       </header>
@@ -155,108 +159,69 @@ export function PresentationPage(props: PresentationPageProps) {
             </button>
           </div>
 
-          {previewMode === 'slide' && selectedSlide ? (
-            <article className={`ppt-slide-preview ppt-slide-${selectedSlide.type} ppt-layout-${slideLayout}`}>
+          {previewMode === 'slide' && selectedSlide && selectedPlan ? (
+            <article className={`ppt-slide-preview ppt-export-preview ppt-slide-${selectedPlan.type} ppt-layout-${selectedPlan.layout}`}>
               <header className="ppt-slide-topline">
-                <span className="ppt-slide-kicker">{selectedSlide.section ?? selectedSlide.type}</span>
-                <span className="ppt-slide-confidence">{selectedSlide.confidence === 'ai-enhanced' ? 'AI 增强' : '本地草稿'}</span>
+                <span className="ppt-slide-kicker">{selectedPlan.section}</span>
+                <span className="ppt-slide-confidence">
+                  {selectedSlide.confidence === 'ai-enhanced' ? 'AI 增强' : '本地草稿'} · {String(selectedPlan.index + 1).padStart(2, '0')}
+                </span>
               </header>
-              <h2>{selectedSlide.title}</h2>
-              {selectedSlide.subtitle ? <p className="ppt-slide-subtitle">{selectedSlide.subtitle}</p> : null}
-              <div className="ppt-slide-body">
-                {slideLayout === 'cover' ? (
+              <h2>{selectedPlan.title}</h2>
+              {selectedPlan.subtitle ? <p className="ppt-slide-subtitle">{selectedPlan.subtitle}</p> : null}
+              <div className="ppt-export-body">
+                {selectedPlan.layout === 'cover' ? (
                   <div className="ppt-cover-grid">
-                    {previewBullets.slice(0, 3).map((bullet, index) => (
-                      <span key={`${selectedSlide.id}-cover-${index}`}>{bullet}</span>
+                    {selectedPlan.bullets.slice(0, 3).map((bullet, index) => (
+                      <span key={`${selectedPlan.id}-cover-${index}`}>{bullet}</span>
                     ))}
                   </div>
                 ) : null}
 
-                {slideLayout !== 'cover' ? (
-                  <section className="ppt-main-claim">
+                {selectedPlan.layout !== 'cover' ? (
+                  <section className="ppt-export-claim">
                     <span className="ppt-panel-label">核心观点</span>
-                    <p>{primaryPoint}</p>
+                    <p>{selectedPlan.mainClaim}</p>
                   </section>
                 ) : null}
 
-                {slideLayout === 'evidence' ? (
-                  <section className="ppt-evidence-layout">
-                    <div className="ppt-evidence-frame">
-                      <span className="ppt-panel-label">原文图表候选</span>
-                      {previewFigure ? (
-                        <>
-                          <strong>{previewFigure.imageId}</strong>
-                          <p>{previewFigure.caption}</p>
-                          <small>p. {previewFigure.pageNumber} · {previewFigure.suggestedReason ?? previewFigure.suggestedSlide}</small>
-                        </>
-                      ) : (
-                        <>
-                          <strong>Figure / Table</strong>
-                          <p>暂未匹配到适合本页的图表 caption，可在右侧候选区手动挑选。</p>
-                          <small>优先使用方法图、实验结果图或关键表格</small>
-                        </>
-                      )}
-                    </div>
-                    <div className="ppt-callout-stack">
-                      {supportPoints.slice(0, 2).map((bullet, index) => (
-                        <article key={`${selectedSlide.id}-support-${index}`}>
-                          <span>{String(index + 1).padStart(2, '0')}</span>
-                          <p>{bullet}</p>
-                        </article>
+                {selectedPlan.layout !== 'cover' ? (
+                  <section className={`ppt-export-main ppt-export-${selectedPlan.visual.kind}`}>
+                    {selectedPlan.visual.kind !== 'none' ? (
+                      <div className="ppt-export-visual">
+                        <span className="ppt-panel-label">{getVisualKindLabel(selectedPlan.visual.kind)}</span>
+                        <strong>{selectedPlan.visual.title}</strong>
+                        <p>{selectedPlan.visual.caption}</p>
+                        {selectedPlan.visual.steps.length > 0 ? (
+                          <ol>
+                            {selectedPlan.visual.steps.slice(0, 4).map((step, index) => (
+                              <li key={`${selectedPlan.id}-step-${index}`}>{step}</li>
+                            ))}
+                          </ol>
+                        ) : null}
+                        <small>{selectedPlan.visual.sourceLabel}</small>
+                      </div>
+                    ) : null}
+                    <ul className="ppt-export-bullets">
+                      {selectedPlan.bullets.slice(0, 5).map((bullet, index) => (
+                        <li key={`${selectedPlan.id}-bullet-${index}`}>{bullet}</li>
                       ))}
-                    </div>
+                    </ul>
                   </section>
                 ) : null}
 
-                {slideLayout === 'discussion' || slideLayout === 'info' ? (
-                  <section className="ppt-support-grid">
-                    {(supportPoints.length > 0 ? supportPoints : previewBullets.slice(0, 3)).slice(0, 3).map((bullet, index) => (
-                      <article key={`${selectedSlide.id}-card-${index}`}>
-                        <span>{String(index + 1).padStart(2, '0')}</span>
-                        <p>{bullet}</p>
-                      </article>
-                    ))}
-                  </section>
-                ) : null}
-
-                {hiddenBulletCount > 0 ? <span className="ppt-more-bullet">+{hiddenBulletCount} 条要点在右侧编辑</span> : null}
-                {slideLayout !== 'cover' && previewSourceRefs.length > 0 ? (
-                  <section className="ppt-source-cards" aria-label="来源摘录">
+                {selectedPlan.layout !== 'cover' && previewSourceRefs.length > 0 ? (
+                  <section className="ppt-export-source-strip" aria-label="来源摘录">
                     {previewSourceRefs.map((ref, index) => (
-                      <article key={`${selectedSlide.id}-source-card-${index}`}>
-                        <strong>p. {ref.pageNumber} · {ref.section}</strong>
-                        <p>{formatSlidePreviewText(ref.text)}</p>
-                      </article>
+                      <span key={`${selectedPlan.id}-source-card-${index}`}>
+                        p. {ref.pageNumber} · {ref.section}
+                      </span>
                     ))}
-                  </section>
-                ) : null}
-                {slideLayout !== 'cover' && selectedSlide.speakerNotes ? (
-                  <section className="ppt-speaker-strip">
-                    <span>讲稿提示</span>
-                    <p>{formatSlidePreviewText(selectedSlide.speakerNotes)}</p>
                   </section>
                 ) : null}
               </div>
-              {slideLayout !== 'cover' ? (
-                <aside className="ppt-context-rail" aria-label="slide evidence rail">
-                  <strong>证据</strong>
-                  <span>{selectedSlide.section ?? selectedSlide.type}</span>
-                  {previewFigure ? (
-                    <p>
-                      图表：p. {previewFigure.pageNumber} · {formatSlidePreviewText(previewFigure.caption)}
-                    </p>
-                  ) : null}
-                  {previewSourceRefs.slice(0, 2).map((ref, index) => (
-                    <p key={`${selectedSlide.id}-rail-source-${index}`}>
-                      p. {ref.pageNumber} · {ref.section}
-                    </p>
-                  ))}
-                </aside>
-              ) : null}
               <footer>
-                {previewSourceRefs.slice(0, 1).map((ref, index) => (
-                  <span key={`${selectedSlide.id}-ref-${index}`}>来源：p. {ref.pageNumber} · {ref.section}</span>
-                ))}
+                <span>{selectedPlan.sourceFooter}</span>
               </footer>
             </article>
           ) : (
@@ -332,44 +297,17 @@ function getDefaultSlideId(draft: PresentationDraft | null): string {
   return draft?.slides.find((slide) => slide.type === 'background')?.id ?? draft?.slides[0]?.id ?? '';
 }
 
-function getPreviewLayout(slide: PresentationSlide): 'cover' | 'info' | 'evidence' | 'discussion' {
-  if (slide.type === 'cover') {
-    return 'cover';
+function getVisualKindLabel(kind: string): string {
+  switch (kind) {
+    case 'figure':
+      return '原文图表';
+    case 'table':
+      return '对比表';
+    case 'diagram':
+      return '结构图';
+    case 'quote':
+      return '证据摘录';
+    default:
+      return '辅助视觉';
   }
-  if (slide.type === 'info') {
-    return 'info';
-  }
-  if (['method', 'formula', 'experiments', 'results'].includes(slide.type)) {
-    return 'evidence';
-  }
-  return 'discussion';
-}
-
-function buildPreviewSupportCards(slide: PresentationSlide, bullets: string[]): string[] {
-  const cards = bullets.slice(1, 4);
-
-  slide.sourceRefs.forEach((ref) => {
-    if (cards.length >= 3) {
-      return;
-    }
-
-    const text = formatSlidePreviewText(ref.text);
-    if (text && !cards.includes(text)) {
-      cards.push(text);
-    }
-  });
-
-  if (cards.length < 3 && slide.speakerNotes) {
-    cards.push(formatSlidePreviewText(slide.speakerNotes));
-  }
-
-  return cards.slice(0, 3);
-}
-
-function formatSlidePreviewText(text: string): string {
-  return text
-    .replace(/\s*(?:[（(]\s*)?(?:p\.|page)\s*\d+\s*(?:[）)])?\s*$/iu, '')
-    .replace(/\s*锛坧\.\s*\d+锛塦\s*$/u, '')
-    .replace(/\s+/gu, ' ')
-    .trim();
 }

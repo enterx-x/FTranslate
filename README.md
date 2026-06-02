@@ -8,7 +8,7 @@ FTranslate 是一个 Windows 桌面端科研论文工作台，面向论文阅读
 2. 使用本地 PDF.js 阅读；
 3. 可用 PDFMathTranslate / pdf2zh 生成双语 PDF；
 4. 在论文库、研究表格、AI 助手、知识图谱和阅读笔记中整理研究信息；
-5. 可基于当前 PDF 提取文本，生成“研究生组会极简风格”PPT 大纲草稿，并导出 Markdown / JSON。
+5. 可基于当前 PDF 提取文本，生成组会 PPT 草稿，并导出 Markdown / JSON / 可编辑 PPTX。
 
 ## 技术栈
 
@@ -17,6 +17,7 @@ FTranslate 是一个 Windows 桌面端科研论文工作台，面向论文阅读
 - PDFMathTranslate / pdf2zh 作为双语 PDF sidecar
 - Univer 作为独立研究表格
 - KaTeX + Markdown 渲染公式与研究笔记
+- PptxGenJS 生成可编辑 PowerPoint `.pptx`
 - electron-builder 生成 Windows NSIS 安装包
 
 ## 运行与打包
@@ -170,7 +171,7 @@ PDF 阅读页包含轻量笔记编辑器：
 
 ### 组会 PPT 生成器
 
-当前实现的是第一阶段稳定版本，重点是“先生成可检查的结构化草稿”，不直接跳到复杂 PPTX 导出。
+当前实现的是第一阶段稳定版本，重点是“先生成可检查、可编辑、可导出的结构化组会 PPT”。PPTX 导出使用 MIT 开源库 [PptxGenJS](https://github.com/gitbrent/PptxGenJS)，适合 Electron / Vite / React 侧生成标准 OOXML PowerPoint 文件。
 
 已支持：
 
@@ -184,16 +185,16 @@ PDF 阅读页包含轻量笔记编辑器：
 - 编辑当前页标题、bullet 和 speaker notes；
 - 导出 Markdown 大纲；
 - 导出 JSON 大纲；
+- 导出可编辑 `.pptx`，包含深色封面、核心观点、要点卡片、图表证据占位、来源页脚和讲稿备注；
 - 在 AI 助手中提供“组会 PPT 生成”提示词模板。
 
 尚未完成：
 
 - 精准图表裁剪；
-- 真实 `.pptx` 导出；
 - AI 自动重写完整 PPT 大纲；
 - 多篇论文综述式 PPT 自动合并。
 
-后续建议在该草稿流程稳定后，再接入 `pptxgenjs` 或 HTML-to-PPT 导出链路。
+后续建议在该草稿流程稳定后，再补充 PDF 图表区域裁剪和 AI 增强大纲。
 
 ### 设置
 
@@ -297,6 +298,7 @@ src/
       appSettings.ts        本地设置解析与默认值
       knowledgeGraph.ts     知识图谱数据生成与导出
       presentationOutline.ts 组会 PPT 大纲生成与 Markdown 导出
+      presentationPptx.ts    组会 PPTX 版式计划与 PptxGenJS 导出
       markdownDocument.ts   安全文档渲染
       papers.ts             论文库记录
       researchWorkbook.ts   研究表格本地模型
