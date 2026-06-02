@@ -36,6 +36,13 @@ export function PresentationPage(props: PresentationPageProps) {
     [draft, selectedSlideId]
   );
   const markdownPreview = draft ? serializePresentationMarkdown(draft) : '';
+  const previewBullets = selectedSlide?.bullets.map(formatSlidePreviewText).filter(Boolean) ?? [];
+  const primaryPoint = previewBullets[0] ?? selectedSlide?.subtitle ?? '原文未明确说明。';
+  const supportPoints = selectedSlide ? buildPreviewSupportCards(selectedSlide, previewBullets) : [];
+  const hiddenBulletCount = selectedSlide ? Math.max(0, selectedSlide.bullets.length - 4) : 0;
+  const previewSourceRefs = selectedSlide?.sourceRefs.slice(0, 2) ?? [];
+  const previewFigure = selectedSlide?.figures.find((figure) => figure.selected !== false) ?? selectedSlide?.figures[0] ?? null;
+  const slideLayout = selectedSlide ? getPreviewLayout(selectedSlide) : 'discussion';
 
   function updateSlide(patch: Partial<PresentationSlide>): void {
     if (!draft || !selectedSlide) {
@@ -149,7 +156,7 @@ export function PresentationPage(props: PresentationPageProps) {
           </div>
 
           {previewMode === 'slide' && selectedSlide ? (
-            <article className={`ppt-slide-preview ppt-slide-${selectedSlide.type}`}>
+            <article className={`ppt-slide-preview ppt-slide-${selectedSlide.type} ppt-layout-${slideLayout}`}>
               <header className="ppt-slide-topline">
                 <span className="ppt-slide-kicker">{selectedSlide.section ?? selectedSlide.type}</span>
                 <span className="ppt-slide-confidence">{selectedSlide.confidence === 'ai-enhanced' ? 'AI 增强' : '本地草稿'}</span>
@@ -157,25 +164,97 @@ export function PresentationPage(props: PresentationPageProps) {
               <h2>{selectedSlide.title}</h2>
               {selectedSlide.subtitle ? <p className="ppt-slide-subtitle">{selectedSlide.subtitle}</p> : null}
               <div className="ppt-slide-body">
-                <ul>
-                  {selectedSlide.bullets.map((bullet, index) => (
-                    <li key={`${selectedSlide.id}-bullet-${index}`}>{bullet}</li>
-                  ))}
-                </ul>
-                {selectedSlide.figures.length > 0 ? (
-                  <div className="ppt-figure-strip">
-                    {selectedSlide.figures.map((figure) => (
-                      <div key={figure.imageId} className={figure.selected === false ? 'muted-figure' : ''}>
-                        <strong>{figure.imageId}</strong>
-                        <span>{figure.caption}</span>
-                        <small>p. {figure.pageNumber} · {figure.suggestedReason ?? figure.suggestedSlide}</small>
-                      </div>
+                {slideLayout === 'cover' ? (
+                  <div className="ppt-cover-grid">
+                    {previewBullets.slice(0, 3).map((bullet, index) => (
+                      <span key={`${selectedSlide.id}-cover-${index}`}>{bullet}</span>
                     ))}
                   </div>
                 ) : null}
+
+                {slideLayout !== 'cover' ? (
+                  <section className="ppt-main-claim">
+                    <span className="ppt-panel-label">核心观点</span>
+                    <p>{primaryPoint}</p>
+                  </section>
+                ) : null}
+
+                {slideLayout === 'evidence' ? (
+                  <section className="ppt-evidence-layout">
+                    <div className="ppt-evidence-frame">
+                      <span className="ppt-panel-label">原文图表候选</span>
+                      {previewFigure ? (
+                        <>
+                          <strong>{previewFigure.imageId}</strong>
+                          <p>{previewFigure.caption}</p>
+                          <small>p. {previewFigure.pageNumber} · {previewFigure.suggestedReason ?? previewFigure.suggestedSlide}</small>
+                        </>
+                      ) : (
+                        <>
+                          <strong>Figure / Table</strong>
+                          <p>暂未匹配到适合本页的图表 caption，可在右侧候选区手动挑选。</p>
+                          <small>优先使用方法图、实验结果图或关键表格</small>
+                        </>
+                      )}
+                    </div>
+                    <div className="ppt-callout-stack">
+                      {supportPoints.slice(0, 2).map((bullet, index) => (
+                        <article key={`${selectedSlide.id}-support-${index}`}>
+                          <span>{String(index + 1).padStart(2, '0')}</span>
+                          <p>{bullet}</p>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {slideLayout === 'discussion' || slideLayout === 'info' ? (
+                  <section className="ppt-support-grid">
+                    {(supportPoints.length > 0 ? supportPoints : previewBullets.slice(0, 3)).slice(0, 3).map((bullet, index) => (
+                      <article key={`${selectedSlide.id}-card-${index}`}>
+                        <span>{String(index + 1).padStart(2, '0')}</span>
+                        <p>{bullet}</p>
+                      </article>
+                    ))}
+                  </section>
+                ) : null}
+
+                {hiddenBulletCount > 0 ? <span className="ppt-more-bullet">+{hiddenBulletCount} 条要点在右侧编辑</span> : null}
+                {slideLayout !== 'cover' && previewSourceRefs.length > 0 ? (
+                  <section className="ppt-source-cards" aria-label="来源摘录">
+                    {previewSourceRefs.map((ref, index) => (
+                      <article key={`${selectedSlide.id}-source-card-${index}`}>
+                        <strong>p. {ref.pageNumber} · {ref.section}</strong>
+                        <p>{formatSlidePreviewText(ref.text)}</p>
+                      </article>
+                    ))}
+                  </section>
+                ) : null}
+                {slideLayout !== 'cover' && selectedSlide.speakerNotes ? (
+                  <section className="ppt-speaker-strip">
+                    <span>讲稿提示</span>
+                    <p>{formatSlidePreviewText(selectedSlide.speakerNotes)}</p>
+                  </section>
+                ) : null}
               </div>
+              {slideLayout !== 'cover' ? (
+                <aside className="ppt-context-rail" aria-label="slide evidence rail">
+                  <strong>证据</strong>
+                  <span>{selectedSlide.section ?? selectedSlide.type}</span>
+                  {previewFigure ? (
+                    <p>
+                      图表：p. {previewFigure.pageNumber} · {formatSlidePreviewText(previewFigure.caption)}
+                    </p>
+                  ) : null}
+                  {previewSourceRefs.slice(0, 2).map((ref, index) => (
+                    <p key={`${selectedSlide.id}-rail-source-${index}`}>
+                      p. {ref.pageNumber} · {ref.section}
+                    </p>
+                  ))}
+                </aside>
+              ) : null}
               <footer>
-                {selectedSlide.sourceRefs.slice(0, 3).map((ref, index) => (
+                {previewSourceRefs.slice(0, 1).map((ref, index) => (
                   <span key={`${selectedSlide.id}-ref-${index}`}>来源：p. {ref.pageNumber} · {ref.section}</span>
                 ))}
               </footer>
@@ -251,4 +330,46 @@ export function PresentationPage(props: PresentationPageProps) {
 
 function getDefaultSlideId(draft: PresentationDraft | null): string {
   return draft?.slides.find((slide) => slide.type === 'background')?.id ?? draft?.slides[0]?.id ?? '';
+}
+
+function getPreviewLayout(slide: PresentationSlide): 'cover' | 'info' | 'evidence' | 'discussion' {
+  if (slide.type === 'cover') {
+    return 'cover';
+  }
+  if (slide.type === 'info') {
+    return 'info';
+  }
+  if (['method', 'formula', 'experiments', 'results'].includes(slide.type)) {
+    return 'evidence';
+  }
+  return 'discussion';
+}
+
+function buildPreviewSupportCards(slide: PresentationSlide, bullets: string[]): string[] {
+  const cards = bullets.slice(1, 4);
+
+  slide.sourceRefs.forEach((ref) => {
+    if (cards.length >= 3) {
+      return;
+    }
+
+    const text = formatSlidePreviewText(ref.text);
+    if (text && !cards.includes(text)) {
+      cards.push(text);
+    }
+  });
+
+  if (cards.length < 3 && slide.speakerNotes) {
+    cards.push(formatSlidePreviewText(slide.speakerNotes));
+  }
+
+  return cards.slice(0, 3);
+}
+
+function formatSlidePreviewText(text: string): string {
+  return text
+    .replace(/\s*(?:[（(]\s*)?(?:p\.|page)\s*\d+\s*(?:[）)])?\s*$/iu, '')
+    .replace(/\s*锛坧\.\s*\d+锛塦\s*$/u, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
 }

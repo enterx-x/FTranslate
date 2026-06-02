@@ -227,18 +227,21 @@ async function waitForResearchSheetCanvas(client) {
       const text = document.body.textContent ?? '';
       const hasVisibleSheetText = /论文|中文标题|英文标题|创新点|局限点/.test(text);
       const hasMountedSurface = Boolean(container) && allCanvases.length > 0 && hasVisibleSheetText;
+      const initState = container?.dataset.univerInitState ?? '';
+      const hasRenderableSheet = hasPaintedCanvas || hasMountedSurface || /^painted:/u.test(initState);
 
       return {
         canvasCount: allCanvases.length,
         drawableCanvasCount: canvases.length,
         hasPaintedCanvas,
         hasMountedSurface,
-        initState: container?.dataset.univerInitState ?? '',
+        hasRenderableSheet,
+        initState,
         errorState: container?.dataset.univerError ?? ''
       };
     }`);
 
-    if (snapshot.hasPaintedCanvas || snapshot.hasMountedSurface) {
+    if (snapshot.hasRenderableSheet) {
       return snapshot;
     }
 
@@ -664,9 +667,13 @@ async function runPresentationScenario(client) {
     snapshot = await evaluateJson(client, `() => {
       const page = document.querySelector('.presentation-page');
       const preview = document.querySelector('.ppt-slide-preview');
-      const bullets = [...document.querySelectorAll('.ppt-slide-preview li')].map((item) => item.textContent?.trim() ?? '');
+      const bullets = [
+        ...document.querySelectorAll(
+          '.ppt-slide-preview li, .ppt-main-claim p, .ppt-support-grid p, .ppt-callout-stack p, .ppt-cover-grid span'
+        )
+      ].map((item) => item.textContent?.trim() ?? '').filter(Boolean);
       const sources = [...document.querySelectorAll('.ppt-slide-preview footer span')].map((item) => item.textContent?.trim() ?? '');
-      const figures = [...document.querySelectorAll('.ppt-figure-strip div')].map((item) => item.textContent?.trim() ?? '');
+      const figures = [...document.querySelectorAll('.ppt-figure-strip div, .ppt-evidence-frame')].map((item) => item.textContent?.trim() ?? '');
       const thumbs = [...document.querySelectorAll('.presentation-thumbs button')].map((item) => item.textContent?.trim() ?? '');
       return {
         hasPage: Boolean(page),
