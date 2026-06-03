@@ -7822,8 +7822,8 @@ body.is-resizing-layout .layout-resize-handle::after {
   max-width: 78%;
   margin: 0;
   color: #111827;
-  font-size: clamp(25px, 2.35vw, 34px);
-  font-weight: 900;
+  font-size: clamp(20px, 1.72vw, 27px);
+  font-weight: 850;
   letter-spacing: -0.01em;
   line-height: 1.12;
 }
@@ -7853,7 +7853,7 @@ body.is-resizing-layout .layout-resize-handle::after {
 .ppt-export-claim p {
   margin: 3px 0 0;
   color: #172033;
-  font-size: clamp(14px, 1.18vw, 17px);
+  font-size: clamp(12px, 1vw, 14px);
   font-weight: 800;
   line-height: 1.45;
 }
@@ -7901,7 +7901,7 @@ body.is-resizing-layout .layout-resize-handle::after {
   z-index: 1;
   margin-top: 8px;
   color: #111827;
-  font-size: clamp(16px, 1.45vw, 21px);
+  font-size: clamp(13px, 1.08vw, 16px);
   line-height: 1.22;
 }
 
@@ -7912,7 +7912,7 @@ body.is-resizing-layout .layout-resize-handle::after {
   margin: 8px 0 0;
   overflow: hidden;
   color: #475467;
-  font-size: clamp(12px, 1vw, 14px);
+  font-size: clamp(10px, 0.84vw, 12px);
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
@@ -7932,10 +7932,10 @@ body.is-resizing-layout .layout-resize-handle::after {
 .ppt-export-visual li {
   border: 1px solid rgba(99, 102, 241, 0.16);
   border-radius: 10px;
-  padding: 8px 9px;
+  padding: 6px 8px;
   background: rgba(255, 255, 255, 0.72);
   color: #1f2937;
-  font-size: clamp(11px, 0.92vw, 13px);
+  font-size: clamp(9px, 0.78vw, 11px);
   font-weight: 700;
   line-height: 1.35;
 }
@@ -7951,7 +7951,7 @@ body.is-resizing-layout .layout-resize-handle::after {
 .ppt-export-bullets {
   display: grid;
   align-content: center;
-  gap: 10px;
+  gap: 8px;
   min-height: 0;
   margin: 0;
   padding: 0;
@@ -7961,9 +7961,9 @@ body.is-resizing-layout .layout-resize-handle::after {
 .ppt-export-bullets li {
   position: relative;
   border-bottom: 1px solid #eef2f7;
-  padding: 0 0 10px 18px;
+  padding: 0 0 8px 16px;
   color: #1f2937;
-  font-size: clamp(13px, 1.05vw, 15px);
+  font-size: clamp(11px, 0.94vw, 13px);
   font-weight: 700;
   line-height: 1.5;
 }
@@ -7973,8 +7973,8 @@ body.is-resizing-layout .layout-resize-handle::after {
   position: absolute;
   top: 0.66em;
   left: 0;
-  width: 7px;
-  height: 7px;
+  width: 5px;
+  height: 5px;
   border-radius: 999px;
   background: #635bff;
 }
@@ -7990,10 +7990,10 @@ body.is-resizing-layout .layout-resize-handle::after {
 .ppt-export-source-strip span {
   border: 1px solid #e5e7eb;
   border-radius: 999px;
-  padding: 4px 8px;
+  padding: 3px 7px;
   background: #fbfcfe;
   color: #667085;
-  font-size: clamp(9px, 0.78vw, 11px);
+  font-size: clamp(8px, 0.68vw, 10px);
   font-weight: 700;
 }
 
@@ -8005,7 +8005,7 @@ body.is-resizing-layout .layout-resize-handle::after {
   border-top: 1px solid #eef2f7;
   padding-top: 7px;
   color: #667085;
-  font-size: clamp(9px, 0.78vw, 11px);
+  font-size: clamp(8px, 0.68vw, 10px);
 }
 
 .ppt-layout-cover.ppt-export-preview {

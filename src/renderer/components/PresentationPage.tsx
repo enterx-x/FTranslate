@@ -38,11 +38,18 @@ export function PresentationPage(props: PresentationPageProps) {
     [draft, selectedSlideId]
   );
   const slidePlans = useMemo(() => (draft ? buildPptxSlidePlan(draft) : []), [draft]);
+  const slidePlanById = useMemo(() => new Map(slidePlans.map((plan) => [plan.id, plan])), [slidePlans]);
   const selectedPlan = selectedSlide
     ? slidePlans.find((plan) => plan.id === selectedSlide.id) ?? slidePlans[0] ?? null
     : null;
+  const selectedDisplayTitle = selectedPlan
+    ? getSlideDisplayTitle(selectedPlan.type, selectedPlan.title)
+    : selectedSlide?.title ?? '';
   const markdownPreview = draft ? serializePresentationMarkdown(draft) : '';
-  const previewSourceRefs = selectedSlide?.sourceRefs.slice(0, 2) ?? [];
+  const previewSourceFooters = selectedPlan?.sourceFooter
+    .split(/\s+\|\s+/u)
+    .map((item) => item.trim())
+    .filter(Boolean) ?? [];
 
   function updateSlide(patch: Partial<PresentationSlide>): void {
     if (!draft || !selectedSlide) {
@@ -126,19 +133,24 @@ export function PresentationPage(props: PresentationPageProps) {
 
       <section className="presentation-workbench">
         <aside className="presentation-thumbs" aria-label="幻灯片缩略图">
-          {draft.slides.map((slide, index) => (
-            <button
-              key={slide.id}
-              type="button"
-              className={slide.id === selectedSlide?.id ? 'active' : ''}
-              onClick={() => setSelectedSlideId(slide.id)}
-            >
-              <span>{index + 1}</span>
-              <strong>{slide.title}</strong>
-              <small>{slide.section ?? slide.type}</small>
-              <em>{slide.bullets[0] ?? '封面 / 占位页'}</em>
-            </button>
-          ))}
+          {draft.slides.map((slide, index) => {
+            const thumbPlan = slidePlanById.get(slide.id);
+            const thumbTitle = getSlideDisplayTitle(slide.type, thumbPlan?.title ?? slide.title);
+
+            return (
+              <button
+                key={slide.id}
+                type="button"
+                className={slide.id === selectedSlide?.id ? 'active' : ''}
+                onClick={() => setSelectedSlideId(slide.id)}
+              >
+                <span>{index + 1}</span>
+                <strong>{thumbTitle}</strong>
+                <small>{slide.section ?? slide.type}</small>
+                <em>{slide.bullets[0] ?? '封面 / 占位页'}</em>
+              </button>
+            );
+          })}
         </aside>
 
         <section className="presentation-stage">
@@ -167,7 +179,7 @@ export function PresentationPage(props: PresentationPageProps) {
                   {selectedSlide.confidence === 'ai-enhanced' ? 'AI 增强' : '本地草稿'} · {String(selectedPlan.index + 1).padStart(2, '0')}
                 </span>
               </header>
-              <h2>{selectedPlan.title}</h2>
+              <h2>{selectedDisplayTitle}</h2>
               {selectedPlan.subtitle ? <p className="ppt-slide-subtitle">{selectedPlan.subtitle}</p> : null}
               <div className="ppt-export-body">
                 {selectedPlan.layout === 'cover' ? (
@@ -210,12 +222,10 @@ export function PresentationPage(props: PresentationPageProps) {
                   </section>
                 ) : null}
 
-                {selectedPlan.layout !== 'cover' && previewSourceRefs.length > 0 ? (
+                {selectedPlan.layout !== 'cover' && previewSourceFooters.length > 0 ? (
                   <section className="ppt-export-source-strip" aria-label="来源摘录">
-                    {previewSourceRefs.map((ref, index) => (
-                      <span key={`${selectedPlan.id}-source-card-${index}`}>
-                        p. {ref.pageNumber} · {ref.section}
-                      </span>
+                    {previewSourceFooters.map((source, index) => (
+                      <span key={`${selectedPlan.id}-source-card-${index}`}>{source}</span>
                     ))}
                   </section>
                 ) : null}
@@ -239,7 +249,7 @@ export function PresentationPage(props: PresentationPageProps) {
                 </div>
                 <label>
                   标题
-                  <input value={selectedSlide.title} onChange={(event) => updateSlide({ title: event.target.value })} />
+                  <input value={selectedDisplayTitle} onChange={(event) => updateSlide({ title: event.target.value })} />
                 </label>
                 <label>
                   要点
@@ -295,6 +305,24 @@ export function PresentationPage(props: PresentationPageProps) {
 
 function getDefaultSlideId(draft: PresentationDraft | null): string {
   return draft?.slides.find((slide) => slide.type === 'background')?.id ?? draft?.slides[0]?.id ?? '';
+}
+
+function getSlideDisplayTitle(type: PresentationSlide['type'], title: string): string {
+  const normalizedTitles: Partial<Record<PresentationSlide['type'], string>> = {
+    info: '论文基本信息',
+    background: '研究背景',
+    relatedWork: 'Related Work / 现有不足',
+    method: '方法框架',
+    formula: '关键模块或公式',
+    experiments: '实验设置',
+    results: '主要实验结果',
+    innovation: '创新点总结',
+    limitations: '局限性与讨论',
+    inspiration: '对我课题的启发',
+    summary: '总结'
+  };
+
+  return normalizedTitles[type] ?? title;
 }
 
 function getVisualKindLabel(kind: string): string {

@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { PresentationDraft, PresentationFigureCandidate, PresentationSlide, PresentationSlideType } from './presentationOutline';
 import {
   SEMINAR_PPT_CANVAS,
+  SEMINAR_PPT_LAYOUT,
   SEMINAR_PPT_TYPOGRAPHY,
   buildPptxSlidePlan,
   createPresentationPptxBuffer,
+  validatePptxQuality,
   validatePptxSlidePlan
 } from './presentationPptx';
 
@@ -118,10 +120,13 @@ function asciiRatio(text: string): number {
 describe('presentationPptx', () => {
   it('builds a real 16:9 seminar slide plan with controlled academic typography', () => {
     expect(SEMINAR_PPT_CANVAS).toEqual({ width: 13.333, height: 7.5 });
-    expect(SEMINAR_PPT_TYPOGRAPHY.coverTitle).toBeLessThanOrEqual(32);
-    expect(SEMINAR_PPT_TYPOGRAPHY.title).toBeLessThanOrEqual(24);
-    expect(SEMINAR_PPT_TYPOGRAPHY.body).toBeLessThanOrEqual(15);
-    expect(SEMINAR_PPT_TYPOGRAPHY.source).toBeLessThanOrEqual(8);
+    expect(SEMINAR_PPT_TYPOGRAPHY.coverTitle).toBeLessThanOrEqual(28);
+    expect(SEMINAR_PPT_TYPOGRAPHY.title).toBeLessThanOrEqual(22);
+    expect(SEMINAR_PPT_TYPOGRAPHY.mainPoint).toBeLessThanOrEqual(13);
+    expect(SEMINAR_PPT_TYPOGRAPHY.body).toBeLessThanOrEqual(13.5);
+    expect(SEMINAR_PPT_TYPOGRAPHY.takeaway).toBeLessThanOrEqual(9.5);
+    expect(SEMINAR_PPT_TYPOGRAPHY.source).toBeLessThanOrEqual(7.5);
+    expect(SEMINAR_PPT_LAYOUT.takeawayHeight).toBeLessThanOrEqual(0.35);
 
     const plan = buildPptxSlidePlan(makeSeminarDraft());
 
@@ -131,6 +136,41 @@ describe('presentationPptx', () => {
     expect(plan.every((item) => item.speakerNotes.length > 0)).toBe(true);
     expect(plan.filter((item) => item.type !== 'cover').every((item) => item.sourceFooter.includes('p.'))).toBe(true);
     expect(validatePptxSlidePlan(plan)).toEqual([]);
+  });
+
+  it('keeps slide titles, sources, and diagrams aligned with seminar slide types', () => {
+    const plan = buildPptxSlidePlan(makeSeminarDraft());
+    const info = plan.find((item) => item.type === 'info');
+    const background = plan.find((item) => item.type === 'background');
+    const method = plan.find((item) => item.type === 'method');
+
+    expect(info?.title).toBe('论文基本信息');
+    expect(background?.title).toBe('研究背景');
+    expect(method?.title).toBe('方法框架');
+    expect(background?.sourceFooter).not.toMatch(/Results|Experiments|Real-world/i);
+
+    const diagramText = plan.flatMap((item) => item.visual.steps).join(' ');
+    expect(diagramText).not.toMatch(/论文信息|研究对象|论点|方法线索|汇报目标/u);
+    expect(method?.visual.steps.join(' ')).toMatch(/PILOT|RL|感知|控制|动作|机器人|Unitree/u);
+  });
+
+  it('rejects generic placeholder diagrams and mismatched sources in quality checks', () => {
+    const [badSlide] = buildPptxSlidePlan(makeSeminarDraft()).filter((item) => item.type === 'background');
+    const issues = validatePptxQuality([
+      {
+        ...badSlide,
+        title: '论文基本信息',
+        sourceFooter: 'p. 1 · Abstract  |  p. 8 · Real-world Results',
+        visual: {
+          ...badSlide.visual,
+          kind: 'diagram',
+          steps: ['论文信息', '研究对象', '论点', '汇报目标']
+        },
+        bullets: ['增强泛化能力']
+      }
+    ]);
+
+    expect(issues.join('\n')).toMatch(/标题|占位|source|来源/u);
   });
 
   it('rewrites manuscript-like English bullets into compact Chinese seminar bullets', () => {

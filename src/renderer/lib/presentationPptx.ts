@@ -3,6 +3,7 @@ import type {
   PresentationDraft,
   PresentationFigureCandidate,
   PresentationSlide,
+  PresentationSourceRef,
   PresentationSlideType
 } from './presentationOutline';
 
@@ -12,17 +13,22 @@ export const SEMINAR_PPT_CANVAS = {
 } as const;
 
 export const SEMINAR_PPT_TYPOGRAPHY = {
-  coverTitle: 30,
-  coverSubtitle: 13,
-  title: 22,
-  mainPoint: 14,
-  body: 13,
-  bodySmall: 11,
-  label: 8.5,
-  source: 7.5
+  coverTitle: 27,
+  coverSubtitle: 11.5,
+  title: 20.5,
+  mainPoint: 12.6,
+  body: 12.2,
+  bodySmall: 10,
+  label: 8,
+  takeaway: 9,
+  source: 7
 } as const;
 
-export type PptxSlideLayout = 'cover' | 'context' | 'process' | 'figure-focus' | 'comparison' | 'summary';
+export const SEMINAR_PPT_LAYOUT = {
+  takeawayHeight: 0.32
+} as const;
+
+export type PptxSlideLayout = 'cover' | 'context' | 'process' | 'figure-focus' | 'comparison' | 'summary' | 'discussion';
 export type PptxVisualKind = 'none' | 'diagram' | 'figure' | 'table' | 'quote';
 
 export interface PptxSlideVisualPlan {
@@ -71,19 +77,14 @@ const COLOR = {
 const SLIDE_TYPE_META: Record<PresentationSlideType, { title: string; section: string; layout: PptxSlideLayout; visual: PptxVisualKind }> = {
   cover: { title: '文献汇报', section: 'COVER', layout: 'cover', visual: 'none' },
   info: { title: '论文基本信息', section: 'INFO', layout: 'context', visual: 'quote' },
-  background: { title: '研究背景与问题', section: 'BACKGROUND', layout: 'context', visual: 'diagram' },
+  background: { title: '研究背景', section: 'BACKGROUND', layout: 'context', visual: 'diagram' },
   relatedWork: { title: '现有方法不足', section: 'GAP', layout: 'comparison', visual: 'diagram' },
-  method: { title: '方法整体框架', section: 'METHOD', layout: 'figure-focus', visual: 'figure' },
-  formula: { title: '关键模块与核心公式', section: 'MODULE', layout: 'process', visual: 'diagram' },
+  method: { title: '方法框架', section: 'METHOD', layout: 'figure-focus', visual: 'figure' },
+  formula: { title: '关键模块或公式', section: 'MODULE', layout: 'process', visual: 'diagram' },
   experiments: { title: '实验设置', section: 'EVALUATION', layout: 'figure-focus', visual: 'table' },
   results: { title: '主要实验结果', section: 'RESULTS', layout: 'figure-focus', visual: 'figure' },
   innovation: { title: '创新点总结', section: 'CONTRIBUTION', layout: 'context', visual: 'diagram' },
-  limitations: { title: '局限性与讨论', section: 'LIMITS', layout: 'discussion', visual: 'quote' } as unknown as {
-    title: string;
-    section: string;
-    layout: PptxSlideLayout;
-    visual: PptxVisualKind;
-  },
+  limitations: { title: '局限性与讨论', section: 'LIMITS', layout: 'discussion', visual: 'quote' },
   inspiration: { title: '对我课题的启发', section: 'INSPIRATION', layout: 'comparison', visual: 'diagram' },
   summary: { title: '总结', section: 'SUMMARY', layout: 'summary', visual: 'diagram' }
 };
@@ -104,67 +105,122 @@ const TYPE_FALLBACK_BULLETS: Record<PresentationSlideType, string[]> = {
 };
 
 const KEYWORD_BULLETS: Array<{ pattern: RegExp; bullet: string }> = [
-  { pattern: /\bhumanoid|loco[-\s]?manipulation|whole[-\s]?body\b/iu, bullet: '面向复杂地形下的移动操作控制' },
-  { pattern: /\breinforcement learning|RL\b/iu, bullet: '用强化学习训练统一低层控制策略' },
-  { pattern: /\bperceptive|exteroceptive|terrain|unstructured\b/iu, bullet: '引入外部感知以适应非结构化场景' },
-  { pattern: /\bgeneralization|diverse|unseen|cross[-\s]?embodiment\b/iu, bullet: '强调跨任务和未见场景下的泛化能力' },
-  { pattern: /\bbenchmark|baseline|evaluation|experiment|result\b/iu, bullet: '通过对比实验验证性能和稳定性' },
-  { pattern: /\bablation|robustness|failure|limitation\b/iu, bullet: '用消融或失败案例说明适用边界' },
-  { pattern: /\barchitecture|overview|framework|model|controller\b/iu, bullet: '整体框架连接感知、策略和执行输出' },
-  { pattern: /\bformula|equation|loss|objective|optimization\b/iu, bullet: '目标函数约束训练信号和模块协同' },
-  { pattern: /\brobot|policy|task|command\b/iu, bullet: '任务指令最终转化为可执行机器人策略' },
-  { pattern: /\bdata|dataset|demonstration|training\b/iu, bullet: '数据覆盖度直接影响模型训练效果' }
+  { pattern: /\bPILOT\b/iu, bullet: 'PILOT 聚焦感知移动操作' },
+  { pattern: /\bUnitree\s*G1\b/iu, bullet: 'Unitree G1 用于真机验证' },
+  { pattern: /\bhumanoid|loco[-\s]?manipulation|whole[-\s]?body\b/iu, bullet: '人形机器人执行移动操作' },
+  { pattern: /\breinforcement learning|RL\b/iu, bullet: 'RL 训练低层控制策略' },
+  { pattern: /\bperceptive|exteroceptive|terrain|unstructured\b/iu, bullet: '外部感知处理非结构化地形' },
+  { pattern: /\bπ0\.?7|pi0\.?7|VLA|VLM|vision[-\s]?language[-\s]?action\b/iu, bullet: 'VLA/VLM 连接指令和动作' },
+  { pattern: /\bsubgoal images?|episode metadata|context conditioning\b/iu, bullet: '子目标图像提供上下文' },
+  { pattern: /\bdemonstration|autonomous data|multimodal web data|training data\b/iu, bullet: '多源数据支撑策略训练' },
+  { pattern: /\bbenchmark|baseline|evaluation|experiment|result\b/iu, bullet: '对比实验验证核心指标' },
+  { pattern: /\bablation|robustness|failure|limitation\b/iu, bullet: '消融和失败例说明边界' },
+  { pattern: /\barchitecture|overview|framework|model|controller\b/iu, bullet: '框架串联感知、策略、执行' },
+  { pattern: /\bformula|equation|loss|objective|optimization\b/iu, bullet: '目标函数约束训练信号' },
+  { pattern: /\brobot|policy|task|command\b/iu, bullet: '任务指令转成机器人策略' }
 ];
+
+const FORBIDDEN_GENERIC_LABELS = ['论文信息', '研究对象', '论点', '方法线索', '汇报目标'];
+const MAX_BULLET_LENGTH = 30;
+
+const SOURCE_SCOPE: Record<PresentationSlideType, { allow: RegExp; deny?: RegExp }> = {
+  cover: { allow: /.*/u },
+  info: { allow: /abstract|title|info|摘要|基本|论文/iu },
+  background: { allow: /abstract|intro|background|motivation|problem|摘要|引言|背景|动机|问题/iu, deny: /result|experiment|evaluation|real[-\s]?world|ablation|结果|实验|评估|真机|消融/iu },
+  relatedWork: { allow: /related|prior|literature|intro|background|gap|相关|现有|引言|背景|缺口/iu },
+  method: { allow: /method|approach|model|framework|architecture|algorithm|overview|controller|方法|模型|框架|结构|控制器/iu },
+  formula: { allow: /formula|equation|objective|loss|optimization|method|公式|方程|目标|损失|优化|方法/iu },
+  experiments: { allow: /experiment|evaluation|dataset|benchmark|setting|ablation|simulation|real[-\s]?world|实验|评估|数据集|基准|消融|仿真|真机/iu },
+  results: { allow: /result|quantitative|comparison|performance|evaluation|ablation|experiment|结果|对比|性能|评估|消融|实验/iu },
+  innovation: { allow: /abstract|method|approach|contribution|conclusion|innovation|摘要|方法|贡献|创新|结论/iu },
+  limitations: { allow: /limitation|failure|discussion|conclusion|future|局限|失败|讨论|结论|未来/iu },
+  inspiration: { allow: /method|experiment|result|conclusion|future|方法|实验|结果|结论|未来/iu },
+  summary: { allow: /abstract|conclusion|summary|摘要|结论|总结/iu }
+};
 
 export function buildPptxSlidePlan(draft: PresentationDraft): PptxSlidePlan[] {
   return draft.slides.map((slide, index) => {
     const meta = SLIDE_TYPE_META[slide.type];
-    const selectedFigures = slide.figures.filter((figure) => figure.selected !== false);
-    const visual = buildVisualPlan(slide, selectedFigures);
-    const bullets = buildSeminarBullets(slide);
-    const mainClaim = buildMainClaim(slide, bullets);
-    const sourceFooter = buildSourceFooter(slide, visual.figure);
+    const scopedSlide = withScopedSources(slide);
+    const selectedFigures = selectFiguresForSlide(scopedSlide, slide.figures.filter((figure) => figure.selected !== false));
+    const visual = buildVisualPlan(scopedSlide, selectedFigures);
+    const bullets = buildSeminarBullets(scopedSlide);
+    const mainClaim = buildMainClaim(scopedSlide, bullets);
+    const sourceFooter = buildSourceFooter(scopedSlide, visual.figure);
 
     return {
       id: slide.id,
       index,
       layout: meta.layout,
       type: slide.type,
-      title: buildSlideTitle(slide),
-      subtitle: slide.type === 'cover' ? cleanText(slide.subtitle) ?? draft.subtitle : cleanText(slide.subtitle),
-      section: cleanText(slide.section) ?? meta.section,
+      title: buildSlideTitle(scopedSlide),
+      subtitle: scopedSlide.type === 'cover' ? cleanText(scopedSlide.subtitle) ?? draft.subtitle : cleanText(scopedSlide.subtitle),
+      section: cleanText(scopedSlide.section) ?? meta.section,
       mainClaim,
       bullets,
       visual,
       figures: selectedFigures,
       sourceFooter,
-      speakerNotes: buildSpeakerNotes(slide, bullets, visual)
+      speakerNotes: buildSpeakerNotes(scopedSlide, bullets, visual)
     };
   });
 }
 
 export function validatePptxSlidePlan(plan: PptxSlidePlan[]): string[] {
+  return validatePptxQuality(plan);
+}
+
+export function validatePptxQuality(plan: PptxSlidePlan[]): string[] {
   const issues: string[] = [];
 
   if (plan.length < 8) {
     issues.push('PPT 页数过少，无法形成完整组会叙事。');
   }
 
+  if (SEMINAR_PPT_TYPOGRAPHY.title > 22) {
+    issues.push('普通页标题字号超过 22 pt。');
+  }
+  if (SEMINAR_PPT_TYPOGRAPHY.body > 13.5) {
+    issues.push('普通页正文字号超过 13.5 pt。');
+  }
+  if (SEMINAR_PPT_LAYOUT.takeawayHeight > 0.35) {
+    issues.push('本页小结高度超过 0.35 inch。');
+  }
+
   plan.forEach((slide) => {
+    const metaTitle = SLIDE_TYPE_META[slide.type].title;
     if (!slide.title.trim()) {
       issues.push(`第 ${slide.index + 1} 页缺少标题。`);
+    }
+    if (slide.type !== 'cover' && slide.title !== metaTitle) {
+      issues.push(`第 ${slide.index + 1} 页标题与 slide type 不匹配。`);
     }
     if (slide.type !== 'cover' && !slide.sourceFooter.includes('p.')) {
       issues.push(`第 ${slide.index + 1} 页缺少可追溯页码来源。`);
     }
+    if (slide.type === 'background' && /result|experiment|real[-\s]?world|Results|Experiments|真机|实验|结果/iu.test(slide.sourceFooter)) {
+      issues.push(`第 ${slide.index + 1} 页背景来源混入实验或结果章节。`);
+    }
     if (!slide.speakerNotes.trim()) {
       issues.push(`第 ${slide.index + 1} 页缺少讲稿备注。`);
+    }
+    if (slide.visual.steps.some((step) => FORBIDDEN_GENERIC_LABELS.includes(step))) {
+      issues.push(`第 ${slide.index + 1} 页包含通用占位结构图标签。`);
+    }
+    if (slide.type === 'method' && !hasMethodEvidence(slide)) {
+      issues.push(`第 ${slide.index + 1} 页方法页缺少方法相关 bullet 或结构图。`);
+    }
+    if ((slide.type === 'experiments' || slide.type === 'results') && countExperimentEvidenceCategories(slide) < 2) {
+      issues.push(`第 ${slide.index + 1} 页实验/结果页缺少 baseline、metric、result 中至少两类信息。`);
+    }
+    if (!['cover', 'info'].includes(slide.type) && slide.bullets.filter((bullet) => hasChineseText(bullet)).length < 2) {
+      issues.push(`第 ${slide.index + 1} 页中文 bullet 少于 2 条。`);
     }
     if (slide.bullets.length > 5) {
       issues.push(`第 ${slide.index + 1} 页要点超过 5 条。`);
     }
     slide.bullets.forEach((bullet, bulletIndex) => {
-      if (bullet.length > 42) {
+      if (bullet.length > MAX_BULLET_LENGTH) {
         issues.push(`第 ${slide.index + 1} 页第 ${bulletIndex + 1} 条要点过长。`);
       }
       if (asciiRatio(bullet) >= 0.7) {
@@ -308,9 +364,12 @@ function drawCoverSlide(pptx: pptxgen, slide: pptxgen.Slide, plan: PptxSlidePlan
 function drawContextSlide(pptx: pptxgen, slide: pptxgen.Slide, plan: PptxSlidePlan): void {
   drawSlideHeader(slide, plan);
   drawMainPoint(slide, plan, 0.72, 1.12, 7.2, 0.78);
-  drawBulletList(slide, plan.bullets, 0.88, 2.15, 6.65, 2.85);
-  drawCompactSchematic(pptx, slide, plan, 8.15, 1.35, 4.15, 3.85);
-  drawTakeawayStrip(slide, plan, 0.72, 5.55, 11.7, 0.58);
+  const hasDiagram = plan.visual.kind === 'diagram' && plan.visual.steps.length >= 4;
+  drawBulletList(slide, plan.bullets, 0.88, 2.15, hasDiagram ? 6.65 : 10.9, 2.85);
+  if (hasDiagram) {
+    drawCompactSchematic(pptx, slide, plan, 8.15, 1.35, 4.15, 3.85);
+  }
+  drawTakeawayStrip(slide, plan, 0.72, 5.72, 11.7, SEMINAR_PPT_LAYOUT.takeawayHeight);
   drawFooter(slide, plan);
 }
 
@@ -364,7 +423,7 @@ function drawComparisonSlide(pptx: pptxgen, slide: pptxgen.Slide, plan: PptxSlid
       y: 2.72,
       w: 3.05,
       h: 1.35,
-      fontSize: 12.2,
+      fontSize: SEMINAR_PPT_TYPOGRAPHY.body,
       color: COLOR.text,
       fit: 'shrink',
       breakLine: false
@@ -409,7 +468,7 @@ function drawSummarySlide(pptx: pptxgen, slide: pptxgen.Slide, plan: PptxSlidePl
       y: y + 0.13,
       w: 8.6,
       h: 0.28,
-      fontSize: 13.5,
+      fontSize: SEMINAR_PPT_TYPOGRAPHY.body,
       bold: true,
       color: COLOR.ink,
       fit: 'shrink'
@@ -495,8 +554,8 @@ function drawBulletList(
     slide.addShape('ellipse', {
       x,
       y: itemY + 0.08,
-      w: 0.13,
-      h: 0.13,
+      w: 0.1,
+      h: 0.1,
       fill: { color: COLOR.accent },
       line: { color: COLOR.accent }
     });
@@ -504,8 +563,8 @@ function drawBulletList(
       x: x + 0.28,
       y: itemY,
       w,
-      h: compact ? 0.28 : 0.36,
-      fontSize: compact ? 11.6 : SEMINAR_PPT_TYPOGRAPHY.body,
+      h: compact ? 0.27 : 0.34,
+      fontSize: compact ? SEMINAR_PPT_TYPOGRAPHY.bodySmall : SEMINAR_PPT_TYPOGRAPHY.body,
       color: COLOR.text,
       fit: 'shrink',
       breakLine: false
@@ -542,7 +601,7 @@ function drawFigureEvidence(pptx: pptxgen, slide: pptxgen.Slide, plan: PptxSlide
     y: y + h - 0.72,
     w: w - 0.56,
     h: 0.42,
-    fontSize: 9.4,
+    fontSize: SEMINAR_PPT_TYPOGRAPHY.bodySmall,
     color: COLOR.text,
     fit: 'shrink',
     breakLine: false
@@ -651,7 +710,7 @@ function drawInterpretationRail(slide: pptxgen.Slide, plan: PptxSlidePlan, x: nu
     y: y + h - 0.62,
     w: w - 0.36,
     h: 0.25,
-    fontSize: 10.5,
+    fontSize: SEMINAR_PPT_TYPOGRAPHY.takeaway,
     bold: true,
     color: COLOR.ink,
     fit: 'shrink',
@@ -687,7 +746,7 @@ function drawWideProcessDiagram(pptx: pptxgen, slide: pptxgen.Slide, plan: PptxS
       y: y + 0.78,
       w: boxW - 0.36,
       h: 0.62,
-      fontSize: 12,
+      fontSize: 10.5,
       bold: true,
       align: 'center',
       color: COLOR.ink,
@@ -850,17 +909,17 @@ function drawTakeawayStrip(slide: pptxgen.Slide, plan: PptxSlidePlan, x: number,
     w,
     h,
     rectRadius: 0.07,
-    fill: { color: COLOR.dark },
-    line: { color: COLOR.dark }
+    fill: { color: COLOR.accentSoft },
+    line: { color: 'D9DEE8', width: 0.55 }
   });
-  slide.addText(`Takeaway  ${plan.mainClaim}`, {
-    x: x + 0.22,
-    y: y + 0.18,
+  slide.addText(`本页小结  ${truncateText(plan.mainClaim, 24)}`, {
+    x: x + 0.18,
+    y: y + 0.08,
     w: w - 0.44,
     h: 0.18,
-    fontSize: 10,
+    fontSize: SEMINAR_PPT_TYPOGRAPHY.takeaway,
     bold: true,
-    color: 'FFFFFF',
+    color: COLOR.text,
     fit: 'shrink'
   });
 }
@@ -915,7 +974,7 @@ function drawCoverEvidenceBand(slide: pptxgen.Slide, draft: PresentationDraft, x
       y: y + 0.13,
       w: 1.05,
       h: 0.24,
-      fontSize: 15,
+      fontSize: 12.5,
       bold: true,
       color: COLOR.ink
     });
@@ -930,6 +989,66 @@ function drawCoverEvidenceBand(slide: pptxgen.Slide, draft: PresentationDraft, x
   });
 }
 
+function withScopedSources(slide: PresentationSlide): PresentationSlide {
+  const scopedRefs = getScopedSourceRefs(slide);
+  if (scopedRefs.length === 0 || scopedRefs.length === slide.sourceRefs.length) {
+    return slide;
+  }
+  return {
+    ...slide,
+    sourceRefs: scopedRefs
+  };
+}
+
+function getScopedSourceRefs(slide: PresentationSlide): PresentationSourceRef[] {
+  const scope = SOURCE_SCOPE[slide.type];
+  const refs = slide.sourceRefs.filter((ref) => {
+    const section = cleanText(ref.section) ?? '';
+    const text = cleanText(ref.text) ?? '';
+    const haystack = `${section} ${text}`;
+    if (scope.deny?.test(haystack)) {
+      return false;
+    }
+    return scope.allow.test(haystack);
+  });
+  return refs.length > 0 ? refs : slide.sourceRefs;
+}
+
+function selectFiguresForSlide(slide: PresentationSlide, figures: PresentationFigureCandidate[]): PresentationFigureCandidate[] {
+  return figures
+    .map((figure) => ({ figure, score: scoreFigureForSlide(slide, figure) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.figure)
+    .slice(0, 2);
+}
+
+function scoreFigureForSlide(slide: PresentationSlide, figure: PresentationFigureCandidate): number {
+  const caption = cleanText(figure.caption) ?? '';
+  const captionLower = caption.toLowerCase();
+  const sourceText = getSlideEvidenceText(slide).toLowerCase();
+  let score = figure.suggestedSlide === slide.type ? 6 : 0;
+
+  if (slide.type === 'method' || slide.type === 'formula') {
+    if (/architecture|overview|framework|method|model|controller|policy|pipeline|system/i.test(captionLower)) score += 5;
+    if (/fig\.|figure/i.test(captionLower)) score += 2;
+    if (/result|ablation|benchmark|table/i.test(captionLower)) score -= 3;
+  } else if (slide.type === 'experiments' || slide.type === 'results') {
+    if (/result|experiment|evaluation|benchmark|ablation|comparison|table/i.test(captionLower)) score += 5;
+    if (/architecture|overview|method|framework/i.test(captionLower)) score -= 2;
+  } else {
+    score += 1;
+  }
+
+  if (figure.pageNumber > 0 && sourceText.includes(String(figure.pageNumber))) {
+    score += 1;
+  }
+  if (/references|bibliography/i.test(captionLower)) {
+    score -= 8;
+  }
+  return score;
+}
+
 function buildSeminarBullets(slide: PresentationSlide): string[] {
   if (slide.type === 'cover') {
     return compactUnique([cleanText(slide.subtitle), ...TYPE_FALLBACK_BULLETS.cover], 3);
@@ -942,14 +1061,42 @@ function buildSeminarBullets(slide: PresentationSlide): string[] {
     ...slide.sourceRefs.map((ref) => ref.text),
     ...slide.figures.map((figure) => figure.caption)
   ].join(' ');
+  const specificBullets = extractSpecificBullets(slide, sourceText);
   const keywordBullets = KEYWORD_BULLETS.filter((item) => item.pattern.test(sourceText)).map((item) => item.bullet);
   const typeBullets = TYPE_FALLBACK_BULLETS[slide.type];
   const derivedBullets = slide.sourceRefs
-    .slice(0, 2)
+    .slice(0, 3)
     .map((ref) => summarizeRefAsChinese(slide.type, ref.text))
     .filter(Boolean);
 
-  return compactUnique([...keywordBullets, ...derivedBullets, ...typeBullets], 5);
+  return compactUnique([...specificBullets, ...keywordBullets, ...derivedBullets, ...typeBullets], 5);
+}
+
+function extractSpecificBullets(slide: PresentationSlide, sourceText: string): string[] {
+  const bullets: string[] = [];
+  const lower = sourceText.toLowerCase();
+
+  if (/\bPILOT\b/iu.test(sourceText)) bullets.push('PILOT 闭环连接感知和低层控制');
+  if (/\bUnitree\s*G1\b/iu.test(sourceText)) bullets.push('Unitree G1 完成真机验证');
+  if (/\bhumanoid|whole[-\s]?body|loco[-\s]?manipulation\b/iu.test(sourceText)) bullets.push('人形机器人执行移动操作任务');
+  if (/\bRL|reinforcement learning\b/iu.test(sourceText)) bullets.push('RL 训练低层控制策略');
+  if (/\bVLA|VLM|vision[-\s]?language[-\s]?action\b/iu.test(sourceText)) bullets.push('VLA/VLM 连接指令与动作');
+  if (/\bsubgoal images?|episode metadata\b/iu.test(sourceText)) bullets.push('子目标图像约束执行策略');
+  if (/\bdemonstration|autonomous data|multimodal web data\b/iu.test(sourceText)) bullets.push('多源数据支持策略训练');
+  if (/\bbaseline|benchmark|comparison\b/iu.test(sourceText)) bullets.push('baseline 对比支撑结论');
+  if (/\bsuccess|tracking|stability|collision|metric|rate\b/iu.test(sourceText)) bullets.push('指标覆盖成功率和稳定性');
+  if (/\bterrain|unstructured|scene\b/iu.test(sourceText)) bullets.push('非结构化地形暴露控制瓶颈');
+
+  if (slide.type === 'method' || slide.type === 'formula') {
+    if (/\binput|observation|vision|perception|exteroceptive\b/u.test(lower)) bullets.push('输入侧包含外部感知观测');
+    if (/\boutput|action|command|control\b/u.test(lower)) bullets.push('输出侧直接服务机器人动作');
+  }
+  if (slide.type === 'experiments' || slide.type === 'results') {
+    if (/\bsimulation|sim[-\s]?to[-\s]?real|real[-\s]?world\b/u.test(lower)) bullets.push('实验覆盖仿真与真实场景');
+    if (/\bablation|generalization|robustness\b/u.test(lower)) bullets.push('消融验证泛化和鲁棒性');
+  }
+
+  return bullets;
 }
 
 function buildMainClaim(slide: PresentationSlide, bullets: string[]): string {
@@ -976,7 +1123,7 @@ function buildVisualPlan(slide: PresentationSlide, figures: PresentationFigureCa
   if (figure) {
     return {
       kind: meta.visual === 'table' ? 'table' : 'figure',
-      title: meta.visual === 'table' ? '实验/结果表格证据' : '原文图表证据',
+      title: meta.visual === 'table' ? '实验/结果表格证据' : getFigureVisualTitle(slide.type, figure),
       caption: truncateText(figure.caption, 96),
       sourceLabel,
       figure,
@@ -984,18 +1131,18 @@ function buildVisualPlan(slide: PresentationSlide, figures: PresentationFigureCa
     };
   }
 
-  if (['method', 'formula', 'background', 'relatedWork', 'innovation', 'inspiration', 'summary'].includes(slide.type)) {
+  if (['method', 'formula', 'experiments', 'results'].includes(slide.type) && steps.length >= 4 && !hasForbiddenGeneric(steps.join(' '))) {
     return {
       kind: 'diagram',
-      title: '生成式结构示意图',
-      caption: '未找到可直接裁剪的原文图表，使用可编辑结构图表达本页逻辑。',
+      title: getDiagramTitle(slide.type),
+      caption: '未找到可直接裁剪的原文图表，使用可编辑结构图表达原文中的具体流程。',
       sourceLabel,
       steps
     };
   }
 
   return {
-    kind: meta.visual,
+    kind: 'none',
     title: '证据摘要',
     caption: slide.sourceRefs[0] ? truncateText(slide.sourceRefs[0].text, 96) : '原文未明确说明',
     sourceLabel,
@@ -1004,45 +1151,128 @@ function buildVisualPlan(slide: PresentationSlide, figures: PresentationFigureCa
 }
 
 function buildVisualSteps(slide: PresentationSlide): string[] {
-  switch (slide.type) {
-    case 'background':
-      return ['现实需求', '能力瓶颈', '研究问题', '验证目标'];
-    case 'relatedWork':
-      return ['已有方法', '关键假设', '缺口', '本文补位'];
-    case 'method':
-      return ['输入感知', '特征编码', '策略模块', '动作输出'];
-    case 'formula':
-      return ['目标函数', '约束项', '训练信号', '优化结果'];
-    case 'experiments':
-      return ['任务设置', 'Baseline', '评价指标', '真实验证'];
-    case 'results':
-      return ['主结果', '泛化', '稳定性', '消融'];
-    case 'innovation':
-      return ['设计差异', '证据支撑', '适用边界', '可复用点'];
-    case 'limitations':
-      return ['数据依赖', '环境边界', '失败案例', '后续问题'];
-    case 'inspiration':
-      return ['可复用模块', '对照实验', '评价指标', '新 idea'];
-    case 'summary':
-      return ['贡献', '证据', '边界', '下一步'];
-    default:
-      return ['论文信息', '研究对象', '方法线索', '汇报目标'];
+  const sourceText = getSlideEvidenceText(slide);
+  const lower = sourceText.toLowerCase();
+  if (slide.type === 'method' || slide.type === 'formula') {
+    if (/\bπ0\.?7|pi0\.?7|VLA|VLM|vision[-\s]?language[-\s]?action\b/iu.test(sourceText)) {
+      return compactUnique(['语言/视觉上下文', 'VLA 策略模型', '子目标图像', '动作输出', '多源数据训练'], 5);
+    }
+    if (/\bPILOT|humanoid|loco[-\s]?manipulation|whole[-\s]?body\b/iu.test(sourceText)) {
+      return compactUnique(['外部感知', 'RL 低层控制器', '全身运动策略', '机器人动作输出', '稳定性目标'], 5);
+    }
+    if (/\bmodel|controller|policy|architecture|framework|objective|loss\b/iu.test(lower)) {
+      return compactUnique(['输入观测', '编码/建模模块', '策略/规划模块', '动作输出', '训练目标'], 5);
+    }
   }
+  if (slide.type === 'experiments' || slide.type === 'results') {
+    const steps = [
+      /\bPILOT|π0\.?7|pi0\.?7\b/iu.test(sourceText) ? '本文方法' : undefined,
+      /\bbaseline|benchmark|comparison|对比\b/iu.test(lower) ? 'Baselines' : undefined,
+      /\bsuccess|tracking|stability|metric|rate|指标|成功率|稳定性\b/iu.test(lower) ? '核心指标' : undefined,
+      /\bsimulation|real[-\s]?world|Unitree|robot|仿真|真机\b/iu.test(lower) ? '仿真/真机任务' : undefined,
+      /\bablation|generalization|robustness|消融|泛化|鲁棒\b/iu.test(lower) ? '消融/泛化验证' : undefined
+    ];
+    return compactUnique(steps, 5);
+  }
+  return [];
+}
+
+function getSlideEvidenceText(slide: PresentationSlide): string {
+  return [
+    slide.title,
+    slide.section,
+    ...slide.bullets,
+    ...slide.sourceRefs.map((ref) => `${ref.section} ${ref.text}`),
+    ...slide.figures.map((figure) => figure.caption)
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function getFigureVisualTitle(type: PresentationSlideType, figure: PresentationFigureCandidate): string {
+  if (type === 'method' || type === 'formula') {
+    return /architecture|overview|framework|method|controller|policy/i.test(figure.caption)
+      ? '原文方法图证据'
+      : '方法相关图表证据';
+  }
+  if (type === 'experiments' || type === 'results') {
+    return /table/i.test(figure.caption) ? '实验结果表证据' : '实验结果图证据';
+  }
+  return '原文图表证据';
+}
+
+function getDiagramTitle(type: PresentationSlideType): string {
+  if (type === 'method' || type === 'formula') return '可编辑方法流程图';
+  if (type === 'experiments' || type === 'results') return '实验对比逻辑图';
+  return '可编辑证据结构图';
+}
+
+function hasForbiddenGeneric(text: string): boolean {
+  return FORBIDDEN_GENERIC_LABELS.some((label) => text.includes(label));
+}
+
+function hasMethodEvidence(slide: PptxSlidePlan): boolean {
+  const evidence = [
+    slide.mainClaim,
+    ...slide.bullets,
+    slide.visual.title,
+    slide.visual.caption,
+    ...slide.visual.steps
+  ].join(' ');
+  return /PILOT|RL|VLA|VLM|Unitree|感知|控制|策略|模型|动作|训练|controller|policy|model|action|objective/i.test(evidence);
+}
+
+function countExperimentEvidenceCategories(slide: PptxSlidePlan): number {
+  const evidence = [
+    slide.mainClaim,
+    ...slide.bullets,
+    slide.visual.title,
+    slide.visual.caption,
+    ...slide.visual.steps,
+    slide.sourceFooter
+  ].join(' ');
+  let count = 0;
+  if (/baseline|benchmark|comparison|对比|本文方法|Baselines/i.test(evidence)) count += 1;
+  if (/metric|success|tracking|stability|rate|指标|成功率|稳定性/i.test(evidence)) count += 1;
+  if (/result|performance|ablation|generalization|robustness|结果|性能|消融|泛化|鲁棒/i.test(evidence)) count += 1;
+  return count;
+}
+
+function hasChineseText(text: string): boolean {
+  return /[\u4e00-\u9fff]/u.test(text);
 }
 
 function summarizeRefAsChinese(type: PresentationSlideType, text: string): string {
   const lower = text.toLowerCase();
+  if (/\bPILOT\b/iu.test(text)) {
+    return 'PILOT 解决感知移动操作控制';
+  }
+  if (/\bUnitree\s*G1\b/iu.test(text)) {
+    return 'Unitree G1 支撑真实机器人验证';
+  }
+  if (/\bπ0\.?7|pi0\.?7\b/iu.test(text)) {
+    return 'π0.7 依靠上下文调节策略';
+  }
+  if (/\bVLA|VLM|vision[-\s]?language[-\s]?action\b/iu.test(text)) {
+    return 'VLA/VLM 连接语言指令与动作';
+  }
+  if (/\bsubgoal images?|episode metadata\b/iu.test(text)) {
+    return '子目标图像和元数据约束策略';
+  }
+  if (/\bdemonstration|autonomous data|multimodal web data\b/iu.test(text)) {
+    return '机器人和非机器人数据共同训练';
+  }
   if (/\bterrain|unstructured|scene|environment\b/u.test(lower)) {
-    return '研究重点落在非结构化环境中的可靠执行';
+    return type === 'background' ? '非结构化环境暴露控制瓶颈' : '非结构化场景检验可靠执行';
   }
   if (/\bcontrol|controller|policy|action\b/u.test(lower)) {
-    return '控制策略需要同时处理运动和任务执行';
+    return '策略同时处理运动和任务执行';
   }
   if (/\bexperiment|evaluation|baseline|simulation|real\b/u.test(lower)) {
-    return '实验围绕仿真、真实平台和 baseline 展开';
+    return '实验覆盖 baseline、仿真与真机';
   }
   if (/\bmethod|framework|architecture|model\b/u.test(lower)) {
-    return '方法强调模块协同而非单一组件堆叠';
+    return '方法强调模型、控制和执行协同';
   }
   if (/\blimitation|future|failure\b/u.test(lower)) {
     return '后续仍需验证部署边界和失败场景';
@@ -1073,13 +1303,15 @@ function compactChineseBullet(text?: string): string | undefined {
     .replace(/\s*\(p\.\s*\d+\)\s*$/iu, '')
     .trim();
   if (asciiRatio(normalized) > 0.58 && normalized.length > 30) {
-    return '原文信息已压缩为中文汇报要点';
+    return summarizeRefAsChinese('summary', normalized);
   }
-  return truncateText(normalized, 42);
+  return truncateText(normalized, MAX_BULLET_LENGTH);
 }
 
 function buildSourceFooter(slide: PresentationSlide, figure?: PresentationFigureCandidate): string {
-  const refs = slide.sourceRefs.slice(0, 2).map((ref) => `p. ${ref.pageNumber} · ${cleanText(ref.section) ?? 'PDF'}`);
+  const refs = getScopedSourceRefs(slide)
+    .slice(0, 2)
+    .map((ref) => `p. ${ref.pageNumber} · ${cleanText(ref.section) ?? 'PDF'}`);
   if (refs.length > 0) {
     return refs.join('  |  ');
   }

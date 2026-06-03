@@ -115,7 +115,7 @@ export function buildLocalPresentationDraft(input: BuildPresentationDraftInput):
     buildContentSlide({
       id: 'slide-background',
       type: 'background',
-      title: '研究背景与问题',
+      title: '研究背景',
       section: 'Introduction',
       refs: pickRefs([buckets.introduction, buckets.abstract], 4),
       fallback: '原文未明确说明研究背景或问题。',
@@ -133,7 +133,7 @@ export function buildLocalPresentationDraft(input: BuildPresentationDraftInput):
     buildContentSlide({
       id: 'slide-method',
       type: 'method',
-      title: '方法整体框架',
+      title: '方法框架',
       section: 'Method',
       refs: pickRefs([buckets.method, buckets.abstract], 4),
       figures: pickFigures(figures, 'method', 2),
@@ -163,7 +163,7 @@ export function buildLocalPresentationDraft(input: BuildPresentationDraftInput):
     buildContentSlide({
       id: 'slide-results',
       type: 'results',
-      title: '实验结果',
+      title: '主要实验结果',
       section: 'Results',
       refs: pickRefs([buckets.results, buckets.experiments], 4),
       figures: pickFigures(figures, 'experiments', 2),

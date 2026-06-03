@@ -746,28 +746,35 @@ async function runAiAssistantScenario(client) {
   await clickSidebarSection(client, 'ai');
   await waitForAppReady(client);
 
-  const before = await evaluateJson(client, `() => {
-    const page = document.querySelector('.ai-assistant-page');
-    const layout = document.querySelector('.ai-assistant-layout');
-    const handle = document.querySelector('.layout-resize-handle');
-    const main = document.querySelector('.ai-assistant-main-column');
-    const side = document.querySelector('.ai-assistant-side-column');
-    const handleRect = handle?.getBoundingClientRect();
-    const layoutRect = layout?.getBoundingClientRect();
-    return {
-      hasAiAssistant: Boolean(page && layout && main && side),
-      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
-      bodyIsResizing: document.body.classList.contains('is-resizing-layout'),
-      layoutColumns: layout ? getComputedStyle(layout).gridTemplateColumns : '',
-      handleVisible: Boolean(handle && getComputedStyle(handle).display !== 'none' && handleRect && handleRect.width > 0),
-      mainWidth: main?.getBoundingClientRect().width ?? 0,
-      sideWidth: side?.getBoundingClientRect().width ?? 0,
-      layoutWidth: layoutRect?.width ?? 0,
-      handle: handleRect
-        ? { x: handleRect.left + handleRect.width / 2, y: handleRect.top + handleRect.height / 2 }
-        : null
-    };
-  }`);
+  let before = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    before = await evaluateJson(client, `() => {
+      const page = document.querySelector('.ai-assistant-page');
+      const layout = document.querySelector('.ai-assistant-layout');
+      const handle = document.querySelector('.layout-resize-handle');
+      const main = document.querySelector('.ai-assistant-main-column');
+      const side = document.querySelector('.ai-assistant-side-column');
+      const handleRect = handle?.getBoundingClientRect();
+      const layoutRect = layout?.getBoundingClientRect();
+      return {
+        hasAiAssistant: Boolean(page && layout && main && side),
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+        bodyIsResizing: document.body.classList.contains('is-resizing-layout'),
+        layoutColumns: layout ? getComputedStyle(layout).gridTemplateColumns : '',
+        handleVisible: Boolean(handle && getComputedStyle(handle).display !== 'none' && handleRect && handleRect.width > 0),
+        mainWidth: main?.getBoundingClientRect().width ?? 0,
+        sideWidth: side?.getBoundingClientRect().width ?? 0,
+        layoutWidth: layoutRect?.width ?? 0,
+        handle: handleRect
+          ? { x: handleRect.left + handleRect.width / 2, y: handleRect.top + handleRect.height / 2 }
+          : null
+      };
+    }`);
+    if (before.hasAiAssistant) {
+      break;
+    }
+    await wait(250);
+  }
 
   if (!before.hasAiAssistant) {
     throw new Error(`aiAssistant: expected AI assistant layout, got ${JSON.stringify(before)}`);
