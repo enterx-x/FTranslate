@@ -6013,6 +6013,17 @@ body.is-resizing-layout .layout-resize-handle::after {
   font-size: 13px;
 }
 
+.inline-alert {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(185, 28, 28, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(254, 242, 242, 0.86);
+  color: #7f1d1d;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .presentation-workbench {
   display: grid;
   grid-template-columns: minmax(170px, 0.78fr) minmax(420px, 2.1fr) minmax(310px, 1fr);

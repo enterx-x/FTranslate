@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { MarkdownDocument } from './MarkdownDocument';
 import {
+  applyAiEnhancedPresentationDraft,
+  buildPresentationAiEnhancementPrompt,
   serializePresentationMarkdown,
   type PresentationDraft,
   type PresentationSlide
@@ -27,6 +29,8 @@ export function PresentationPage(props: PresentationPageProps) {
   const [draft, setDraft] = useState<PresentationDraft | null>(props.draft);
   const [selectedSlideId, setSelectedSlideId] = useState(getDefaultSlideId(props.draft));
   const [previewMode, setPreviewMode] = useState<PreviewMode>('slide');
+  const [isEnhancingOutline, setIsEnhancingOutline] = useState(false);
+  const [enhanceError, setEnhanceError] = useState('');
 
   useEffect(() => {
     setDraft(props.draft);
@@ -69,6 +73,26 @@ export function PresentationPage(props: PresentationPageProps) {
         .map((line) => line.replace(/^[-*]\s*/u, '').trim())
         .filter(Boolean)
     });
+  }
+
+  async function handleEnhanceOutlineWithAi(): Promise<void> {
+    if (!draft || isEnhancingOutline) {
+      return;
+    }
+
+    setIsEnhancingOutline(true);
+    setEnhanceError('');
+    try {
+      const prompt = buildPresentationAiEnhancementPrompt(draft);
+      const aiText = await window.electronAPI.completeWithAi(prompt);
+      const nextDraft = applyAiEnhancedPresentationDraft(draft, aiText);
+      setDraft(nextDraft);
+      setSelectedSlideId(getDefaultSlideId(nextDraft));
+    } catch (error) {
+      setEnhanceError(`AI outline enhancement failed: ${String(error)}`);
+    } finally {
+      setIsEnhancingOutline(false);
+    }
   }
 
   if (!draft) {
@@ -116,6 +140,15 @@ export function PresentationPage(props: PresentationPageProps) {
             <img className="button-icon" src={refreshIcon} alt="" />
             <span>重新生成</span>
           </button>
+          <button
+            type="button"
+            className="secondary-button button-with-icon"
+            disabled={isEnhancingOutline}
+            onClick={handleEnhanceOutlineWithAi}
+          >
+            <img className="button-icon" src={refreshIcon} alt="" />
+            <span>{isEnhancingOutline ? 'AI 增强中...' : 'AI 增强大纲'}</span>
+          </button>
           <button type="button" className="secondary-button button-with-icon" onClick={() => props.onExportJson(draft)}>
             <img className="button-icon" src={saveIcon} alt="" />
             <span>导出 JSON</span>
@@ -130,6 +163,8 @@ export function PresentationPage(props: PresentationPageProps) {
           </button>
         </div>
       </header>
+
+      {enhanceError ? <div className="inline-alert">{enhanceError}</div> : null}
 
       <section className="presentation-workbench">
         <aside className="presentation-thumbs" aria-label="幻灯片缩略图">

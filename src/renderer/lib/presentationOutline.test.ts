@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ExtractedPdfBlock } from './pdfTextStructure';
-import { buildLocalPresentationDraft, buildPresentationDraft, serializePresentationMarkdown } from './presentationOutline';
+import {
+  applyAiEnhancedPresentationDraft,
+  buildLocalPresentationDraft,
+  buildPresentationDraft,
+  buildPresentationAiEnhancementPrompt,
+  serializePresentationMarkdown
+} from './presentationOutline';
 import type { PaperRecord } from './papers';
 
 function block(partial: Partial<ExtractedPdfBlock> & Pick<ExtractedPdfBlock, 'original'>): ExtractedPdfBlock {
@@ -12,6 +18,7 @@ function block(partial: Partial<ExtractedPdfBlock> & Pick<ExtractedPdfBlock, 'or
     original: partial.original,
     translation: partial.translation ?? '',
     sourceHash: partial.sourceHash ?? partial.original.slice(0, 16),
+    bounds: partial.bounds,
     sectionId: partial.sectionId,
     sectionOrder: partial.sectionOrder,
     paragraphOrder: partial.paragraphOrder
@@ -374,5 +381,81 @@ describe('presentationOutline', () => {
     expect(markdown).toContain('来源');
     expect(markdown).toContain('p. 1');
     expect(markdown).toContain('Table 1. Main quantitative results.');
+  });
+
+  it('keeps figure crop metadata when caption blocks include PDF coordinates', () => {
+    const draft = buildPresentationDraft({
+      papers: [paper({ englishTitle: 'Figure Crop Paper' })],
+      blocks: [
+        block({
+          type: 'caption',
+          section: 'Method',
+          page: 4,
+          original: 'Fig. 2. Architecture overview of the policy and controller.',
+          bounds: {
+            x: 86,
+            y: 610,
+            width: 410,
+            height: 18,
+            pageWidth: 612,
+            pageHeight: 792
+          }
+        })
+      ]
+    });
+
+    expect(draft.figures[0].cropStatus).toBe('crop-ready');
+    expect(draft.figures[0].cropBox).toMatchObject({
+      pageWidth: 612,
+      pageHeight: 792
+    });
+    expect(draft.figures[0].cropBox?.y).toBeLessThan(610);
+    expect(draft.figures[0].cropBox?.height).toBeGreaterThan(120);
+  });
+
+  it('applies AI-enhanced slide bullets without dropping sources or figures', () => {
+    const draft = buildPresentationDraft({
+      papers: [paper({ englishTitle: 'AI Enhanced Robot Paper' })],
+      blocks: [
+        block({
+          section: 'Method',
+          page: 3,
+          original: 'The model consumes RGB observations, proprioceptive states, and language goals before outputting low-level robot actions.'
+        }),
+        block({
+          type: 'caption',
+          section: 'Method',
+          page: 3,
+          original: 'Fig. 1. Policy network with observation encoder and action head.'
+        })
+      ],
+      targetSlideCount: 8
+    });
+    const prompt = buildPresentationAiEnhancementPrompt(draft);
+    const method = draft.slides.find((slide) => slide.type === 'method');
+    const enhanced = applyAiEnhancedPresentationDraft(
+      draft,
+      JSON.stringify({
+        slides: [
+          {
+            id: method?.id,
+            type: 'method',
+            title: '方法框架',
+            bullets: [
+              'RGB 观测、机器人本体状态和语言目标共同输入策略',
+              '观测编码器提取场景状态，动作头输出低层动作'
+            ],
+            speakerNotes: '讲清输入、编码器和动作输出的闭环关系。'
+          }
+        ]
+      })
+    );
+    const enhancedMethod = enhanced.slides.find((slide) => slide.id === method?.id);
+
+    expect(prompt.userPrompt).toContain(method?.id);
+    expect(enhancedMethod?.confidence).toBe('ai-enhanced');
+    expect(enhancedMethod?.bullets[0]).toContain('RGB');
+    expect(enhancedMethod?.sourceRefs).toEqual(method?.sourceRefs);
+    expect(enhancedMethod?.figures).toEqual(method?.figures);
   });
 });

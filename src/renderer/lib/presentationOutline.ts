@@ -37,6 +37,19 @@ export interface PresentationFigureCandidate {
   suggestedSlide: PresentationSlideType;
   selected?: boolean;
   suggestedReason?: string;
+  cropBox?: PresentationFigureCropBox;
+  cropStatus?: 'caption-only' | 'crop-ready' | 'image-ready';
+  imageDataUrl?: string;
+  imageMimeType?: 'image/png' | 'image/jpeg';
+}
+
+export interface PresentationFigureCropBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  pageWidth: number;
+  pageHeight: number;
 }
 
 export interface PresentationSlide {
@@ -67,6 +80,11 @@ export interface BuildPresentationDraftInput {
   blocks: ExtractedPdfBlock[];
   targetSlideCount?: number;
   speakerName?: string;
+}
+
+export interface PresentationAiEnhancementPrompt {
+  systemPrompt: string;
+  userPrompt: string;
 }
 
 interface SectionBucket {
@@ -269,6 +287,135 @@ export function serializePresentationMarkdown(draft: PresentationDraft): string 
   return lines.join('\n').trimEnd() + '\n';
 }
 
+export function buildPresentationAiEnhancementPrompt(draft: PresentationDraft): PresentationAiEnhancementPrompt {
+  const compactSlides = draft.slides
+    .filter((slide) => slide.type !== 'cover')
+    .map((slide) => ({
+      id: slide.id,
+      type: slide.type,
+      title: slide.title,
+      bullets: slide.bullets.slice(0, 5),
+      sources: slide.sourceRefs.slice(0, 4).map((ref) => ({
+        pageNumber: ref.pageNumber,
+        section: ref.section,
+        text: ref.text
+      })),
+      figures: slide.figures.slice(0, 2).map((figure) => ({
+        imageId: figure.imageId,
+        pageNumber: figure.pageNumber,
+        caption: figure.caption,
+        suggestedSlide: figure.suggestedSlide
+      }))
+    }));
+
+  return {
+    systemPrompt: [
+      'You are a rigorous graduate seminar slide editor.',
+      'Rewrite slide bullets to be specific, source-grounded, concise, and suitable for an academic group meeting.',
+      'Do not invent facts. Preserve citation/page traceability. Output strict JSON only.'
+    ].join('\n'),
+    userPrompt: [
+      'Rewrite the following PPT outline.',
+      'Return JSON with this exact shape: {"slides":[{"id":"slide-id","type":"method","title":"...","bullets":["..."],"speakerNotes":"..."}]}',
+      'Rules:',
+      '- Match every slide by id.',
+      '- Keep each slide to 3-5 bullets.',
+      '- Each bullet should be concrete and mention paper-specific objects, modules, tasks, metrics, baselines, platforms, or results when the sources support it.',
+      '- Do not output Markdown fences or explanations.',
+      '- Do not remove source pages or figure ids; the app will keep them separately.',
+      '',
+      JSON.stringify(
+        {
+          title: draft.title,
+          sourcePapers: draft.sourcePapers,
+          slides: compactSlides
+        },
+        null,
+        2
+      )
+    ].join('\n')
+  };
+}
+
+export function applyAiEnhancedPresentationDraft(draft: PresentationDraft, aiText: string): PresentationDraft {
+  const parsed = parseAiEnhancementResponse(aiText);
+  if (!parsed || !Array.isArray(parsed.slides)) {
+    throw new Error('AI did not return a valid slides array.');
+  }
+
+  const patchById = new Map<string, AiEnhancedSlidePatch>();
+  parsed.slides.forEach((item) => {
+    if (!item || typeof item !== 'object') {
+      return;
+    }
+    const patch = item as AiEnhancedSlidePatch;
+    if (typeof patch.id === 'string' && patch.id.trim()) {
+      patchById.set(patch.id, patch);
+    }
+  });
+
+  return {
+    ...draft,
+    subtitle: `${draft.subtitle} · AI enhanced`,
+    slides: draft.slides.map((slide) => {
+      const patch = patchById.get(slide.id);
+      if (!patch) {
+        return slide;
+      }
+
+      const bullets = sanitizeAiBullets(patch.bullets);
+      return {
+        ...slide,
+        title: typeof patch.title === 'string' && patch.title.trim() ? patch.title.trim() : slide.title,
+        subtitle: typeof patch.subtitle === 'string' && patch.subtitle.trim() ? patch.subtitle.trim() : slide.subtitle,
+        bullets: bullets.length > 0 ? bullets : slide.bullets,
+        speakerNotes:
+          typeof patch.speakerNotes === 'string' && patch.speakerNotes.trim()
+            ? patch.speakerNotes.trim()
+            : slide.speakerNotes,
+        confidence: 'ai-enhanced'
+      };
+    })
+  };
+}
+
+interface AiEnhancedSlidePatch {
+  id?: string;
+  type?: PresentationSlideType;
+  title?: string;
+  subtitle?: string;
+  bullets?: unknown;
+  speakerNotes?: string;
+}
+
+function parseAiEnhancementResponse(aiText: string): { slides?: unknown[] } | null {
+  const trimmed = aiText.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/iu)?.[1]?.trim();
+  const candidate = fenced ?? trimmed;
+  const jsonStart = candidate.indexOf('{');
+  const jsonEnd = candidate.lastIndexOf('}');
+  if (jsonStart < 0 || jsonEnd <= jsonStart) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(candidate.slice(jsonStart, jsonEnd + 1)) as { slides?: unknown[] };
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeAiBullets(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => (typeof item === 'string' ? normalizeInlineText(item, 96) : ''))
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
 export function extractFigureCandidates(blocks: ExtractedPdfBlock[]): PresentationFigureCandidate[] {
   let figureIndex = 0;
 
@@ -278,6 +425,7 @@ export function extractFigureCandidates(blocks: ExtractedPdfBlock[]): Presentati
     .map((block) => {
       figureIndex += 1;
       const suggestedSlide = suggestFigureSlide(block.original);
+      const cropBox = inferFigureCropBoxFromCaptionBlock(block);
       return {
         imageId: `fig-${block.page}-${figureIndex}`,
         pageNumber: block.page,
@@ -285,9 +433,41 @@ export function extractFigureCandidates(blocks: ExtractedPdfBlock[]): Presentati
         source: 'pdf-caption' as const,
         suggestedSlide,
         selected: true,
-        suggestedReason: getFigureReason(suggestedSlide)
+        suggestedReason: getFigureReason(suggestedSlide),
+        cropBox,
+        cropStatus: cropBox ? 'crop-ready' : 'caption-only'
       };
     });
+}
+
+export function inferFigureCropBoxFromCaptionBlock(block: ExtractedPdfBlock): PresentationFigureCropBox | undefined {
+  const bounds = block.bounds;
+  if (!bounds || !bounds.pageWidth || !bounds.pageHeight) {
+    return undefined;
+  }
+
+  const pageWidth = bounds.pageWidth;
+  const pageHeight = bounds.pageHeight;
+  const horizontalMargin = Math.max(14, pageWidth * 0.025);
+  const figurePadding = Math.max(8, pageHeight * 0.012);
+  const captionTop = clamp(bounds.y, 0, pageHeight);
+  const targetHeight = clamp(pageHeight * 0.32, pageHeight * 0.18, pageHeight * 0.48);
+  const cropY = clamp(captionTop - targetHeight - figurePadding, pageHeight * 0.04, Math.max(pageHeight * 0.04, captionTop - 30));
+  const cropHeight = clamp(captionTop - cropY - figurePadding, pageHeight * 0.12, pageHeight * 0.52);
+  const wideCaption = bounds.width >= pageWidth * 0.42;
+  const cropWidth = wideCaption
+    ? clamp(bounds.width + horizontalMargin * 2, pageWidth * 0.48, pageWidth * 0.92)
+    : clamp(Math.max(bounds.width + horizontalMargin * 2, pageWidth * 0.34), pageWidth * 0.28, pageWidth * 0.5);
+  const cropX = clamp(bounds.x - horizontalMargin, pageWidth * 0.03, Math.max(pageWidth * 0.03, pageWidth - cropWidth));
+
+  return {
+    x: roundNumber(cropX),
+    y: roundNumber(cropY),
+    width: roundNumber(clamp(cropWidth, 1, pageWidth - cropX)),
+    height: roundNumber(clamp(cropHeight, 1, pageHeight - cropY)),
+    pageWidth: roundNumber(pageWidth),
+    pageHeight: roundNumber(pageHeight)
+  };
 }
 
 function buildCoverSlide(title: string, paper: PaperRecord | undefined, speakerName?: string): PresentationSlide {
@@ -741,4 +921,12 @@ function getPaperTitle(paper: PaperRecord | undefined): string {
 
 function getUsedPages(slides: PresentationSlide[]): number[] {
   return [...new Set(slides.flatMap((slide) => slide.sourceRefs.map((ref) => ref.pageNumber)))].sort((a, b) => a - b);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function roundNumber(value: number): number {
+  return Math.round(value * 100) / 100;
 }

@@ -626,6 +626,12 @@ function drawFigurePlaceholder(
   w: number,
   h: number
 ): void {
+  const imageData = getFigureImageData(plan.visual.figure);
+  if (imageData) {
+    drawFigureImage(slide, plan, imageData, x, y, w, h);
+    return;
+  }
+
   slide.addShape(pptx.ShapeType.rect, {
     x,
     y,
@@ -683,6 +689,70 @@ function drawFigurePlaceholder(
     fontSize: 8,
     color: COLOR.weak
   });
+}
+
+function drawFigureImage(
+  slide: pptxgen.Slide,
+  plan: PptxSlidePlan,
+  imageData: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+): void {
+  slide.addShape('rect', {
+    x,
+    y,
+    w,
+    h,
+    fill: { color: 'FFFFFF' },
+    line: { color: 'CBD5E1', width: 0.8, transparency: 10 }
+  });
+
+  const cropBox = plan.visual.figure?.cropBox;
+  const aspectRatio = cropBox && cropBox.height > 0 ? cropBox.width / cropBox.height : 1.4;
+  const imageFrame = fitRectIntoBox(aspectRatio, x + 0.12, y + 0.12, w - 0.24, h - 0.24);
+  slide.addImage({
+    data: imageData,
+    x: imageFrame.x,
+    y: imageFrame.y,
+    w: imageFrame.w,
+    h: imageFrame.h
+  });
+}
+
+function getFigureImageData(figure?: PresentationFigureCandidate): string | null {
+  if (!figure?.imageDataUrl || !/^data:image\/(png|jpeg|jpg);base64,/iu.test(figure.imageDataUrl)) {
+    return null;
+  }
+  return figure.imageDataUrl;
+}
+
+function fitRectIntoBox(
+  aspectRatio: number,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+): { x: number; y: number; w: number; h: number } {
+  const boxRatio = w / h;
+  if (aspectRatio >= boxRatio) {
+    const imageHeight = w / aspectRatio;
+    return {
+      x,
+      y: y + (h - imageHeight) / 2,
+      w,
+      h: imageHeight
+    };
+  }
+
+  const imageWidth = h * aspectRatio;
+  return {
+    x: x + (w - imageWidth) / 2,
+    y,
+    w: imageWidth,
+    h
+  };
 }
 
 function drawInterpretationRail(slide: pptxgen.Slide, plan: PptxSlidePlan, x: number, y: number, w: number, h: number): void {

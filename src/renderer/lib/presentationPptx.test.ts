@@ -52,6 +52,9 @@ function figure(id: string, suggestedSlide: PresentationSlideType, caption: stri
   };
 }
 
+const transparentPng =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lS+q9QAAAABJRU5ErkJggg==';
+
 function slide(type: PresentationSlideType, index: number, figures: PresentationFigureCandidate[] = []): PresentationSlide {
   const section = type === 'cover' ? 'Cover' : titles[type];
   return {
@@ -194,5 +197,27 @@ describe('presentationPptx', () => {
 
     expect(buffer.byteLength).toBeGreaterThan(1000);
     expect(String.fromCharCode(bytes[0], bytes[1])).toBe('PK');
+  });
+
+  it('embeds cropped figure image assets instead of exporting only a placeholder', async () => {
+    const draft = makeSeminarDraft();
+    draft.figures[0] = {
+      ...draft.figures[0],
+      imageDataUrl: transparentPng,
+      cropStatus: 'crop-ready'
+    };
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'method'
+        ? {
+            ...item,
+            figures: [draft.figures[0]]
+          }
+        : item
+    );
+
+    const buffer = await createPresentationPptxBuffer(draft);
+    const zipText = new TextDecoder('latin1').decode(new Uint8Array(buffer));
+
+    expect(zipText).toContain('ppt/media/');
   });
 });

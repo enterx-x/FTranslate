@@ -9,6 +9,17 @@ export interface PositionedPdfTextItem {
   width: number;
   height: number;
   page: number;
+  pageWidth?: number;
+  pageHeight?: number;
+}
+
+export interface PdfBlockBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  pageWidth?: number;
+  pageHeight?: number;
 }
 
 export interface ExtractedPdfBlock extends TranslationItem {
@@ -16,6 +27,7 @@ export interface ExtractedPdfBlock extends TranslationItem {
   type: ExtractedBlockType;
   page: number;
   sourceHash: string;
+  bounds?: PdfBlockBounds;
 }
 
 interface TextLine<TItem extends PositionedPdfTextItem = PositionedPdfTextItem> {
@@ -66,7 +78,7 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
       shouldIncludeBlock('paragraph', original) &&
       !looksLikePageOnePreAbstractFragment(page, currentSection, inlineSection, currentParagraph, firstInlineAbstractY)
     ) {
-      blocks.push(createBlock(page, 'paragraph', section, original));
+      blocks.push(createBlock(page, 'paragraph', section, original, getLinesBounds(currentParagraph)));
     }
     currentParagraph = [];
   }
@@ -77,7 +89,7 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
     if (type !== 'paragraph') {
       flushParagraph();
       const original = type === 'heading' ? normalizeSectionHeading(line.text) : line.text.trim();
-      const block = createBlock(page, type, type === 'heading' ? original : currentSection, original);
+      const block = createBlock(page, type, type === 'heading' ? original : currentSection, original, getLinesBounds([line]));
       const includeBlock = shouldIncludeBlock(type, block.original);
       if (includeBlock) {
         blocks.push(block);
@@ -137,12 +149,18 @@ function mergeDocumentParagraphContinuations(blocks: ExtractedPdfBlock[]): Extra
 
     const inheritedSection = isDefaultPageSection(block.section) && activeSection ? activeSection : block.section;
     const paragraphBlock =
-      inheritedSection === block.section ? block : createBlock(block.page, block.type, inheritedSection, block.original);
+      inheritedSection === block.section ? block : createBlock(block.page, block.type, inheritedSection, block.original, block.bounds);
     const previous = merged.at(-1);
 
     if (previous && shouldMergeAdjacentParagraphs(previous, paragraphBlock)) {
       const mergedOriginal = joinParagraphLines([previous.original, paragraphBlock.original]);
-      merged[merged.length - 1] = createBlock(previous.page, 'paragraph', previous.section, mergedOriginal);
+      merged[merged.length - 1] = createBlock(
+        previous.page,
+        'paragraph',
+        previous.section,
+        mergedOriginal,
+        mergeBounds(previous.bounds, paragraphBlock.bounds)
+      );
       return;
     }
 
@@ -708,7 +726,8 @@ function createBlock(
   page: number,
   type: ExtractedBlockType,
   section: string,
-  original: string
+  original: string,
+  bounds?: PdfBlockBounds
 ): ExtractedPdfBlock {
   const sourceHash = hashText(`${page}|${type}|${section}|${original}`);
 
@@ -719,7 +738,57 @@ function createBlock(
     translation: '',
     type,
     page,
-    sourceHash
+    sourceHash,
+    bounds
+  };
+}
+
+function getLinesBounds(lines: TextLine[]): PdfBlockBounds | undefined {
+  const items = lines.flatMap((line) => line.items);
+  if (items.length === 0) {
+    return undefined;
+  }
+
+  const minX = Math.min(...items.map((item) => item.x));
+  const minY = Math.min(...items.map((item) => item.y));
+  const maxX = Math.max(...items.map((item) => item.x + item.width));
+  const maxY = Math.max(...items.map((item) => item.y + item.height));
+  const pageWidth = items.find((item) => typeof item.pageWidth === 'number')?.pageWidth;
+  const pageHeight = items.find((item) => typeof item.pageHeight === 'number')?.pageHeight;
+
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+    pageWidth,
+    pageHeight
+  };
+}
+
+function mergeBounds(left?: PdfBlockBounds, right?: PdfBlockBounds): PdfBlockBounds | undefined {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  if (typeof left.pageWidth === 'number' && typeof right.pageWidth === 'number' && left.pageWidth !== right.pageWidth) {
+    return left;
+  }
+
+  const minX = Math.min(left.x, right.x);
+  const minY = Math.min(left.y, right.y);
+  const maxX = Math.max(left.x + left.width, right.x + right.width);
+  const maxY = Math.max(left.y + left.height, right.y + right.height);
+
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+    pageWidth: left.pageWidth ?? right.pageWidth,
+    pageHeight: left.pageHeight ?? right.pageHeight
   };
 }
 

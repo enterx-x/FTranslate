@@ -70,14 +70,17 @@ function toPositionedTextItems(
       }
 
       const [x, y] = viewport.convertToViewportPoint(record.transform[4], record.transform[5]);
-      return {
+      const positionedItem: PositionedPdfTextItem = {
         str: record.str,
         x,
         y,
         width: Math.max(1, record.width ?? 1),
         height: Math.max(1, record.height ?? 1),
-        page: pageNumber
+        page: pageNumber,
+        pageWidth: viewport.width,
+        pageHeight: viewport.height
       };
+      return positionedItem;
     })
-    .filter((item): item is PositionedPdfTextItem => Boolean(item));
+    .filter((item): item is PositionedPdfTextItem => item !== null);
 }

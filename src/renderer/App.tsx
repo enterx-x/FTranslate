@@ -27,6 +27,7 @@ import {
 } from './lib/presentationOutline';
 import { arrayBufferToBase64 } from './lib/binaryEncoding';
 import { createPresentationPptxBuffer } from './lib/presentationPptx';
+import { enrichPresentationDraftWithPdfFigureCrops } from './lib/presentationFigureAssets';
 import { NotesPanel } from './components/NotesPanel';
 import { PdfViewer } from './components/PdfViewer';
 import { extractPdfBlocksFromData } from './lib/pdfOutlineExtraction';
@@ -656,11 +657,18 @@ export default function App() {
         setExtractedPdfBlocks(blocks);
       }
 
-      const draft = buildPresentationDraft({
+      let draft = buildPresentationDraft({
         papers: [paper],
         blocks,
         targetSlideCount: 12
       });
+
+      try {
+        draft = await enrichPresentationDraftWithPdfFigureCrops(draft, pdf.data);
+      } catch (figureError) {
+        console.warn('Failed to crop presentation figures from PDF pages.', figureError);
+      }
+
       setPresentationDraft(draft);
       setView('presentation');
       setStatusMessage(
