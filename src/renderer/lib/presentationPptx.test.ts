@@ -157,6 +157,172 @@ describe('presentationPptx', () => {
     expect(method?.visual.steps.join(' ')).toMatch(/PILOT|RL|感知|控制|动作|机器人|Unitree/u);
   });
 
+  it('keeps paper-specific method, formula, and metric evidence in exported slide plans', () => {
+    const methodFigure = figure('fig-method-specific', 'method', 'Fig. 2. Architecture overview of PILOT controller.', 4);
+    const resultFigure = figure('fig-result-specific', 'results', 'Table 1. Unitree G1 stability and command tracking results.', 6);
+    const draft = makeSeminarDraft();
+    draft.figures = [methodFigure, resultFigure];
+    draft.slides = draft.slides.map((item) => {
+      if (item.type === 'method') {
+        return {
+          ...item,
+          figures: [methodFigure],
+          bullets: [
+            'PILOT 输入侧使用 LiDAR-based elevation map 感知地形',
+            'hybrid internal command 连接任务意图与 whole-body action'
+          ],
+          sourceRefs: [
+            {
+              pageNumber: 4,
+              section: 'Method',
+              text:
+                'We propose PILOT with a robot-centric, LiDAR-based elevation map and a hybrid internal command representation to output whole-body actions.'
+            }
+          ]
+        };
+      }
+      if (item.type === 'formula') {
+        return {
+          ...item,
+          bullets: ['核心公式：L = L_task + lambda L_stability + beta L_tracking'],
+          sourceRefs: [
+            {
+              pageNumber: 5,
+              section: 'Method',
+              text: 'The training objective is L = L_task + lambda L_stability + beta L_tracking.'
+            }
+          ]
+        };
+      }
+      if (item.type === 'results') {
+        return {
+          ...item,
+          figures: [resultFigure],
+          bullets: ['Unitree G1 用于真机验证', '指标关注 stability、command tracking precision、terrain traversability'],
+          sourceRefs: [
+            {
+              pageNumber: 6,
+              section: 'Results',
+              text:
+                'Simulation and physical Unitree G1 experiments validate stability, command tracking precision, and terrain traversability compared with existing baselines.'
+            }
+          ]
+        };
+      }
+      return item;
+    });
+
+    const plan = buildPptxSlidePlan(draft);
+    const method = plan.find((item) => item.type === 'method');
+    const formula = plan.find((item) => item.type === 'formula');
+    const results = plan.find((item) => item.type === 'results');
+
+    expect(method?.bullets.join(' ')).toMatch(/PILOT|LiDAR|hybrid internal command|whole-body/u);
+    expect(method?.visual.steps.join(' ')).toMatch(/PILOT|LiDAR|hybrid internal command|whole-body/u);
+    expect(formula?.bullets.join(' ')).toContain('L_task');
+    expect(results?.bullets.join(' ')).toMatch(/Unitree G1|stability|command tracking|terrain traversability/u);
+    expect(results?.visual.kind).toBe('figure');
+    expect(plan.flatMap((item) => item.bullets).join(' ')).not.toMatch(/框架串联|任务指令转成机器人策略|方法强调/u);
+  });
+
+  it('does not replace real paper terms with generic seminar placeholders', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) => {
+      if (item.type === 'background') {
+        return {
+          ...item,
+          bullets: [
+            'The model follows diverse language instructions in unseen environments.',
+            'The prompt contains subgoal images and episode metadata for context conditioning.'
+          ],
+          sourceRefs: [
+            {
+              pageNumber: 1,
+              section: 'Abstract',
+              text:
+                'π0.7 follows diverse language instructions in unseen environments using context conditioning, subgoal images, and episode metadata for long-horizon tasks.'
+            }
+          ]
+        };
+      }
+      if (item.type === 'method') {
+        return {
+          ...item,
+          bullets: [
+            'PILOT uses a LiDAR-based elevation map and hybrid internal command representation.',
+            'The controller outputs whole-body actions for loco-manipulation.'
+          ],
+          sourceRefs: [
+            {
+              pageNumber: 4,
+              section: 'Method',
+              text:
+                'PILOT builds a robot-centric LiDAR-based elevation map, uses a hybrid internal command representation, and outputs whole-body actions for perceptive loco-manipulation.'
+            }
+          ]
+        };
+      }
+      return item;
+    });
+
+    const plan = buildPptxSlidePlan(draft);
+    const background = plan.find((item) => item.type === 'background');
+    const method = plan.find((item) => item.type === 'method');
+    const allBullets = plan.flatMap((item) => item.bullets).join(' ');
+
+    expect(background?.bullets.join(' ')).toMatch(/π0\.7|language instruction|subgoal images|episode metadata|long-horizon/u);
+    expect(method?.bullets.join(' ')).toMatch(/PILOT|LiDAR|hybrid internal command|whole-body|loco-manipulation/u);
+    expect(allBullets).not.toMatch(/结构图对应原文模块链路|策略围绕任务与动作闭环|方法强调模型、控制和执行协同|现有系统在复杂场景下仍有能力边界/u);
+  });
+
+  it('does not draw a generic method diagram when source lacks concrete modules', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'method'
+        ? {
+            ...item,
+            figures: [],
+            bullets: ['The paper introduces a general model framework and controller architecture.'],
+            sourceRefs: [
+              {
+                pageNumber: 4,
+                section: 'Method',
+                text: 'The method section describes a model framework, controller architecture, policy, and objective, but does not name concrete modules.'
+              }
+            ]
+          }
+        : item
+    );
+
+    const method = buildPptxSlidePlan(draft).find((item) => item.type === 'method');
+
+    expect(method?.visual.kind).toBe('none');
+    expect(method?.visual.steps.join(' ')).not.toMatch(/输入观测|编码\/建模模块|策略\/规划模块|动作输出|训练目标/u);
+  });
+
+  it('does not pad weak background evidence with generic fallback claims', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'background'
+        ? {
+            ...item,
+            bullets: [],
+            sourceRefs: [
+              {
+                pageNumber: 2,
+                section: 'I. INTRODUCTION',
+                text: 'The paper motivates the study through a broad discussion but does not name a concrete module, task, platform, metric, or observation.'
+              }
+            ]
+          }
+        : item
+    );
+
+    const background = buildPptxSlidePlan(draft).find((item) => item.type === 'background');
+
+    expect(background?.bullets.join(' ')).not.toMatch(/现有系统在复杂场景下仍有能力边界|论文从真实任务需求出发定义问题|背景页只说明为什么该问题值得研究/u);
+  });
+
   it('rejects generic placeholder diagrams and mismatched sources in quality checks', () => {
     const [badSlide] = buildPptxSlidePlan(makeSeminarDraft()).filter((item) => item.type === 'background');
     const issues = validatePptxQuality([

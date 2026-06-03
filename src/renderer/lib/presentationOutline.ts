@@ -164,7 +164,7 @@ export function buildLocalPresentationDraft(input: BuildPresentationDraftInput):
       title: '关键模块或公式',
       section: 'Method',
       refs: pickRefs([buckets.formula, buckets.method], 3),
-      figures: pickFigures(figures, 'formula', 1),
+      figures: pickFiguresForTypes(figures, ['formula', 'method'], 1),
       fallback: '原文未明确说明关键公式，汇报时可只解释核心模块。',
       speakerNote: '只讲对方法理解必要的公式或模块，不堆满推导。'
     }),
@@ -174,7 +174,7 @@ export function buildLocalPresentationDraft(input: BuildPresentationDraftInput):
       title: '实验设置',
       section: 'Experiments',
       refs: pickRefs([buckets.experiments, buckets.results], 3),
-      figures: pickFigures(figures, 'experiments', 1),
+      figures: pickFiguresForTypes(figures, ['experiments', 'results'], 1),
       fallback: '原文未明确说明实验设置。',
       speakerNote: '交代数据集、任务、对比方法和评价指标。'
     }),
@@ -184,7 +184,7 @@ export function buildLocalPresentationDraft(input: BuildPresentationDraftInput):
       title: '主要实验结果',
       section: 'Results',
       refs: pickRefs([buckets.results, buckets.experiments], 4),
-      figures: pickFigures(figures, 'experiments', 2),
+      figures: pickFiguresForTypes(figures, ['results', 'experiments'], 2),
       fallback: '原文未明确说明实验结果。',
       speakerNote: '说明主要结果和指标变化，不夸大论文结论。'
     }),
@@ -321,6 +321,10 @@ export function buildPresentationAiEnhancementPrompt(draft: PresentationDraft): 
       '- Match every slide by id.',
       '- Keep each slide to 3-5 bullets.',
       '- Each bullet should be concrete and mention paper-specific objects, modules, tasks, metrics, baselines, platforms, or results when the sources support it.',
+      '- At least two bullets on each non-cover slide must include exact source-backed details such as robot platform, input observation, output action, model module, training objective, baseline, metric, dataset, task, or figure caption.',
+      '- For robotics/RL/VLA/PINN papers, prefer details about robot platform, input observation, output action, training data/objective, baseline, metric, real robot validation, and limitation.',
+      '- Do not use generic bullets such as “框架串联感知、策略、执行”, “任务指令转成机器人策略”, “方法强调模型、控制和执行协同”, “增强泛化能力”, or “面向复杂场景”.',
+      '- If the source does not support a method diagram, say the missing detail explicitly instead of writing a generic placeholder.',
       '- Do not output Markdown fences or explanations.',
       '- Do not remove source pages or figure ids; the app will keep them separately.',
       '',
@@ -523,7 +527,9 @@ function buildContentSlide(options: {
   fallback: string;
   speakerNote: string;
 }): PresentationSlide {
-  const bullets = refsToBullets(options.refs, { allowFormulaText: options.type === 'formula' });
+  const bullets = buildEvidenceAwareBullets(options.type, options.refs, {
+    allowFormulaText: options.type === 'formula'
+  });
 
   return {
     id: options.id,
@@ -590,15 +596,30 @@ function bucketSections(blocks: ExtractedPdfBlock[]): SectionBuckets {
     .forEach((block) => {
       const ref = toSourceRef(block);
       const sectionText = `${block.section} ${block.original}`;
+      const sectionOnly = block.section;
 
       if (block.type === 'formula' || FORMULA_SECTION_PATTERN.test(sectionText)) {
         buckets.formula.refs.push(ref);
+      } else if (ABSTRACT_SECTION_PATTERN.test(sectionOnly)) {
+        buckets.abstract.refs.push(ref);
+      } else if (RELATED_WORK_SECTION_PATTERN.test(sectionOnly)) {
+        buckets.relatedWork.refs.push(ref);
+      } else if (METHOD_SECTION_PATTERN.test(sectionOnly)) {
+        buckets.method.refs.push(ref);
+      } else if (EXPERIMENT_SECTION_PATTERN.test(sectionOnly)) {
+        buckets.experiments.refs.push(ref);
+      } else if (RESULT_SECTION_PATTERN.test(sectionOnly)) {
+        buckets.results.refs.push(ref);
+      } else if (CONCLUSION_SECTION_PATTERN.test(sectionOnly)) {
+        buckets.conclusion.refs.push(ref);
+      } else if (LIMITATION_SECTION_PATTERN.test(sectionOnly)) {
+        buckets.limitations.refs.push(ref);
+      } else if (INTRO_SECTION_PATTERN.test(sectionOnly)) {
+        buckets.introduction.refs.push(ref);
       } else if (ABSTRACT_SECTION_PATTERN.test(sectionText)) {
         buckets.abstract.refs.push(ref);
       } else if (RELATED_WORK_SECTION_PATTERN.test(sectionText)) {
         buckets.relatedWork.refs.push(ref);
-      } else if (LIMITATION_SECTION_PATTERN.test(sectionText)) {
-        buckets.limitations.refs.push(ref);
       } else if (METHOD_SECTION_PATTERN.test(sectionText)) {
         buckets.method.refs.push(ref);
       } else if (RESULT_SECTION_PATTERN.test(sectionText)) {
@@ -607,6 +628,8 @@ function bucketSections(blocks: ExtractedPdfBlock[]): SectionBuckets {
         buckets.experiments.refs.push(ref);
       } else if (CONCLUSION_SECTION_PATTERN.test(sectionText)) {
         buckets.conclusion.refs.push(ref);
+      } else if (LIMITATION_SECTION_PATTERN.test(sectionText)) {
+        buckets.limitations.refs.push(ref);
       } else if (INTRO_SECTION_PATTERN.test(sectionText)) {
         buckets.introduction.refs.push(ref);
       } else if (block.page <= 2 && buckets.introduction.refs.length < 4) {
@@ -663,6 +686,14 @@ function pickFigures(
   return figures.filter((figure) => figure.suggestedSlide === type).slice(0, limit);
 }
 
+function pickFiguresForTypes(
+  figures: PresentationFigureCandidate[],
+  types: PresentationSlideType[],
+  limit: number
+): PresentationFigureCandidate[] {
+  return figures.filter((figure) => types.includes(figure.suggestedSlide)).slice(0, limit);
+}
+
 function refsToBullets(
   refs: PresentationSourceRef[],
   options: { allowFormulaText?: boolean } = {}
@@ -672,6 +703,364 @@ function refsToBullets(
       .filter((bullet) => isUsefulBulletText(bullet) || (options.allowFormulaText && isUsefulFormulaText(bullet)))
       .map((bullet) => `${bullet}（p. ${ref.pageNumber}）`)
   );
+}
+
+interface EvidenceTerms {
+  methods: string[];
+  observations: string[];
+  commands: string[];
+  outputs: string[];
+  platforms: string[];
+  tasks: string[];
+  training: string[];
+  baselines: string[];
+  metrics: string[];
+  constraints: string[];
+  formulas: string[];
+}
+
+const GENERIC_PRESENTATION_BULLET_PATTERNS = [
+  /框架串联感知、策略、执行/u,
+  /任务指令转成机器人策略/u,
+  /方法强调模型、控制和执行协同/u,
+  /论文信息|研究对象|论点|方法线索|汇报目标/u,
+  /增强泛化能力/u
+];
+
+const EVIDENCE_DICTIONARY = {
+  methods: [
+    { pattern: /\bPILOT\b/u, label: 'PILOT' },
+    { pattern: /\brobot foundation model\b/iu, label: 'robot foundation model' },
+    { pattern: /π0\.?7|pi0\.?7/iu, label: 'π0.7' },
+    { pattern: /\bVLA\b|\bvision[-\s]?language[-\s]?action\b/iu, label: 'VLA' },
+    { pattern: /\bVLM\b|\bvision[-\s]?language\b/iu, label: 'VLM' },
+    { pattern: /\bPINN\b|\bphysics[-\s]?informed\b/iu, label: 'PINN' },
+    { pattern: /\bCBF\b|\bcontrol barrier function\b/iu, label: 'CBF' },
+    { pattern: /\bMPC\b|\bmodel predictive control\b/iu, label: 'MPC' },
+    { pattern: /\bPPO\b/u, label: 'PPO' },
+    { pattern: /\bSAC\b/u, label: 'SAC' },
+    { pattern: /\bworld model\b/iu, label: 'World Model' }
+  ],
+  observations: [
+    { pattern: /\bLiDAR[-\s]?based elevation maps?\b/iu, label: 'LiDAR-based elevation map' },
+    { pattern: /\belevation maps?\b/iu, label: 'elevation map' },
+    { pattern: /\bproprioceptive states?\b|\bproprioception\b/iu, label: 'proprioception' },
+    { pattern: /\bRGB observations?\b|\bRGB images?\b/iu, label: 'RGB observations' },
+    { pattern: /\bvisual observations?\b|\bvision observations?\b/iu, label: 'visual observations' },
+    { pattern: /\blanguage (instructions?|goals?|commands?)\b/iu, label: 'language instruction' },
+    { pattern: /\bsubgoal images?\b/iu, label: 'subgoal images' },
+    { pattern: /\bepisode metadata\b/iu, label: 'episode metadata' },
+    { pattern: /\btask metadata\b/iu, label: 'task metadata' },
+    { pattern: /\bpoint clouds?\b/iu, label: 'point cloud' }
+  ],
+  commands: [
+    { pattern: /\bhybrid internal command(?: representation)?\b/iu, label: 'hybrid internal command' },
+    { pattern: /\binternal command(?: representation)?\b/iu, label: 'internal command' },
+    { pattern: /\bhigh[-\s]?level policy prompts?\b/iu, label: 'high-level policy prompt' },
+    { pattern: /\bcontext conditioning\b/iu, label: 'context conditioning' },
+    { pattern: /\bsubtask instructions?\b/iu, label: 'subtask instruction' }
+  ],
+  outputs: [
+    { pattern: /\bwhole[-\s]?body actions?\b/iu, label: 'whole-body action' },
+    { pattern: /\blow[-\s]?level robot actions?\b/iu, label: 'low-level action' },
+    { pattern: /\baction outputs?\b/iu, label: 'action output' },
+    { pattern: /\bcommand tracking\b/iu, label: 'command tracking' },
+    { pattern: /\btrajectory\b/iu, label: 'trajectory' },
+    { pattern: /\bcontrol commands?\b/iu, label: 'control command' }
+  ],
+  platforms: [
+    { pattern: /\bUnitree\s*G1\b/iu, label: 'Unitree G1' },
+    { pattern: /\bhumanoid robots?\b/iu, label: 'humanoid robot' },
+    { pattern: /\bphysical robot\b|\breal[-\s]?world robot\b/iu, label: 'real robot' },
+    { pattern: /\bmultiple robot platforms?\b/iu, label: 'multiple robot platforms' },
+    { pattern: /\bmobile robots?\b/iu, label: 'mobile robot' },
+    { pattern: /\bquadruped robots?\b/iu, label: 'quadruped robot' }
+  ],
+  tasks: [
+    { pattern: /\bloco[-\s]?manipulation\b/iu, label: 'loco-manipulation' },
+    { pattern: /\bwhole[-\s]?body control\b/iu, label: 'whole-body control' },
+    { pattern: /\bdexterous manipulation\b/iu, label: 'dexterous manipulation' },
+    { pattern: /\bunstructured scenes?\b|\bunstructured environments?\b/iu, label: 'unstructured scenes' },
+    { pattern: /\bterrain traversability\b/iu, label: 'terrain traversability' },
+    { pattern: /\bdaily service tasks?\b/iu, label: 'daily service tasks' },
+    { pattern: /\bnavigation\b/iu, label: 'navigation' },
+    { pattern: /\bpath planning\b/iu, label: 'path planning' },
+    { pattern: /\blong[-\s]?horizon\b/iu, label: 'long-horizon tasks' }
+  ],
+  training: [
+    { pattern: /\breinforcement learning\b|\bRL\b/u, label: 'reinforcement learning' },
+    { pattern: /\bimitation learning\b/iu, label: 'imitation learning' },
+    { pattern: /\bdemonstrations?\b/iu, label: 'demonstrations' },
+    { pattern: /\bautonomous data\b/iu, label: 'autonomous data' },
+    { pattern: /\bmultimodal web data\b/iu, label: 'multimodal web data' },
+    { pattern: /\bsimulation\b/iu, label: 'simulation' },
+    { pattern: /\breal[-\s]?world\b/iu, label: 'real-world data' },
+    { pattern: /\bpre[-\s]?training\b/iu, label: 'pre-training' }
+  ],
+  baselines: [
+    { pattern: /\bexisting baselines?\b/iu, label: 'existing baselines' },
+    { pattern: /\bspecialist policies\b/iu, label: 'specialist policies' },
+    { pattern: /\bimitation learning baselines?\b/iu, label: 'imitation learning baselines' },
+    { pattern: /\bPPO\b/u, label: 'PPO' },
+    { pattern: /\bMPC\b/u, label: 'MPC' },
+    { pattern: /\bCBF\b/u, label: 'CBF' }
+  ],
+  metrics: [
+    { pattern: /\bsuccess rate\b/iu, label: 'success rate' },
+    { pattern: /\bcollision rate\b/iu, label: 'collision rate' },
+    { pattern: /\bpath efficiency\b/iu, label: 'path efficiency' },
+    { pattern: /\bstability\b/iu, label: 'stability' },
+    { pattern: /\bcommand tracking(?: precision)?\b/iu, label: 'command tracking precision' },
+    { pattern: /\bterrain traversability\b/iu, label: 'terrain traversability' },
+    { pattern: /\bcompositional generalization\b/iu, label: 'compositional generalization' },
+    { pattern: /\bgeneralization\b/iu, label: 'generalization' },
+    { pattern: /\brobustness\b/iu, label: 'robustness' }
+  ],
+  constraints: [
+    { pattern: /\bsafety constraints?\b/iu, label: 'safety constraint' },
+    { pattern: /\bphysical constraints?\b/iu, label: 'physical constraint' },
+    { pattern: /\bcontrol barrier function\b|\bCBF\b/u, label: 'CBF safety constraint' },
+    { pattern: /\bloss functions?\b|\bloss\b/iu, label: 'loss objective' },
+    { pattern: /\bobjective function\b|\bobjective\b/iu, label: 'objective function' }
+  ]
+} as const;
+
+function buildEvidenceAwareBullets(
+  type: PresentationSlideType,
+  refs: PresentationSourceRef[],
+  options: { allowFormulaText?: boolean } = {}
+): string[] {
+  const candidates: string[] = [];
+
+  refs.forEach((ref) => {
+    const terms = extractEvidenceTerms(ref.text);
+    candidates.push(...buildEvidenceBulletsForRef(type, ref, terms, options));
+
+    if (candidates.length < 4) {
+      candidates.push(...buildSentenceFallbackBullets(type, ref, terms, options));
+    }
+  });
+
+  return compactPresentationBullets(candidates, 5);
+}
+
+function buildEvidenceBulletsForRef(
+  type: PresentationSlideType,
+  ref: PresentationSourceRef,
+  terms: EvidenceTerms,
+  options: { allowFormulaText?: boolean }
+): string[] {
+  const page = ref.pageNumber;
+  const method = terms.methods[0];
+  const bullets: string[] = [];
+
+  if (type === 'method') {
+    if (method && terms.tasks[0]) {
+      bullets.push(withSourcePage(`${method} 面向 ${terms.tasks[0]} 做统一控制`, page));
+    }
+    if (terms.observations.length > 0) {
+      bullets.push(withSourcePage(`输入侧使用 ${joinTerms(terms.observations, 2)} 感知状态`, page));
+    }
+    if (terms.commands.length > 0) {
+      bullets.push(withSourcePage(`${joinTerms(terms.commands, 2)} 连接任务意图与全身控制`, page));
+    }
+    if (terms.outputs.length > 0) {
+      bullets.push(withSourcePage(`输出侧服务 ${joinTerms(terms.outputs, 2)}`, page));
+    }
+    if (terms.training.length > 0) {
+      bullets.push(withSourcePage(`训练信号来自 ${joinTerms(terms.training, 2)}`, page));
+    }
+  } else if (type === 'formula') {
+    if (terms.formulas.length > 0) {
+      bullets.push(...terms.formulas.slice(0, 2).map((formula) => withSourcePage(`核心公式：${formula}`, page)));
+    }
+    if (terms.constraints.length > 0) {
+      bullets.push(withSourcePage(`目标项约束 ${joinTerms(terms.constraints, 2)}`, page));
+    }
+    if (terms.training.length > 0) {
+      bullets.push(withSourcePage(`训练目标关联 ${joinTerms(terms.training, 2)}`, page));
+    }
+  } else if (type === 'experiments' || type === 'results') {
+    if (terms.platforms.length > 0) {
+      bullets.push(withSourcePage(`${joinTerms(terms.platforms, 2)} 用于真机/平台验证`, page));
+    }
+    if (terms.tasks.length > 0) {
+      bullets.push(withSourcePage(`任务覆盖 ${joinTerms(terms.tasks, 2)}`, page));
+    }
+    if (terms.baselines.length > 0) {
+      bullets.push(withSourcePage(`对比对象包含 ${joinTerms(terms.baselines, 2)}`, page));
+    }
+    if (terms.metrics.length > 0) {
+      bullets.push(withSourcePage(`指标关注 ${joinTerms(terms.metrics, 3)}`, page));
+    }
+    if (terms.training.includes('simulation') || terms.training.includes('real-world data')) {
+      bullets.push(withSourcePage(`验证覆盖 ${joinTerms(terms.training, 2)} 场景`, page));
+    }
+  } else if (type === 'background' || type === 'relatedWork') {
+    if (terms.platforms.length > 0 || terms.tasks.length > 0) {
+      bullets.push(withSourcePage(`问题场景是 ${joinTerms([...terms.platforms, ...terms.tasks], 2)}`, page));
+    }
+    if (terms.observations.length > 0) {
+      bullets.push(withSourcePage(`难点来自 ${joinTerms(terms.observations, 2)} 与环境状态`, page));
+    }
+    if (terms.metrics.length > 0) {
+      bullets.push(withSourcePage(`现有方法仍受 ${joinTerms(terms.metrics, 2)} 约束`, page));
+    }
+  } else if (type === 'innovation') {
+    if (method && terms.observations.length > 0) {
+      bullets.push(withSourcePage(`${method} 的差异点在 ${joinTerms(terms.observations, 2)}`, page));
+    }
+    if (terms.commands.length > 0) {
+      bullets.push(withSourcePage(`${joinTerms(terms.commands, 2)} 是可验证贡献`, page));
+    }
+    if (terms.metrics.length > 0) {
+      bullets.push(withSourcePage(`贡献用 ${joinTerms(terms.metrics, 2)} 支撑`, page));
+    }
+  } else if (type === 'limitations') {
+    const riskTerms = [...terms.observations, ...terms.platforms, ...terms.metrics].slice(0, 2);
+    if (riskTerms.length > 0) {
+      bullets.push(withSourcePage(`边界需关注 ${joinTerms(riskTerms, 2)}`, page));
+    }
+  } else if (type === 'inspiration') {
+    if (terms.methods.length > 0) {
+      bullets.push(withSourcePage(`可复用 ${joinTerms(terms.methods, 2)} 作为 baseline`, page));
+    }
+    if (terms.metrics.length > 0) {
+      bullets.push(withSourcePage(`评价可借鉴 ${joinTerms(terms.metrics, 2)}`, page));
+    }
+    if (terms.tasks.length > 0) {
+      bullets.push(withSourcePage(`课题迁移到 ${joinTerms(terms.tasks, 2)}`, page));
+    }
+  } else if (type === 'summary') {
+    if (method && terms.tasks.length > 0) {
+      bullets.push(withSourcePage(`${method} 的核心价值在 ${terms.tasks[0]}`, page));
+    }
+    if (terms.metrics.length > 0) {
+      bullets.push(withSourcePage(`是否复现看 ${joinTerms(terms.metrics, 2)}`, page));
+    }
+  }
+
+  if (options.allowFormulaText && terms.formulas.length > 0) {
+    bullets.push(...terms.formulas.slice(0, 2).map((formula) => withSourcePage(`公式证据：${formula}`, page)));
+  }
+
+  return bullets;
+}
+
+function buildSentenceFallbackBullets(
+  type: PresentationSlideType,
+  ref: PresentationSourceRef,
+  terms: EvidenceTerms,
+  options: { allowFormulaText?: boolean }
+): string[] {
+  if (type !== 'info' && !options.allowFormulaText && terms.formulas.length > 0) {
+    return [];
+  }
+
+  return splitIntoShortBullets(ref.text)
+    .filter((bullet) => isUsefulBulletText(bullet) || (options.allowFormulaText && isUsefulFormulaText(bullet)))
+    .map((bullet) => rewriteSentenceAsSeminarBullet(type, bullet, ref, terms))
+    .filter(Boolean);
+}
+
+function rewriteSentenceAsSeminarBullet(
+  type: PresentationSlideType,
+  sentence: string,
+  ref: PresentationSourceRef,
+  terms: EvidenceTerms
+): string {
+  const lower = sentence.toLowerCase();
+  const page = ref.pageNumber;
+
+  if (type === 'formula' && terms.formulas.length > 0) {
+    return withSourcePage(`公式/目标：${terms.formulas[0]}`, page);
+  }
+  if (/\bchallenge|lack|difficult|insufficient|unresolved|complex|unstructured\b/iu.test(lower)) {
+    const target = joinTerms([...terms.platforms, ...terms.tasks, ...terms.observations], 2);
+    return withSourcePage(target ? `核心瓶颈是 ${target}` : `原文指出 ${normalizeInlineText(sentence, 46)}`, page);
+  }
+  if (/\bpropose|present|introduce|incorporate|use|combine\b/iu.test(lower)) {
+    const parts = joinTerms([...terms.methods, ...terms.observations, ...terms.commands, ...terms.outputs], 3);
+    return withSourcePage(parts ? `方法具体包含 ${parts}` : `方法证据：${normalizeInlineText(sentence, 44)}`, page);
+  }
+  if (/\bevaluate|experiment|validate|compare|result|baseline|metric\b/iu.test(lower)) {
+    const parts = joinTerms([...terms.platforms, ...terms.baselines, ...terms.metrics], 3);
+    return withSourcePage(parts ? `实验验证 ${parts}` : `实验信息：${normalizeInlineText(sentence, 44)}`, page);
+  }
+
+  if (asciiRatio(sentence) > 0.55) {
+    const parts = joinTerms([...terms.methods, ...terms.tasks, ...terms.metrics], 2);
+    return withSourcePage(parts ? `原文证据指向 ${parts}` : `原文要点：${normalizeInlineText(sentence, 42)}`, page);
+  }
+
+  return withSourcePage(sentence, page);
+}
+
+function extractEvidenceTerms(text: string): EvidenceTerms {
+  return {
+    methods: extractDictionaryMatches(text, EVIDENCE_DICTIONARY.methods),
+    observations: extractDictionaryMatches(text, EVIDENCE_DICTIONARY.observations),
+    commands: extractDictionaryMatches(text, EVIDENCE_DICTIONARY.commands),
+    outputs: extractDictionaryMatches(text, EVIDENCE_DICTIONARY.outputs),
+    platforms: extractDictionaryMatches(text, EVIDENCE_DICTIONARY.platforms),
+    tasks: extractDictionaryMatches(text, EVIDENCE_DICTIONARY.tasks),
+    training: extractDictionaryMatches(text, EVIDENCE_DICTIONARY.training),
+    baselines: extractDictionaryMatches(text, EVIDENCE_DICTIONARY.baselines),
+    metrics: extractDictionaryMatches(text, EVIDENCE_DICTIONARY.metrics),
+    constraints: extractDictionaryMatches(text, EVIDENCE_DICTIONARY.constraints),
+    formulas: extractFormulaSnippets(text)
+  };
+}
+
+function extractDictionaryMatches(text: string, entries: readonly { pattern: RegExp; label: string }[]): string[] {
+  return compactTextList(entries.filter((entry) => entry.pattern.test(text)).map((entry) => entry.label), 6);
+}
+
+function extractFormulaSnippets(text: string): string[] {
+  if (!isUsefulFormulaText(text) && !/[=+\-*/^_{}]/u.test(text)) {
+    return [];
+  }
+
+  return splitIntoShortBullets(text)
+    .filter((part) => /[=+\-*/^_{}]/u.test(part))
+    .map((part) => normalizeInlineText(part, 92))
+    .slice(0, 3);
+}
+
+function compactPresentationBullets(items: string[], limit: number): string[] {
+  const result: string[] = [];
+  items.forEach((item) => {
+    const normalized = normalizeInlineText(item, 150);
+    if (!normalized || GENERIC_PRESENTATION_BULLET_PATTERNS.some((pattern) => pattern.test(normalized))) {
+      return;
+    }
+    const key = normalized.replace(/（p\.\s*\d+）/u, '').toLowerCase();
+    if (result.some((existing) => existing.replace(/（p\.\s*\d+）/u, '').toLowerCase() === key)) {
+      return;
+    }
+    result.push(normalized);
+  });
+  return result.slice(0, limit);
+}
+
+function withSourcePage(text: string, pageNumber: number): string {
+  return `${normalizeInlineText(text, 112)}（p. ${pageNumber}）`;
+}
+
+function joinTerms(terms: string[], limit: number): string {
+  return compactTextList(terms, limit).join('、');
+}
+
+function compactTextList(items: string[], limit: number): string[] {
+  const result: string[] = [];
+  items.forEach((item) => {
+    const normalized = item.trim();
+    if (!normalized || result.some((existing) => existing.toLowerCase() === normalized.toLowerCase())) {
+      return;
+    }
+    result.push(normalized);
+  });
+  return result.slice(0, limit);
 }
 
 function splitIntoShortBullets(text: string): string[] {
@@ -857,12 +1246,23 @@ function countTextWords(text: string): number {
   return text.match(/[\p{L}\p{N}]+/gu)?.length ?? 0;
 }
 
+function asciiRatio(text: string): number {
+  if (!text) {
+    return 0;
+  }
+  const ascii = text.match(/[A-Za-z]/gu)?.length ?? 0;
+  return ascii / text.length;
+}
+
 function isReferenceSection(section: string): boolean {
   return REFERENCE_SECTION_PATTERN.test(section.trim());
 }
 
 function suggestFigureSlide(text: string): PresentationSlideType {
-  if (/table|result|experiment|evaluation|ablation|quantitative|benchmark/iu.test(text)) {
+  if (/result|quantitative|comparison|performance|ablation|success|tracking|stability/iu.test(text)) {
+    return 'results';
+  }
+  if (/table|experiment|evaluation|benchmark|dataset|setting|task|platform/iu.test(text)) {
     return 'experiments';
   }
   if (/loss|equation|formula|objective|gradient|optimization/iu.test(text)) {

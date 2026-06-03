@@ -115,12 +115,21 @@ const KEYWORD_BULLETS: Array<{ pattern: RegExp; bullet: string }> = [
   { pattern: /\bdemonstration|autonomous data|multimodal web data|training data\b/iu, bullet: '多源数据支撑策略训练' },
   { pattern: /\bbenchmark|baseline|evaluation|experiment|result\b/iu, bullet: '对比实验验证核心指标' },
   { pattern: /\bablation|robustness|failure|limitation\b/iu, bullet: '消融和失败例说明边界' },
-  { pattern: /\barchitecture|overview|framework|model|controller\b/iu, bullet: '框架串联感知、策略、执行' },
-  { pattern: /\bformula|equation|loss|objective|optimization\b/iu, bullet: '目标函数约束训练信号' },
-  { pattern: /\brobot|policy|task|command\b/iu, bullet: '任务指令转成机器人策略' }
+  { pattern: /\bformula|equation|loss|objective|optimization\b/iu, bullet: '公式解释训练目标项' }
 ];
 
-const FORBIDDEN_GENERIC_LABELS = ['论文信息', '研究对象', '论点', '方法线索', '汇报目标'];
+const FORBIDDEN_GENERIC_LABELS = [
+  '论文信息',
+  '研究对象',
+  '论点',
+  '方法线索',
+  '汇报目标',
+  '结构图对应原文模块链路',
+  '策略围绕任务与动作闭环',
+  '方法强调模型、控制和执行协同',
+  '增强泛化能力',
+  '面向复杂场景'
+];
 const MAX_BULLET_LENGTH = 30;
 
 const SOURCE_SCOPE: Record<PresentationSlideType, { allow: RegExp; deny?: RegExp }> = {
@@ -1133,13 +1142,13 @@ function buildSeminarBullets(slide: PresentationSlide): string[] {
   ].join(' ');
   const specificBullets = extractSpecificBullets(slide, sourceText);
   const keywordBullets = KEYWORD_BULLETS.filter((item) => item.pattern.test(sourceText)).map((item) => item.bullet);
-  const typeBullets = TYPE_FALLBACK_BULLETS[slide.type];
+  const typeBullets = specificBullets.length >= 2 || slide.sourceRefs.length > 0 ? [] : TYPE_FALLBACK_BULLETS[slide.type];
   const derivedBullets = slide.sourceRefs
     .slice(0, 3)
     .map((ref) => summarizeRefAsChinese(slide.type, ref.text))
     .filter(Boolean);
 
-  return compactUnique([...specificBullets, ...keywordBullets, ...derivedBullets, ...typeBullets], 5);
+  return compactUnique([...specificBullets, ...keywordBullets, ...derivedBullets, ...typeBullets].filter(isAllowedSeminarBullet), 5);
 }
 
 function extractSpecificBullets(slide: PresentationSlide, sourceText: string): string[] {
@@ -1147,11 +1156,22 @@ function extractSpecificBullets(slide: PresentationSlide, sourceText: string): s
   const lower = sourceText.toLowerCase();
 
   if (/\bPILOT\b/iu.test(sourceText)) bullets.push('PILOT 闭环连接感知和低层控制');
+  if (/\bπ0\.?7|pi0\.?7\b/iu.test(sourceText)) bullets.push('π0.7 通过 context conditioning 调节策略');
+  if (/\bLiDAR[-\s]?based elevation maps?\b/iu.test(sourceText)) bullets.push('LiDAR 地形图提供外部感知');
+  if (/\blanguage (instructions?|goals?|commands?)\b/iu.test(sourceText)) bullets.push('language instruction 作为策略输入');
+  if (/\bhybrid internal command(?: representation)?\b/iu.test(sourceText)) bullets.push('hybrid internal command 连接任务意图');
+  if (/\bwhole[-\s]?body actions?\b/iu.test(sourceText)) bullets.push('whole-body action 作为控制输出');
+  if (/\bL\s*=\s*L_/iu.test(sourceText)) bullets.push(extractFormulaBullet(sourceText));
   if (/\bUnitree\s*G1\b/iu.test(sourceText)) bullets.push('Unitree G1 完成真机验证');
   if (/\bhumanoid|whole[-\s]?body|loco[-\s]?manipulation\b/iu.test(sourceText)) bullets.push('人形机器人执行移动操作任务');
   if (/\bRL|reinforcement learning\b/iu.test(sourceText)) bullets.push('RL 训练低层控制策略');
   if (/\bVLA|VLM|vision[-\s]?language[-\s]?action\b/iu.test(sourceText)) bullets.push('VLA/VLM 连接指令与动作');
   if (/\bsubgoal images?|episode metadata\b/iu.test(sourceText)) bullets.push('子目标图像约束执行策略');
+  if (/\bsubgoal images?\b/iu.test(sourceText)) bullets.push('subgoal images 提供阶段目标');
+  if (/\bepisode metadata\b/iu.test(sourceText)) bullets.push('episode metadata 描述任务上下文');
+  if (/\bcontext conditioning\b/iu.test(sourceText)) bullets.push('context conditioning 约束模型行为');
+  if (/\blong[-\s]?horizon tasks?\b/iu.test(sourceText)) bullets.push('long-horizon tasks 检验组合执行');
+  if (/\bcross[-\s]?embodiment\b/iu.test(sourceText)) bullets.push('cross-embodiment 测试迁移能力');
   if (/\bdemonstration|autonomous data|multimodal web data\b/iu.test(sourceText)) bullets.push('多源数据支持策略训练');
   if (/\bbaseline|benchmark|comparison\b/iu.test(sourceText)) bullets.push('baseline 对比支撑结论');
   if (/\bsuccess|tracking|stability|collision|metric|rate\b/iu.test(sourceText)) bullets.push('指标覆盖成功率和稳定性');
@@ -1167,6 +1187,14 @@ function extractSpecificBullets(slide: PresentationSlide, sourceText: string): s
   }
 
   return bullets;
+}
+
+function isAllowedSeminarBullet(item: string | undefined): item is string {
+  const cleaned = cleanText(item);
+  if (!cleaned) {
+    return false;
+  }
+  return !hasForbiddenGeneric(cleaned);
 }
 
 function buildMainClaim(slide: PresentationSlide, bullets: string[]): string {
@@ -1224,27 +1252,78 @@ function buildVisualSteps(slide: PresentationSlide): string[] {
   const sourceText = getSlideEvidenceText(slide);
   const lower = sourceText.toLowerCase();
   if (slide.type === 'method' || slide.type === 'formula') {
+    const concreteSteps = buildConcreteMethodSteps(sourceText);
+    if (concreteSteps.length >= 4) {
+      return concreteSteps;
+    }
     if (/\bπ0\.?7|pi0\.?7|VLA|VLM|vision[-\s]?language[-\s]?action\b/iu.test(sourceText)) {
       return compactUnique(['语言/视觉上下文', 'VLA 策略模型', '子目标图像', '动作输出', '多源数据训练'], 5);
     }
     if (/\bPILOT|humanoid|loco[-\s]?manipulation|whole[-\s]?body\b/iu.test(sourceText)) {
       return compactUnique(['外部感知', 'RL 低层控制器', '全身运动策略', '机器人动作输出', '稳定性目标'], 5);
     }
-    if (/\bmodel|controller|policy|architecture|framework|objective|loss\b/iu.test(lower)) {
-      return compactUnique(['输入观测', '编码/建模模块', '策略/规划模块', '动作输出', '训练目标'], 5);
-    }
   }
   if (slide.type === 'experiments' || slide.type === 'results') {
     const steps = [
-      /\bPILOT|π0\.?7|pi0\.?7\b/iu.test(sourceText) ? '本文方法' : undefined,
-      /\bbaseline|benchmark|comparison|对比\b/iu.test(lower) ? 'Baselines' : undefined,
-      /\bsuccess|tracking|stability|metric|rate|指标|成功率|稳定性\b/iu.test(lower) ? '核心指标' : undefined,
-      /\bsimulation|real[-\s]?world|Unitree|robot|仿真|真机\b/iu.test(lower) ? '仿真/真机任务' : undefined,
+      matchFirstTerm(sourceText, [
+        { pattern: /\bPILOT\b/iu, label: 'PILOT' },
+        { pattern: /π0\.?7|pi0\.?7/iu, label: 'π0.7' }
+      ]) ?? (/\bbaseline|benchmark|comparison|对比\b/iu.test(lower) ? '本文方法' : undefined),
+      matchFirstTerm(sourceText, [
+        { pattern: /\bexisting baselines?\b/iu, label: 'existing baselines' },
+        { pattern: /\bspecialist policies\b/iu, label: 'specialist policies' },
+        { pattern: /\bimitation learning baselines?\b/iu, label: 'imitation baselines' }
+      ]) ?? (/\bbaseline|benchmark|comparison|对比\b/iu.test(lower) ? 'Baselines' : undefined),
+      matchFirstTerm(sourceText, [
+        { pattern: /\bUnitree\s*G1\b/iu, label: 'Unitree G1' },
+        { pattern: /\bsimulation\b/iu, label: 'simulation' },
+        { pattern: /\breal[-\s]?world\b/iu, label: 'real-world' }
+      ]) ?? (/\bsimulation|real[-\s]?world|Unitree|robot|仿真|真机\b/iu.test(lower) ? '仿真/真机任务' : undefined),
+      matchFirstTerm(sourceText, [
+        { pattern: /\bstability\b/iu, label: 'stability' },
+        { pattern: /\bcommand tracking(?: precision)?\b/iu, label: 'command tracking' },
+        { pattern: /\bterrain traversability\b/iu, label: 'terrain traversability' },
+        { pattern: /\bsuccess rate\b/iu, label: 'success rate' }
+      ]) ?? (/\bsuccess|tracking|stability|metric|rate|指标|成功率|稳定性\b/iu.test(lower) ? '核心指标' : undefined),
       /\bablation|generalization|robustness|消融|泛化|鲁棒\b/iu.test(lower) ? '消融/泛化验证' : undefined
     ];
     return compactUnique(steps, 5);
   }
   return [];
+}
+
+function buildConcreteMethodSteps(sourceText: string): string[] {
+  const steps = [
+    matchFirstTerm(sourceText, [
+      { pattern: /\bPILOT\b/iu, label: 'PILOT controller' },
+      { pattern: /π0\.?7|pi0\.?7/iu, label: 'π0.7 model' },
+      { pattern: /\bVLA\b|\bvision[-\s]?language[-\s]?action\b/iu, label: 'VLA policy' }
+    ]),
+    matchFirstTerm(sourceText, [
+      { pattern: /\bLiDAR[-\s]?based elevation maps?\b/iu, label: 'LiDAR elevation map' },
+      { pattern: /\bproprioception\b|\bproprioceptive states?\b/iu, label: 'proprioception' },
+      { pattern: /\bRGB observations?\b|\bvisual observations?\b/iu, label: 'visual observation' },
+      { pattern: /\blanguage (instructions?|goals?|commands?)\b/iu, label: 'language instruction' }
+    ]),
+    matchFirstTerm(sourceText, [
+      { pattern: /\bhybrid internal command(?: representation)?\b/iu, label: 'hybrid internal command' },
+      { pattern: /\bcontext conditioning\b/iu, label: 'context conditioning' },
+      { pattern: /\bsubgoal images?\b/iu, label: 'subgoal images' },
+      { pattern: /\bepisode metadata\b/iu, label: 'episode metadata' }
+    ]),
+    matchFirstTerm(sourceText, [
+      { pattern: /\bwhole[-\s]?body actions?\b/iu, label: 'whole-body action' },
+      { pattern: /\blow[-\s]?level robot actions?\b/iu, label: 'low-level action' },
+      { pattern: /\bcontrol commands?\b/iu, label: 'control command' }
+    ]),
+    matchFirstTerm(sourceText, [
+      { pattern: /\bL\s*=\s*L_/iu, label: 'training objective' },
+      { pattern: /\breinforcement learning\b|\bRL\b/iu, label: 'RL training' },
+      { pattern: /\bstability\b/iu, label: 'stability objective' }
+    ])
+  ];
+
+  return compactUnique(steps, 5);
 }
 
 function getSlideEvidenceText(slide: PresentationSlide): string {
@@ -1257,6 +1336,18 @@ function getSlideEvidenceText(slide: PresentationSlide): string {
   ]
     .filter(Boolean)
     .join(' ');
+}
+
+function matchFirstTerm(sourceText: string, entries: Array<{ pattern: RegExp; label: string }>): string | undefined {
+  return entries.find((entry) => entry.pattern.test(sourceText))?.label;
+}
+
+function extractFormulaBullet(sourceText: string): string {
+  const match = sourceText.match(/L\s*=\s*[^.。;；\n]+/iu)?.[0];
+  if (!match) {
+    return '公式解释训练目标项';
+  }
+  return `核心公式 ${truncateText(match, 24)}`;
 }
 
 function getFigureVisualTitle(type: PresentationSlideType, figure: PresentationFigureCandidate): string {
@@ -1312,7 +1403,7 @@ function hasChineseText(text: string): boolean {
   return /[\u4e00-\u9fff]/u.test(text);
 }
 
-function summarizeRefAsChinese(type: PresentationSlideType, text: string): string {
+function summarizeRefAsChinese(type: PresentationSlideType, text: string): string | undefined {
   const lower = text.toLowerCase();
   if (/\bPILOT\b/iu.test(text)) {
     return 'PILOT 解决感知移动操作控制';
@@ -1348,7 +1439,7 @@ function summarizeRefAsChinese(type: PresentationSlideType, text: string): strin
     return '后续仍需验证部署边界和失败场景';
   }
 
-  return TYPE_FALLBACK_BULLETS[type][0];
+  return undefined;
 }
 
 function compactUnique(items: Array<string | undefined>, limit: number): string[] {

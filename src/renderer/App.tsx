@@ -1564,6 +1564,7 @@ export default function App() {
       setView('presentation');
       return;
     }
+    setView('presentation');
     void handleGeneratePresentationFromCurrentPdf();
   }
 

@@ -187,9 +187,49 @@ describe('presentationOutline', () => {
 
     const experiments = draft.slides.find((slide) => slide.type === 'experiments');
     expect(experiments?.figures[0]).toMatchObject({
-      suggestedSlide: 'experiments',
       selected: true
     });
+    expect(['experiments', 'results']).toContain(experiments?.figures[0]?.suggestedSlide);
+  });
+
+  it('turns method and result evidence into paper-specific seminar bullets', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [paper({ englishTitle: 'PILOT: Perceptive Integrated Low-level Controller' })],
+      blocks: [
+        block({
+          section: 'Abstract',
+          page: 1,
+          original:
+            'Humanoid robots hold great potential for daily service tasks, but existing whole-body controllers lack exteroceptive awareness in unstructured scenes.'
+        }),
+        block({
+          section: 'Method',
+          page: 4,
+          original:
+            'We propose PILOT, a perceptive and unified loco-manipulation controller. PILOT incorporates a robot-centric, LiDAR-based elevation map to capture surrounding terrain information and a hybrid internal command representation for whole-body loco-manipulation.'
+        }),
+        block({
+          section: 'Experiments',
+          page: 6,
+          original:
+            'Extensive experiments in simulation and on the physical Unitree G1 humanoid robot validate superior stability, command tracking precision, and terrain traversability compared with existing baselines.'
+        })
+      ],
+      targetSlideCount: 12
+    });
+
+    const methodText = draft.slides.find((slide) => slide.type === 'method')?.bullets.join(' ') ?? '';
+    const resultsText = draft.slides.find((slide) => slide.type === 'results')?.bullets.join(' ') ?? '';
+
+    expect(methodText).toContain('PILOT');
+    expect(methodText).toContain('LiDAR');
+    expect(methodText).toContain('hybrid internal command');
+    expect(methodText).toMatch(/输入|地形|控制|动作/u);
+    expect(methodText).not.toMatch(/\bWe propose\b/iu);
+
+    expect(resultsText).toContain('Unitree G1');
+    expect(resultsText).toMatch(/仿真|真机|稳定|跟踪|地形通过/u);
+    expect(resultsText).not.toMatch(/\bExtensive experiments\b/iu);
   });
 
   it('keeps a stable slide even when experiments are missing', () => {
@@ -283,7 +323,8 @@ describe('presentationOutline', () => {
     });
 
     const pageText = draft.slides.flatMap((slide) => slide.bullets).join(' ');
-    expect(pageText).toContain('Experiments evaluate');
+    expect(pageText).toContain('compositional generalization');
+    expect(pageText).toMatch(/指标|实验|验证/u);
     expect(pageText).not.toContain('end if');
     expect(pageText).not.toContain('pi_theta');
   });
@@ -457,5 +498,34 @@ describe('presentationOutline', () => {
     expect(enhancedMethod?.bullets[0]).toContain('RGB');
     expect(enhancedMethod?.sourceRefs).toEqual(method?.sourceRefs);
     expect(enhancedMethod?.figures).toEqual(method?.figures);
+  });
+
+  it('asks AI enhancement to replace generic bullets with source-backed details', () => {
+    const draft = buildPresentationDraft({
+      papers: [paper({ englishTitle: 'Specific Seminar Prompt Paper' })],
+      blocks: [
+        block({
+          section: 'Method',
+          page: 3,
+          original:
+            'The controller uses LiDAR-based elevation maps, proprioception, and hybrid commands to output whole-body actions.'
+        }),
+        block({
+          section: 'Results',
+          page: 7,
+          original:
+            'The evaluation reports command tracking, terrain traversability, and stability against baselines.'
+        })
+      ],
+      targetSlideCount: 8
+    });
+    const prompt = buildPresentationAiEnhancementPrompt(draft);
+
+    expect(prompt.userPrompt).toContain('robot platform');
+    expect(prompt.userPrompt).toContain('input observation');
+    expect(prompt.userPrompt).toContain('baseline');
+    expect(prompt.userPrompt).toContain('metric');
+    expect(prompt.userPrompt).toContain('Do not use generic bullets');
+    expect(prompt.userPrompt).toContain('任务指令转成机器人策略');
   });
 });

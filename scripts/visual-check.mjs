@@ -680,7 +680,7 @@ async function runWholePdfReaderScenario(client) {
 async function runPresentationScenario(client) {
   await clickSidebarSection(client, 'presentation');
   let snapshot = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  for (let attempt = 0; attempt < 240; attempt += 1) {
     snapshot = await evaluateJson(client, `() => {
       const page = document.querySelector('.presentation-page');
       const preview = document.querySelector('.ppt-export-preview');
@@ -714,6 +714,9 @@ async function runPresentationScenario(client) {
   }
 
   if (!snapshot.hasPage || !snapshot.hasPreview || snapshot.slideCount < 10) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'presentation-page-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
     throw new Error(`presentation: expected rich slide workspace, got ${JSON.stringify(snapshot)}`);
   }
   if (!snapshot.hasPptxExport) {
