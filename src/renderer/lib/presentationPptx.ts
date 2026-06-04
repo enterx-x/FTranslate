@@ -58,6 +58,12 @@ export interface PptxSlidePlan {
   speakerNotes: string;
 }
 
+export interface PptxEvidenceCard {
+  label: string;
+  text: string;
+  tone: 'evidence' | 'source' | 'figure';
+}
+
 const COLOR = {
   ink: '111827',
   text: '1F2937',
@@ -178,8 +184,52 @@ export function buildPptxSlidePlan(draft: PresentationDraft): PptxSlidePlan[] {
   return ensurePlanBulletUniqueness(plan);
 }
 
+export function buildPptxEvidenceCards(plan: PptxSlidePlan): PptxEvidenceCard[] {
+  const cards: PptxEvidenceCard[] = [];
+  const seen = new Set<string>();
+
+  const addCard = (label: string, text: string | undefined, tone: PptxEvidenceCard['tone']): void => {
+    const cleaned = cleanText(text);
+    if (!cleaned || hasForbiddenGeneric(cleaned) || hasTypeFallbackText(cleaned) || hasTemplateClaimPrefix(cleaned)) {
+      return;
+    }
+    const key = normalizeBulletForCompare(cleaned);
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    cards.push({
+      label,
+      text: truncateText(cleaned, tone === 'source' ? 58 : 44),
+      tone
+    });
+  };
+
+  plan.bullets.slice(0, 4).forEach((bullet, index) => {
+    addCard(`证据 ${index + 1}`, bullet, 'evidence');
+  });
+
+  if (plan.visual.figure) {
+    addCard('图表线索', `${plan.visual.figure.caption || plan.visual.caption}（p.${plan.visual.figure.pageNumber}）`, 'figure');
+  } else if (plan.visual.kind !== 'none' && plan.visual.caption && !/原文未明确说明|待裁剪/u.test(plan.visual.caption)) {
+    addCard('图表线索', plan.visual.caption, 'figure');
+  }
+
+  plan.sourceFooter
+    .split(/\s+\|\s+/u)
+    .slice(0, 2)
+    .forEach((source, index) => addCard(index === 0 ? '来源' : '来源补充', source, 'source'));
+
+  if (cards.length < 4) {
+    addCard('核心观点', plan.mainClaim, 'evidence');
+  }
+
+  return cards.slice(0, 5);
+}
+
 function ensurePlanBulletUniqueness(plan: PptxSlidePlan[]): PptxSlidePlan[] {
   const seen = new Map<string, number>();
+  const finalSeen = new Set<string>();
   return plan.map((slide) => {
     const localKeys = new Set<string>();
     const localSemanticKeys = new Set<string>();
@@ -188,6 +238,7 @@ function ensurePlanBulletUniqueness(plan: PptxSlidePlan[]): PptxSlidePlan[] {
         const key = normalizeBulletForCompare(bullet);
         if (key) {
           seen.set(key, slide.index);
+          finalSeen.add(key);
         }
       });
       return slide;
@@ -209,7 +260,7 @@ function ensurePlanBulletUniqueness(plan: PptxSlidePlan[]): PptxSlidePlan[] {
     });
 
     const candidates = buildSlideSpecificFallbacks(slide);
-    const minBulletCount = slide.type === 'info' ? Math.min(1, slide.bullets.length || 1) : 2;
+    const minBulletCount = slide.type === 'info' ? Math.min(1, slide.bullets.length || 1) : slide.type === 'summary' ? 2 : 3;
     for (const candidate of candidates) {
       if (uniqueBullets.length >= minBulletCount) {
         break;
@@ -227,12 +278,166 @@ function ensurePlanBulletUniqueness(plan: PptxSlidePlan[]): PptxSlidePlan[] {
       uniqueBullets.push(candidate);
     }
 
+    for (const candidate of slide.bullets) {
+      if (uniqueBullets.length >= minBulletCount) {
+        break;
+      }
+      let fallbackBullet = buildOriginalBulletFallback(slide, candidate);
+      let key = fallbackBullet ? normalizeBulletForCompare(fallbackBullet) : '';
+      if (fallbackBullet && key && seen.has(key)) {
+        const contextual = buildStepBullet(slide.type, fallbackBullet) ?? summarizeRefAsChinese(slide.type, fallbackBullet);
+        const contextualKey = contextual ? normalizeBulletForCompare(contextual) : '';
+        if (contextual && contextualKey && contextualKey !== key) {
+          fallbackBullet = contextual;
+          key = contextualKey;
+        }
+      }
+      const semanticKey = fallbackBullet ? getSemanticBulletKey(fallbackBullet) : '';
+      if (
+        !fallbackBullet ||
+        !key ||
+        seen.has(key) ||
+        localKeys.has(key) ||
+        (semanticKey && localSemanticKeys.has(semanticKey))
+      ) {
+        continue;
+      }
+      seen.set(key, slide.index);
+      localKeys.add(key);
+      if (semanticKey) {
+        localSemanticKeys.add(semanticKey);
+      }
+      uniqueBullets.push(fallbackBullet);
+    }
+
+    const finalBullets = finalizeStrengthenedBullets(slide, strengthenWeakBullets(slide, uniqueBullets.slice(0, 5)), finalSeen);
+
+    const claimEvidence = finalBullets.length >= 2 ? `${finalBullets[0]}；${finalBullets[1]}` : finalBullets[0] ?? slide.mainClaim;
+
     return {
       ...slide,
-      bullets: uniqueBullets.slice(0, 5),
-      mainClaim: buildTypedMainClaim(slide.type, uniqueBullets[0] ?? slide.mainClaim)
+      bullets: finalBullets,
+      mainClaim: buildTypedMainClaim(slide.type, claimEvidence)
     };
   });
+}
+
+function finalizeStrengthenedBullets(slide: PptxSlidePlan, bullets: string[], finalSeen: Set<string>): string[] {
+  const minBulletCount = getMinimumBulletCount(slide, bullets.length);
+  const localKeys = new Set<string>();
+  const localSemanticKeys = new Set<string>();
+  const result: string[] = [];
+
+  const addBullet = (candidate: string | undefined): boolean => {
+    const compact = compactChineseBullet(candidate);
+    const key = compact ? normalizeBulletForCompare(compact) : '';
+    const semanticKey = compact ? getSemanticBulletKey(compact) : '';
+    if (
+      !compact ||
+      !key ||
+      hasTypeFallbackText(compact) ||
+      hasTemplateClaimPrefix(compact) ||
+      finalSeen.has(key) ||
+      localKeys.has(key) ||
+      (semanticKey && localSemanticKeys.has(semanticKey))
+    ) {
+      return false;
+    }
+    localKeys.add(key);
+    if (semanticKey) {
+      localSemanticKeys.add(semanticKey);
+    }
+    finalSeen.add(key);
+    result.push(compact);
+    return true;
+  };
+
+  bullets.forEach((bullet) => addBullet(bullet));
+
+  const fallbacks = [
+    ...buildSlideSpecificFallbacks(slide),
+    ...slide.bullets.map((bullet) => {
+      const fallback = buildOriginalBulletFallback(slide, bullet);
+      return isWeakNounPhraseBullet(fallback ?? '') ? rewriteWeakNounPhraseBullet(slide.type, bullet) : fallback;
+    }),
+    hasTypeFallbackText(slide.mainClaim) || hasTemplateClaimPrefix(slide.mainClaim)
+      ? undefined
+      : rewriteWeakNounPhraseBullet(slide.type, slide.mainClaim)
+  ];
+
+  for (const fallback of fallbacks) {
+    if (result.length >= minBulletCount) {
+      break;
+    }
+    addBullet(fallback);
+  }
+
+  return result.slice(0, 5);
+}
+
+function getMinimumBulletCount(slide: PptxSlidePlan, sourceCount: number): number {
+  if (slide.type === 'info') {
+    return Math.min(1, sourceCount || 1);
+  }
+  if (slide.type === 'summary') {
+    return 2;
+  }
+  return 3;
+}
+
+function strengthenWeakBullets(slide: PptxSlidePlan, bullets: string[]): string[] {
+  const evidence = [slide.mainClaim, slide.visual.caption, ...slide.visual.steps, slide.sourceFooter].join(' ');
+  const seen = new Set<string>();
+  const strengthened: string[] = [];
+
+  const addBullet = (bullet: string | undefined): void => {
+    const compact = compactChineseBullet(bullet);
+    const key = compact ? normalizeBulletForCompare(compact) : '';
+    if (!compact || !key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    strengthened.push(compact);
+  };
+
+  bullets.forEach((bullet) => {
+    if (!isWeakNounPhraseBullet(bullet)) {
+      addBullet(bullet);
+      return;
+    }
+
+    const candidate =
+      summarizeRefAsChinese(slide.type, `${bullet} ${evidence}`) ??
+      buildStepBullet(slide.type, bullet) ??
+      rewriteWeakNounPhraseBullet(slide.type, bullet);
+    addBullet(isWeakNounPhraseBullet(candidate ?? '') ? rewriteWeakNounPhraseBullet(slide.type, bullet) : candidate);
+  });
+
+  for (const fallback of buildSlideSpecificFallbacks(slide)) {
+    if (strengthened.length >= Math.max(2, Math.min(3, bullets.length || 3))) {
+      break;
+    }
+    addBullet(fallback);
+  }
+
+  return strengthened.slice(0, 5);
+}
+
+function rewriteWeakNounPhraseBullet(type: PresentationSlideType, bullet: string): string | undefined {
+  const cleaned = cleanText(bullet);
+  if (!cleaned) {
+    return undefined;
+  }
+  const topic = truncateText(cleaned, 26);
+  if (type === 'experiments') return `${topic} 用于说明实验设置或对比对象`;
+  if (type === 'results') return `${topic} 用于支撑结果判断`;
+  if (type === 'method' || type === 'formula') return `${topic} 连接方法输入、处理和输出`;
+  if (type === 'background' || type === 'relatedWork') return `${topic} 是问题背景中的关键约束`;
+  if (type === 'innovation') return `${topic} 体现论文的设计差异`;
+  if (type === 'limitations') return `${topic} 暴露方法边界`;
+  if (type === 'inspiration') return `${topic} 可转为复现实验线索`;
+  if (type === 'summary') return `${topic} 支撑汇报结论`;
+  return `${topic} 需要结合原文证据解释`;
 }
 
 function buildSlideSpecificFallbacks(slide: PptxSlidePlan): string[] {
@@ -242,14 +447,29 @@ function buildSlideSpecificFallbacks(slide: PptxSlidePlan): string[] {
     ...slide.visual.steps.map((step) => buildStepBullet(slide.type, step)),
     slide.visual.figure ? `${getFigureKind(slide.visual.figure)} 图表支撑第 ${slide.visual.figure.pageNumber} 页证据` : undefined
   ];
-  return compactUnique(candidates, 5).filter((item) => !hasForbiddenGeneric(item));
+  return compactUnique(candidates, 5).filter(
+    (item) => !hasForbiddenGeneric(item) && !hasTypeFallbackText(item) && !hasTemplateClaimPrefix(item)
+  );
+}
+
+function buildOriginalBulletFallback(slide: PptxSlidePlan, bullet: string): string | undefined {
+  const cleaned = cleanText(bullet);
+  if (!cleaned) {
+    return undefined;
+  }
+
+  if (isWeakNounPhraseBullet(cleaned)) {
+    return summarizeRefAsChinese(slide.type, cleaned) ?? buildStepBullet(slide.type, cleaned);
+  }
+
+  return compactChineseBullet(cleaned);
 }
 
 function buildStepBullet(type: PresentationSlideType, step: string): string | undefined {
   const cleaned = cleanText(step);
   if (!cleaned) return undefined;
-  if (type === 'method' || type === 'formula') return `${cleaned} 属于方法链路`;
-  if (type === 'experiments') return `${cleaned} 属于实验设置`;
+  if (type === 'method' || type === 'formula') return `${cleaned} 用于连接方法输入、处理和输出`;
+  if (type === 'experiments') return `${cleaned} 用于说明实验设置或评估对象`;
   if (type === 'results') return `${cleaned} 支撑结果判断`;
   if (type === 'innovation') return `${cleaned} 构成设计差异`;
   if (type === 'limitations') return `${cleaned} 暴露方法边界`;
@@ -408,6 +628,26 @@ export function validatePptxQuality(plan: PptxSlidePlan[]): string[] {
   return issues;
 }
 
+type PptxDeepMethodMap = NonNullable<PresentationDraft['methodMap']>;
+
+function trainingImplementationToText(training: PptxDeepMethodMap['training_or_implementation']): string {
+  return [
+    training.what_is_trained_or_built,
+    training.data_or_inputs,
+    training.objective_or_rules,
+    training.important_details,
+    training.source
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function evaluationLogicToText(logic: PptxDeepMethodMap['evaluation_logic']): string {
+  return [logic.tasks_or_datasets, logic.baselines, logic.metrics, logic.main_results, logic.what_the_results_prove, logic.source]
+    .filter(Boolean)
+    .join(' ');
+}
+
 function evaluateMethodCapability(
   draft: PresentationDraft,
   plan: PptxSlidePlan[]
@@ -433,6 +673,8 @@ function evaluateMethodCapability(
     .join(' ');
   const combined = `${methodPlanText} ${draftMethodText}`;
   const stages = methodMap?.method_stages ?? [];
+  const trainingText = methodMap ? trainingImplementationToText(methodMap.training_or_implementation) : '';
+  const evaluationText = methodMap ? evaluationLogicToText(methodMap.evaluation_logic) : '';
   const canIdentifyCoreProblem = Boolean(methodMap?.core_problem) || /problem|challenge|lack|瓶颈|困难|不足|unstructured|loco[-\s]?manipulation/iu.test(combined);
   const canIdentifyInputs =
     stages.some((stage) => hasConcreteValue(stage.input)) ||
@@ -444,10 +686,10 @@ function evaluateMethodCapability(
     stages.some((stage) => hasConcreteValue(stage.connects_to_next)) ||
     /connect|condition|representation|→|->|驱动|连接|交给|闭环/iu.test(combined);
   const canIdentifyTraining =
-    Boolean(methodMap?.training_or_implementation && !/原文未明确说明/u.test(methodMap.training_or_implementation)) ||
+    Boolean(trainingText && !/原文未明确说明|not clearly|does not clearly/iu.test(trainingText)) ||
     /training|reinforcement learning|objective|loss|optimization|训练|目标|实现/iu.test(combined);
   const canIdentifyEvaluation =
-    Boolean(methodMap?.evaluation_logic && !/原文未明确说明/u.test(methodMap.evaluation_logic)) ||
+    Boolean(evaluationText && !/原文未明确说明|not clearly|does not clearly/iu.test(evaluationText)) ||
     /experiment|evaluate|baseline|metric|success|tracking|stability|Unitree|实验|指标|对比|结果/iu.test(combined);
   const canIdentifyStages =
     stages.length >= 3 ||
@@ -528,7 +770,7 @@ function hasKeywordStuffingProblem(bullets: string[]): boolean {
 
 function hasGenericTemplateProblem(plan: PptxSlidePlan[]): boolean {
   const planText = plan.map((slide) => [slide.mainClaim, ...slide.bullets, ...slide.visual.steps].join(' ')).join(' ');
-  return hasForbiddenGeneric(planText) || /论文信息|研究对象|论点|方法线索|汇报目标/u.test(planText);
+  return hasForbiddenGeneric(planText) || hasTemplateClaimPrefix(planText) || /论文信息|研究对象|论点|方法线索|汇报目标/u.test(planText);
 }
 
 function hasSlideTypeMismatch(plan: PptxSlidePlan[], draft: PresentationDraft): boolean {
@@ -872,9 +1114,11 @@ function drawContextSlide(pptx: pptxgen, slide: pptxgen.Slide, plan: PptxSlidePl
   drawSlideHeader(slide, plan);
   drawMainPoint(slide, plan, 0.72, 1.12, 7.2, 0.78);
   const hasDiagram = plan.visual.kind === 'diagram' && plan.visual.steps.length >= 4;
-  drawBulletList(slide, plan.bullets, 0.88, 2.15, hasDiagram ? 6.65 : 10.9, 2.85);
   if (hasDiagram) {
+    drawBulletList(slide, plan.bullets, 0.88, 2.15, 6.65, 2.85);
     drawCompactSchematic(pptx, slide, plan, 8.15, 1.35, 4.15, 3.85);
+  } else {
+    drawEvidenceCardGrid(pptx, slide, plan, 0.78, 2.02, 11.55, 3.25);
   }
   drawTakeawayStrip(slide, plan, 0.72, 5.72, 11.7, SEMINAR_PPT_LAYOUT.takeawayHeight);
   drawFooter(slide, plan);
@@ -1073,6 +1317,64 @@ function drawBulletList(
       h: compact ? 0.27 : 0.34,
       fontSize: compact ? SEMINAR_PPT_TYPOGRAPHY.bodySmall : SEMINAR_PPT_TYPOGRAPHY.body,
       color: COLOR.text,
+      fit: 'shrink',
+      breakLine: false
+    });
+  });
+}
+
+function drawEvidenceCardGrid(
+  pptx: pptxgen,
+  slide: pptxgen.Slide,
+  plan: PptxSlidePlan,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+): void {
+  const cards = buildPptxEvidenceCards(plan);
+  const columns = cards.length <= 2 ? Math.max(1, cards.length) : 2;
+  const rows = Math.ceil(cards.length / columns);
+  const gapX = 0.18;
+  const gapY = 0.16;
+  const cardW = (w - gapX * (columns - 1)) / columns;
+  const cardH = Math.min(1.08, (h - gapY * (rows - 1)) / Math.max(1, rows));
+
+  cards.forEach((card, index) => {
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+    const cardX = x + col * (cardW + gapX);
+    const cardY = y + row * (cardH + gapY);
+    const accentColor = card.tone === 'figure' ? '2563EB' : card.tone === 'source' ? '64748B' : COLOR.accent;
+    const fillColor = card.tone === 'figure' ? COLOR.blueSoft : card.tone === 'source' ? 'F8FAFC' : COLOR.surface;
+
+    slide.addShape(pptx.ShapeType.roundRect, {
+      x: cardX,
+      y: cardY,
+      w: cardW,
+      h: cardH,
+      rectRadius: 0.08,
+      fill: { color: fillColor },
+      line: { color: card.tone === 'source' ? 'E2E8F0' : COLOR.line, width: 0.75 }
+    });
+    slide.addText(card.label, {
+      x: cardX + 0.18,
+      y: cardY + 0.14,
+      w: 1.0,
+      h: 0.18,
+      fontSize: SEMINAR_PPT_TYPOGRAPHY.label,
+      bold: true,
+      color: accentColor,
+      fit: 'shrink'
+    });
+    slide.addText(card.text, {
+      x: cardX + 0.18,
+      y: cardY + 0.42,
+      w: cardW - 0.36,
+      h: cardH - 0.52,
+      fontSize: card.tone === 'source' ? SEMINAR_PPT_TYPOGRAPHY.source + 1 : SEMINAR_PPT_TYPOGRAPHY.bodySmall,
+      bold: card.tone !== 'source',
+      color: card.tone === 'source' ? COLOR.muted : COLOR.text,
       fit: 'shrink',
       breakLine: false
     });
@@ -1754,33 +2056,9 @@ function buildMainClaim(slide: PresentationSlide, bullets: string[]): string {
 }
 
 function buildTypedMainClaim(type: PresentationSlideType, evidence: string): string {
-  const compact = truncateText(cleanText(evidence) ?? '原文未明确说明', 22);
-  switch (type) {
-    case 'info':
-      return `本页交代论文来源：${compact}`;
-    case 'background':
-      return `本页聚焦问题来源：${compact}`;
-    case 'relatedWork':
-      return `本页说明现有缺口：${compact}`;
-    case 'method':
-      return `本页讲清方法链路：${compact}`;
-    case 'formula':
-      return `本页解释关键模块：${compact}`;
-    case 'experiments':
-      return `本页说明实验设置：${compact}`;
-    case 'results':
-      return `本页回到实验结论：${compact}`;
-    case 'innovation':
-      return `本页提炼真实差异：${compact}`;
-    case 'limitations':
-      return `本页保留边界讨论：${compact}`;
-    case 'inspiration':
-      return `本页转化为可复现实验：${compact}`;
-    case 'summary':
-      return `本页收束复现判断：${compact}`;
-    default:
-      return compact;
-  }
+  const cleaned = stripTemplateClaimPrefix(cleanText(evidence) ?? '') ?? '';
+  const compact = truncateText(cleaned || TYPE_FALLBACK_BULLETS[type]?.[0] || '原文未明确说明', 22);
+  return compact;
 }
 
 function buildSlideTitle(slide: PresentationSlide): string {
@@ -1961,6 +2239,30 @@ function getDiagramTitle(type: PresentationSlideType): string {
 
 function hasForbiddenGeneric(text: string): boolean {
   return FORBIDDEN_GENERIC_LABELS.some((label) => text.includes(label));
+}
+
+function hasTypeFallbackText(text: string | undefined): boolean {
+  const cleaned = cleanText(text);
+  if (!cleaned) {
+    return false;
+  }
+  return Object.values(TYPE_FALLBACK_BULLETS).some((items) => items.some((item) => cleaned.includes(item)));
+}
+
+function hasTemplateClaimPrefix(text: string | undefined): boolean {
+  const cleaned = cleanText(text);
+  if (!cleaned) {
+    return false;
+  }
+  return /^(本页|鏈〉)[^：:锛?]{0,36}[：:锛?]/u.test(cleaned);
+}
+
+function stripTemplateClaimPrefix(text: string | undefined): string | undefined {
+  const cleaned = cleanText(text);
+  if (!cleaned) {
+    return undefined;
+  }
+  return cleaned.replace(/^(本页|鏈〉)[^：:锛?]{0,36}[：:锛?]\s*/u, '').trim();
 }
 
 function hasMethodEvidence(slide: PptxSlidePlan): boolean {

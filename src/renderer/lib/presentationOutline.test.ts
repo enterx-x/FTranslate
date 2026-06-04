@@ -280,10 +280,71 @@ describe('presentationOutline', () => {
       output: expect.stringMatching(/elevation|terrain|state/i)
     });
     expect(map.method_stages.some((stage) => /whole-body action|control command/i.test(stage.output))).toBe(true);
-    expect(map.training_or_implementation).toMatch(/reinforcement learning|stability|command tracking/i);
-    expect(map.evaluation_logic).toMatch(/Unitree G1|baseline|metric|terrain traversability/i);
+    expect(map.paper_type).toMatch(/algorithm|system|application/);
+    expect(map.prior_work_limitations.join(' ')).toMatch(/lack exteroceptive|unstructured|whole-body/i);
+    expect(map.training_or_implementation.what_is_trained_or_built).toMatch(/controller|PILOT|method/i);
+    expect(map.training_or_implementation.objective_or_rules).toMatch(/reinforcement learning|stability|command tracking/i);
+    expect(map.evaluation_logic.tasks_or_datasets).toMatch(/simulation|Unitree G1|unstructured/i);
+    expect(map.evaluation_logic.baselines).toMatch(/existing baselines/i);
+    expect(map.evaluation_logic.metrics).toMatch(/stability|command tracking|terrain traversability/i);
+    expect(map.evaluation_logic.what_the_results_prove).toMatch(/terrain traversability|stability|command tracking/i);
+    expect(map.limitations.author_stated || map.limitations.inferred).toBeTruthy();
     expect(draft.methodMap?.method_stages.length).toBeGreaterThanOrEqual(3);
     expect(methodSlideText).toMatch(/LiDAR|hybrid internal command|whole-body|reinforcement learning/i);
+  });
+
+  it('keeps the deep method map rich enough for review agents instead of a flat summary', () => {
+    const input = {
+      papers: [paper({ englishTitle: 'Grounded Mobile Robot Planner' })],
+      blocks: [
+        block({
+          section: 'Introduction',
+          page: 2,
+          original:
+            'Prior mobile robot planners struggle in dynamic clutter because they do not combine RGB-D observations, occupancy maps, and safety costs.'
+        }),
+        block({
+          section: 'Method',
+          page: 4,
+          original:
+            'The planner takes RGB-D observations and an occupancy map as input, passes them through a perception encoder, predicts latent dynamics with a world model, and uses MPC with a trajectory optimizer to output velocity commands.'
+        }),
+        block({
+          section: 'Training',
+          page: 5,
+          original:
+            'The model is trained with behavior cloning and a safety cost objective so the policy avoids collisions while following waypoints.'
+        }),
+        block({
+          section: 'Experiments',
+          page: 7,
+          original:
+            'Experiments compare against PPO and SAC baselines on mobile robot navigation tasks using success rate, collision rate, path efficiency, and tracking error metrics.'
+        }),
+        block({
+          section: 'Limitations',
+          page: 9,
+          original:
+            'The method still depends on reliable obstacle state estimation and may fail when RGB-D perception is degraded.'
+        })
+      ],
+      targetSlideCount: 12
+    };
+
+    const map = buildDeepMethodMap(input);
+    const stageText = map.method_stages.map((stage) => `${stage.stage_name} ${stage.input} ${stage.process} ${stage.output}`).join(' ');
+
+    expect(map.paper_type).toBe('algorithm');
+    expect(map.core_problem).toMatch(/dynamic clutter|RGB-D|occupancy|safety/i);
+    expect(map.prior_work_limitations.join(' ')).toMatch(/Prior mobile robot planners|struggle/i);
+    expect(stageText).toMatch(/RGB-D observations|occupancy map|perception encoder|World Model|MPC|trajectory optimizer|velocity command/i);
+    expect(map.method_stages.every((stage) => stage.input && stage.process && stage.output && stage.purpose && stage.source)).toBe(true);
+    expect(map.training_or_implementation.data_or_inputs).toMatch(/behavior cloning|safety cost|waypoint/i);
+    expect(map.training_or_implementation.objective_or_rules).toMatch(/safety cost objective|avoid collisions/i);
+    expect(map.evaluation_logic.tasks_or_datasets).toMatch(/mobile robot navigation/i);
+    expect(map.evaluation_logic.baselines).toMatch(/PPO|SAC/i);
+    expect(map.evaluation_logic.metrics).toMatch(/success rate|collision rate|path efficiency|tracking error/i);
+    expect(map.limitations.author_stated).toMatch(/obstacle state estimation|RGB-D perception/i);
   });
 
   it('classifies figure captions so results slides do not use setup figures as evidence', () => {
@@ -376,7 +437,42 @@ describe('presentationOutline', () => {
 
     const background = draft.slides.find((slide) => slide.type === 'background');
     expect(background?.sourceRefs.some((ref) => ref.pageNumber === 4)).toBe(false);
+    expect(background?.bullets.length).toBeGreaterThanOrEqual(2);
     expect(background?.bullets.join(' ')).toContain('robot foundation model');
+  });
+
+  it('does not let method-map rewriting collapse a content slide to one vague bullet', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [paper({ englishTitle: 'Robot Foundation Model' })],
+      blocks: [
+        block({
+          section: 'Abstract',
+          page: 1,
+          original:
+            'We present π0.7, a robot foundation model that follows diverse language instructions in unseen environments and uses context conditioning to steer behavior.'
+        }),
+        block({
+          section: 'I. INTRODUCTION',
+          page: 2,
+          original:
+            'Foundation models emerge from large and diverse datasets. Prior vision-language-action policies remain limited by narrow robot task distributions and weak out-of-the-box generalization.'
+        }),
+        block({
+          section: 'I. INTRODUCTION',
+          page: 2,
+          original:
+            'The main idea behind π0.7 is to use diverse context conditioning information contained in the prompt, including language commands, subgoal images, and metadata.'
+        })
+      ],
+      targetSlideCount: 12
+    });
+
+    const background = draft.slides.find((slide) => slide.type === 'background');
+    const text = background?.bullets.join(' ') ?? '';
+
+    expect(background?.bullets.length).toBeGreaterThanOrEqual(3);
+    expect(text).toContain('π0.7');
+    expect(text).toMatch(/language|context conditioning|subgoal images|VLA|generalization/iu);
   });
 
   it('filters pseudocode and formula fragments from narrative slides', () => {

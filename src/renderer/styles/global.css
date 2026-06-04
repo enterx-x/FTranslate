@@ -7888,23 +7888,23 @@ body.is-resizing-layout .layout-resize-handle::after {
 .ppt-export-body {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 14px;
+  gap: 10px;
   min-height: 0;
-  padding-top: 16px;
+  padding-top: 12px;
 }
 
 .ppt-export-claim {
-  max-width: 86%;
+  max-width: 94%;
   border-left: 3px solid #635bff;
-  padding: 8px 0 8px 14px;
+  padding: 5px 0 6px 12px;
 }
 
 .ppt-export-claim p {
   margin: 3px 0 0;
   color: #172033;
-  font-size: clamp(12px, 1vw, 14px);
-  font-weight: 800;
-  line-height: 1.45;
+  font-size: clamp(11px, 0.92vw, 13px);
+  font-weight: 760;
+  line-height: 1.38;
 }
 
 .ppt-export-main {
@@ -7917,6 +7917,10 @@ body.is-resizing-layout .layout-resize-handle::after {
 .ppt-export-quote,
 .ppt-export-none {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.ppt-export-none .ppt-export-evidence-cards {
+  grid-column: 1 / -1;
 }
 
 .ppt-export-visual {
@@ -7999,22 +8003,23 @@ body.is-resizing-layout .layout-resize-handle::after {
 
 .ppt-export-bullets {
   display: grid;
-  align-content: center;
-  gap: 8px;
+  align-content: start;
+  gap: 6px;
   min-height: 0;
   margin: 0;
   padding: 0;
   list-style: none;
+  overflow: visible;
 }
 
 .ppt-export-bullets li {
   position: relative;
   border-bottom: 1px solid #eef2f7;
-  padding: 0 0 8px 16px;
+  padding: 0 0 6px 15px;
   color: #1f2937;
-  font-size: clamp(11px, 0.94vw, 13px);
-  font-weight: 700;
-  line-height: 1.5;
+  font-size: clamp(10.5px, 0.86vw, 12.5px);
+  font-weight: 650;
+  line-height: 1.42;
 }
 
 .ppt-export-bullets li::before {
@@ -8026,6 +8031,62 @@ body.is-resizing-layout .layout-resize-handle::after {
   height: 5px;
   border-radius: 999px;
   background: #635bff;
+}
+
+.ppt-export-evidence-cards {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-content: stretch;
+}
+
+.ppt-export-evidence-card {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 82px;
+  border: 1px solid #e1e7f0;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.045);
+}
+
+.ppt-export-evidence-card::before {
+  display: none;
+}
+
+.ppt-export-evidence-card p {
+  margin: 6px 0 0;
+  color: #1f2937;
+  font-size: clamp(10px, 0.82vw, 12px);
+  font-weight: 720;
+  line-height: 1.42;
+}
+
+.ppt-export-evidence-source {
+  background: #fbfcfe;
+}
+
+.ppt-export-evidence-source p {
+  color: #667085;
+  font-size: clamp(9px, 0.72vw, 10.5px);
+  font-weight: 650;
+}
+
+.ppt-export-evidence-figure {
+  border-color: #c7d2fe;
+  background: linear-gradient(180deg, #f8fbff, #eef4ff);
+}
+
+.ppt-export-card-label {
+  width: fit-content;
+  border: 1px solid #dfe4ff;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #eef0ff;
+  color: #4f46e5;
+  font-size: clamp(8px, 0.66vw, 9.5px);
+  font-weight: 850;
+  line-height: 1.2;
 }
 
 .ppt-export-source-strip {
@@ -8098,6 +8159,11 @@ body.is-resizing-layout .layout-resize-handle::after {
     gap: 12px;
   }
 
+  .ppt-export-main.ppt-export-none,
+  .ppt-export-main.ppt-export-quote {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .ppt-export-visual {
     padding: 13px 14px;
   }
@@ -8105,6 +8171,15 @@ body.is-resizing-layout .layout-resize-handle::after {
   .ppt-export-visual ol {
     grid-template-columns: 1fr;
     gap: 6px;
+  }
+
+  .ppt-export-evidence-cards {
+    gap: 7px;
+  }
+
+  .ppt-export-evidence-card {
+    min-height: 68px;
+    padding: 8px 10px;
   }
 }
 

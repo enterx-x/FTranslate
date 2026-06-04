@@ -5,6 +5,7 @@ import {
   SEMINAR_PPT_LAYOUT,
   SEMINAR_PPT_TYPOGRAPHY,
   buildPresentationReviewReport,
+  buildPptxEvidenceCards,
   buildPptxSlidePlan,
   createPresentationPptxBuffer,
   validatePptxQuality,
@@ -189,6 +190,53 @@ describe('presentationPptx', () => {
     const diagramText = plan.flatMap((item) => item.visual.steps).join(' ');
     expect(diagramText).not.toMatch(/论文信息|研究对象|论点|方法线索|汇报目标/u);
     expect(method?.visual.steps.join(' ')).toMatch(/PILOT|RL|感知|控制|动作|机器人|Unitree/u);
+  });
+
+  it('builds evidence cards for text-led slides without falling back to a sparse whiteboard', () => {
+    const plan = buildPptxSlidePlan(makeSeminarDraft());
+    const background = plan.find((item) => item.type === 'background');
+
+    expect(background).toBeDefined();
+    const cards = buildPptxEvidenceCards(background!);
+
+    expect(cards.length).toBeGreaterThanOrEqual(4);
+    expect(cards.map((card) => card.label).join(' ')).toMatch(/证据|来源/u);
+    expect(cards.map((card) => card.text).join(' ')).toMatch(/PILOT|Unitree|移动操作|复杂地形|低层控制|perceptive/u);
+    expect(cards.map((card) => card.text).join(' ')).not.toMatch(/论文信息|研究对象|论点|方法线索|汇报目标/u);
+  });
+
+  it('does not use slide-level template claim prefixes as evidence cards', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'background'
+        ? {
+            ...item,
+            bullets: [
+              '本页聚焦问题来源：π0.7 关注未见环境指令执行 是问题背景',
+              'PILOT 在复杂地形移动操作任务中需要感知低层控制',
+              'Unitree G1 真机实验用于验证稳定性'
+            ],
+            sourceRefs: [
+              {
+                pageNumber: 1,
+                section: 'Introduction',
+                text:
+                  'PILOT tackles loco-manipulation over unstructured scenes with perceptive low-level control and physical Unitree G1 validation.'
+              }
+            ]
+          }
+        : item
+    );
+    const background = buildPptxSlidePlan(draft).find((item) => item.type === 'background');
+
+    expect(background).toBeDefined();
+    expect(background?.mainClaim).not.toMatch(/本页聚焦|问题来源/u);
+    const cardText = buildPptxEvidenceCards(background!)
+      .map((card) => card.text)
+      .join(' ');
+
+    expect(cardText).not.toMatch(/本页聚焦|问题来源/u);
+    expect(cardText).toMatch(/PILOT|Unitree|复杂地形|低层控制/u);
   });
 
   it('keeps paper-specific method, formula, and metric evidence in exported slide plans', () => {
@@ -407,8 +455,38 @@ describe('presentationPptx', () => {
     );
 
     const report = buildPresentationReviewReport(draft);
-
     expect(report.repeated_keyword_problem).toBe(false);
+  });
+
+  it('deduplicates final strengthened bullets before quality review', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'method' || item.type === 'formula'
+        ? {
+            ...item,
+            bullets: [
+              'π0.7 依靠上下文调节策略',
+              '上下文/任务表示用于把高层任务要求转成低层控制信号',
+              'π0.7 依靠上下文调节策略'
+            ],
+            sourceRefs: [
+              {
+                pageNumber: item.type === 'method' ? 4 : 5,
+                section: 'Method',
+                text:
+                  'π0.7 uses context conditioning. Language instructions, subgoal images, and episode metadata are processed into robot actions.'
+              }
+            ]
+          }
+        : item
+    );
+
+    const plan = buildPptxSlidePlan(draft);
+    const issues = validatePptxQuality(plan);
+    const bullets = plan.flatMap((item) => item.bullets.map((bullet) => bullet.replace(/\s+/gu, ' ').trim().toLowerCase()));
+
+    expect(new Set(bullets).size).toBe(bullets.length);
+    expect(issues.join('\n')).not.toMatch(/重复 bullet|semantic duplicate|noun-phrase stuffing/u);
   });
 
   it('does not flag raw unselected setup figures when the exported result slide uses result evidence', () => {
@@ -594,6 +672,35 @@ describe('presentationPptx', () => {
 
     expect(experiments!.bullets.filter((bullet) => /[\u4e00-\u9fff]/u.test(bullet)).length).toBeGreaterThanOrEqual(2);
     expect(issues.join('\n')).not.toMatch(/中文 bullet 少于 2|baseline、metric、result/u);
+  });
+
+  it('rewrites weak experiment noun phrases into explanatory bullets before quality review', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'experiments'
+        ? {
+            ...item,
+            bullets: ['baseline', 'platform', 'metric'],
+            figures: [],
+            sourceRefs: [
+              {
+                pageNumber: 6,
+                section: 'Experiments',
+                text:
+                  'The evaluation compares the proposed method with existing baselines on robot platform tasks using success rate and tracking metrics.'
+              }
+            ]
+          }
+        : item
+    );
+
+    const experiments = buildPptxSlidePlan(draft).find((item) => item.type === 'experiments');
+    expect(experiments).toBeDefined();
+
+    const issues = validatePptxQuality([experiments!]);
+
+    expect(experiments!.bullets.every((bullet) => /用于|包含|关注|验证|支撑|对比/u.test(bullet))).toBe(true);
+    expect(issues.join('\n')).not.toMatch(/名词堆叠|解释价值/u);
   });
 
   it('rewrites manuscript-like English bullets into compact Chinese seminar bullets', () => {

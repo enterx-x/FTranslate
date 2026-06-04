@@ -7,7 +7,13 @@ import {
   type PresentationDraft,
   type PresentationSlide
 } from '../lib/presentationOutline';
-import { buildPresentationReviewReport, buildPptxSlidePlan, type PptxSlidePlan } from '../lib/presentationPptx';
+import {
+  buildPresentationReviewReport,
+  buildPptxEvidenceCards,
+  buildPptxSlidePlan,
+  type PptxEvidenceCard,
+  type PptxSlidePlan
+} from '../lib/presentationPptx';
 import backIcon from '../assets/icons/duotone/back.svg';
 import downloadIcon from '../assets/icons/duotone/download.svg';
 import refreshIcon from '../assets/icons/duotone/refresh.svg';
@@ -61,6 +67,9 @@ export function PresentationPage(props: PresentationPageProps) {
     .map((item) => item.trim())
     .filter(Boolean) ?? [];
   const selectedPreviewBullets = selectedPlan ? buildPreviewBullets(selectedPlan.mainClaim, selectedPlan.bullets) : [];
+  const selectedEditorBullets = selectedPlan?.bullets ?? selectedSlide?.bullets ?? [];
+  const showPreviewVisual = selectedPlan ? shouldShowPreviewVisual(selectedPlan.visual) : false;
+  const selectedPreviewEvidenceCards = selectedPlan ? buildPreviewEvidenceCards(selectedPlan, selectedPreviewBullets) : [];
 
   function updateSlide(patch: Partial<PresentationSlide>): void {
     if (!draft || !selectedSlide) {
@@ -264,8 +273,8 @@ export function PresentationPage(props: PresentationPageProps) {
                 ) : null}
 
                 {selectedPlan.layout !== 'cover' ? (
-                  <section className={`ppt-export-main ppt-export-${selectedPlan.visual.kind}`}>
-                    {selectedPlan.visual.kind !== 'none' ? (
+                  <section className={`ppt-export-main ${showPreviewVisual ? `ppt-export-${selectedPlan.visual.kind}` : 'ppt-export-none'}`}>
+                    {showPreviewVisual ? (
                       <div className="ppt-export-visual">
                         <span className="ppt-panel-label">{getVisualKindLabel(selectedPlan.visual.kind)}</span>
                         <strong>{selectedPlan.visual.title}</strong>
@@ -280,11 +289,22 @@ export function PresentationPage(props: PresentationPageProps) {
                         <small>{selectedPlan.visual.sourceLabel}</small>
                       </div>
                     ) : null}
-                    <ul className="ppt-export-bullets">
-                      {selectedPreviewBullets.map((bullet, index) => (
-                        <li key={`${selectedPlan.id}-bullet-${index}`}>{bullet}</li>
-                      ))}
-                    </ul>
+                    {showPreviewVisual ? (
+                      <ul className="ppt-export-bullets">
+                        {selectedPreviewBullets.map((bullet, index) => (
+                          <li key={`${selectedPlan.id}-bullet-${index}`}>{bullet}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <ul className="ppt-export-bullets ppt-export-evidence-cards">
+                        {selectedPreviewEvidenceCards.map((card, index) => (
+                          <li className={`ppt-export-evidence-card ppt-export-evidence-${card.tone}`} key={`${selectedPlan.id}-evidence-${index}`}>
+                            <span className="ppt-export-card-label">{card.label}</span>
+                            <p>{card.text}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </section>
                 ) : null}
 
@@ -325,7 +345,7 @@ export function PresentationPage(props: PresentationPageProps) {
                 <label>
                   要点
                   <textarea
-                    value={(selectedPlan ? selectedPreviewBullets : selectedSlide.bullets).join('\n')}
+                    value={selectedEditorBullets.join('\n')}
                     onChange={(event) => updateBullets(event.target.value)}
                   />
                 </label>
@@ -493,28 +513,61 @@ function normalizePreviewText(text: string): string {
 
 function buildPreviewBullets(mainClaim: string, bullets: string[]): string[] {
   const mainKey = normalizePreviewText(mainClaim);
-  const mainSemanticKey = getPreviewSemanticKey(mainClaim);
   const seen = new Set<string>();
-  const seenSemantic = new Set<string>();
   const unique: string[] = [];
   bullets.forEach((bullet) => {
     const key = normalizePreviewText(bullet);
-    const semanticKey = getPreviewSemanticKey(bullet);
-    if (
-      !key ||
-      key === mainKey ||
-      seen.has(key) ||
-      (semanticKey && (semanticKey === mainSemanticKey || seenSemantic.has(semanticKey)))
-    ) {
+    if (!key || key === mainKey || seen.has(key) || looksLikeTemplateClaimPrefix(bullet)) {
       return;
     }
     seen.add(key);
-    if (semanticKey) {
-      seenSemantic.add(semanticKey);
-    }
     unique.push(bullet);
   });
   return unique.slice(0, 5);
+}
+
+function buildPreviewEvidenceCards(plan: PptxSlidePlan, bullets: string[]): PptxEvidenceCard[] {
+  const baseCards = buildPptxEvidenceCards(plan);
+  const seen = new Set<string>();
+  const cards: PptxEvidenceCard[] = [];
+
+  const addCard = (card: PptxEvidenceCard): void => {
+    const key = normalizePreviewText(card.text);
+    if (!key || seen.has(key) || looksLikeTemplateClaimPrefix(card.text)) {
+      return;
+    }
+    seen.add(key);
+    cards.push(card);
+  };
+
+  bullets.slice(0, 4).forEach((bullet, index) => {
+    addCard({ label: `证据 ${index + 1}`, text: bullet, tone: 'evidence' });
+  });
+  baseCards.filter((card) => card.tone !== 'evidence').forEach(addCard);
+  baseCards.forEach(addCard);
+
+  return cards.slice(0, 5);
+}
+
+function looksLikeTemplateClaimPrefix(text: string): boolean {
+  return /^(本页|鏈〉)[^：:锛?]{0,36}[：:锛?]/u.test(text.trim());
+}
+
+function shouldShowPreviewVisual(visual: PptxSlidePlan['visual']): boolean {
+  if (visual.kind === 'none' || visual.kind === 'quote') {
+    return false;
+  }
+  if (visual.kind === 'figure' || visual.kind === 'table') {
+    return Boolean(visual.figure);
+  }
+  if (visual.kind === 'diagram') {
+    return visual.steps.length >= 4 && !looksLikeGenericPreviewDiagram(visual.steps.join(' '));
+  }
+  return Boolean(visual.caption || visual.steps.length > 0);
+}
+
+function looksLikeGenericPreviewDiagram(text: string): boolean {
+  return /论文信息|研究对象|论点|方法线索|汇报目标|problem\s*\/\s*solution|research\s*object|presentation\s*goal/iu.test(text);
 }
 
 function getPreviewSemanticKey(text: string): string {

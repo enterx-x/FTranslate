@@ -87,14 +87,45 @@ export interface DeepMethodKeyDesign {
   source: string;
 }
 
+export type DeepMethodPaperType = 'algorithm' | 'system' | 'application' | 'experiment' | 'review' | 'other';
+
+export interface DeepMethodTrainingImplementation {
+  what_is_trained_or_built: string;
+  data_or_inputs: string;
+  objective_or_rules: string;
+  important_details: string;
+  source: string;
+  sourceRefs?: PresentationSourceRef[];
+}
+
+export interface DeepMethodEvaluationLogic {
+  tasks_or_datasets: string;
+  baselines: string;
+  metrics: string;
+  main_results: string;
+  what_the_results_prove: string;
+  source: string;
+  sourceRefs?: PresentationSourceRef[];
+}
+
+export interface DeepMethodLimitations {
+  author_stated: string;
+  inferred: string;
+  source: string;
+  sourceRefs?: PresentationSourceRef[];
+}
+
 export interface DeepMethodMap {
+  paper_type: DeepMethodPaperType;
   core_problem: string;
   why_difficult: string[];
+  prior_work_limitations: string[];
   main_idea: string;
   method_stages: DeepMethodStage[];
   key_designs: DeepMethodKeyDesign[];
-  training_or_implementation: string;
-  evaluation_logic: string;
+  training_or_implementation: DeepMethodTrainingImplementation;
+  evaluation_logic: DeepMethodEvaluationLogic;
+  limitations: DeepMethodLimitations;
 }
 
 export interface PresentationReviewReport {
@@ -181,6 +212,7 @@ export function buildDeepMethodMap(input: BuildPresentationDraftInput): DeepMeth
   const methodRefs = pickRefs([buckets.method, buckets.formula, buckets.abstract], 8);
   const experimentRefs = pickRefs([buckets.experiments, buckets.results], 8);
   const conclusionRefs = pickRefs([buckets.conclusion, buckets.limitations], 4);
+  const relatedWorkRefs = pickRefs([buckets.relatedWork], 4);
   const methodText = methodRefs.map((ref) => ref.text).join(' ');
   const problemText = abstractIntroRefs.map((ref) => ref.text).join(' ');
   const experimentText = experimentRefs.map((ref) => ref.text).join(' ');
@@ -188,9 +220,11 @@ export function buildDeepMethodMap(input: BuildPresentationDraftInput): DeepMeth
   const methodTerms = extractEvidenceTerms(methodText);
   const problemTerms = extractEvidenceTerms(problemText);
   const experimentTerms = extractEvidenceTerms(experimentText);
+  const conclusionTerms = extractEvidenceTerms(conclusionText);
 
   const primaryMethod = methodTerms.methods[0] ?? problemTerms.methods[0] ?? getPaperTitle(input.papers[0]);
   const coreProblem = firstSpecificSentence(abstractIntroRefs, [
+    /challenge|difficult|lack|insufficient|struggle|unstructured|dynamic clutter|problem/iu,
     /challenge|difficult|lack|insufficient|unstructured|problem|瓶颈|困难|不足/iu,
     /propose|present|introduce|address/iu
   ]);
@@ -198,6 +232,7 @@ export function buildDeepMethodMap(input: BuildPresentationDraftInput): DeepMeth
   const stages = buildMethodStagesFromEvidence(primaryMethod, methodRefs, methodTerms, experimentTerms);
 
   return {
+    paper_type: classifyPaperType(methodTerms, experimentTerms, `${problemText} ${methodText} ${experimentText}`),
     core_problem:
       coreProblem ??
       buildFallbackSentence(
@@ -213,21 +248,15 @@ export function buildDeepMethodMap(input: BuildPresentationDraftInput): DeepMeth
       ],
       4
     ),
+    prior_work_limitations: buildPriorWorkLimitations([...abstractIntroRefs, ...relatedWorkRefs], problemTerms),
     main_idea:
       mainIdea ??
       buildFallbackSentence('主思路', compactTextList([...methodTerms.methods, ...methodTerms.observations, ...methodTerms.outputs], 4), methodText),
     method_stages: stages,
     key_designs: buildKeyDesigns(methodRefs, methodTerms),
-    training_or_implementation:
-      firstMatchingSentence([...methodRefs, ...experimentRefs], [/train|training|reinforcement learning|objective|loss|implementation|optimi[sz]e|训练|目标|实现/iu]) ??
-      buildFallbackSentence('训练/实现', compactTextList([...methodTerms.training, ...methodTerms.constraints, ...experimentTerms.training], 4), methodText),
-    evaluation_logic:
-      firstSpecificSentence(experimentRefs, [/experiment|evaluate|compare|baseline|metric|success|tracking|stability|result|实验|评估|指标|对比/iu]) ??
-      buildFallbackSentence(
-        '评估逻辑',
-        compactTextList([...experimentTerms.platforms, ...experimentTerms.baselines, ...experimentTerms.metrics], 5),
-        experimentText || conclusionText
-      )
+    training_or_implementation: buildTrainingImplementation(primaryMethod, methodRefs, experimentRefs, methodTerms, experimentTerms),
+    evaluation_logic: buildEvaluationLogic(experimentRefs, conclusionRefs, experimentTerms),
+    limitations: buildLimitations(conclusionRefs, experimentRefs, conclusionTerms)
   };
 }
 
@@ -339,6 +368,7 @@ export function buildLocalPresentationDraft(input: BuildPresentationDraftInput):
   ];
 
   applyMethodMapToSlides(slides, methodMap);
+  ensureContentSlideEvidenceDensity(slides);
 
   const targetCount = Math.max(4, Math.min(slides.length, input.targetSlideCount ?? slides.length));
   const selectedSlides = selectSlidesForTargetCount(slides, targetCount);
@@ -447,6 +477,7 @@ export function buildPresentationAiEnhancementPrompt(draft: PresentationDraft): 
         {
           title: draft.title,
           sourcePapers: draft.sourcePapers,
+          methodMap: draft.methodMap,
           slides: compactSlides
         },
         null,
@@ -702,7 +733,29 @@ function applyMethodMapToSlides(slides: PresentationSlide[], methodMap: DeepMeth
 
   const experiments = slides.find((slide) => slide.type === 'experiments');
   if (experiments && methodMap.evaluation_logic) {
-    experiments.bullets = limitBullets(compactPresentationBullets([methodMap.evaluation_logic, ...experiments.bullets], 5), 5);
+    experiments.bullets = limitBullets(compactPresentationBullets([formatEvaluationLogic(methodMap.evaluation_logic), ...experiments.bullets], 5), 5);
+    experiments.sourceRefs = compactRefs([...(methodMap.evaluation_logic.sourceRefs ?? []), ...experiments.sourceRefs], 4);
+  }
+
+  const results = slides.find((slide) => slide.type === 'results');
+  if (results && methodMap.evaluation_logic) {
+    results.bullets = limitBullets(
+      compactPresentationBullets(
+        [methodMap.evaluation_logic.main_results, methodMap.evaluation_logic.what_the_results_prove, ...results.bullets],
+        5
+      ),
+      5
+    );
+    results.sourceRefs = compactRefs([...(methodMap.evaluation_logic.sourceRefs ?? []), ...results.sourceRefs], 4);
+  }
+
+  const limitations = slides.find((slide) => slide.type === 'limitations');
+  if (limitations && methodMap.limitations) {
+    limitations.bullets = limitBullets(
+      compactPresentationBullets([methodMap.limitations.author_stated, methodMap.limitations.inferred, ...limitations.bullets], 5),
+      5
+    );
+    limitations.sourceRefs = compactRefs([...(methodMap.limitations.sourceRefs ?? []), ...limitations.sourceRefs], 4);
   }
 
   const innovation = slides.find((slide) => slide.type === 'innovation');
@@ -722,13 +775,54 @@ function applyMethodMapToSlides(slides: PresentationSlide[], methodMap: DeepMeth
         [
           methodMap.main_idea,
           ...methodMap.method_stages.slice(0, 3).map((stage) => `${stage.stage_name} 产出 ${stage.output}`),
-          methodMap.evaluation_logic
+          formatEvaluationLogic(methodMap.evaluation_logic)
         ],
         5
       ),
       5
     );
   }
+}
+
+function ensureContentSlideEvidenceDensity(slides: PresentationSlide[]): void {
+  slides.forEach((slide) => {
+    if (slide.type === 'cover' || slide.type === 'info' || slide.sourceRefs.length === 0) {
+      return;
+    }
+
+    const minimumBulletCount = slide.type === 'summary' ? 2 : 3;
+    if (slide.bullets.length >= minimumBulletCount) {
+      return;
+    }
+
+    const allowFormulaText = slide.type === 'formula';
+    const evidenceBullets = buildEvidenceAwareBullets(slide.type, slide.sourceRefs, { allowFormulaText });
+    const sentenceBullets = slide.sourceRefs.flatMap((ref) =>
+      buildSentenceFallbackBullets(slide.type, ref, extractEvidenceTerms(ref.text), { allowFormulaText })
+    );
+    const rawSourceBullets = slide.sourceRefs.flatMap((ref) =>
+      splitIntoShortBullets(ref.text)
+        .filter((bullet) => isUsefulBulletText(bullet) || (allowFormulaText && isUsefulFormulaText(bullet)))
+        .map((bullet) => withSourcePage(normalizeInlineText(bullet, 92), ref.pageNumber))
+    );
+
+    slide.bullets = limitBullets(
+      compactPresentationBullets([...slide.bullets, ...evidenceBullets, ...sentenceBullets, ...rawSourceBullets], 5),
+      5
+    );
+  });
+}
+
+function formatEvaluationLogic(logic: DeepMethodEvaluationLogic): string {
+  return compactTextList(
+    [
+      logic.tasks_or_datasets ? `Tasks: ${logic.tasks_or_datasets}` : '',
+      logic.baselines ? `Baselines: ${logic.baselines}` : '',
+      logic.metrics ? `Metrics: ${logic.metrics}` : '',
+      logic.what_the_results_prove || logic.main_results
+    ],
+    4
+  ).join(' | ');
 }
 
 function compactRefs(refs: PresentationSourceRef[], limit: number): PresentationSourceRef[] {
@@ -743,6 +837,190 @@ function compactRefs(refs: PresentationSourceRef[], limit: number): Presentation
     result.push(ref);
   });
   return result.slice(0, limit);
+}
+
+function classifyPaperType(methodTerms: EvidenceTerms, experimentTerms: EvidenceTerms, text: string): DeepMethodPaperType {
+  if (/\breview|survey|perspective|overview of the literature\b/iu.test(text)) {
+    return 'review';
+  }
+  if (
+    methodTerms.methods.some((term) =>
+      /planner|MPC|CBF|PPO|SAC|PINN|policy|world model|perception encoder|trajectory optimizer|VLA|VLM|PILOT/iu.test(term)
+    ) ||
+    /\balgorithm|controller|planner|policy|optimization|training objective\b/iu.test(text)
+  ) {
+    return 'algorithm';
+  }
+  if (/\bsystem|platform|robot foundation model|architecture\b/iu.test(text)) {
+    return 'system';
+  }
+  if (experimentTerms.platforms.length > 0 || /\bapplication|real[-\s]?world|robot platform\b/iu.test(text)) {
+    return 'application';
+  }
+  if (experimentTerms.metrics.length > 0 || /\bexperiment|evaluation|benchmark\b/iu.test(text)) {
+    return 'experiment';
+  }
+  return 'other';
+}
+
+function buildPriorWorkLimitations(refs: PresentationSourceRef[], terms: EvidenceTerms): string[] {
+  const limitationSentences = refs.flatMap((ref) =>
+    splitIntoShortBullets(ref.text).filter((sentence) =>
+      /prior|existing|traditional|baseline|lack|limited|struggle|insufficient|cannot|unstructured|gap|challenge/iu.test(sentence)
+    )
+  );
+  return compactTextList(
+    [
+      ...limitationSentences,
+      ...terms.observations.map((term) => `Prior work does not reliably use ${term}.`),
+      ...terms.tasks.map((term) => `Existing methods remain brittle on ${term}.`)
+    ],
+    4
+  );
+}
+
+function buildTrainingImplementation(
+  primaryMethod: string,
+  methodRefs: PresentationSourceRef[],
+  experimentRefs: PresentationSourceRef[],
+  methodTerms: EvidenceTerms,
+  experimentTerms: EvidenceTerms
+): DeepMethodTrainingImplementation {
+  const candidateRefs = [...methodRefs, ...experimentRefs];
+  const trainingRefs = compactRefs(
+    candidateRefs.filter((ref) =>
+      /train|training|reinforcement learning|behavior cloning|objective|loss|safety cost|waypoint/iu.test(`${ref.section} ${ref.text}`)
+    ),
+    4
+  );
+  const implementationRefs = compactRefs(
+    candidateRefs.filter((ref) => /implementation|optimi[sz]er|optimi[sz]ation|built|construct|deploy/iu.test(`${ref.section} ${ref.text}`)),
+    4
+  );
+  const refs = compactRefs(
+    candidateRefs.filter((ref) =>
+      /train|training|reinforcement learning|behavior cloning|objective|loss|implementation|optimi[sz]e|safety cost|waypoint/iu.test(ref.text)
+    ),
+    4
+  );
+  const fallbackRefs = trainingRefs.length > 0 ? trainingRefs : refs.length > 0 ? refs : implementationRefs.length > 0 ? implementationRefs : compactRefs(methodRefs, 3);
+  const detailRefs = compactRefs([...fallbackRefs, ...methodRefs], 4);
+  const sourceText = fallbackRefs.map((ref) => ref.text).join(' ');
+  const source = buildSourceLabel(fallbackRefs[0]);
+  const trainedOrBuilt = compactTextList([primaryMethod, ...methodTerms.methods, ...methodTerms.outputs], 4).join(' + ');
+  const dataInputs =
+    firstMatchingSentence(fallbackRefs, [/data|input|observation|demonstration|behavior cloning|waypoint|RGB-D|LiDAR|occupancy|safety cost/iu]) ??
+    buildFallbackSentence('Training data or inputs', compactTextList([...methodTerms.observations, ...methodTerms.training, ...experimentTerms.training], 5), sourceText);
+  const objective =
+    firstMatchingSentence(fallbackRefs, [/objective|loss|reinforcement learning|safety cost|avoid collisions?|tracking|stability|optimi[sz]e/iu]) ??
+    buildFallbackSentence('Training objective', compactTextList([...methodTerms.constraints, ...methodTerms.training, ...experimentTerms.metrics], 5), sourceText);
+  const details =
+    firstSpecificSentence(detailRefs, [/implementation|trained|behavior cloning|reinforcement learning|safety cost|waypoint|objective|policy|input|observation|encoder|planner/iu]) ??
+    buildFallbackSentence('Implementation detail', compactTextList([...methodTerms.methods, ...methodTerms.commands, ...methodTerms.outputs], 5), sourceText);
+
+  return {
+    what_is_trained_or_built: trainedOrBuilt || primaryMethod || 'source method',
+    data_or_inputs: dataInputs,
+    objective_or_rules: objective,
+    important_details: details,
+    source,
+    sourceRefs: fallbackRefs
+  };
+}
+
+function buildEvaluationLogic(
+  experimentRefs: PresentationSourceRef[],
+  conclusionRefs: PresentationSourceRef[],
+  experimentTerms: EvidenceTerms
+): DeepMethodEvaluationLogic {
+  const refs = compactRefs([...experimentRefs, ...conclusionRefs], 5);
+  const sourceText = refs.map((ref) => ref.text).join(' ');
+  const source = buildSourceLabel(refs[0]);
+  const taskTerms = compactTextList([...experimentTerms.platforms, ...experimentTerms.tasks, ...experimentTerms.training], 6);
+  const baselineTerms = compactTextList(experimentTerms.baselines, 5);
+  const metricTerms = compactTextList(experimentTerms.metrics, 6);
+  const tasksOrDatasets = buildEvaluationTasksLabel(taskTerms, sourceText);
+  const resultSentence =
+    firstSpecificSentence(refs, [/experiment|evaluate|compare|baseline|metric|success|tracking|stability|result|terrain traversability|collision|path efficiency/iu]) ??
+    normalizeInlineText(sourceText, 160);
+  const structuredResult = buildEvaluationResultLabel(taskTerms, baselineTerms, metricTerms, experimentTerms.training, sourceText);
+  const proof = buildEvaluationProofLabel(metricTerms, taskTerms, resultSentence);
+
+  return {
+    tasks_or_datasets: tasksOrDatasets,
+    baselines: baselineTerms.join(', ') || buildFallbackSentence('Baselines', baselineTerms, sourceText),
+    metrics: metricTerms.join(', ') || buildFallbackSentence('Metrics', metricTerms, sourceText),
+    main_results: structuredResult || resultSentence || 'The paper does not clearly report main results in the extracted text.',
+    what_the_results_prove: proof || 'The extracted text does not clearly state what the results prove.',
+    source,
+    sourceRefs: refs
+  };
+}
+
+function buildEvaluationTasksLabel(taskTerms: string[], sourceText: string): string {
+  const phrase =
+    sourceText.match(/\bmobile robot navigation tasks?\b/iu)?.[0] ??
+    sourceText.match(/\bloco[-\s]?manipulation\b/iu)?.[0] ??
+    sourceText.match(/\bwhole[-\s]?body control\b/iu)?.[0] ??
+    sourceText.match(/\bterrain traversability\b/iu)?.[0];
+  const terms = compactTextList([phrase ?? '', ...taskTerms], 6);
+  return terms.join(', ') || buildFallbackSentence('Tasks or datasets', taskTerms, sourceText);
+}
+
+function buildEvaluationResultLabel(taskTerms: string[], baselineTerms: string[], metricTerms: string[], trainingTerms: string[], sourceText: string): string {
+  const parts = compactTextList(
+    [
+      taskTerms.length > 0 ? `任务/平台：${joinTerms(taskTerms, 3)}` : '',
+      baselineTerms.length > 0 ? `对比：${joinTerms(baselineTerms, 3)}` : '',
+      metricTerms.length > 0 ? `指标：${joinTerms(metricTerms, 4)}` : '',
+      trainingTerms.length > 0 ? `验证场景：${joinTerms(trainingTerms, 2)}` : ''
+    ],
+    4
+  );
+  if (parts.length > 0) {
+    return parts.join('；');
+  }
+  return normalizeInlineText(sourceText, 140);
+}
+
+function buildEvaluationProofLabel(metricTerms: string[], taskTerms: string[], resultSentence: string | undefined): string {
+  const concreteTerms = compactTextList([...metricTerms, ...taskTerms], 5);
+  if (concreteTerms.length > 0) {
+    return `结果主要支撑 ${joinTerms(concreteTerms, 4)} 这些结论`;
+  }
+  return resultSentence ? normalizeInlineText(resultSentence, 140) : '';
+}
+
+function buildLimitations(
+  conclusionRefs: PresentationSourceRef[],
+  experimentRefs: PresentationSourceRef[],
+  conclusionTerms: EvidenceTerms
+): DeepMethodLimitations {
+  const explicitRefs = compactRefs(
+    [...conclusionRefs, ...experimentRefs].filter((ref) =>
+      /limitation|failure|weakness|depends on|may fail|future work|not cover|degraded|robustness|ablation/iu.test(ref.text)
+    ),
+    4
+  );
+  const refs = explicitRefs.length > 0 ? explicitRefs : compactRefs(conclusionRefs, 3);
+  const sourceText = refs.map((ref) => ref.text).join(' ');
+  const authorStated =
+    firstMatchingSentence(refs, [/limitation|failure|weakness|depends on|may fail|future work|not cover|degraded/iu]) ?? '';
+  const inferredTerms = compactTextList([...conclusionTerms.observations, ...conclusionTerms.platforms, ...conclusionTerms.metrics], 4);
+  const inferred = authorStated
+    ? ''
+    : buildFallbackSentence('Evidence-backed risk', inferredTerms, sourceText || 'No explicit limitation sentence was extracted.');
+
+  return {
+    author_stated: authorStated,
+    inferred,
+    source: buildSourceLabel(refs[0]),
+    sourceRefs: refs
+  };
+}
+
+function buildSourceLabel(ref?: PresentationSourceRef): string {
+  return ref ? `p. ${ref.pageNumber} · ${ref.section}` : 'PDF extracted text';
 }
 
 function buildMethodStagesFromEvidence(
@@ -1138,6 +1416,7 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\bspecialist policies\b/iu, label: 'specialist policies' },
     { pattern: /\bimitation learning baselines?\b/iu, label: 'imitation learning baselines' },
     { pattern: /\bPPO\b/u, label: 'PPO' },
+    { pattern: /\bSAC\b/u, label: 'SAC' },
     { pattern: /\bMPC\b/u, label: 'MPC' },
     { pattern: /\bCBF\b/u, label: 'CBF' }
   ],
