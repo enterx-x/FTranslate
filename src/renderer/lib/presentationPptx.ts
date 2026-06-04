@@ -2,6 +2,8 @@ import pptxgen from 'pptxgenjs';
 import type {
   PresentationDraft,
   PresentationFigureCandidate,
+  PresentationFigureKind,
+  PresentationReviewReport,
   PresentationSlide,
   PresentationSourceRef,
   PresentationSlideType
@@ -110,7 +112,7 @@ const KEYWORD_BULLETS: Array<{ pattern: RegExp; bullet: string }> = [
   { pattern: /\bhumanoid|loco[-\s]?manipulation|whole[-\s]?body\b/iu, bullet: '人形机器人执行移动操作' },
   { pattern: /\breinforcement learning|RL\b/iu, bullet: 'RL 训练低层控制策略' },
   { pattern: /\bperceptive|exteroceptive|terrain|unstructured\b/iu, bullet: '外部感知处理非结构化地形' },
-  { pattern: /\bπ0\.?7|pi0\.?7|VLA|VLM|vision[-\s]?language[-\s]?action\b/iu, bullet: 'VLA/VLM 连接指令和动作' },
+  { pattern: /π0\.?7|pi0\.?7|VLA|VLM|vision[-\s]?language[-\s]?action\b/iu, bullet: 'VLA/VLM 连接指令和动作' },
   { pattern: /\bsubgoal images?|episode metadata|context conditioning\b/iu, bullet: '子目标图像提供上下文' },
   { pattern: /\bdemonstration|autonomous data|multimodal web data|training data\b/iu, bullet: '多源数据支撑策略训练' },
   { pattern: /\bbenchmark|baseline|evaluation|experiment|result\b/iu, bullet: '对比实验验证核心指标' },
@@ -148,7 +150,7 @@ const SOURCE_SCOPE: Record<PresentationSlideType, { allow: RegExp; deny?: RegExp
 };
 
 export function buildPptxSlidePlan(draft: PresentationDraft): PptxSlidePlan[] {
-  return draft.slides.map((slide, index) => {
+  const plan = draft.slides.map((slide, index) => {
     const meta = SLIDE_TYPE_META[slide.type];
     const scopedSlide = withScopedSources(slide);
     const selectedFigures = selectFiguresForSlide(scopedSlide, slide.figures.filter((figure) => figure.selected !== false));
@@ -173,10 +175,147 @@ export function buildPptxSlidePlan(draft: PresentationDraft): PptxSlidePlan[] {
       speakerNotes: buildSpeakerNotes(scopedSlide, bullets, visual)
     };
   });
+  return ensurePlanBulletUniqueness(plan);
+}
+
+function ensurePlanBulletUniqueness(plan: PptxSlidePlan[]): PptxSlidePlan[] {
+  const seen = new Map<string, number>();
+  return plan.map((slide) => {
+    const localKeys = new Set<string>();
+    const localSemanticKeys = new Set<string>();
+    if (slide.type === 'cover') {
+      slide.bullets.forEach((bullet) => {
+        const key = normalizeBulletForCompare(bullet);
+        if (key) {
+          seen.set(key, slide.index);
+        }
+      });
+      return slide;
+    }
+
+    const uniqueBullets: string[] = [];
+    slide.bullets.forEach((bullet) => {
+      const key = normalizeBulletForCompare(bullet);
+      const semanticKey = getSemanticBulletKey(bullet);
+      if (!key || seen.has(key) || localKeys.has(key) || (semanticKey && localSemanticKeys.has(semanticKey))) {
+        return;
+      }
+      seen.set(key, slide.index);
+      localKeys.add(key);
+      if (semanticKey) {
+        localSemanticKeys.add(semanticKey);
+      }
+      uniqueBullets.push(bullet);
+    });
+
+    const candidates = buildSlideSpecificFallbacks(slide);
+    const minBulletCount = slide.type === 'info' ? Math.min(1, slide.bullets.length || 1) : 2;
+    for (const candidate of candidates) {
+      if (uniqueBullets.length >= minBulletCount) {
+        break;
+      }
+      const key = normalizeBulletForCompare(candidate);
+      const semanticKey = getSemanticBulletKey(candidate);
+      if (!key || seen.has(key) || localKeys.has(key) || (semanticKey && localSemanticKeys.has(semanticKey))) {
+        continue;
+      }
+      seen.set(key, slide.index);
+      localKeys.add(key);
+      if (semanticKey) {
+        localSemanticKeys.add(semanticKey);
+      }
+      uniqueBullets.push(candidate);
+    }
+
+    return {
+      ...slide,
+      bullets: uniqueBullets.slice(0, 5),
+      mainClaim: buildTypedMainClaim(slide.type, uniqueBullets[0] ?? slide.mainClaim)
+    };
+  });
+}
+
+function buildSlideSpecificFallbacks(slide: PptxSlidePlan): string[] {
+  const evidence = [slide.mainClaim, ...slide.visual.steps, slide.visual.caption, slide.sourceFooter].join(' ');
+  const candidates = [
+    summarizeRefAsChinese(slide.type, evidence),
+    ...slide.visual.steps.map((step) => buildStepBullet(slide.type, step)),
+    slide.visual.figure ? `${getFigureKind(slide.visual.figure)} 图表支撑第 ${slide.visual.figure.pageNumber} 页证据` : undefined
+  ];
+  return compactUnique(candidates, 5).filter((item) => !hasForbiddenGeneric(item));
+}
+
+function buildStepBullet(type: PresentationSlideType, step: string): string | undefined {
+  const cleaned = cleanText(step);
+  if (!cleaned) return undefined;
+  if (type === 'method' || type === 'formula') return `${cleaned} 属于方法链路`;
+  if (type === 'experiments') return `${cleaned} 属于实验设置`;
+  if (type === 'results') return `${cleaned} 支撑结果判断`;
+  if (type === 'innovation') return `${cleaned} 构成设计差异`;
+  if (type === 'limitations') return `${cleaned} 暴露方法边界`;
+  if (type === 'inspiration') return `${cleaned} 可转为复现线索`;
+  if (type === 'summary') return `${cleaned} 是汇报结论线索`;
+  return undefined;
 }
 
 export function validatePptxSlidePlan(plan: PptxSlidePlan[]): string[] {
   return validatePptxQuality(plan);
+}
+
+export function buildPresentationReviewReport(draft: PresentationDraft): PresentationReviewReport {
+  const plan = buildPptxSlidePlan(draft);
+  const issues = validatePptxQuality(plan);
+  const planBullets = plan.flatMap((slide) => slide.bullets);
+  const repeatedKeywordProblem = hasRepeatedBulletProblem(planBullets) || hasKeywordStuffingProblem(planBullets);
+  const genericTemplateProblem = hasGenericTemplateProblem(plan);
+  const slideTypeMismatch = hasSlideTypeMismatch(plan, draft);
+  const figureMismatch = hasFigureMismatch(plan);
+  const methodCapability = evaluateMethodCapability(draft, plan);
+  const failedSlides = buildFailedSlideReport(plan, {
+    repeatedKeywordProblem,
+    genericTemplateProblem,
+    slideTypeMismatch,
+    figureMismatch
+  });
+  const allIssues = compactStringList(
+    [
+      ...issues,
+      repeatedKeywordProblem ? '存在跨页重复关键词或 noun-phrase stuffing。' : '',
+      genericTemplateProblem ? '存在通用模板化内容或占位图。' : '',
+      slideTypeMismatch ? '存在页面类型与内容不匹配。' : '',
+      figureMismatch ? '存在图表类型与页面不匹配。' : '',
+      ...methodCapability.issues
+    ],
+    80
+  );
+
+  const passed =
+    allIssues.length === 0 &&
+    methodCapability.can_explain_method_from_ppt_only &&
+    !repeatedKeywordProblem &&
+    !genericTemplateProblem &&
+    !slideTypeMismatch &&
+    !figureMismatch;
+
+  return {
+    passed,
+    can_explain_method_from_ppt_only: methodCapability.can_explain_method_from_ppt_only,
+    can_identify_core_problem: methodCapability.can_identify_core_problem,
+    can_identify_method_stages: methodCapability.can_identify_method_stages,
+    can_identify_stage_inputs: methodCapability.can_identify_stage_inputs,
+    can_identify_stage_outputs: methodCapability.can_identify_stage_outputs,
+    can_identify_stage_connections: methodCapability.can_identify_stage_connections,
+    can_identify_training_or_implementation: methodCapability.can_identify_training_or_implementation,
+    can_identify_evaluation_logic: methodCapability.can_identify_evaluation_logic,
+    repeated_keyword_problem: repeatedKeywordProblem,
+    generic_template_problem: genericTemplateProblem,
+    slide_type_mismatch: slideTypeMismatch,
+    figure_mismatch: figureMismatch,
+    failed_slides: failedSlides,
+    issues: allIssues,
+    auto_revisions: 0,
+    remaining_risks: passed ? [] : ['请重新生成或使用 AI 增强大纲；导出前必须让方法链路、来源和图表匹配通过。']
+  };
 }
 
 export function validatePptxQuality(plan: PptxSlidePlan[]): string[] {
@@ -216,8 +355,19 @@ export function validatePptxQuality(plan: PptxSlidePlan[]): string[] {
     if (slide.visual.steps.some((step) => FORBIDDEN_GENERIC_LABELS.includes(step))) {
       issues.push(`第 ${slide.index + 1} 页包含通用占位结构图标签。`);
     }
+    if (
+      slide.type !== 'cover' &&
+      slide.type !== 'info' &&
+      slide.bullets.length > 0 &&
+      slide.bullets.filter((bullet) => isWeakNounPhraseBullet(bullet)).length / slide.bullets.length > 0.5
+    ) {
+      issues.push(`第 ${slide.index + 1} 页存在只有名词堆叠、缺少解释价值的 bullet。`);
+    }
     if (slide.type === 'method' && !hasMethodEvidence(slide)) {
       issues.push(`第 ${slide.index + 1} 页方法页缺少方法相关 bullet 或结构图。`);
+    }
+    if (slide.type === 'method' && !hasInputProcessOutputEvidence(slide)) {
+      issues.push(`第 ${slide.index + 1} 页方法页没有讲清 input / process / output / connection。`);
     }
     if ((slide.type === 'experiments' || slide.type === 'results') && countExperimentEvidenceCategories(slide) < 2) {
       issues.push(`第 ${slide.index + 1} 页实验/结果页缺少 baseline、metric、result 中至少两类信息。`);
@@ -238,7 +388,356 @@ export function validatePptxQuality(plan: PptxSlidePlan[]): string[] {
     });
   });
 
+  collectRepeatedBulletIssues(plan).forEach((issue) => issues.push(issue));
+
+  plan.forEach((slide) => {
+    const bySemanticKey = new Map<string, string[]>();
+    slide.bullets.forEach((bullet) => {
+      const key = getSemanticBulletKey(bullet);
+      if (!key) {
+        return;
+      }
+      bySemanticKey.set(key, [...(bySemanticKey.get(key) ?? []), bullet]);
+    });
+    bySemanticKey.forEach((items) => {
+      if (items.length >= 2) {
+        issues.push(`semantic duplicate on slide ${slide.index + 1}: ${items[0]}`);
+      }
+    });
+  });
   return issues;
+}
+
+function evaluateMethodCapability(
+  draft: PresentationDraft,
+  plan: PptxSlidePlan[]
+): Pick<
+  PresentationReviewReport,
+  | 'can_explain_method_from_ppt_only'
+  | 'can_identify_core_problem'
+  | 'can_identify_method_stages'
+  | 'can_identify_stage_inputs'
+  | 'can_identify_stage_outputs'
+  | 'can_identify_stage_connections'
+  | 'can_identify_training_or_implementation'
+  | 'can_identify_evaluation_logic'
+> & { issues: string[] } {
+  const methodMap = draft.methodMap;
+  const methodPlanText = plan
+    .filter((slide) => slide.type === 'method' || slide.type === 'formula')
+    .map((slide) => [slide.mainClaim, ...slide.bullets, ...slide.visual.steps, slide.visual.caption].join(' '))
+    .join(' ');
+  const draftMethodText = draft.slides
+    .filter((slide) => slide.type === 'method' || slide.type === 'formula')
+    .map((slide) => [...slide.bullets, ...slide.sourceRefs.map((ref) => ref.text)].join(' '))
+    .join(' ');
+  const combined = `${methodPlanText} ${draftMethodText}`;
+  const stages = methodMap?.method_stages ?? [];
+  const canIdentifyCoreProblem = Boolean(methodMap?.core_problem) || /problem|challenge|lack|瓶颈|困难|不足|unstructured|loco[-\s]?manipulation/iu.test(combined);
+  const canIdentifyInputs =
+    stages.some((stage) => hasConcreteValue(stage.input)) ||
+    /input|observation|LiDAR|elevation map|proprioceptive|language instruction|视觉|感知|输入/iu.test(combined);
+  const canIdentifyOutputs =
+    stages.some((stage) => hasConcreteValue(stage.output)) ||
+    /output|action|control command|whole[-\s]?body|动作|控制输出|输出/iu.test(combined);
+  const canIdentifyConnections =
+    stages.some((stage) => hasConcreteValue(stage.connects_to_next)) ||
+    /connect|condition|representation|→|->|驱动|连接|交给|闭环/iu.test(combined);
+  const canIdentifyTraining =
+    Boolean(methodMap?.training_or_implementation && !/原文未明确说明/u.test(methodMap.training_or_implementation)) ||
+    /training|reinforcement learning|objective|loss|optimization|训练|目标|实现/iu.test(combined);
+  const canIdentifyEvaluation =
+    Boolean(methodMap?.evaluation_logic && !/原文未明确说明/u.test(methodMap.evaluation_logic)) ||
+    /experiment|evaluate|baseline|metric|success|tracking|stability|Unitree|实验|指标|对比|结果/iu.test(combined);
+  const canIdentifyStages =
+    stages.length >= 3 ||
+    (plan.some((slide) => slide.type === 'method' && slide.visual.steps.length >= 4) &&
+      canIdentifyInputs &&
+      canIdentifyOutputs &&
+      canIdentifyConnections);
+  const genericMethodProblem =
+    /does not explain input, process, output/i.test(draftMethodText) ||
+    plan.some((slide) => slide.type === 'method' && slide.visual.kind === 'diagram' && slide.visual.steps.some((step) => isGenericMethodStep(step)));
+  const canExplain =
+    canIdentifyCoreProblem &&
+    canIdentifyStages &&
+    canIdentifyInputs &&
+    canIdentifyOutputs &&
+    canIdentifyConnections &&
+    canIdentifyTraining &&
+    canIdentifyEvaluation &&
+    !genericMethodProblem;
+  const issues = compactStringList(
+    [
+      canIdentifyCoreProblem ? '' : 'PPT 无法识别核心问题。',
+      canIdentifyStages ? '' : 'PPT 无法识别方法阶段。',
+      canIdentifyInputs ? '' : '方法页没有明确输入。',
+      canIdentifyOutputs ? '' : '方法页没有明确输出。',
+      canIdentifyConnections ? '' : '方法页没有明确阶段连接。',
+      canIdentifyTraining ? '' : 'PPT 缺少训练或实现逻辑。',
+      canIdentifyEvaluation ? '' : 'PPT 缺少评估逻辑。',
+      genericMethodProblem ? '方法图或方法页仍像通用模板。' : ''
+    ],
+    20
+  );
+
+  return {
+    can_explain_method_from_ppt_only: canExplain,
+    can_identify_core_problem: canIdentifyCoreProblem,
+    can_identify_method_stages: canIdentifyStages && !genericMethodProblem,
+    can_identify_stage_inputs: canIdentifyInputs,
+    can_identify_stage_outputs: canIdentifyOutputs,
+    can_identify_stage_connections: canIdentifyConnections,
+    can_identify_training_or_implementation: canIdentifyTraining,
+    can_identify_evaluation_logic: canIdentifyEvaluation,
+    issues
+  };
+}
+
+function hasRepeatedBulletProblem(bullets: string[]): boolean {
+  const normalized = bullets.map(normalizeBulletForCompare).filter(Boolean);
+  const counts = new Map<string, number>();
+  normalized.forEach((bullet) => counts.set(bullet, (counts.get(bullet) ?? 0) + 1));
+  if ([...counts.values()].some((count) => count >= 2)) {
+    return true;
+  }
+
+  const fuzzyHits = new Map<string, number>();
+  normalized.forEach((bullet, index) => {
+    let similar = 0;
+    normalized.forEach((other, otherIndex) => {
+      if (index !== otherIndex && similarityScore(bullet, other) > 0.82) {
+        similar += 1;
+      }
+    });
+    if (similar > 0) {
+      fuzzyHits.set(bullet, similar + 1);
+    }
+  });
+  return [...fuzzyHits.values()].some((count) => count >= 3);
+}
+
+function hasKeywordStuffingProblem(bullets: string[]): boolean {
+  const useful = bullets.map((bullet) => cleanText(bullet) ?? '').filter(Boolean);
+  if (useful.length < 4) {
+    return false;
+  }
+  const weakCount = useful.filter((bullet) => isWeakNounPhraseBullet(bullet)).length;
+  return weakCount / useful.length > 0.5;
+}
+
+function hasGenericTemplateProblem(plan: PptxSlidePlan[]): boolean {
+  const planText = plan.map((slide) => [slide.mainClaim, ...slide.bullets, ...slide.visual.steps].join(' ')).join(' ');
+  return hasForbiddenGeneric(planText) || /论文信息|研究对象|论点|方法线索|汇报目标/u.test(planText);
+}
+
+function hasSlideTypeMismatch(plan: PptxSlidePlan[], draft: PresentationDraft): boolean {
+  const info = draft.slides.find((slide) => slide.type === 'info');
+  if (info && countMethodTermsInInfo(info.bullets.join(' ')) >= 2) {
+    return true;
+  }
+  return plan.some((slide) => {
+    if (slide.type === 'background') {
+      return /result|experiment|real[-\s]?world|Results|Experiments|真机|实验|结果/iu.test(slide.sourceFooter);
+    }
+    if (slide.type === 'info') {
+      return countMethodTermsInInfo(slide.bullets.join(' ')) >= 2;
+    }
+    return false;
+  });
+}
+
+function countMethodTermsInInfo(text: string): number {
+  const cleaned = text.replace(/英文标题|作者|来源|会议|年份|title|author|source/giu, '');
+  const terms = [
+    /VLA|VLM/iu,
+    /subgoal|episode metadata|language instruction/iu,
+    /LiDAR/iu,
+    /whole[-\s]?body|hybrid internal command/iu,
+    /policy|training|动作|策略|控制/iu
+  ];
+  return terms.reduce((count, pattern) => count + (pattern.test(cleaned) ? 1 : 0), 0);
+}
+
+function hasFigureMismatch(plan: PptxSlidePlan[]): boolean {
+  return plan.some((slide) => {
+    const kind = getFigureKind(slide.visual.figure);
+    if (slide.type === 'results') {
+      return kind === 'setup' || kind === 'method';
+    }
+    if (slide.type === 'method') {
+      return kind === 'setup' || kind === 'result';
+    }
+    return false;
+  });
+}
+
+function buildFailedSlideReport(
+  plan: PptxSlidePlan[],
+  flags: {
+    repeatedKeywordProblem: boolean;
+    genericTemplateProblem: boolean;
+    slideTypeMismatch: boolean;
+    figureMismatch: boolean;
+  }
+): PresentationReviewReport['failed_slides'] {
+  const failed: PresentationReviewReport['failed_slides'] = [];
+  plan.forEach((slide) => {
+    if (slide.type === 'method' && !hasInputProcessOutputEvidence(slide)) {
+      failed.push({ index: slide.index, type: slide.type, reason: '方法页缺少 input/process/output/connection。' });
+    }
+    if (slide.type === 'background' && /result|experiment|real[-\s]?world|Results|Experiments|真机|实验|结果/iu.test(slide.sourceFooter)) {
+      failed.push({ index: slide.index, type: slide.type, reason: '背景页来源混入实验/结果。' });
+    }
+    if (slide.type === 'results') {
+      const hasSetupFigure = slide.figures.some((figure) => getFigureKind(figure) === 'setup');
+      if (hasSetupFigure) {
+        failed.push({ index: slide.index, type: slide.type, reason: '结果页使用了 setup/task/robot 示例图。' });
+      }
+    }
+  });
+  if (flags.repeatedKeywordProblem) {
+    failed.push({ index: -1, type: 'summary', reason: '跨页重复关键词或 noun phrase stuffing。' });
+  }
+  if (flags.genericTemplateProblem) {
+    failed.push({ index: -1, type: 'method', reason: '仍含通用占位模板内容。' });
+  }
+  if (flags.slideTypeMismatch) {
+    failed.push({ index: -1, type: 'info', reason: '页面类型与内容不匹配。' });
+  }
+  if (flags.figureMismatch) {
+    failed.push({ index: -1, type: 'results', reason: '图表类型与页面不匹配。' });
+  }
+  return failed;
+}
+
+function collectRepeatedBulletIssues(plan: PptxSlidePlan[]): string[] {
+  const bullets = plan.flatMap((slide) => slide.bullets.map((bullet) => ({ slide, bullet })));
+  const normalized = bullets.map((item) => ({ ...item, key: normalizeBulletForCompare(item.bullet) })).filter((item) => item.key);
+  const byKey = new Map<string, typeof normalized>();
+  normalized.forEach((item) => {
+    byKey.set(item.key, [...(byKey.get(item.key) ?? []), item]);
+  });
+  const issues: string[] = [];
+  byKey.forEach((items) => {
+    if (items.length >= 2) {
+      issues.push(`重复 bullet：${items[0].bullet}`);
+    }
+  });
+  return issues;
+}
+
+function hasInputProcessOutputEvidence(slide: PptxSlidePlan): boolean {
+  const evidence = [slide.mainClaim, ...slide.bullets, ...slide.visual.steps, slide.visual.caption, slide.sourceFooter].join(' ');
+  const hasInput = /input|observation|LiDAR|elevation map|proprioceptive|language instruction|视觉|感知|输入/iu.test(evidence);
+  const hasProcess = /policy|controller|model|VLA|VLM|RL|condition|representation|process|策略|模型|控制器|训练|表示/iu.test(evidence);
+  const hasOutput = /output|action|command|control|whole[-\s]?body|动作|命令|输出/iu.test(evidence);
+  const hasConnection = /connect|condition|representation|→|->|驱动|连接|交给|闭环/iu.test(evidence);
+  return hasInput && hasProcess && hasOutput && hasConnection;
+}
+
+function isWeakNounPhraseBullet(bullet: string): boolean {
+  const text = normalizeBulletForCompare(bullet);
+  if (!text) {
+    return false;
+  }
+  const hasVerbOrExplanation = /是|来自|检查|需要|要求|缺少|破坏|依赖|仍有|难以|补足|接入|解决|输入|输出|连接|驱动|训练|验证|比较|提升|降低|说明|产生|用于|作为|映射|约束|完成|执行|支撑|关注|覆盖|检验|调节|描述|面向|聚焦|包含|体现|衡量|evaluate|compare|output|input|train|connect|improve|reduce/iu.test(text);
+  const terms = text.match(/[A-Za-z0-9π.-]+|[\u4e00-\u9fff]{2,}/gu) ?? [];
+  return terms.length <= 6 && !hasVerbOrExplanation;
+}
+
+function isGenericMethodStep(step: string): boolean {
+  return /语言\/视觉上下文|VLA 策略模型|子目标图像|动作输出|多源数据训练|外部感知|RL 低层控制器|全身运动策略|机器人动作输出|稳定性目标/u.test(step);
+}
+
+function normalizeBulletForCompare(text: string): string {
+  return (cleanText(text) ?? '')
+    .replace(/（p\.\s*\d+）/giu, '')
+    .replace(/\(p\.\s*\d+\)/giu, '')
+    .replace(/[，。；;:：,.!?！？、\s]+/gu, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function getSemanticBulletKey(text: string): string {
+  const normalized = normalizeBulletForCompare(text);
+  if (!normalized) {
+    return '';
+  }
+
+  const topics: Array<[RegExp, string]> = [
+    [/π0\.?7|蟺0\.?7|pi0\.?7/iu, 'pi0.7'],
+    [/\blanguage (instruction|instructions|command|commands|goal|goals)\b/iu, 'language-instruction'],
+    [/\bsubgoal images?\b|子目标/u, 'subgoal-images'],
+    [/\bepisode metadata\b|元数据/u, 'episode-metadata'],
+    [/\bcontext conditioning\b|上下文/u, 'context-conditioning'],
+    [/\blong[-\s]?horizon\b|长程/u, 'long-horizon'],
+    [/\bVLA\b|\bVLM\b|vision[-\s]?language[-\s]?action/iu, 'vla-vlm'],
+    [/\bLiDAR\b|elevation map|地形图/u, 'lidar-elevation'],
+    [/\bhybrid internal command\b|混合内部/u, 'hybrid-command'],
+    [/\bwhole[-\s]?body actions?\b|全身动作/u, 'whole-body-action'],
+    [/\bUnitree\s*G1\b/iu, 'unitree-g1'],
+    [/\bbaseline|benchmark|comparison\b|基线|对比/u, 'baseline-comparison'],
+    [/\btracking|stability|success rate|metric|rate\b|指标|稳定/u, 'metrics'],
+    [/\breinforcement learning\b|\bRL\b|训练/u, 'rl-training'],
+    [/\bterrain|unstructured|scene|environment\b|非结构|地形/u, 'terrain-scene']
+  ];
+
+  return topics.find(([pattern]) => pattern.test(normalized))?.[1] ?? '';
+}
+
+function similarityScore(a: string, b: string): number {
+  const aSet = new Set(a.split(/\s+/u).filter(Boolean));
+  const bSet = new Set(b.split(/\s+/u).filter(Boolean));
+  if (aSet.size === 0 || bSet.size === 0) {
+    return 0;
+  }
+  const intersection = [...aSet].filter((item) => bSet.has(item)).length;
+  return (2 * intersection) / (aSet.size + bSet.size);
+}
+
+function compactStringList(items: string[], limit: number): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  items.forEach((item) => {
+    const normalized = cleanText(item);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  });
+  return result.slice(0, limit);
+}
+
+function hasConcreteValue(text: string): boolean {
+  return Boolean(cleanText(text)) && !/原文未明确说明|未找到|unknown/i.test(text);
+}
+
+function getFigureKind(figure?: PresentationFigureCandidate): PresentationFigureKind {
+  if (!figure) {
+    return 'unknown';
+  }
+  if (figure.figureKind) {
+    return figure.figureKind;
+  }
+  const caption = cleanText(figure.caption) ?? '';
+  if (/result|quantitative|comparison|performance|ablation|success\s*rate|tracking|stability|benchmark|evaluation|metric|score|accuracy|table/iu.test(caption)) {
+    return 'result';
+  }
+  if (/architecture|overview|framework|pipeline|method|model|algorithm|system|module|process|controller|policy/iu.test(caption)) {
+    return 'method';
+  }
+  if (/robot|platform|task|environment|dataset|setup|illustration|example|demonstration|scene/iu.test(caption)) {
+    return 'setup';
+  }
+  if (/loss|equation|formula|objective|optimization|gradient/iu.test(caption)) {
+    return 'formula';
+  }
+  if (/failure|case|qualitative|visualization/iu.test(caption)) {
+    return 'case';
+  }
+  return 'unknown';
 }
 
 export async function createPresentationPptxBuffer(draft: PresentationDraft): Promise<ArrayBuffer> {
@@ -255,10 +754,9 @@ export async function createPresentationPptxBuffer(draft: PresentationDraft): Pr
   };
 
   const plan = buildPptxSlidePlan(draft);
-  const issues = validatePptxSlidePlan(plan);
-  if (issues.length > 0) {
-    // 质量问题不阻止导出，但写入备注方便用户后续定位。
-    plan[0].speakerNotes = `${plan[0].speakerNotes}\n\n导出质量提示：\n${issues.join('\n')}`;
+  const reviewReport = buildPresentationReviewReport(draft);
+  if (!reviewReport.passed) {
+    throw new Error(`质量检查未通过，请重新生成。\n${reviewReport.issues.join('\n')}`);
   }
 
   plan.forEach((slidePlan) => addPlannedSlide(pptx, slidePlan, draft));
@@ -1106,14 +1604,22 @@ function scoreFigureForSlide(slide: PresentationSlide, figure: PresentationFigur
   const caption = cleanText(figure.caption) ?? '';
   const captionLower = caption.toLowerCase();
   const sourceText = getSlideEvidenceText(slide).toLowerCase();
+  const figureKind = getFigureKind(figure);
   let score = figure.suggestedSlide === slide.type ? 6 : 0;
 
   if (slide.type === 'method' || slide.type === 'formula') {
+    if (figureKind === 'setup' || figureKind === 'result') return 0;
     if (/architecture|overview|framework|method|model|controller|policy|pipeline|system/i.test(captionLower)) score += 5;
     if (/fig\.|figure/i.test(captionLower)) score += 2;
     if (/result|ablation|benchmark|table/i.test(captionLower)) score -= 3;
-  } else if (slide.type === 'experiments' || slide.type === 'results') {
+  } else if (slide.type === 'results') {
+    if (figureKind !== 'result') return 0;
     if (/result|experiment|evaluation|benchmark|ablation|comparison|table/i.test(captionLower)) score += 5;
+    if (/architecture|overview|method|framework|robot platform|task examples/i.test(captionLower)) score -= 4;
+  } else if (slide.type === 'experiments') {
+    if (figureKind === 'method') return 0;
+    if (/result|experiment|evaluation|benchmark|ablation|comparison|table/i.test(captionLower)) score += 5;
+    if (/robot|platform|task|environment|dataset|setup|example/i.test(captionLower)) score += 4;
     if (/architecture|overview|method|framework/i.test(captionLower)) score -= 2;
   } else {
     score += 1;
@@ -1140,15 +1646,57 @@ function buildSeminarBullets(slide: PresentationSlide): string[] {
     ...slide.sourceRefs.map((ref) => ref.text),
     ...slide.figures.map((figure) => figure.caption)
   ].join(' ');
-  const specificBullets = extractSpecificBullets(slide, sourceText);
-  const keywordBullets = KEYWORD_BULLETS.filter((item) => item.pattern.test(sourceText)).map((item) => item.bullet);
+  const directBullets = slide.bullets
+    .map((bullet) => summarizeDirectSlideBullet(slide.type, bullet))
+    .filter(Boolean);
+  const specificBullets = filterKeywordBulletsForType(slide.type, extractSpecificBullets(slide, sourceText));
+  const keywordBullets = filterKeywordBulletsForType(
+    slide.type,
+    KEYWORD_BULLETS.filter((item) => item.pattern.test(sourceText)).map((item) => item.bullet)
+  );
   const typeBullets = specificBullets.length >= 2 || slide.sourceRefs.length > 0 ? [] : TYPE_FALLBACK_BULLETS[slide.type];
   const derivedBullets = slide.sourceRefs
     .slice(0, 3)
     .map((ref) => summarizeRefAsChinese(slide.type, ref.text))
     .filter(Boolean);
 
-  return compactUnique([...specificBullets, ...keywordBullets, ...derivedBullets, ...typeBullets].filter(isAllowedSeminarBullet), 5);
+  const primary = compactUnique([...directBullets, ...specificBullets, ...keywordBullets, ...derivedBullets, ...typeBullets].filter(isAllowedSeminarBullet), 5);
+  if (slide.type !== 'info' && primary.length < 2 && slide.sourceRefs.length === 0) {
+    return compactUnique([...primary, ...TYPE_FALLBACK_BULLETS[slide.type]], 5);
+  }
+  return primary;
+}
+
+function summarizeDirectSlideBullet(type: PresentationSlideType, bullet: string): string | undefined {
+  const cleaned = cleanText(bullet);
+  if (!cleaned) {
+    return undefined;
+  }
+  if (type === 'info' && /^来源[:：]/u.test(cleaned)) {
+    return cleaned.replace(/IEEE Robotics/iu, 'IEEE 机器人方向').replace(/Robotics/iu, '机器人方向');
+  }
+  if (asciiRatio(cleaned) > 0.58 && !/[=+*/^_{}]/u.test(cleaned)) {
+    return summarizeRefAsChinese(type, cleaned) ?? summarizeEnglishLikeBullet(cleaned);
+  }
+  return compactChineseBullet(cleaned);
+}
+
+function filterKeywordBulletsForType(type: PresentationSlideType, bullets: string[]): string[] {
+  const allow: Record<PresentationSlideType, RegExp> = {
+    cover: /组会|汇报/u,
+    info: /论文|作者|来源/u,
+    background: /瓶颈|场景|地形|任务|泛化|unstructured|humanoid|loco|π0\.7|language|subgoal|metadata|context|long-horizon/u,
+    relatedWork: /baseline|现有|瓶颈|场景|泛化|unstructured|limited|lack|cannot/u,
+    method: /PILOT|LiDAR|language|hybrid|whole-body|RL|VLA|VLM|subgoal|metadata|context|动作|训练|策略|控制/u,
+    formula: /公式|目标|loss|objective|训练/u,
+    experiments: /Unitree|仿真|真实|baseline|benchmark|任务|平台|实验|指标/u,
+    results: /Unitree|baseline|benchmark|success|tracking|stability|ablation|robustness|指标|结果|泛化/u,
+    innovation: /PILOT|LiDAR|hybrid|context|subgoal|VLA|贡献|差异/u,
+    limitations: /failure|limitation|ablation|robustness|失败|边界/u,
+    inspiration: /baseline|指标|RL|PINN|CBF|MPC|可复用/u,
+    summary: /PILOT|π0\.7|Unitree|baseline|指标|总结|复现/u
+  };
+  return bullets.filter((bullet) => allow[type].test(bullet));
 }
 
 function extractSpecificBullets(slide: PresentationSlide, sourceText: string): string[] {
@@ -1156,24 +1704,24 @@ function extractSpecificBullets(slide: PresentationSlide, sourceText: string): s
   const lower = sourceText.toLowerCase();
 
   if (/\bPILOT\b/iu.test(sourceText)) bullets.push('PILOT 闭环连接感知和低层控制');
-  if (/\bπ0\.?7|pi0\.?7\b/iu.test(sourceText)) bullets.push('π0.7 通过 context conditioning 调节策略');
+  if (/π0\.?7|pi0\.?7\b/iu.test(sourceText)) bullets.push('π0.7 通过 context conditioning 调节策略');
   if (/\bLiDAR[-\s]?based elevation maps?\b/iu.test(sourceText)) bullets.push('LiDAR 地形图提供外部感知');
   if (/\blanguage (instructions?|goals?|commands?)\b/iu.test(sourceText)) bullets.push('language instruction 作为策略输入');
-  if (/\bhybrid internal command(?: representation)?\b/iu.test(sourceText)) bullets.push('hybrid internal command 连接任务意图');
-  if (/\bwhole[-\s]?body actions?\b/iu.test(sourceText)) bullets.push('whole-body action 作为控制输出');
+  if (/\bhybrid internal command(?: representation)?\b/iu.test(sourceText)) bullets.push('混合内部命令连接任务意图');
+  if (/\bwhole[-\s]?body actions?\b/iu.test(sourceText)) bullets.push('全身动作作为控制输出');
   if (/\bL\s*=\s*L_/iu.test(sourceText)) bullets.push(extractFormulaBullet(sourceText));
   if (/\bUnitree\s*G1\b/iu.test(sourceText)) bullets.push('Unitree G1 完成真机验证');
   if (/\bhumanoid|whole[-\s]?body|loco[-\s]?manipulation\b/iu.test(sourceText)) bullets.push('人形机器人执行移动操作任务');
-  if (/\bRL|reinforcement learning\b/iu.test(sourceText)) bullets.push('RL 训练低层控制策略');
+  if (/\bRL|reinforcement learning\b/iu.test(sourceText)) bullets.push('强化学习训练低层控制策略');
   if (/\bVLA|VLM|vision[-\s]?language[-\s]?action\b/iu.test(sourceText)) bullets.push('VLA/VLM 连接指令与动作');
   if (/\bsubgoal images?|episode metadata\b/iu.test(sourceText)) bullets.push('子目标图像约束执行策略');
-  if (/\bsubgoal images?\b/iu.test(sourceText)) bullets.push('subgoal images 提供阶段目标');
-  if (/\bepisode metadata\b/iu.test(sourceText)) bullets.push('episode metadata 描述任务上下文');
+  if (/\bsubgoal images?\b/iu.test(sourceText)) bullets.push('子目标图像提供阶段目标');
+  if (/\bepisode metadata\b/iu.test(sourceText)) bullets.push('回合元数据描述任务上下文');
   if (/\bcontext conditioning\b/iu.test(sourceText)) bullets.push('context conditioning 约束模型行为');
   if (/\blong[-\s]?horizon tasks?\b/iu.test(sourceText)) bullets.push('long-horizon tasks 检验组合执行');
   if (/\bcross[-\s]?embodiment\b/iu.test(sourceText)) bullets.push('cross-embodiment 测试迁移能力');
   if (/\bdemonstration|autonomous data|multimodal web data\b/iu.test(sourceText)) bullets.push('多源数据支持策略训练');
-  if (/\bbaseline|benchmark|comparison\b/iu.test(sourceText)) bullets.push('baseline 对比支撑结论');
+  if (/\bbaseline|benchmark|comparison\b/iu.test(sourceText)) bullets.push('基线对比支撑结论');
   if (/\bsuccess|tracking|stability|collision|metric|rate\b/iu.test(sourceText)) bullets.push('指标覆盖成功率和稳定性');
   if (/\bterrain|unstructured|scene\b/iu.test(sourceText)) bullets.push('非结构化地形暴露控制瓶颈');
 
@@ -1201,7 +1749,38 @@ function buildMainClaim(slide: PresentationSlide, bullets: string[]): string {
   if (slide.type === 'cover') {
     return '围绕问题、方法、证据和启发组织组会汇报';
   }
-  return bullets[0] ?? TYPE_FALLBACK_BULLETS[slide.type][0] ?? '原文未明确说明';
+  const evidence = bullets[0] ?? TYPE_FALLBACK_BULLETS[slide.type][0] ?? '原文未明确说明';
+  return buildTypedMainClaim(slide.type, evidence);
+}
+
+function buildTypedMainClaim(type: PresentationSlideType, evidence: string): string {
+  const compact = truncateText(cleanText(evidence) ?? '原文未明确说明', 22);
+  switch (type) {
+    case 'info':
+      return `本页交代论文来源：${compact}`;
+    case 'background':
+      return `本页聚焦问题来源：${compact}`;
+    case 'relatedWork':
+      return `本页说明现有缺口：${compact}`;
+    case 'method':
+      return `本页讲清方法链路：${compact}`;
+    case 'formula':
+      return `本页解释关键模块：${compact}`;
+    case 'experiments':
+      return `本页说明实验设置：${compact}`;
+    case 'results':
+      return `本页回到实验结论：${compact}`;
+    case 'innovation':
+      return `本页提炼真实差异：${compact}`;
+    case 'limitations':
+      return `本页保留边界讨论：${compact}`;
+    case 'inspiration':
+      return `本页转化为可复现实验：${compact}`;
+    case 'summary':
+      return `本页收束复现判断：${compact}`;
+    default:
+      return compact;
+  }
 }
 
 function buildSlideTitle(slide: PresentationSlide): string {
@@ -1256,11 +1835,11 @@ function buildVisualSteps(slide: PresentationSlide): string[] {
     if (concreteSteps.length >= 4) {
       return concreteSteps;
     }
-    if (/\bπ0\.?7|pi0\.?7|VLA|VLM|vision[-\s]?language[-\s]?action\b/iu.test(sourceText)) {
-      return compactUnique(['语言/视觉上下文', 'VLA 策略模型', '子目标图像', '动作输出', '多源数据训练'], 5);
+    if (/π0\.?7|pi0\.?7|VLA|VLM|vision[-\s]?language[-\s]?action\b/iu.test(sourceText)) {
+      return compactVisualSteps(['language instruction', 'VLA policy', 'subgoal images / episode metadata', 'action output', 'diverse training data'], 5);
     }
     if (/\bPILOT|humanoid|loco[-\s]?manipulation|whole[-\s]?body\b/iu.test(sourceText)) {
-      return compactUnique(['外部感知', 'RL 低层控制器', '全身运动策略', '机器人动作输出', '稳定性目标'], 5);
+      return compactVisualSteps(['LiDAR / exteroceptive input', 'PILOT controller', 'hybrid internal command', 'whole-body action', 'RL stability objective'], 5);
     }
   }
   if (slide.type === 'experiments' || slide.type === 'results') {
@@ -1287,7 +1866,7 @@ function buildVisualSteps(slide: PresentationSlide): string[] {
       ]) ?? (/\bsuccess|tracking|stability|metric|rate|指标|成功率|稳定性\b/iu.test(lower) ? '核心指标' : undefined),
       /\bablation|generalization|robustness|消融|泛化|鲁棒\b/iu.test(lower) ? '消融/泛化验证' : undefined
     ];
-    return compactUnique(steps, 5);
+    return compactVisualSteps(steps, 5);
   }
   return [];
 }
@@ -1323,7 +1902,19 @@ function buildConcreteMethodSteps(sourceText: string): string[] {
     ])
   ];
 
-  return compactUnique(steps, 5);
+  return compactVisualSteps(steps, 5);
+}
+
+function compactVisualSteps(items: Array<string | undefined>, limit: number): string[] {
+  const result: string[] = [];
+  items.forEach((item) => {
+    const cleaned = cleanText(item);
+    if (!cleaned || result.includes(cleaned)) {
+      return;
+    }
+    result.push(cleaned);
+  });
+  return result.slice(0, limit);
 }
 
 function getSlideEvidenceText(slide: PresentationSlide): string {
@@ -1406,34 +1997,74 @@ function hasChineseText(text: string): boolean {
 function summarizeRefAsChinese(type: PresentationSlideType, text: string): string | undefined {
   const lower = text.toLowerCase();
   if (/\bPILOT\b/iu.test(text)) {
-    return 'PILOT 解决感知移动操作控制';
+    if (type === 'background') return 'PILOT 面向感知移动操作问题';
+    if (type === 'method' || type === 'formula') return 'PILOT 串起感知输入和控制输出';
+    if (type === 'innovation') return 'PILOT 差异点是感知闭环控制';
+    if (type === 'summary') return 'PILOT 主线是感知到动作闭环';
+    return undefined;
   }
   if (/\bUnitree\s*G1\b/iu.test(text)) {
-    return 'Unitree G1 支撑真实机器人验证';
+    if (type === 'experiments') return 'Unitree G1 用于真实平台设置';
+    if (type === 'results') return 'Unitree G1 支撑真机结果验证';
+    if (type === 'summary') return '真机结果来自 Unitree G1';
+    return undefined;
   }
-  if (/\bπ0\.?7|pi0\.?7\b/iu.test(text)) {
-    return 'π0.7 依靠上下文调节策略';
+  if (/π0\.?7|pi0\.?7\b/iu.test(text)) {
+    if (type === 'background') return 'π0.7 关注未见环境指令执行';
+    if (type === 'method' || type === 'formula') return 'π0.7 依靠上下文调节策略';
+    if (type === 'summary') return 'π0.7 主线是上下文条件控制';
+    return undefined;
   }
   if (/\bVLA|VLM|vision[-\s]?language[-\s]?action\b/iu.test(text)) {
-    return 'VLA/VLM 连接语言指令与动作';
+    if (type === 'background') return 'VLA/VLM 暴露语言到动作泛化问题';
+    if (type === 'method' || type === 'formula') return 'VLA/VLM 连接语言指令与动作';
+    if (type === 'innovation') return '贡献落在语言到动作接口';
+    return undefined;
   }
   if (/\bsubgoal images?|episode metadata\b/iu.test(text)) {
-    return '子目标图像和元数据约束策略';
+    if (type === 'background') return 'subgoal images 和 episode metadata 指出长程任务难点';
+    if (type === 'method' || type === 'formula') return '子目标图像和元数据约束策略';
+    if (type === 'summary') return '上下文信息帮助策略分阶段执行';
+    return undefined;
+  }
+  if (/\blanguage (instructions?|commands?)\b/iu.test(text)) {
+    if (type === 'background') return 'language instruction 要在未见环境中执行';
+    if (type === 'method') return 'language instruction 作为策略输入';
+    return undefined;
+  }
+  if (/\blong[-\s]?horizon tasks?\b/iu.test(text)) {
+    if (type === 'background') return 'long-horizon tasks 检验组合执行能力';
+    if (type === 'summary') return '长程任务是主要验证对象';
+    return undefined;
   }
   if (/\bdemonstration|autonomous data|multimodal web data\b/iu.test(text)) {
-    return '机器人和非机器人数据共同训练';
+    if (type === 'method' || type === 'experiments') return '多源数据支撑策略训练';
+    return undefined;
   }
   if (/\bterrain|unstructured|scene|environment\b/u.test(lower)) {
-    return type === 'background' ? '非结构化环境暴露控制瓶颈' : '非结构化场景检验可靠执行';
+    if (type === 'background') return '非结构化环境暴露控制瓶颈';
+    if (type === 'experiments') return '非结构化场景用于任务设置';
+    if (type === 'limitations') return '复杂场景仍是部署边界';
+    return undefined;
   }
   if (/\bcontrol|controller|policy|action\b/u.test(lower)) {
-    return '策略同时处理运动和任务执行';
+    if (type === 'method' || type === 'formula') return '控制策略同时处理运动和执行';
+    if (type === 'inspiration') return '控制闭环可作为复现实验线索';
+    return undefined;
   }
   if (/\bexperiment|evaluation|baseline|simulation|real\b/u.test(lower)) {
-    return '实验覆盖 baseline、仿真与真机';
+    if (type === 'experiments') return '实验设置包含 baseline 与平台';
+    if (type === 'results') return '结果页需要回到 baseline 对比';
+    return undefined;
   }
   if (/\bmethod|framework|architecture|model\b/u.test(lower)) {
-    return '方法强调模型、控制和执行协同';
+    if (type === 'method') return '方法页解释模型和控制协同';
+    return undefined;
+  }
+  if (/\bRL|reinforcement learning|training\b/iu.test(text)) {
+    if (type === 'formula' || type === 'method') return 'RL 训练服务低层控制目标';
+    if (type === 'experiments') return '训练设置需要和评估指标对应';
+    return undefined;
   }
   if (/\blimitation|future|failure\b/u.test(lower)) {
     return '后续仍需验证部署边界和失败场景';
@@ -1444,10 +2075,18 @@ function summarizeRefAsChinese(type: PresentationSlideType, text: string): strin
 
 function compactUnique(items: Array<string | undefined>, limit: number): string[] {
   const result: string[] = [];
+  const keys = new Set<string>();
+  const semanticKeys = new Set<string>();
   items.forEach((item) => {
     const compact = compactChineseBullet(item);
-    if (!compact || result.includes(compact)) {
+    const key = compact ? normalizeBulletForCompare(compact) : '';
+    const semanticKey = compact ? getSemanticBulletKey(compact) : '';
+    if (!compact || !key || keys.has(key) || (semanticKey && semanticKeys.has(semanticKey))) {
       return;
+    }
+    keys.add(key);
+    if (semanticKey) {
+      semanticKeys.add(semanticKey);
     }
     result.push(compact);
   });
@@ -1463,10 +2102,29 @@ function compactChineseBullet(text?: string): string | undefined {
     .replace(/[，,。.;；:：]+$/u, '')
     .replace(/\s*\(p\.\s*\d+\)\s*$/iu, '')
     .trim();
-  if (asciiRatio(normalized) > 0.58 && normalized.length > 30) {
-    return summarizeRefAsChinese('summary', normalized);
+  if (asciiRatio(normalized) > 0.58 && !/[=+*/^_{}]/u.test(normalized)) {
+    return summarizeRefAsChinese('summary', normalized) ?? summarizeEnglishLikeBullet(normalized);
   }
   return truncateText(normalized, MAX_BULLET_LENGTH);
+}
+
+function summarizeEnglishLikeBullet(text: string): string | undefined {
+  if (/π0\.?7|pi0\.?7\b/iu.test(text)) return 'π0.7 使用 context conditioning 调节策略';
+  if (/\blanguage (instructions?|commands?)\b/iu.test(text)) return '语言指令作为策略输入';
+  if (/\bsubgoal images?\b/iu.test(text)) return '子目标图像提供阶段目标';
+  if (/\bepisode metadata\b/iu.test(text)) return '回合元数据描述任务上下文';
+  if (/\blong[-\s]?horizon tasks?\b/iu.test(text)) return '长程任务检验组合执行';
+  if (/\bLiDAR[-\s]?based elevation maps?\b/iu.test(text)) return 'LiDAR elevation map 提供外部地形感知';
+  if (/\bhybrid internal command(?: representation)?\b/iu.test(text)) return '混合内部命令连接任务意图';
+  if (/\bwhole[-\s]?body actions?\b/iu.test(text)) return '全身动作作为控制输出';
+  if (/\bcommand tracking(?: precision)?\b/iu.test(text)) return '命令跟踪衡量控制精度';
+  if (/\bterrain traversability\b/iu.test(text)) return '地形通过性衡量复杂场景结果';
+  if (/\bRL|reinforcement learning|training\b/iu.test(text)) return '强化学习服务低层控制目标';
+  if (/\bbaseline|benchmark|comparison\b/iu.test(text)) return '基线对比支撑实验结论';
+  if (/\bsuccess|tracking|stability|metric|rate\b/iu.test(text)) return '指标用于验证控制效果';
+  if (/\bUnitree\s*G1\b/iu.test(text)) return 'Unitree G1 支撑真机结果验证';
+  if (/\bPILOT\b/iu.test(text)) return 'PILOT 主线是感知到动作闭环';
+  return undefined;
 }
 
 function buildSourceFooter(slide: PresentationSlide, figure?: PresentationFigureCandidate): string {

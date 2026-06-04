@@ -219,6 +219,10 @@ export interface ElectronApi {
     contentBase64: string;
     defaultFileName: string;
   }) => Promise<SaveTextResult | null>;
+  downloadArxivPdf: (request: {
+    pdfUrl: string;
+    defaultFileName: string;
+  }) => Promise<PdfFilePayload | null>;
   exportPdf: (request: {
     sourcePath: string;
     defaultFileName: string;

@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { ExtractedPdfBlock } from './pdfTextStructure';
 import {
   applyAiEnhancedPresentationDraft,
+  buildDeepMethodMap,
   buildLocalPresentationDraft,
   buildPresentationDraft,
   buildPresentationAiEnhancementPrompt,
+  extractFigureCandidates,
   serializePresentationMarkdown
 } from './presentationOutline';
 import type { PaperRecord } from './papers';
@@ -232,6 +234,86 @@ describe('presentationOutline', () => {
     expect(resultsText).not.toMatch(/\bExtensive experiments\b/iu);
   });
 
+  it('builds a deep method map before creating slides so the method can be explained stage by stage', () => {
+    const input = {
+      papers: [paper({ englishTitle: 'PILOT: Perceptive Integrated Low-level Controller' })],
+      blocks: [
+        block({
+          section: 'Abstract',
+          page: 1,
+          original:
+            'PILOT addresses loco-manipulation over unstructured scenes where whole-body controllers lack exteroceptive awareness.'
+        }),
+        block({
+          section: 'Method',
+          page: 4,
+          original:
+            'PILOT uses a robot-centric LiDAR-based elevation map, proprioceptive states, and a hybrid internal command representation to output whole-body actions.'
+        }),
+        block({
+          section: 'Training',
+          page: 5,
+          original:
+            'The controller is trained with reinforcement learning to improve stability, command tracking precision, and terrain traversability.'
+        }),
+        block({
+          section: 'Experiments',
+          page: 6,
+          original:
+            'Experiments compare against existing baselines in simulation and on the physical Unitree G1 robot using stability, command tracking, and terrain traversability metrics.'
+        })
+      ],
+      targetSlideCount: 12
+    };
+
+    const map = buildDeepMethodMap(input);
+    const draft = buildLocalPresentationDraft(input);
+    const methodSlideText = draft.slides
+      .filter((slide) => slide.type === 'method' || slide.type === 'formula')
+      .flatMap((slide) => slide.bullets)
+      .join(' ');
+
+    expect(map.core_problem).toMatch(/PILOT|loco-manipulation|unstructured|exteroceptive/i);
+    expect(map.method_stages.length).toBeGreaterThanOrEqual(3);
+    expect(map.method_stages[0]).toMatchObject({
+      input: expect.stringMatching(/LiDAR|proprioceptive/i),
+      output: expect.stringMatching(/elevation|terrain|state/i)
+    });
+    expect(map.method_stages.some((stage) => /whole-body action|control command/i.test(stage.output))).toBe(true);
+    expect(map.training_or_implementation).toMatch(/reinforcement learning|stability|command tracking/i);
+    expect(map.evaluation_logic).toMatch(/Unitree G1|baseline|metric|terrain traversability/i);
+    expect(draft.methodMap?.method_stages.length).toBeGreaterThanOrEqual(3);
+    expect(methodSlideText).toMatch(/LiDAR|hybrid internal command|whole-body|reinforcement learning/i);
+  });
+
+  it('classifies figure captions so results slides do not use setup figures as evidence', () => {
+    const figures = extractFigureCandidates([
+      block({
+        type: 'caption',
+        section: 'Method',
+        page: 3,
+        original: 'Fig. 2. Architecture overview of the PILOT controller and LiDAR elevation map pipeline.'
+      }),
+      block({
+        type: 'caption',
+        section: 'Experiments',
+        page: 5,
+        original: 'Fig. 4. Robot platform and unstructured terrain task examples.'
+      }),
+      block({
+        type: 'caption',
+        section: 'Results',
+        page: 7,
+        original: 'Table 1. Quantitative success rate and command tracking comparison against baselines.'
+      })
+    ]);
+
+    expect(figures.map((item) => item.figureKind)).toEqual(['method', 'setup', 'result']);
+    expect(figures[0]).toMatchObject({ suggestedSlide: 'method' });
+    expect(figures[1]).toMatchObject({ suggestedSlide: 'experiments' });
+    expect(figures[2]).toMatchObject({ suggestedSlide: 'results' });
+  });
+
   it('keeps a stable slide even when experiments are missing', () => {
     const draft = buildLocalPresentationDraft({
       papers: [paper()],
@@ -454,6 +536,28 @@ describe('presentationOutline', () => {
     expect(draft.figures[0].cropBox?.height).toBeGreaterThan(120);
   });
 
+  it('crops below top table captions instead of always cropping above captions', () => {
+    const figures = extractFigureCandidates([
+      block({
+        type: 'caption',
+        section: 'Results',
+        page: 6,
+        original: 'Table 1. Quantitative comparison of success rate, collision rate, and tracking error.',
+        bounds: {
+          x: 74,
+          y: 118,
+          width: 470,
+          height: 20,
+          pageWidth: 612,
+          pageHeight: 792
+        }
+      })
+    ]);
+
+    expect(figures[0].cropBox?.y).toBeGreaterThan(118);
+    expect(figures[0].cropBox?.height).toBeGreaterThan(120);
+  });
+
   it('applies AI-enhanced slide bullets without dropping sources or figures', () => {
     const draft = buildPresentationDraft({
       papers: [paper({ englishTitle: 'AI Enhanced Robot Paper' })],
@@ -527,5 +631,60 @@ describe('presentationOutline', () => {
     expect(prompt.userPrompt).toContain('metric');
     expect(prompt.userPrompt).toContain('Do not use generic bullets');
     expect(prompt.userPrompt).toContain('任务指令转成机器人策略');
+  });
+
+  it('extracts paper-specific modules instead of falling back to generic method placeholders', () => {
+    const input = {
+      papers: [paper({ englishTitle: 'Grounded Mobile Robot Planner' })],
+      blocks: [
+        block({
+          section: 'Method',
+          page: 4,
+          original:
+            'The planner takes RGB-D observations and an occupancy map as input, passes them through a perception encoder, predicts latent dynamics with a world model, and uses MPC with a trajectory optimizer to output velocity commands.'
+        }),
+        block({
+          section: 'Training',
+          page: 5,
+          original:
+            'The model is trained with behavior cloning and a safety cost objective so the policy avoids collisions while following waypoints.'
+        }),
+        block({
+          section: 'Experiments',
+          page: 7,
+          original:
+            'Experiments compare against PPO and SAC baselines on mobile robot navigation tasks using success rate, collision rate, path efficiency, and tracking error metrics.'
+        })
+      ],
+      targetSlideCount: 12
+    };
+
+    const map = buildDeepMethodMap(input);
+    const draft = buildLocalPresentationDraft(input);
+    const methodText = draft.slides
+      .filter((slide) => slide.type === 'method' || slide.type === 'formula')
+      .flatMap((slide) => slide.bullets)
+      .join(' ');
+    const resultsText = draft.slides
+      .filter((slide) => slide.type === 'experiments' || slide.type === 'results')
+      .flatMap((slide) => slide.bullets)
+      .join(' ');
+    const stageText = map.method_stages.map((stage) => `${stage.input} ${stage.process} ${stage.output}`).join(' ');
+
+    expect(stageText).toContain('RGB-D observations');
+    expect(stageText).toContain('occupancy map');
+    expect(stageText).toContain('perception encoder');
+    expect(stageText).toContain('World Model');
+    expect(stageText).toContain('MPC');
+    expect(stageText).toContain('velocity command');
+    expect(stageText).not.toContain('原文观测输入');
+    expect(stageText).not.toContain('任务/上下文表示');
+
+    expect(methodText).toContain('perception encoder');
+    expect(methodText).toContain('trajectory optimizer');
+    expect(methodText).toContain('safety cost objective');
+    expect(resultsText).toContain('PPO');
+    expect(resultsText).toContain('SAC');
+    expect(resultsText).toContain('tracking error');
   });
 });

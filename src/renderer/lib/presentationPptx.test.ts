@@ -4,6 +4,7 @@ import {
   SEMINAR_PPT_CANVAS,
   SEMINAR_PPT_LAYOUT,
   SEMINAR_PPT_TYPOGRAPHY,
+  buildPresentationReviewReport,
   buildPptxSlidePlan,
   createPresentationPptxBuffer,
   validatePptxQuality,
@@ -57,6 +58,44 @@ const transparentPng =
 
 function slide(type: PresentationSlideType, index: number, figures: PresentationFigureCandidate[] = []): PresentationSlide {
   const section = type === 'cover' ? 'Cover' : titles[type];
+  const typedBullets: Record<PresentationSlideType, string[]> = {
+    cover: ['原文 PDF：pilot.pdf', '作者：Xinru Cui 等', '目标：讲清问题、方法、实验和启发'],
+    info: ['英文标题：PILOT: Perceptive Integrated Low-level Controller', '作者：Xinru Cui, Linxi Feng, Yixuan Zhou', '来源：IEEE Robotics 2026'],
+    background: ['非结构化场景要求同时移动和操作', '传统全身控制缺少外部感知', '复杂地形会破坏稳定执行'],
+    relatedWork: ['已有低层控制多依赖平整场地', '感知和控制之间仍有断点', '现有方法难以覆盖移动操作'],
+    method: ['PILOT 使用 LiDAR elevation map 输入', 'hybrid internal command 连接任务意图', 'whole-body action 作为控制输出'],
+    formula: ['核心目标包含 stability 与 command tracking', 'RL training 优化低层控制策略', '约束项服务 terrain traversability'],
+    experiments: ['任务覆盖 simulation 与真实机器人', '对比对象包含 existing baselines', '指标关注 stability 与 command tracking'],
+    results: ['Unitree G1 完成真机验证', 'terrain traversability 支撑复杂场景结果', 'baseline 对比支撑结论'],
+    innovation: ['外部感知补足低层控制盲区', 'hybrid command 把任务意图接入动作', '真实平台验证方法边界'],
+    limitations: ['方法依赖可靠地形感知', '未覆盖所有非结构化场景', '失败边界需要更多实测'],
+    inspiration: ['LiDAR 表征可作为安全 RL 输入', 'stability 指标适合复现实验', 'baseline 可用于路径规划对照'],
+    summary: ['PILOT 链路是感知到控制闭环', '证据来自仿真和 Unitree G1', '复现优先检查稳定性指标']
+  };
+  const typedSource: Record<PresentationSlideType, string> = {
+    cover: '',
+    info: 'The paper is PILOT: A Perceptive Integrated Low-level Controller for loco-manipulation over unstructured scenes.',
+    background:
+      'The first challenge centers on traversing uneven terrain while concurrently executing manipulation over non-planar scenes.',
+    relatedWork:
+      'Traditional low-level controllers remain confined to planar or mildly varying surfaces and lack perceptive terrain awareness.',
+    method:
+      'PILOT uses a robot-centric LiDAR-based elevation map, a hybrid internal command representation, and outputs whole-body actions.',
+    formula:
+      'The reinforcement learning objective optimizes stability, command tracking precision, and terrain traversability.',
+    experiments:
+      'Experiments evaluate simulation and physical Unitree G1 tasks against existing baselines using stability and tracking metrics.',
+    results:
+      'Results validate superior stability, command tracking precision, and terrain traversability compared with existing baselines.',
+    innovation:
+      'The key design connects external perception with unified loco-manipulation control through hybrid internal commands.',
+    limitations:
+      'The method still depends on reliable terrain perception and may require broader real-world validation.',
+    inspiration:
+      'The LiDAR elevation map and stability metrics can be reused as baselines for safe RL and path planning experiments.',
+    summary:
+      'PILOT links terrain perception, hybrid commands, RL training, and real robot evaluation into one loco-manipulation pipeline.'
+  };
   return {
     id: `slide-${type}`,
     type,
@@ -64,12 +103,7 @@ function slide(type: PresentationSlideType, index: number, figures: Presentation
     subtitle: type === 'cover' ? '组会 / 文献汇报' : undefined,
     section,
     confidence: 'local',
-    bullets: [
-      'Humanoid robots hold great potential for diverse interactions, but most existing whole-body controllers lack exteroceptive awareness.',
-      'The paper proposes PILOT, a unified reinforcement learning framework tailored for perceptive loco-manipulation.',
-      'Experiments in simulation and on a physical Unitree G1 humanoid validate superior stability and command tracking.',
-      'Results highlight robust locomotion and manipulation compared with existing baselines in unstructured scenes.'
-    ],
+    bullets: typedBullets[type],
     figures,
     sourceRefs:
       type === 'cover'
@@ -78,7 +112,7 @@ function slide(type: PresentationSlideType, index: number, figures: Presentation
             {
               pageNumber: Math.max(1, index),
               section,
-              text: 'The first challenge centers on traversing uneven terrain while concurrently executing manipulation over non-planar scenes.'
+              text: typedSource[type]
             }
           ],
     speakerNotes: '用自己的话解释本页核心逻辑，强调原文证据和组会讨论价值。'
@@ -323,6 +357,93 @@ describe('presentationPptx', () => {
     expect(background?.bullets.join(' ')).not.toMatch(/现有系统在复杂场景下仍有能力边界|论文从真实任务需求出发定义问题|背景页只说明为什么该问题值得研究/u);
   });
 
+  it('deduplicates same-page semantic bullets from repeated source evidence', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'background'
+        ? {
+            ...item,
+            bullets: [
+              'The model follows diverse language instructions in unseen environments.',
+              'Language instructions are provided in the prompt and condition the policy.'
+            ],
+            sourceRefs: [
+              {
+                pageNumber: 2,
+                section: 'I. INTRODUCTION',
+                text:
+                  'The model follows diverse language instructions in unseen environments. The prompt contains language instructions, subgoal images, and episode metadata for long-horizon tasks.'
+              }
+            ]
+          }
+        : item
+    );
+
+    const background = buildPptxSlidePlan(draft).find((item) => item.type === 'background');
+    const normalizedBullets = background?.bullets.map((bullet) => bullet.replace(/\s+/gu, ' ').trim().toLowerCase()) ?? [];
+    const normalizedMainClaim = background?.mainClaim.replace(/\s+/gu, ' ').trim().toLowerCase();
+
+    expect(normalizedBullets.length).toBeGreaterThan(0);
+    expect(new Set(normalizedBullets).size).toBe(normalizedBullets.length);
+    expect(normalizedMainClaim).not.toBe(normalizedBullets[0]);
+  });
+
+  it('reviews cleaned slide plans instead of raw repeated draft evidence', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      ['background', 'innovation', 'summary'].includes(item.type)
+        ? {
+            ...item,
+            bullets: ['language instruction 作为策略输入', 'VLA/VLM 连接指令与动作', 'subgoal images 提供阶段目标'],
+            sourceRefs: [
+              {
+                pageNumber: item.type === 'background' ? 2 : 4,
+                section: item.type === 'background' ? 'I. INTRODUCTION' : item.section ?? 'Method',
+                text: 'The paper repeatedly mentions language instructions, VLA/VLM policies, and subgoal images as evidence.'
+              }
+            ]
+          }
+        : item
+    );
+
+    const report = buildPresentationReviewReport(draft);
+
+    expect(report.repeated_keyword_problem).toBe(false);
+  });
+
+  it('does not flag raw unselected setup figures when the exported result slide uses result evidence', () => {
+    const setupFigure: PresentationFigureCandidate = {
+      ...figure('fig-setup-unselected', 'experiments', 'Fig. 4. Robot platform and task examples in the kitchen.', 5),
+      figureKind: 'setup',
+      selected: false
+    };
+    const resultFigure: PresentationFigureCandidate = {
+      ...figure('fig-result-selected', 'results', 'Table 2. Unitree G1 success rate and tracking comparison results.', 7),
+      figureKind: 'result'
+    };
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'results'
+        ? {
+            ...item,
+            figures: [setupFigure, resultFigure],
+            bullets: ['Unitree G1 完成真机验证', 'success rate 与 tracking 指标支撑结论'],
+            sourceRefs: [
+              {
+                pageNumber: 7,
+                section: 'Results',
+                text: 'Results compare success rate and command tracking against baselines on Unitree G1.'
+              }
+            ]
+          }
+        : item
+    );
+
+    const report = buildPresentationReviewReport(draft);
+
+    expect(report.figure_mismatch).toBe(false);
+  });
+
   it('rejects generic placeholder diagrams and mismatched sources in quality checks', () => {
     const [badSlide] = buildPptxSlidePlan(makeSeminarDraft()).filter((item) => item.type === 'background');
     const issues = validatePptxQuality([
@@ -340,6 +461,139 @@ describe('presentationPptx', () => {
     ]);
 
     expect(issues.join('\n')).toMatch(/标题|占位|source|来源/u);
+  });
+
+  it('hard-fails slide type mismatch and weak method explanation after plan cleanup', async () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) => {
+      if (item.type === 'info') {
+        return {
+          ...item,
+          bullets: ['language instruction 作为策略输入', 'VLA/VLM 连接指令与动作', 'subgoal images 提供阶段目标']
+        };
+      }
+      if (item.type === 'background' || item.type === 'innovation' || item.type === 'summary') {
+        return {
+          ...item,
+          bullets: ['language instruction 作为策略输入', 'VLA/VLM 连接指令与动作', 'subgoal images 提供阶段目标'],
+          sourceRefs: [
+            {
+              pageNumber: item.type === 'background' ? 8 : 1,
+              section: item.type === 'background' ? 'Results' : item.section ?? 'Abstract',
+              text: 'language instruction, VLA/VLM, subgoal images, episode metadata, cross-embodiment.'
+            }
+          ]
+        };
+      }
+      if (item.type === 'method') {
+        return {
+          ...item,
+          figures: [],
+          bullets: ['方法具体包含 VLA/VLM', '方法具体包含 subgoal images'],
+          sourceRefs: [
+            {
+              pageNumber: 4,
+              section: 'Method',
+              text: 'The method mentions VLA/VLM and subgoal images but does not explain input, process, output, connection, or training logic.'
+            }
+          ]
+        };
+      }
+      return item;
+    });
+
+    const report = buildPresentationReviewReport(draft);
+    expect(report.passed).toBe(false);
+    expect(report.repeated_keyword_problem).toBe(false);
+    expect(report.slide_type_mismatch).toBe(true);
+    expect(report.can_identify_method_stages).toBe(false);
+    await expect(createPresentationPptxBuffer(draft)).rejects.toThrow(/质量检查未通过|quality/i);
+  });
+
+  it('filters setup figures away from result slides instead of exporting mismatched evidence', () => {
+    const setupFigure: PresentationFigureCandidate = {
+      ...figure('fig-setup', 'experiments', 'Fig. 4. Robot platform and task examples in the kitchen.', 5),
+      figureKind: 'setup'
+    };
+    const draft = makeSeminarDraft();
+    draft.figures = [setupFigure];
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'results'
+        ? {
+            ...item,
+            figures: [setupFigure],
+            bullets: ['Unitree G1 完成真机验证', 'success rate 用于评估'],
+            sourceRefs: [
+              {
+                pageNumber: 7,
+                section: 'Results',
+                text: 'Results compare success rate and command tracking against baselines.'
+              }
+            ]
+          }
+        : item
+    );
+
+    const report = buildPresentationReviewReport(draft);
+    const result = buildPptxSlidePlan(draft).find((item) => item.type === 'results');
+
+    expect(result?.figures).toEqual([]);
+    expect(report.figure_mismatch).toBe(false);
+  });
+
+  it('does not treat paper metadata slides as weak noun-only seminar content', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'info'
+        ? {
+            ...item,
+            bullets: ['英文标题：Visual Check Paper'],
+            sourceRefs: [
+              {
+                pageNumber: 1,
+                section: 'Info',
+                text: 'Visual Check Paper'
+              }
+            ]
+          }
+        : item
+    );
+
+    const info = buildPptxSlidePlan(draft).find((item) => item.type === 'info');
+    expect(info).toBeDefined();
+
+    const issues = validatePptxQuality([info!]);
+
+    expect(issues.join('\n')).not.toMatch(/名词堆叠|解释价值/u);
+  });
+
+  it('pads thin experiment slides with source-backed Chinese evidence before quality review', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'experiments'
+        ? {
+            ...item,
+            bullets: ['simulation and real-world evaluation'],
+            figures: [],
+            sourceRefs: [
+              {
+                pageNumber: 6,
+                section: 'Experiments',
+                text:
+                  'The evaluation compares the proposed controller with existing baselines in simulation and real-world tasks using success rate and tracking metrics.'
+              }
+            ]
+          }
+        : item
+    );
+
+    const experiments = buildPptxSlidePlan(draft).find((item) => item.type === 'experiments');
+    expect(experiments).toBeDefined();
+
+    const issues = validatePptxQuality([experiments!]);
+
+    expect(experiments!.bullets.filter((bullet) => /[\u4e00-\u9fff]/u.test(bullet)).length).toBeGreaterThanOrEqual(2);
+    expect(issues.join('\n')).not.toMatch(/中文 bullet 少于 2|baseline、metric、result/u);
   });
 
   it('rewrites manuscript-like English bullets into compact Chinese seminar bullets', () => {

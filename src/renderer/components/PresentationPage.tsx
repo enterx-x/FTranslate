@@ -7,7 +7,7 @@ import {
   type PresentationDraft,
   type PresentationSlide
 } from '../lib/presentationOutline';
-import { buildPptxSlidePlan } from '../lib/presentationPptx';
+import { buildPresentationReviewReport, buildPptxSlidePlan, type PptxSlidePlan } from '../lib/presentationPptx';
 import backIcon from '../assets/icons/duotone/back.svg';
 import downloadIcon from '../assets/icons/duotone/download.svg';
 import refreshIcon from '../assets/icons/duotone/refresh.svg';
@@ -31,17 +31,23 @@ export function PresentationPage(props: PresentationPageProps) {
   const [previewMode, setPreviewMode] = useState<PreviewMode>('slide');
   const [isEnhancingOutline, setIsEnhancingOutline] = useState(false);
   const [enhanceError, setEnhanceError] = useState('');
+  const [showRawSources, setShowRawSources] = useState(false);
 
   useEffect(() => {
     setDraft(props.draft);
     setSelectedSlideId(getDefaultSlideId(props.draft));
   }, [props.draft]);
 
+  useEffect(() => {
+    setShowRawSources(false);
+  }, [selectedSlideId]);
+
   const selectedSlide = useMemo(
     () => draft?.slides.find((slide) => slide.id === selectedSlideId) ?? draft?.slides[0] ?? null,
     [draft, selectedSlideId]
   );
   const slidePlans = useMemo(() => (draft ? buildPptxSlidePlan(draft) : []), [draft]);
+  const reviewReport = useMemo(() => (draft ? buildPresentationReviewReport(draft) : null), [draft]);
   const slidePlanById = useMemo(() => new Map(slidePlans.map((plan) => [plan.id, plan])), [slidePlans]);
   const selectedPlan = selectedSlide
     ? slidePlans.find((plan) => plan.id === selectedSlide.id) ?? slidePlans[0] ?? null
@@ -54,6 +60,7 @@ export function PresentationPage(props: PresentationPageProps) {
     .split(/\s+\|\s+/u)
     .map((item) => item.trim())
     .filter(Boolean) ?? [];
+  const selectedPreviewBullets = selectedPlan ? buildPreviewBullets(selectedPlan.mainClaim, selectedPlan.bullets) : [];
 
   function updateSlide(patch: Partial<PresentationSlide>): void {
     if (!draft || !selectedSlide) {
@@ -157,7 +164,13 @@ export function PresentationPage(props: PresentationPageProps) {
             <img className="button-icon" src={downloadIcon} alt="" />
             <span>导出 Markdown</span>
           </button>
-          <button type="button" className="primary-button button-with-icon" onClick={() => props.onExportPptx(draft)}>
+          <button
+            type="button"
+            className="primary-button button-with-icon"
+            disabled={Boolean(reviewReport && !reviewReport.passed)}
+            title={reviewReport && !reviewReport.passed ? '质量检查未通过，请先修正大纲内容。' : '导出 PPTX'}
+            onClick={() => props.onExportPptx(draft)}
+          >
             <img className="button-icon" src={downloadIcon} alt="" />
             <span>导出 PPTX</span>
           </button>
@@ -165,12 +178,30 @@ export function PresentationPage(props: PresentationPageProps) {
       </header>
 
       {enhanceError ? <div className="inline-alert">{enhanceError}</div> : null}
+      {reviewReport ? (
+        <section className={reviewReport.passed ? 'inline-alert presentation-quality-pass' : 'inline-alert presentation-quality-fail'}>
+          <strong>{reviewReport.passed ? 'PPT 质量检查通过' : '质量检查未通过，请重新生成或修改当前页'}</strong>
+          <span>
+            方法可解释：{reviewReport.can_explain_method_from_ppt_only ? '是' : '否'} ·
+            阶段输入/输出：{reviewReport.can_identify_stage_inputs && reviewReport.can_identify_stage_outputs ? '完整' : '不足'} ·
+            图表匹配：{reviewReport.figure_mismatch ? '需检查' : '正常'}
+          </span>
+          {!reviewReport.passed && reviewReport.issues.length > 0 ? (
+            <ul>
+              {reviewReport.issues.slice(0, 5).map((issue) => (
+                <li key={issue}>{issue}</li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="presentation-workbench">
         <aside className="presentation-thumbs" aria-label="幻灯片缩略图">
           {draft.slides.map((slide, index) => {
             const thumbPlan = slidePlanById.get(slide.id);
             const thumbTitle = getSlideDisplayTitle(slide.type, thumbPlan?.title ?? slide.title);
+            const thumbSummary = buildThumbnailSummary(slide, thumbPlan);
 
             return (
               <button
@@ -182,7 +213,7 @@ export function PresentationPage(props: PresentationPageProps) {
                 <span>{index + 1}</span>
                 <strong>{thumbTitle}</strong>
                 <small>{slide.section ?? slide.type}</small>
-                <em>{slide.bullets[0] ?? '封面 / 占位页'}</em>
+                <em>{thumbSummary}</em>
               </button>
             );
           })}
@@ -250,7 +281,7 @@ export function PresentationPage(props: PresentationPageProps) {
                       </div>
                     ) : null}
                     <ul className="ppt-export-bullets">
-                      {selectedPlan.bullets.slice(0, 5).map((bullet, index) => (
+                      {selectedPreviewBullets.map((bullet, index) => (
                         <li key={`${selectedPlan.id}-bullet-${index}`}>{bullet}</li>
                       ))}
                     </ul>
@@ -282,13 +313,21 @@ export function PresentationPage(props: PresentationPageProps) {
                   <h2>当前页内容</h2>
                   <span className="badge">{selectedSlide.type}</span>
                 </div>
+                {reviewReport?.failed_slides.some((item) => item.index === (selectedPlan?.index ?? -1)) ? (
+                  <p className="subtle">
+                    当前页触发质量门，请优先补充真实模块名、输入、处理、输出、来源或匹配图表。
+                  </p>
+                ) : null}
                 <label>
                   标题
                   <input value={selectedDisplayTitle} onChange={(event) => updateSlide({ title: event.target.value })} />
                 </label>
                 <label>
                   要点
-                  <textarea value={selectedSlide.bullets.join('\n')} onChange={(event) => updateBullets(event.target.value)} />
+                  <textarea
+                    value={(selectedPlan ? selectedPreviewBullets : selectedSlide.bullets).join('\n')}
+                    onChange={(event) => updateBullets(event.target.value)}
+                  />
                 </label>
                 <label>
                   讲稿备注
@@ -300,10 +339,18 @@ export function PresentationPage(props: PresentationPageProps) {
               </section>
 
               <section className="presentation-card">
-                <h2>来源信息</h2>
+                <div className="presentation-card-title-row">
+                  <h2>来源信息</h2>
+                  {selectedSlide.sourceRefs.length > 0 ? (
+                    <button type="button" className="ghost-button compact-button" onClick={() => setShowRawSources((value) => !value)}>
+                      {showRawSources ? '隐藏原文摘录' : '展开原文摘录'}
+                    </button>
+                  ) : null}
+                </div>
+                {selectedPlan?.sourceFooter ? <p className="presentation-source-summary">{selectedPlan.sourceFooter}</p> : null}
                 {selectedSlide.sourceRefs.length === 0 ? (
                   <p className="subtle">封面或占位页没有直接来源段落。</p>
-                ) : (
+                ) : showRawSources ? (
                   <div className="presentation-source-list">
                     {selectedSlide.sourceRefs.map((ref, index) => (
                       <article key={`${selectedSlide.id}-source-${index}`}>
@@ -312,6 +359,8 @@ export function PresentationPage(props: PresentationPageProps) {
                       </article>
                     ))}
                   </div>
+                ) : (
+                  <p className="subtle">默认只显示页码和章节，避免编辑区被原文长段挤占；需要核对证据时可展开原文摘录。</p>
                 )}
               </section>
 
@@ -323,7 +372,7 @@ export function PresentationPage(props: PresentationPageProps) {
                   <div className="presentation-figure-list">
                     {draft.figures.map((figure) => (
                       <article key={figure.imageId}>
-                        <strong>{figure.caption}</strong>
+                        <strong>{buildFigureCardTitle(figure.caption)}</strong>
                         <span>p. {figure.pageNumber} · 建议：{figure.suggestedReason ?? figure.suggestedSlide}</span>
                       </article>
                     ))}
@@ -373,4 +422,109 @@ function getVisualKindLabel(kind: string): string {
     default:
       return '辅助视觉';
   }
+}
+
+function buildThumbnailSummary(slide: PresentationSlide, plan?: PptxSlidePlan): string {
+  const candidates = [
+    plan?.mainClaim,
+    ...(plan?.bullets ?? []),
+    plan?.visual.caption,
+    slide.section ? `${getSlideDisplayTitle(slide.type, slide.title)} · ${slide.section}` : undefined
+  ];
+  const summary = candidates.find(
+    (item): item is string => typeof item === 'string' && Boolean(item.trim()) && !isRawManuscriptLike(item)
+  );
+  return truncatePresentationUiText(summary ?? getFallbackThumbnailSummary(slide.type), 72);
+}
+
+function getFallbackThumbnailSummary(type: PresentationSlide['type']): string {
+  const fallback: Partial<Record<PresentationSlide['type'], string>> = {
+    cover: '封面页：标题、来源和汇报信息',
+    info: '论文元信息：标题、作者、年份和来源',
+    background: '研究背景：问题来源和研究动机',
+    relatedWork: '现有不足：已有路线与本文补位',
+    method: '方法框架：输入、模块、输出和训练目标',
+    formula: '关键模块：公式、目标函数或核心机制',
+    experiments: '实验设置：任务、平台、baseline 和指标',
+    results: '实验结果：指标表现与关键结论',
+    innovation: '创新点：相对前人工作的差异',
+    limitations: '局限性：适用边界和待验证问题',
+    inspiration: '课题启发：可复用模块和后续实验',
+    summary: '总结页：一句话结论和下一步'
+  };
+  return fallback[type] ?? '导出预览已按组会逻辑整理';
+}
+
+function isRawManuscriptLike(text: string): boolean {
+  const normalized = text.trim();
+  if (
+    /\b(we present|our approach|the idea|in our evaluation|and a bimanual|generated subgoal images|combining all of the context|we now discuss|to understand how|in this paper)\b/iu.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+  const asciiWords = normalized.match(/[A-Za-z]{3,}/gu) ?? [];
+  const chineseChars = normalized.match(/[\u4e00-\u9fff]/gu) ?? [];
+  return asciiWords.length >= 9 && chineseChars.length < 4;
+}
+
+function truncatePresentationUiText(text: string, maxLength: number): string {
+  const normalized = text.replace(/\s+/gu, ' ').trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
+}
+
+function buildFigureCardTitle(caption: string): string {
+  const match = caption.match(/^(Fig(?:ure)?\.?\s*\d+|Table\s*\d+)[:.\s-]*(.*)$/iu);
+  if (!match) {
+    return truncatePresentationUiText(caption, 64);
+  }
+  const [, label, title] = match;
+  return `${label.trim()} · ${truncatePresentationUiText(title || '论文图表候选', 52)}`;
+}
+
+function normalizePreviewText(text: string): string {
+  return text
+    .replace(/^本页[^：:]{0,20}[：:]/u, '')
+    .replace(/[，。；;:：,.!?！？、\s]+/gu, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function buildPreviewBullets(mainClaim: string, bullets: string[]): string[] {
+  const mainKey = normalizePreviewText(mainClaim);
+  const mainSemanticKey = getPreviewSemanticKey(mainClaim);
+  const seen = new Set<string>();
+  const seenSemantic = new Set<string>();
+  const unique: string[] = [];
+  bullets.forEach((bullet) => {
+    const key = normalizePreviewText(bullet);
+    const semanticKey = getPreviewSemanticKey(bullet);
+    if (
+      !key ||
+      key === mainKey ||
+      seen.has(key) ||
+      (semanticKey && (semanticKey === mainSemanticKey || seenSemantic.has(semanticKey)))
+    ) {
+      return;
+    }
+    seen.add(key);
+    if (semanticKey) {
+      seenSemantic.add(semanticKey);
+    }
+    unique.push(bullet);
+  });
+  return unique.slice(0, 5);
+}
+
+function getPreviewSemanticKey(text: string): string {
+  const lower = normalizePreviewText(text);
+  if (/language instruction|language command|语言指令/u.test(lower)) return 'language-instruction';
+  if (/subgoal image|subgoal|子目标/u.test(lower)) return 'subgoal';
+  if (/episode metadata|metadata|元数据/u.test(lower)) return 'episode-metadata';
+  if (/long horizon|long-horizon|长程/u.test(lower)) return 'long-horizon';
+  if (/compositional generalization|组合泛化/u.test(lower)) return 'compositional-generalization';
+  if (/generalization|泛化/u.test(lower)) return 'generalization';
+  if (/π0\.7|pi0\.7/u.test(lower)) return 'pi0.7';
+  return '';
 }

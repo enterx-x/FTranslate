@@ -81,6 +81,18 @@ PDFMathTranslate sidecar 会优先查找系统中的 `pdf2zh` / `pdf2zh_next`。
 %APPDATA%\pdf-translation-reader\translations\<paperId>\
 ```
 
+### arXiv 检索
+
+arXiv 检索是一个独立模块，不会自动改写论文库或 PPT 草稿。它使用 arXiv 官方 Atom API 检索论文，并在本机缓存短时间搜索结果，减少重复请求。
+
+已支持：
+
+- 关键词、分类、排序和数量设置；
+- 显示标题、作者、更新时间、分类、摘要和 arXiv 链接；
+- 下载 arXiv PDF 到用户选择的本地路径；
+- 下载完成后把 PDF 加入本地论文库；
+- 保持与 PPT 生成分离：需要生成 PPT 时，再从论文库、PDF 阅读页或组会 PPT 页面选择 PDF。
+
 ### AI 助手
 
 AI 助手集中管理：
@@ -177,8 +189,10 @@ PDF 阅读页包含轻量笔记编辑器：
 
 - 从当前 PDF 的文本块生成组会 PPT 草稿；如果缓存中的文本块尚未就绪，会主动用 PDF.js 从当前 PDF 重新抽取正文、章节和 Fig. / Figure / Table caption；
 - 抽取 Abstract、Introduction、Method、Experiments、Conclusion 等章节信息；
+- 从论文文本中抽取真实模块名、观测输入、动作输出、训练目标、约束、baseline 和指标，避免生成“论文信息 / 研究对象 / 方法线索”这类空泛占位；
 - 默认生成 12 页组会结构：封面、论文信息、背景、Related Work、方法、公式、实验、结果、创新、局限、启发和总结；
 - 识别 Fig. / Figure / Table caption 作为图表候选；
+- 根据 caption 所在位置做保守裁剪：页顶 Table / Figure caption 优先向下取图，页底 caption 优先向上取图；
 - 跳过 References / Bibliography 作为默认策略；
 - 生成结构化 PPT 大纲 JSON；
 - 提供 HTML 幻灯片预览；
@@ -190,11 +204,11 @@ PDF 阅读页包含轻量笔记编辑器：
 
 尚未完成：
 
-- 精准图表裁剪；
-- AI 自动重写完整 PPT 大纲；
+- 多面板真实图表的精准裁剪和人工裁剪工具；
+- AI 自动重写完整 PPT 大纲的稳定质量门控；
 - 多篇论文综述式 PPT 自动合并。
 
-后续建议在该草稿流程稳定后，再补充 PDF 图表区域裁剪和 AI 增强大纲。
+后续建议继续补充图表接触表、人工裁剪确认、AI 增强大纲质量检查和多篇论文综述式合并。
 
 ### 设置
 
@@ -291,10 +305,12 @@ src/
       AiAssistantPage.tsx   AI 助手
       KnowledgeGraphPage.tsx 知识图谱
       PresentationPage.tsx  组会 PPT 草稿预览与导出
+      ArxivSearchPage.tsx   arXiv 检索与 PDF 下载
       NotesPanel.tsx        阅读笔记
       SettingsPage.tsx      设置页
       MarkdownDocument.tsx  Markdown + 公式渲染组件
     lib/
+      arxivClient.ts        arXiv 官方 Atom API 查询与解析
       appSettings.ts        本地设置解析与默认值
       knowledgeGraph.ts     知识图谱数据生成与导出
       presentationOutline.ts 组会 PPT 大纲生成与 Markdown 导出

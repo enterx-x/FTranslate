@@ -679,6 +679,27 @@ async function runWholePdfReaderScenario(client) {
 
 async function runPresentationScenario(client) {
   await clickSidebarSection(client, 'presentation');
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const emptyState = await evaluateJson(client, `() => ({
+      hasPage: Boolean(document.querySelector('.presentation-page')),
+      hasPreview: Boolean(document.querySelector('.ppt-export-preview')),
+      hasEmptyState: Boolean(document.querySelector('.presentation-empty')),
+      hasGenerateButton: Boolean(document.querySelector('.presentation-page .presentation-header .primary-button'))
+    })`);
+    if (emptyState.hasPreview) {
+      break;
+    }
+    if (emptyState.hasPage && emptyState.hasEmptyState && emptyState.hasGenerateButton) {
+      await client.send('Runtime.evaluate', {
+        expression: `
+          document.querySelector('.presentation-page .presentation-header .primary-button')?.click();
+        `
+      });
+      break;
+    }
+    await wait(250);
+  }
+
   let snapshot = null;
   for (let attempt = 0; attempt < 240; attempt += 1) {
     snapshot = await evaluateJson(client, `() => {
@@ -693,16 +714,20 @@ async function runPresentationScenario(client) {
       const sources = [...document.querySelectorAll('.ppt-export-preview footer span')].map((item) => item.textContent?.trim() ?? '');
       const figures = [...document.querySelectorAll('.ppt-export-preview .ppt-export-visual')].map((item) => item.textContent?.trim() ?? '');
       const thumbs = [...document.querySelectorAll('.presentation-thumbs button')].map((item) => item.textContent?.trim() ?? '');
+      const editorText = document.querySelector('.presentation-editor')?.textContent?.slice(0, 1200) ?? '';
       return {
         hasPage: Boolean(page),
         hasPreview: Boolean(preview),
         previewRatio: rect && rect.height ? rect.width / rect.height : 0,
         slideCount: thumbs.length,
+        qualityFailed: Boolean(document.querySelector('.presentation-quality-fail')),
         hasPptxExport: [...document.querySelectorAll('.presentation-page button')]
           .some((button) => /PPTX/i.test(button.textContent ?? '')),
         bullets,
         sources,
         figures,
+        thumbs,
+        editorText,
         previewText: preview?.textContent?.slice(0, 1200) ?? '',
         pageText: page?.textContent?.slice(0, 1500) ?? ''
       };
@@ -725,6 +750,18 @@ async function runPresentationScenario(client) {
   if (snapshot.previewRatio < 1.68 || snapshot.previewRatio > 1.86) {
     throw new Error(`presentation: expected 16:9 slide preview, got ${JSON.stringify(snapshot)}`);
   }
+  if (snapshot.qualityFailed) {
+    throw new Error(`presentation: quality gate is still failing, got ${JSON.stringify(snapshot)}`);
+  }
+  const rawDraftThumb = (Array.isArray(snapshot.thumbs) ? snapshot.thumbs : []).find((thumb) =>
+    hasRawManuscriptFragment(thumb)
+  );
+  if (rawDraftThumb) {
+    throw new Error(`presentation: thumbnail still exposes raw manuscript fragments, got ${JSON.stringify({ rawDraftThumb, snapshot })}`);
+  }
+  if (hasRawManuscriptFragment(snapshot.editorText ?? '')) {
+    throw new Error(`presentation: editor still exposes raw manuscript fragments, got ${JSON.stringify(snapshot)}`);
+  }
 
   const hasStructuredContent =
     snapshot.bullets.length >= 2 ||
@@ -733,6 +770,10 @@ async function runPresentationScenario(client) {
     /论文基本信息|研究背景|方法整体框架|实验结果/.test(snapshot.pageText);
   if (!hasStructuredContent) {
     throw new Error(`presentation: slide preview still looks empty, got ${JSON.stringify(snapshot)}`);
+  }
+  const normalizedPreviewBullets = snapshot.bullets.map(normalizePresentationPreviewItem).filter(Boolean);
+  if (new Set(normalizedPreviewBullets).size !== normalizedPreviewBullets.length) {
+    throw new Error(`presentation: slide preview repeats claim/bullet text, got ${JSON.stringify(snapshot)}`);
   }
   if (/Markdown 预览|当前页内容|来源信息|导出 PPTX|导出 Markdown/.test(snapshot.previewText)) {
     throw new Error(`presentation: app UI text leaked into slide canvas, got ${JSON.stringify(snapshot)}`);
@@ -743,6 +784,20 @@ async function runPresentationScenario(client) {
   );
 
   return snapshot;
+}
+
+function normalizePresentationPreviewItem(text) {
+  return text
+    .replace(/^本页[^：:]{0,20}[：:]/u, '')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function hasRawManuscriptFragment(text) {
+  return /\b(we present|our approach|the idea|in our evaluation|and a bimanual|generated subgoal images|combining all of the context)\b/iu.test(
+    text
+  );
 }
 
 async function runAiAssistantScenario(client) {
@@ -780,6 +835,22 @@ async function runAiAssistantScenario(client) {
   }
 
   if (!before.hasAiAssistant) {
+    const diagnostic = await evaluateJson(client, `() => ({
+      activeSidebar: [...document.querySelectorAll('.app-sidebar-link.active')].map((item) => item.textContent?.trim() ?? ''),
+      knownViews: {
+        home: Boolean(document.querySelector('.home-page')),
+        reader: Boolean(document.querySelector('.split-layout')),
+        researchSheet: Boolean(document.querySelector('.research-sheet-page')),
+        presentation: Boolean(document.querySelector('.presentation-page')),
+        ai: Boolean(document.querySelector('.ai-assistant-page')),
+        settings: Boolean(document.querySelector('.settings-page'))
+      },
+      bodyText: (document.body.textContent ?? '').slice(0, 1200)
+    })`);
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'ai-assistant-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    await writeFile(path.join(outputDir, 'ai-assistant-failed.json'), JSON.stringify({ before, diagnostic }, null, 2));
     throw new Error(`aiAssistant: expected AI assistant layout, got ${JSON.stringify(before)}`);
   }
 

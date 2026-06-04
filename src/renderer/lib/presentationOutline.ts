@@ -15,6 +15,8 @@ export type PresentationSlideType =
   | 'inspiration'
   | 'summary';
 
+export type PresentationFigureKind = 'method' | 'setup' | 'result' | 'case' | 'formula' | 'unknown';
+
 export interface PresentationSourcePaper {
   paperId: string;
   title: string;
@@ -35,6 +37,7 @@ export interface PresentationFigureCandidate {
   caption: string;
   source: 'pdf-caption';
   suggestedSlide: PresentationSlideType;
+  figureKind?: PresentationFigureKind;
   selected?: boolean;
   suggestedReason?: string;
   cropBox?: PresentationFigureCropBox;
@@ -65,6 +68,55 @@ export interface PresentationSlide {
   speakerNotes: string;
 }
 
+export interface DeepMethodStage {
+  stage_name: string;
+  input: string;
+  process: string;
+  output: string;
+  purpose: string;
+  connects_to_next: string;
+  source: string;
+  sourceRefs?: PresentationSourceRef[];
+}
+
+export interface DeepMethodKeyDesign {
+  name: string;
+  problem_it_solves: string;
+  how_it_works: string;
+  evidence: string;
+  source: string;
+}
+
+export interface DeepMethodMap {
+  core_problem: string;
+  why_difficult: string[];
+  main_idea: string;
+  method_stages: DeepMethodStage[];
+  key_designs: DeepMethodKeyDesign[];
+  training_or_implementation: string;
+  evaluation_logic: string;
+}
+
+export interface PresentationReviewReport {
+  passed: boolean;
+  can_explain_method_from_ppt_only: boolean;
+  can_identify_core_problem: boolean;
+  can_identify_method_stages: boolean;
+  can_identify_stage_inputs: boolean;
+  can_identify_stage_outputs: boolean;
+  can_identify_stage_connections: boolean;
+  can_identify_training_or_implementation: boolean;
+  can_identify_evaluation_logic: boolean;
+  repeated_keyword_problem: boolean;
+  generic_template_problem: boolean;
+  slide_type_mismatch: boolean;
+  figure_mismatch: boolean;
+  failed_slides: Array<{ index: number; type: PresentationSlideType; reason: string }>;
+  issues: string[];
+  auto_revisions: number;
+  remaining_risks: string[];
+}
+
 export interface PresentationDraft {
   id: string;
   title: string;
@@ -72,6 +124,8 @@ export interface PresentationDraft {
   sourcePapers: PresentationSourcePaper[];
   figures: PresentationFigureCandidate[];
   slides: PresentationSlide[];
+  methodMap?: DeepMethodMap;
+  reviewReport?: PresentationReviewReport;
   createdAt: string;
 }
 
@@ -108,7 +162,7 @@ const REFERENCE_SECTION_PATTERN = /^(references?|bibliography|参考文献)\b/iu
 const ABSTRACT_SECTION_PATTERN = /abstract|摘要/iu;
 const RELATED_WORK_SECTION_PATTERN = /related\s+work|prior\s+work|literature|相关工作|现有工作/iu;
 const INTRO_SECTION_PATTERN = /intro|background|motivation|problem|背景|动机|引言/iu;
-const METHOD_SECTION_PATTERN = /method|approach|model|framework|algorithm|overview|architecture|方法|模型|算法|框架|结构/iu;
+const METHOD_SECTION_PATTERN = /method|approach|model|framework|algorithm|overview|architecture|training|implementation|方法|模型|算法|框架|结构|训练|实现/iu;
 const FORMULA_SECTION_PATTERN = /formula|equation|objective|loss|公式|损失|目标函数/iu;
 const EXPERIMENT_SECTION_PATTERN = /experiment|evaluation|dataset|benchmark|setting|ablation|实验|评估|数据集|基准|消融/iu;
 const RESULT_SECTION_PATTERN = /result|quantitative|comparison|performance|结果|对比|性能/iu;
@@ -120,12 +174,70 @@ export function buildPresentationDraft(input: BuildPresentationDraftInput): Pres
   return buildLocalPresentationDraft(input);
 }
 
+export function buildDeepMethodMap(input: BuildPresentationDraftInput): DeepMethodMap {
+  const usableBlocks = input.blocks.filter((block) => isUsablePresentationBlock(block));
+  const buckets = bucketSections(usableBlocks);
+  const abstractIntroRefs = pickRefs([buckets.abstract, buckets.introduction], 4);
+  const methodRefs = pickRefs([buckets.method, buckets.formula, buckets.abstract], 8);
+  const experimentRefs = pickRefs([buckets.experiments, buckets.results], 8);
+  const conclusionRefs = pickRefs([buckets.conclusion, buckets.limitations], 4);
+  const methodText = methodRefs.map((ref) => ref.text).join(' ');
+  const problemText = abstractIntroRefs.map((ref) => ref.text).join(' ');
+  const experimentText = experimentRefs.map((ref) => ref.text).join(' ');
+  const conclusionText = conclusionRefs.map((ref) => ref.text).join(' ');
+  const methodTerms = extractEvidenceTerms(methodText);
+  const problemTerms = extractEvidenceTerms(problemText);
+  const experimentTerms = extractEvidenceTerms(experimentText);
+
+  const primaryMethod = methodTerms.methods[0] ?? problemTerms.methods[0] ?? getPaperTitle(input.papers[0]);
+  const coreProblem = firstSpecificSentence(abstractIntroRefs, [
+    /challenge|difficult|lack|insufficient|unstructured|problem|瓶颈|困难|不足/iu,
+    /propose|present|introduce|address/iu
+  ]);
+  const mainIdea = firstSpecificSentence(methodRefs, [/propose|present|introduce|combine|incorporate|use|framework|controller|model/iu]);
+  const stages = buildMethodStagesFromEvidence(primaryMethod, methodRefs, methodTerms, experimentTerms);
+
+  return {
+    core_problem:
+      coreProblem ??
+      buildFallbackSentence(
+        '核心问题',
+        compactTextList([...problemTerms.platforms, ...problemTerms.tasks, ...problemTerms.observations], 3),
+        problemText
+      ),
+    why_difficult: compactTextList(
+      [
+        ...buildDifficultyStatements(abstractIntroRefs),
+        ...problemTerms.observations.map((term) => `${term} 让状态感知和决策更难`),
+        ...problemTerms.tasks.map((term) => `${term} 需要跨阶段闭环执行`)
+      ],
+      4
+    ),
+    main_idea:
+      mainIdea ??
+      buildFallbackSentence('主思路', compactTextList([...methodTerms.methods, ...methodTerms.observations, ...methodTerms.outputs], 4), methodText),
+    method_stages: stages,
+    key_designs: buildKeyDesigns(methodRefs, methodTerms),
+    training_or_implementation:
+      firstMatchingSentence([...methodRefs, ...experimentRefs], [/train|training|reinforcement learning|objective|loss|implementation|optimi[sz]e|训练|目标|实现/iu]) ??
+      buildFallbackSentence('训练/实现', compactTextList([...methodTerms.training, ...methodTerms.constraints, ...experimentTerms.training], 4), methodText),
+    evaluation_logic:
+      firstSpecificSentence(experimentRefs, [/experiment|evaluate|compare|baseline|metric|success|tracking|stability|result|实验|评估|指标|对比/iu]) ??
+      buildFallbackSentence(
+        '评估逻辑',
+        compactTextList([...experimentTerms.platforms, ...experimentTerms.baselines, ...experimentTerms.metrics], 5),
+        experimentText || conclusionText
+      )
+  };
+}
+
 export function buildLocalPresentationDraft(input: BuildPresentationDraftInput): PresentationDraft {
   const paper = input.papers[0];
   const title = getPaperTitle(paper);
   const usableBlocks = input.blocks.filter((block) => isUsablePresentationBlock(block));
   const figures = extractFigureCandidates(usableBlocks);
   const buckets = bucketSections(usableBlocks);
+  const methodMap = buildDeepMethodMap(input);
 
   const slides = [
     buildCoverSlide(title, paper, input.speakerName),
@@ -226,6 +338,8 @@ export function buildLocalPresentationDraft(input: BuildPresentationDraftInput):
     })
   ];
 
+  applyMethodMapToSlides(slides, methodMap);
+
   const targetCount = Math.max(4, Math.min(slides.length, input.targetSlideCount ?? slides.length));
   const selectedSlides = selectSlidesForTargetCount(slides, targetCount);
   const usedPages = getUsedPages(selectedSlides);
@@ -244,6 +358,7 @@ export function buildLocalPresentationDraft(input: BuildPresentationDraftInput):
     })),
     figures,
     slides: selectedSlides,
+    methodMap,
     createdAt: new Date().toISOString()
   };
 }
@@ -428,7 +543,8 @@ export function extractFigureCandidates(blocks: ExtractedPdfBlock[]): Presentati
     .filter((block) => !isReferenceSection(block.section))
     .map((block) => {
       figureIndex += 1;
-      const suggestedSlide = suggestFigureSlide(block.original);
+      const figureKind = classifyFigureKind(block.original);
+      const suggestedSlide = suggestFigureSlide(block.original, figureKind);
       const cropBox = inferFigureCropBoxFromCaptionBlock(block);
       return {
         imageId: `fig-${block.page}-${figureIndex}`,
@@ -436,8 +552,9 @@ export function extractFigureCandidates(blocks: ExtractedPdfBlock[]): Presentati
         caption: normalizeInlineText(block.original, 240),
         source: 'pdf-caption' as const,
         suggestedSlide,
+        figureKind,
         selected: true,
-        suggestedReason: getFigureReason(suggestedSlide),
+        suggestedReason: getFigureReason(suggestedSlide, figureKind),
         cropBox,
         cropStatus: cropBox ? 'crop-ready' : 'caption-only'
       };
@@ -456,8 +573,13 @@ export function inferFigureCropBoxFromCaptionBlock(block: ExtractedPdfBlock): Pr
   const figurePadding = Math.max(8, pageHeight * 0.012);
   const captionTop = clamp(bounds.y, 0, pageHeight);
   const targetHeight = clamp(pageHeight * 0.32, pageHeight * 0.18, pageHeight * 0.48);
-  const cropY = clamp(captionTop - targetHeight - figurePadding, pageHeight * 0.04, Math.max(pageHeight * 0.04, captionTop - 30));
-  const cropHeight = clamp(captionTop - cropY - figurePadding, pageHeight * 0.12, pageHeight * 0.52);
+  const captionLooksAboveVisual = /^table\b/iu.test(block.original.trim()) || captionTop < pageHeight * 0.22;
+  const cropY = captionLooksAboveVisual
+    ? clamp(captionTop + bounds.height + figurePadding, pageHeight * 0.04, pageHeight * 0.82)
+    : clamp(captionTop - targetHeight - figurePadding, pageHeight * 0.04, Math.max(pageHeight * 0.04, captionTop - 30));
+  const cropHeight = captionLooksAboveVisual
+    ? clamp(targetHeight, pageHeight * 0.12, pageHeight - cropY - pageHeight * 0.04)
+    : clamp(captionTop - cropY - figurePadding, pageHeight * 0.12, pageHeight * 0.52);
   const wideCaption = bounds.width >= pageWidth * 0.42;
   const cropWidth = wideCaption
     ? clamp(bounds.width + horizontalMargin * 2, pageWidth * 0.48, pageWidth * 0.92)
@@ -542,6 +664,206 @@ function buildContentSlide(options: {
     sourceRefs: options.refs,
     speakerNotes: options.speakerNote
   };
+}
+
+function applyMethodMapToSlides(slides: PresentationSlide[], methodMap: DeepMethodMap): void {
+  const background = slides.find((slide) => slide.type === 'background');
+  if (background) {
+    background.bullets = limitBullets(
+      compactPresentationBullets([methodMap.core_problem, ...methodMap.why_difficult], 4),
+      5
+    );
+  }
+
+  const method = slides.find((slide) => slide.type === 'method');
+  if (method && methodMap.method_stages.length > 0) {
+    method.bullets = limitBullets(
+      methodMap.method_stages.map((stage) =>
+        normalizeInlineText(`${stage.stage_name}：${stage.input} → ${stage.process} → ${stage.output}`, 120)
+      ),
+      5
+    );
+    method.sourceRefs = compactRefs(methodMap.method_stages.flatMap((stage) => stage.sourceRefs ?? []), 4) || method.sourceRefs;
+  }
+
+  const formula = slides.find((slide) => slide.type === 'formula');
+  if (formula && methodMap.method_stages.length > 1) {
+    const formulaBullets = formula.bullets.filter((bullet) => /[=+\-*/^_{}]/u.test(bullet));
+    formula.bullets = limitBullets(
+      [
+        ...formulaBullets,
+        ...methodMap.method_stages.slice(0, 3).map((stage) =>
+          normalizeInlineText(`${stage.stage_name} 解决：${stage.purpose}；连接：${stage.connects_to_next}`, 120)
+        )
+      ],
+      5
+    );
+  }
+
+  const experiments = slides.find((slide) => slide.type === 'experiments');
+  if (experiments && methodMap.evaluation_logic) {
+    experiments.bullets = limitBullets(compactPresentationBullets([methodMap.evaluation_logic, ...experiments.bullets], 5), 5);
+  }
+
+  const innovation = slides.find((slide) => slide.type === 'innovation');
+  if (innovation && methodMap.key_designs.length > 0) {
+    innovation.bullets = limitBullets(
+      methodMap.key_designs.map((design) =>
+        normalizeInlineText(`${design.problem_it_solves} → ${design.name} → ${design.evidence}`, 120)
+      ),
+      5
+    );
+  }
+
+  const summary = slides.find((slide) => slide.type === 'summary');
+  if (summary) {
+    summary.bullets = limitBullets(
+      compactPresentationBullets(
+        [
+          methodMap.main_idea,
+          ...methodMap.method_stages.slice(0, 3).map((stage) => `${stage.stage_name} 产出 ${stage.output}`),
+          methodMap.evaluation_logic
+        ],
+        5
+      ),
+      5
+    );
+  }
+}
+
+function compactRefs(refs: PresentationSourceRef[], limit: number): PresentationSourceRef[] {
+  const seen = new Set<string>();
+  const result: PresentationSourceRef[] = [];
+  refs.forEach((ref) => {
+    const key = `${ref.pageNumber}:${ref.section}:${ref.text.slice(0, 48)}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    result.push(ref);
+  });
+  return result.slice(0, limit);
+}
+
+function buildMethodStagesFromEvidence(
+  primaryMethod: string,
+  methodRefs: PresentationSourceRef[],
+  methodTerms: EvidenceTerms,
+  experimentTerms: EvidenceTerms
+): DeepMethodStage[] {
+  const source = methodRefs[0];
+  const sourceLabel = source ? `p. ${source.pageNumber} · ${source.section}` : 'PDF';
+  const sourceRefs = source ? [source] : [];
+  const observation = joinTerms(methodTerms.observations, 4) || inferTermFromText(methodRefs, /LiDAR|elevation map|proprioceptive|visual|language|RGB-D|occupancy map/iu) || '原文观测输入';
+  const modulePipeline = joinTerms(methodTerms.methods, 6);
+  const command =
+    joinTerms(compactTextList([...methodTerms.commands, ...methodTerms.methods], 6), 6) ||
+    modulePipeline ||
+    inferTermFromText(methodRefs, /hybrid internal command|context conditioning|subgoal images|episode metadata|perception encoder|world model|trajectory optimizer/iu) ||
+    '任务/上下文表示';
+  const output = joinTerms(methodTerms.outputs, 2) || inferTermFromText(methodRefs, /whole[-\s]?body actions?|control commands?|action output/iu) || '动作或控制输出';
+  const training = joinTerms(compactTextList([...methodTerms.training, ...experimentTerms.training], 4), 4) || '训练/实现细节';
+  const methodName = primaryMethod || methodTerms.methods[0] || '本文方法';
+
+  const stages: DeepMethodStage[] = [
+    {
+      stage_name: '输入与状态构建',
+      input: observation,
+      process: `${methodName} 将外部感知和机器人状态整理为可决策表示`,
+      output: /LiDAR|elevation|terrain/iu.test(observation) ? 'terrain/elevation state' : `${observation} 表示`,
+      purpose: '让策略看到任务所需的环境和机器人状态',
+      connects_to_next: `把状态表示交给 ${command}`,
+      source: sourceLabel,
+      sourceRefs
+    },
+    {
+      stage_name: '上下文/任务表示',
+      input: `${observation} + ${command}`,
+      process: `${command} 将任务意图、子目标或上下文写入策略条件`,
+      output: command,
+      purpose: '把高层任务要求转成低层控制可使用的条件',
+      connects_to_next: `条件表示驱动 ${methodName} 推理动作`,
+      source: sourceLabel,
+      sourceRefs
+    },
+    {
+      stage_name: '策略推理与动作输出',
+      input: command,
+      process: `${methodName} 执行策略/控制推理`,
+      output,
+      purpose: '产生可执行的机器人动作或控制命令',
+      connects_to_next: `动作进入训练和实验评估闭环`,
+      source: sourceLabel,
+      sourceRefs
+    },
+    {
+      stage_name: '训练与评估闭环',
+      input: output,
+      process: training,
+      output: joinTerms(experimentTerms.metrics, 3) || '任务成功率、稳定性或跟踪指标',
+      purpose: '验证方法是否真正解决原文提出的控制/泛化问题',
+      connects_to_next: '形成实验结论和局限性讨论',
+      source: methodRefs[1] ? `p. ${methodRefs[1].pageNumber} · ${methodRefs[1].section}` : sourceLabel,
+      sourceRefs: compactRefs(methodRefs.slice(0, 2), 2)
+    }
+  ];
+
+  return stages.filter((stage) => stage.input && stage.process && stage.output).slice(0, 4);
+}
+
+function buildKeyDesigns(refs: PresentationSourceRef[], terms: EvidenceTerms): DeepMethodKeyDesign[] {
+  const designs = compactTextList([...terms.methods, ...terms.observations, ...terms.commands, ...terms.constraints], 5);
+  return designs.slice(0, 4).map((name, index) => {
+    const ref = refs[index] ?? refs[0];
+    return {
+      name,
+      problem_it_solves: index === 0 ? '原文方法需要把具体场景信息送入策略' : '原文需要避免只停留在抽象任务描述',
+      how_it_works: ref ? normalizeInlineText(ref.text, 120) : `${name} 来自原文方法描述`,
+      evidence: ref ? `p. ${ref.pageNumber} · ${normalizeInlineText(ref.section, 40)}` : 'PDF 方法章节',
+      source: ref ? `p. ${ref.pageNumber} · ${ref.section}` : 'PDF'
+    };
+  });
+}
+
+function buildDifficultyStatements(refs: PresentationSourceRef[]): string[] {
+  return refs
+    .map((ref) => firstSpecificSentence([ref], [/challenge|difficult|lack|insufficient|limited|unstructured|complex|问题|困难|不足/iu]))
+    .filter((item): item is string => Boolean(item));
+}
+
+function firstSpecificSentence(refs: PresentationSourceRef[], patterns: RegExp[]): string | undefined {
+  for (const ref of refs) {
+    const sentences = splitIntoShortBullets(ref.text);
+    const hit = sentences.find((sentence) => patterns.some((pattern) => pattern.test(sentence)));
+    if (hit) {
+      return normalizeInlineText(hit, 140);
+    }
+  }
+  const fallback = refs.find((ref) => isUsefulBulletText(ref.text));
+  return fallback ? normalizeInlineText(fallback.text, 140) : undefined;
+}
+
+function firstMatchingSentence(refs: PresentationSourceRef[], patterns: RegExp[]): string | undefined {
+  for (const ref of refs) {
+    const sentences = splitIntoShortBullets(ref.text);
+    const hit = sentences.find((sentence) => patterns.some((pattern) => pattern.test(sentence)));
+    if (hit) {
+      return normalizeInlineText(hit, 140);
+    }
+  }
+  return undefined;
+}
+
+function buildFallbackSentence(label: string, terms: string[], sourceText: string): string {
+  if (terms.length > 0) {
+    return `${label}：${terms.join('、')}`;
+  }
+  return normalizeInlineText(sourceText || `${label}：原文未明确说明`, 140);
+}
+
+function inferTermFromText(refs: PresentationSourceRef[], pattern: RegExp): string | undefined {
+  const match = refs.map((ref) => ref.text.match(pattern)?.[0]).find(Boolean);
+  return match ? normalizeInlineText(match, 60) : undefined;
 }
 
 function selectSlidesForTargetCount(slides: PresentationSlide[], targetCount: number): PresentationSlide[] {
@@ -739,11 +1061,19 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\bMPC\b|\bmodel predictive control\b/iu, label: 'MPC' },
     { pattern: /\bPPO\b/u, label: 'PPO' },
     { pattern: /\bSAC\b/u, label: 'SAC' },
-    { pattern: /\bworld model\b/iu, label: 'World Model' }
+    { pattern: /\bworld model\b/iu, label: 'World Model' },
+    { pattern: /\bperception encoders?\b/iu, label: 'perception encoder' },
+    { pattern: /\blatent dynamics\b/iu, label: 'latent dynamics' },
+    { pattern: /\btrajectory optimizers?\b/iu, label: 'trajectory optimizer' },
+    { pattern: /\bpolicy networks?\b/iu, label: 'policy network' },
+    { pattern: /\bplanners?\b/iu, label: 'planner' }
   ],
   observations: [
+    { pattern: /\bRGB[-\s]?D observations?\b|\bRGB[-\s]?D inputs?\b/iu, label: 'RGB-D observations' },
     { pattern: /\bLiDAR[-\s]?based elevation maps?\b/iu, label: 'LiDAR-based elevation map' },
     { pattern: /\belevation maps?\b/iu, label: 'elevation map' },
+    { pattern: /\boccupancy maps?\b/iu, label: 'occupancy map' },
+    { pattern: /\bcost maps?\b/iu, label: 'cost map' },
     { pattern: /\bproprioceptive states?\b|\bproprioception\b/iu, label: 'proprioception' },
     { pattern: /\bRGB observations?\b|\bRGB images?\b/iu, label: 'RGB observations' },
     { pattern: /\bvisual observations?\b|\bvision observations?\b/iu, label: 'visual observations' },
@@ -758,7 +1088,9 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\binternal command(?: representation)?\b/iu, label: 'internal command' },
     { pattern: /\bhigh[-\s]?level policy prompts?\b/iu, label: 'high-level policy prompt' },
     { pattern: /\bcontext conditioning\b/iu, label: 'context conditioning' },
-    { pattern: /\bsubtask instructions?\b/iu, label: 'subtask instruction' }
+    { pattern: /\bsubtask instructions?\b/iu, label: 'subtask instruction' },
+    { pattern: /\bwaypoints?\b/iu, label: 'waypoint' },
+    { pattern: /\blanguage goals?\b/iu, label: 'language goal' }
   ],
   outputs: [
     { pattern: /\bwhole[-\s]?body actions?\b/iu, label: 'whole-body action' },
@@ -766,7 +1098,9 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\baction outputs?\b/iu, label: 'action output' },
     { pattern: /\bcommand tracking\b/iu, label: 'command tracking' },
     { pattern: /\btrajectory\b/iu, label: 'trajectory' },
-    { pattern: /\bcontrol commands?\b/iu, label: 'control command' }
+    { pattern: /\bcontrol commands?\b/iu, label: 'control command' },
+    { pattern: /\bvelocity commands?\b/iu, label: 'velocity command' },
+    { pattern: /\btarget poses?\b/iu, label: 'target pose' }
   ],
   platforms: [
     { pattern: /\bUnitree\s*G1\b/iu, label: 'Unitree G1' },
@@ -793,6 +1127,8 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\bdemonstrations?\b/iu, label: 'demonstrations' },
     { pattern: /\bautonomous data\b/iu, label: 'autonomous data' },
     { pattern: /\bmultimodal web data\b/iu, label: 'multimodal web data' },
+    { pattern: /\bbehavior cloning\b/iu, label: 'behavior cloning' },
+    { pattern: /\bsafety cost objective\b|\bsafety cost\b/iu, label: 'safety cost objective' },
     { pattern: /\bsimulation\b/iu, label: 'simulation' },
     { pattern: /\breal[-\s]?world\b/iu, label: 'real-world data' },
     { pattern: /\bpre[-\s]?training\b/iu, label: 'pre-training' }
@@ -813,6 +1149,7 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\bcommand tracking(?: precision)?\b/iu, label: 'command tracking precision' },
     { pattern: /\bterrain traversability\b/iu, label: 'terrain traversability' },
     { pattern: /\bcompositional generalization\b/iu, label: 'compositional generalization' },
+    { pattern: /\btracking error\b/iu, label: 'tracking error' },
     { pattern: /\bgeneralization\b/iu, label: 'generalization' },
     { pattern: /\brobustness\b/iu, label: 'robustness' }
   ],
@@ -820,6 +1157,7 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\bsafety constraints?\b/iu, label: 'safety constraint' },
     { pattern: /\bphysical constraints?\b/iu, label: 'physical constraint' },
     { pattern: /\bcontrol barrier function\b|\bCBF\b/u, label: 'CBF safety constraint' },
+    { pattern: /\bsafety cost objective\b|\bsafety cost\b/iu, label: 'safety cost objective' },
     { pattern: /\bloss functions?\b|\bloss\b/iu, label: 'loss objective' },
     { pattern: /\bobjective function\b|\bobjective\b/iu, label: 'objective function' }
   ]
@@ -1258,20 +1596,48 @@ function isReferenceSection(section: string): boolean {
   return REFERENCE_SECTION_PATTERN.test(section.trim());
 }
 
-function suggestFigureSlide(text: string): PresentationSlideType {
-  if (/result|quantitative|comparison|performance|ablation|success|tracking|stability/iu.test(text)) {
+function classifyFigureKind(text: string): PresentationFigureKind {
+  if (/result|quantitative|comparison|performance|ablation|success\s*rate|tracking|stability|benchmark|evaluation|metric|score|accuracy|table/iu.test(text)) {
+    return 'result';
+  }
+  if (/architecture|overview|framework|pipeline|method|model|algorithm|system|module|process|controller|policy/iu.test(text)) {
+    return 'method';
+  }
+  if (/loss|equation|formula|objective|optimization|gradient/iu.test(text)) {
+    return 'formula';
+  }
+  if (/robot|platform|task|environment|dataset|setup|illustration|example|demonstration|scene/iu.test(text)) {
+    return 'setup';
+  }
+  if (/failure|case|qualitative|visualization|example/iu.test(text)) {
+    return 'case';
+  }
+  return 'unknown';
+}
+
+function suggestFigureSlide(text: string, figureKind: PresentationFigureKind = classifyFigureKind(text)): PresentationSlideType {
+  if (figureKind === 'result') {
     return 'results';
   }
-  if (/table|experiment|evaluation|benchmark|dataset|setting|task|platform/iu.test(text)) {
+  if (figureKind === 'setup') {
     return 'experiments';
   }
-  if (/loss|equation|formula|objective|gradient|optimization/iu.test(text)) {
+  if (figureKind === 'formula') {
     return 'formula';
+  }
+  if (figureKind === 'case') {
+    return 'limitations';
   }
   return 'method';
 }
 
-function getFigureReason(type: PresentationSlideType): string {
+function getFigureReason(type: PresentationSlideType, figureKind: PresentationFigureKind = 'unknown'): string {
+  if (figureKind === 'result') {
+    return '结果/对比/指标证据，优先用于结果页';
+  }
+  if (figureKind === 'setup') {
+    return '平台/任务/环境示意，优先用于实验设置页';
+  }
   if (type === 'experiments') {
     return '实验或结果页优先使用';
   }

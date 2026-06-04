@@ -6024,6 +6024,35 @@ body.is-resizing-layout .layout-resize-handle::after {
   line-height: 1.45;
 }
 
+.presentation-quality-pass {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  border-color: rgba(22, 101, 52, 0.16);
+  background: rgba(240, 253, 244, 0.72);
+  color: #14532d;
+}
+
+.presentation-quality-fail {
+  display: grid;
+  gap: 6px;
+  border-color: rgba(185, 28, 28, 0.2);
+  background: rgba(254, 242, 242, 0.86);
+  color: #7f1d1d;
+}
+
+.presentation-quality-pass strong,
+.presentation-quality-fail strong {
+  font-size: 12px;
+}
+
+.presentation-quality-pass span,
+.presentation-quality-fail span {
+  color: inherit;
+  opacity: 0.78;
+}
+
 .presentation-workbench {
   display: grid;
   grid-template-columns: minmax(170px, 0.78fr) minmax(420px, 2.1fr) minmax(310px, 1fr);
@@ -6258,6 +6287,15 @@ body.is-resizing-layout .layout-resize-handle::after {
   padding: 9px;
   border-radius: var(--radius-sm);
   background: #f7f8fb;
+}
+
+.presentation-figure-list strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.35;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .presentation-source-list p,
@@ -8077,5 +8115,100 @@ body.is-resizing-layout .layout-resize-handle::after {
 
   .ppt-export-visual ol {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.arxiv-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.arxiv-search-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.arxiv-search-bar {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(150px, 0.32fr) minmax(150px, 0.28fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.arxiv-search-bar label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 750;
+}
+
+.arxiv-results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 14px;
+  align-items: start;
+  min-height: 0;
+}
+
+.arxiv-paper-card {
+  display: grid;
+  gap: 10px;
+}
+
+.arxiv-paper-card h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: clamp(16px, 1.1vw, 20px);
+  line-height: 1.25;
+}
+
+.arxiv-paper-meta,
+.arxiv-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.arxiv-authors,
+.arxiv-summary {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.arxiv-authors {
+  font-size: var(--font-size-sm);
+}
+
+.arxiv-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+}
+
+.arxiv-card-actions {
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+@media (max-width: 1180px) {
+  .arxiv-search-bar {
+    grid-template-columns: minmax(0, 1fr) minmax(140px, 0.5fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .arxiv-results-grid,
+  .arxiv-search-bar {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

@@ -69,6 +69,11 @@ interface SaveBinaryRequest {
   defaultFileName: string;
 }
 
+interface ArxivDownloadPdfRequest {
+  pdfUrl: string;
+  defaultFileName: string;
+}
+
 interface ResearchWorkbookExcelRequest {
   workbook: ResearchWorkbookExcelPayload;
 }
@@ -1000,6 +1005,17 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 function sanitizeFileName(value: string): string {
   return value.replace(/[<>:"/\\|?*\u0000-\u001f]+/gu, '_').slice(0, 120) || 'paper';
+}
+
+function normalizeArxivPdfDownloadUrl(value: string): URL {
+  const url = new URL(value.trim().replace(/^http:\/\//iu, 'https://'));
+  if (url.protocol !== 'https:' || url.hostname !== 'arxiv.org' || !url.pathname.startsWith('/pdf/')) {
+    throw new Error('只允许下载 arXiv 官方 PDF 链接。');
+  }
+  if (!url.pathname.toLowerCase().endsWith('.pdf')) {
+    url.pathname = `${url.pathname}.pdf`;
+  }
+  return url;
 }
 
 async function exportResearchWorkbookToExcel(
@@ -2816,6 +2832,32 @@ function registerIpcHandlers(): void {
       filePath: result.filePath,
       fileName: path.basename(result.filePath)
     };
+  });
+
+  ipcMain.handle('arxiv:download-pdf', async (_event, request: ArxivDownloadPdfRequest) => {
+    const pdfUrl = normalizeArxivPdfDownloadUrl(request.pdfUrl);
+    const result = await dialog.showSaveDialog({
+      title: '下载 arXiv PDF',
+      defaultPath: sanitizeFileName(request.defaultFileName || path.basename(pdfUrl.pathname)) || 'arxiv-paper.pdf',
+      filters: [{ name: 'PDF', extensions: ['pdf'] }]
+    });
+
+    if (result.canceled || !result.filePath) {
+      return null;
+    }
+
+    const response = await fetch(pdfUrl.toString());
+    if (!response.ok) {
+      throw new Error(`arXiv PDF 下载失败：HTTP ${response.status}`);
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.byteLength < 1024 || buffer.subarray(0, 4).toString('utf8') !== '%PDF') {
+      throw new Error('下载结果不是有效 PDF 文件。');
+    }
+
+    await fs.writeFile(result.filePath, buffer);
+    return readPdfFile(result.filePath);
   });
 
   ipcMain.handle('file:export-pdf', async (_event, request: { sourcePath: string; defaultFileName: string }) => {

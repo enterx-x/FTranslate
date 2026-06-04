@@ -91,6 +91,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('file:export-markdown', request),
   exportPptx: (request: { filePath?: string; contentBase64: string; defaultFileName: string }) =>
     ipcRenderer.invoke('file:export-pptx', request),
+  downloadArxivPdf: (request: { pdfUrl: string; defaultFileName: string }) =>
+    ipcRenderer.invoke('arxiv:download-pdf', request),
   exportPdf: (request: { sourcePath: string; defaultFileName: string }) =>
     ipcRenderer.invoke('file:export-pdf', request),
   exportResearchWorkbookExcel: (request: { workbook: unknown }) =>

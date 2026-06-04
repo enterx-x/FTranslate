@@ -25,6 +25,7 @@ import {
   serializePresentationMarkdown,
   type PresentationDraft
 } from './lib/presentationOutline';
+import type { ArxivPaper } from './lib/arxivClient';
 import { arrayBufferToBase64 } from './lib/binaryEncoding';
 import { createPresentationPptxBuffer } from './lib/presentationPptx';
 import { enrichPresentationDraftWithPdfFigureCrops } from './lib/presentationFigureAssets';
@@ -116,7 +117,7 @@ interface RecentProject {
   aiCachePath?: string;
 }
 
-type AppView = 'home' | 'reader' | 'researchSheet' | 'aiAssistant' | 'knowledgeGraph' | 'presentation' | 'settings';
+type AppView = 'home' | 'reader' | 'researchSheet' | 'aiAssistant' | 'knowledgeGraph' | 'presentation' | 'arxivSearch' | 'settings';
 type ReaderMode = 'manual' | 'ai';
 type PdfViewMode = 'source' | 'parallel' | 'translated';
 type BuiltInProviderId = Exclude<AiProviderId, 'custom'>;
@@ -137,6 +138,10 @@ const KnowledgeGraphPage = lazy(async () => {
 const PresentationPage = lazy(async () => {
   const module = await import('./components/PresentationPage');
   return { default: module.PresentationPage };
+});
+const ArxivSearchPage = lazy(async () => {
+  const module = await import('./components/ArxivSearchPage');
+  return { default: module.ArxivSearchPage };
 });
 const SettingsPage = lazy(async () => {
   const module = await import('./components/SettingsPage');
@@ -648,6 +653,7 @@ export default function App() {
       return;
     }
 
+    setView('presentation');
     try {
       setIsPresentationGenerating(true);
       setStatusMessage('正在从当前 PDF 提取正文、章节和图表 caption...');
@@ -664,13 +670,20 @@ export default function App() {
       });
 
       try {
-        draft = await enrichPresentationDraftWithPdfFigureCrops(draft, pdf.data);
+        setStatusMessage('正在生成组会 PPT 大纲，并尝试裁剪关键图表...');
+        draft = await withPresentationCropTimeout(
+          draft,
+          enrichPresentationDraftWithPdfFigureCrops(draft, pdf.data, {
+            maxFigures: 4,
+            renderScale: 1.25
+          }),
+          12000
+        );
       } catch (figureError) {
         console.warn('Failed to crop presentation figures from PDF pages.', figureError);
       }
 
       setPresentationDraft(draft);
-      setView('presentation');
       setStatusMessage(
         blocks.length > 0
           ? `已从当前 PDF 提取 ${blocks.length} 个正文/图表块，并生成 ${draft.slides.length} 页组会 PPT 草稿。`
@@ -683,7 +696,6 @@ export default function App() {
         targetSlideCount: 12
       });
       setPresentationDraft(draft);
-      setView('presentation');
       setStatusMessage(`PDF 正文提取失败，已生成基础 PPT 草稿：${String(error)}`);
     } finally {
       setIsPresentationGenerating(false);
@@ -746,6 +758,29 @@ export default function App() {
     } catch (error) {
       setStatusMessage(`导出组会 PPTX 失败：${String(error)}`);
     }
+  }
+
+  function handleArxivPaperDownloaded(arxivPaper: ArxivPaper, pdfPayload: PdfFilePayload): void {
+    const now = new Date().toISOString();
+    const record: PaperRecord = {
+      id: `paper-${hashText(pdfPayload.filePath)}`,
+      pdfPath: pdfPayload.filePath,
+      pdfName: pdfPayload.fileName,
+      translationPath: '',
+      translationName: '',
+      aiCachePath: undefined,
+      aiCacheName: undefined,
+      chineseTitle: '',
+      englishTitle: arxivPaper.title || pdfPayload.fileName.replace(/\.[^.]+$/u, ''),
+      journal: `arXiv ${arxivPaper.categories[0] ?? ''}`.trim(),
+      authors: arxivPaper.authors.join(', '),
+      year: arxivPaper.publishedAt?.slice(0, 4) ?? '',
+      notes: `arXiv: ${arxivPaper.stableId}\n${arxivPaper.summary}`.trim(),
+      lastOpenedAt: now,
+      lastPage: 1
+    };
+    const storedRecord = rememberPaper(record);
+    setStatusMessage(`arXiv PDF 已加入论文库：${storedRecord.englishTitle}`);
   }
 
   function ensureActivePaperForCurrentPdf(): PaperRecord | null {
@@ -1568,6 +1603,10 @@ export default function App() {
     void handleGeneratePresentationFromCurrentPdf();
   }
 
+  function openArxivSearch(): void {
+    setView('arxivSearch');
+  }
+
   function openAiAssistant(focus: AiAssistantFocus = 'analysis'): void {
     setAiAssistantFocus(focus);
     setView('aiAssistant');
@@ -1596,6 +1635,10 @@ export default function App() {
       return 'presentation';
     }
 
+    if (view === 'arxivSearch') {
+      return 'arxiv';
+    }
+
     if (view === 'aiAssistant') {
       return 'ai';
     }
@@ -1620,6 +1663,7 @@ export default function App() {
         onOpenResearchSheet={openResearchSheetFromSidebar}
         onOpenKnowledgeGraph={openKnowledgeGraph}
         onOpenPresentation={openPresentationGenerator}
+        onOpenArxiv={openArxivSearch}
         onOpenReader={openReaderFromSidebar}
         onOpenAi={openAiFromSidebar}
         onOpenSettings={openSettings}
@@ -1755,6 +1799,22 @@ export default function App() {
             />
           </Suspense>
           <footer className="status-bar">{statusMessage}</footer>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'arxivSearch') {
+    return (
+      <div className="app-shell desktop-shell arxiv-shell">
+        {renderSidebar()}
+        <div className="app-main">
+          <Suspense fallback={<main className="arxiv-loading">正在加载 arXiv 检索...</main>}>
+            <ArxivSearchPage
+              onBackHome={openWorkspace}
+              onDownloadedPaper={handleArxivPaperDownloaded}
+            />
+          </Suspense>
         </div>
       </div>
     );
@@ -2204,6 +2264,19 @@ function buildPresentationExportFileName(title: string, extension: 'json' | 'md'
     .replace(/^-|-$/gu, '')
     .slice(0, 80);
   return `${safeTitle || 'seminar-presentation'}-slides.${extension}`;
+}
+
+async function withPresentationCropTimeout(
+  fallbackDraft: PresentationDraft,
+  cropPromise: Promise<PresentationDraft>,
+  timeoutMs: number
+): Promise<PresentationDraft> {
+  return Promise.race([
+    cropPromise,
+    new Promise<PresentationDraft>((resolve) => {
+      window.setTimeout(() => resolve(fallbackDraft), timeoutMs);
+    })
+  ]);
 }
 
 function readLegacyPapersWithSheetCells(
