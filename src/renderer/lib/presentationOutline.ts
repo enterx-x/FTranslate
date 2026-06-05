@@ -1032,14 +1032,30 @@ function buildMethodStagesFromEvidence(
   const source = methodRefs[0];
   const sourceLabel = source ? `p. ${source.pageNumber} · ${source.section}` : 'PDF';
   const sourceRefs = source ? [source] : [];
-  const observation = joinTerms(methodTerms.observations, 4) || inferTermFromText(methodRefs, /LiDAR|elevation map|proprioceptive|visual|language|RGB-D|occupancy map/iu) || '原文观测输入';
-  const modulePipeline = joinTerms(methodTerms.methods, 6);
+  const observation =
+    joinTerms(methodTerms.observations, 4) ||
+    inferTermFromText(
+      methodRefs,
+      /LiDAR|elevation map|proprioceptive|perceptive|terrain[-\s]?aware|visual|language|RGB-D|occupancy map/iu
+    ) ||
+    '原文观测输入';
+  const methodModules = compactTextList(
+    methodTerms.methods.filter((term) => term.toLowerCase() !== primaryMethod.toLowerCase()),
+    6
+  );
+  const modulePipeline = joinTerms(methodModules.length > 0 ? methodModules : methodTerms.methods, 6);
   const command =
-    joinTerms(compactTextList([...methodTerms.commands, ...methodTerms.methods], 6), 6) ||
+    joinTerms(compactTextList([...methodTerms.commands, ...methodModules], 6), 6) ||
     modulePipeline ||
-    inferTermFromText(methodRefs, /hybrid internal command|context conditioning|subgoal images|episode metadata|perception encoder|world model|trajectory optimizer/iu) ||
+    inferTermFromText(
+      methodRefs,
+      /hybrid internal command|context conditioning|subgoal images|episode metadata|context encoder|MoE|perception encoder|world model|trajectory optimizer/iu
+    ) ||
     '任务/上下文表示';
-  const output = joinTerms(methodTerms.outputs, 2) || inferTermFromText(methodRefs, /whole[-\s]?body actions?|control commands?|action output/iu) || '动作或控制输出';
+  const output =
+    joinTerms(methodTerms.outputs, 3) ||
+    inferTermFromText(methodRefs, /joint targets?|whole[-\s]?body (?:control )?actions?|control commands?|action output/iu) ||
+    '动作或控制输出';
   const training = joinTerms(compactTextList([...methodTerms.training, ...experimentTerms.training], 4), 4) || '训练/实现细节';
   const methodName = primaryMethod || methodTerms.methods[0] || '本文方法';
 
@@ -1057,7 +1073,7 @@ function buildMethodStagesFromEvidence(
     {
       stage_name: '上下文/任务表示',
       input: `${observation} + ${command}`,
-      process: `${command} 将任务意图、子目标或上下文写入策略条件`,
+      process: `${modulePipeline || command} 将任务意图、子目标或上下文写入策略条件`,
       output: command,
       purpose: '把高层任务要求转成低层控制可使用的条件',
       connects_to_next: `条件表示驱动 ${methodName} 推理动作`,
@@ -1067,7 +1083,7 @@ function buildMethodStagesFromEvidence(
     {
       stage_name: '策略推理与动作输出',
       input: command,
-      process: `${methodName} 执行策略/控制推理`,
+      process: `${modulePipeline || methodName} 执行策略/控制推理`,
       output,
       purpose: '产生可执行的机器人动作或控制命令',
       connects_to_next: `动作进入训练和实验评估闭环`,
@@ -1340,10 +1356,15 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\bPPO\b/u, label: 'PPO' },
     { pattern: /\bSAC\b/u, label: 'SAC' },
     { pattern: /\bworld model\b/iu, label: 'World Model' },
+    { pattern: /\bcross[-\s]?modal context encoders?\b/iu, label: 'cross-modal context encoder' },
+    { pattern: /\bMixture[-\s]?of[-\s]?Experts\b|\bMoE\b/iu, label: 'Mixture-of-Experts (MoE)' },
+    { pattern: /\bMoE policies?\b/iu, label: 'MoE policy' },
+    { pattern: /\bprediction[-\s]?based perception\b|\bprediction[-\s]?based perceptive representations?\b/iu, label: 'prediction-based perceptive representation' },
     { pattern: /\bperception encoders?\b/iu, label: 'perception encoder' },
     { pattern: /\blatent dynamics\b/iu, label: 'latent dynamics' },
     { pattern: /\btrajectory optimizers?\b/iu, label: 'trajectory optimizer' },
     { pattern: /\bpolicy networks?\b/iu, label: 'policy network' },
+    { pattern: /\blow[-\s]?level controllers?\b/iu, label: 'low-level controller' },
     { pattern: /\bplanners?\b/iu, label: 'planner' }
   ],
   observations: [
@@ -1352,6 +1373,9 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\belevation maps?\b/iu, label: 'elevation map' },
     { pattern: /\boccupancy maps?\b/iu, label: 'occupancy map' },
     { pattern: /\bcost maps?\b/iu, label: 'cost map' },
+    { pattern: /\bterrain[-\s]?aware perceptive features?\b/iu, label: 'terrain-aware perceptive features' },
+    { pattern: /\bperceptive features?\b/iu, label: 'perceptive features' },
+    { pattern: /\bprediction[-\s]?based perceptive representations?\b/iu, label: 'prediction-based perceptive representation' },
     { pattern: /\bproprioceptive states?\b|\bproprioception\b/iu, label: 'proprioception' },
     { pattern: /\bRGB observations?\b|\bRGB images?\b/iu, label: 'RGB observations' },
     { pattern: /\bvisual observations?\b|\bvision observations?\b/iu, label: 'visual observations' },
@@ -1367,11 +1391,14 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\bhigh[-\s]?level policy prompts?\b/iu, label: 'high-level policy prompt' },
     { pattern: /\bcontext conditioning\b/iu, label: 'context conditioning' },
     { pattern: /\bsubtask instructions?\b/iu, label: 'subtask instruction' },
+    { pattern: /\btask commands?\b/iu, label: 'task command' },
     { pattern: /\bwaypoints?\b/iu, label: 'waypoint' },
     { pattern: /\blanguage goals?\b/iu, label: 'language goal' }
   ],
   outputs: [
     { pattern: /\bwhole[-\s]?body actions?\b/iu, label: 'whole-body action' },
+    { pattern: /\bwhole[-\s]?body control actions?\b/iu, label: 'whole-body control action' },
+    { pattern: /\bjoint targets?\b/iu, label: 'joint target' },
     { pattern: /\blow[-\s]?level robot actions?\b/iu, label: 'low-level action' },
     { pattern: /\baction outputs?\b/iu, label: 'action output' },
     { pattern: /\bcommand tracking\b/iu, label: 'command tracking' },
@@ -1394,6 +1421,10 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\bdexterous manipulation\b/iu, label: 'dexterous manipulation' },
     { pattern: /\bunstructured scenes?\b|\bunstructured environments?\b/iu, label: 'unstructured scenes' },
     { pattern: /\bterrain traversability\b/iu, label: 'terrain traversability' },
+    { pattern: /\bobstacle crossing\b/iu, label: 'obstacle crossing' },
+    { pattern: /\bslope traversal\b/iu, label: 'slope traversal' },
+    { pattern: /\bnarrow passage\b/iu, label: 'narrow passage' },
+    { pattern: /\bobject transport\b/iu, label: 'object transport' },
     { pattern: /\bdaily service tasks?\b/iu, label: 'daily service tasks' },
     { pattern: /\bnavigation\b/iu, label: 'navigation' },
     { pattern: /\bpath planning\b/iu, label: 'path planning' },
@@ -1412,6 +1443,7 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\bpre[-\s]?training\b/iu, label: 'pre-training' }
   ],
   baselines: [
+    { pattern: /\bblind baseline(?: controllers?)?\b/iu, label: 'blind baseline' },
     { pattern: /\bexisting baselines?\b/iu, label: 'existing baselines' },
     { pattern: /\bspecialist policies\b/iu, label: 'specialist policies' },
     { pattern: /\bimitation learning baselines?\b/iu, label: 'imitation learning baselines' },
@@ -1425,6 +1457,10 @@ const EVIDENCE_DICTIONARY = {
     { pattern: /\bcollision rate\b/iu, label: 'collision rate' },
     { pattern: /\bpath efficiency\b/iu, label: 'path efficiency' },
     { pattern: /\bstability\b/iu, label: 'stability' },
+    { pattern: /\bfall rate\b/iu, label: 'fall rate' },
+    { pattern: /\bR_tracking\b/iu, label: 'R_tracking' },
+    { pattern: /\bR_stability\b/iu, label: 'R_stability' },
+    { pattern: /\bC_collision\b/iu, label: 'C_collision' },
     { pattern: /\bcommand tracking(?: precision)?\b/iu, label: 'command tracking precision' },
     { pattern: /\bterrain traversability\b/iu, label: 'terrain traversability' },
     { pattern: /\bcompositional generalization\b/iu, label: 'compositional generalization' },

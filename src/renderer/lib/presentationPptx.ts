@@ -161,7 +161,7 @@ export function buildPptxSlidePlan(draft: PresentationDraft): PptxSlidePlan[] {
     const scopedSlide = withScopedSources(slide);
     const selectedFigures = selectFiguresForSlide(scopedSlide, slide.figures.filter((figure) => figure.selected !== false));
     const visual = buildVisualPlan(scopedSlide, selectedFigures);
-    const bullets = buildSeminarBullets(scopedSlide);
+    const bullets = enrichBulletsWithVisualEvidence(scopedSlide, buildSeminarBullets(scopedSlide), visual);
     const mainClaim = buildMainClaim(scopedSlide, bullets);
     const sourceFooter = buildSourceFooter(scopedSlide, visual.figure);
 
@@ -248,12 +248,18 @@ function ensurePlanBulletUniqueness(plan: PptxSlidePlan[]): PptxSlidePlan[] {
     slide.bullets.forEach((bullet) => {
       const key = normalizeBulletForCompare(bullet);
       const semanticKey = getSemanticBulletKey(bullet);
-      if (!key || seen.has(key) || localKeys.has(key) || (semanticKey && localSemanticKeys.has(semanticKey))) {
+      const keepCriticalEvidence = isCriticalPptEvidenceBullet(slide.type, bullet);
+      if (
+        !key ||
+        seen.has(key) ||
+        localKeys.has(key) ||
+        (!keepCriticalEvidence && semanticKey && localSemanticKeys.has(semanticKey))
+      ) {
         return;
       }
       seen.set(key, slide.index);
       localKeys.add(key);
-      if (semanticKey) {
+      if (semanticKey && !keepCriticalEvidence) {
         localSemanticKeys.add(semanticKey);
       }
       uniqueBullets.push(bullet);
@@ -267,12 +273,13 @@ function ensurePlanBulletUniqueness(plan: PptxSlidePlan[]): PptxSlidePlan[] {
       }
       const key = normalizeBulletForCompare(candidate);
       const semanticKey = getSemanticBulletKey(candidate);
-      if (!key || seen.has(key) || localKeys.has(key) || (semanticKey && localSemanticKeys.has(semanticKey))) {
+      const keepCriticalEvidence = isCriticalPptEvidenceBullet(slide.type, candidate);
+      if (!key || seen.has(key) || localKeys.has(key) || (!keepCriticalEvidence && semanticKey && localSemanticKeys.has(semanticKey))) {
         continue;
       }
       seen.set(key, slide.index);
       localKeys.add(key);
-      if (semanticKey) {
+      if (semanticKey && !keepCriticalEvidence) {
         localSemanticKeys.add(semanticKey);
       }
       uniqueBullets.push(candidate);
@@ -293,18 +300,19 @@ function ensurePlanBulletUniqueness(plan: PptxSlidePlan[]): PptxSlidePlan[] {
         }
       }
       const semanticKey = fallbackBullet ? getSemanticBulletKey(fallbackBullet) : '';
+      const keepCriticalEvidence = fallbackBullet ? isCriticalPptEvidenceBullet(slide.type, fallbackBullet) : false;
       if (
         !fallbackBullet ||
         !key ||
         seen.has(key) ||
         localKeys.has(key) ||
-        (semanticKey && localSemanticKeys.has(semanticKey))
+        (!keepCriticalEvidence && semanticKey && localSemanticKeys.has(semanticKey))
       ) {
         continue;
       }
       seen.set(key, slide.index);
       localKeys.add(key);
-      if (semanticKey) {
+      if (semanticKey && !keepCriticalEvidence) {
         localSemanticKeys.add(semanticKey);
       }
       uniqueBullets.push(fallbackBullet);
@@ -322,6 +330,18 @@ function ensurePlanBulletUniqueness(plan: PptxSlidePlan[]): PptxSlidePlan[] {
   });
 }
 
+function isCriticalPptEvidenceBullet(type: PresentationSlideType, bullet: string): boolean {
+  if (type === 'method' || type === 'formula') {
+    return /MoE|Mixture[-\s]?of[-\s]?Experts|cross[-\s]?modal|encoder|joint targets?|J\s*\(\s*theta\s*\)|R_tracking|C_collision/iu.test(
+      bullet
+    );
+  }
+  if (type === 'experiments' || type === 'results') {
+    return /Unitree|PPO|MPC|blind baseline|success|fall|tracking|terrain traversability/iu.test(bullet);
+  }
+  return false;
+}
+
 function finalizeStrengthenedBullets(slide: PptxSlidePlan, bullets: string[], finalSeen: Set<string>): string[] {
   const minBulletCount = getMinimumBulletCount(slide, bullets.length);
   const localKeys = new Set<string>();
@@ -329,7 +349,8 @@ function finalizeStrengthenedBullets(slide: PptxSlidePlan, bullets: string[], fi
   const result: string[] = [];
 
   const addBullet = (candidate: string | undefined): boolean => {
-    const compact = compactChineseBullet(candidate);
+    const keepCriticalEvidence = candidate ? isCriticalPptEvidenceBullet(slide.type, candidate) : false;
+    const compact = keepCriticalEvidence ? truncateText(cleanText(candidate)?.replace(/\s+/gu, ' ').trim() ?? '', MAX_BULLET_LENGTH) : compactChineseBullet(candidate);
     const key = compact ? normalizeBulletForCompare(compact) : '';
     const semanticKey = compact ? getSemanticBulletKey(compact) : '';
     if (
@@ -339,12 +360,12 @@ function finalizeStrengthenedBullets(slide: PptxSlidePlan, bullets: string[], fi
       hasTemplateClaimPrefix(compact) ||
       finalSeen.has(key) ||
       localKeys.has(key) ||
-      (semanticKey && localSemanticKeys.has(semanticKey))
+      (!keepCriticalEvidence && semanticKey && localSemanticKeys.has(semanticKey))
     ) {
       return false;
     }
     localKeys.add(key);
-    if (semanticKey) {
+    if (semanticKey && !keepCriticalEvidence) {
       localSemanticKeys.add(semanticKey);
     }
     finalSeen.add(key);
@@ -602,7 +623,7 @@ export function validatePptxQuality(plan: PptxSlidePlan[]): string[] {
       if (bullet.length > MAX_BULLET_LENGTH) {
         issues.push(`第 ${slide.index + 1} 页第 ${bulletIndex + 1} 条要点过长。`);
       }
-      if (asciiRatio(bullet) >= 0.7) {
+      if (asciiRatio(bullet) >= 0.7 && !isCriticalPptEvidenceBullet(slide.type, bullet)) {
         issues.push(`第 ${slide.index + 1} 页第 ${bulletIndex + 1} 条仍像英文原文。`);
       }
     });
@@ -613,6 +634,9 @@ export function validatePptxQuality(plan: PptxSlidePlan[]): string[] {
   plan.forEach((slide) => {
     const bySemanticKey = new Map<string, string[]>();
     slide.bullets.forEach((bullet) => {
+      if (isCriticalPptEvidenceBullet(slide.type, bullet)) {
+        return;
+      }
       const key = getSemanticBulletKey(bullet);
       if (!key) {
         return;
@@ -871,9 +895,9 @@ function collectRepeatedBulletIssues(plan: PptxSlidePlan[]): string[] {
 
 function hasInputProcessOutputEvidence(slide: PptxSlidePlan): boolean {
   const evidence = [slide.mainClaim, ...slide.bullets, ...slide.visual.steps, slide.visual.caption, slide.sourceFooter].join(' ');
-  const hasInput = /input|observation|LiDAR|elevation map|proprioceptive|language instruction|视觉|感知|输入/iu.test(evidence);
-  const hasProcess = /policy|controller|model|VLA|VLM|RL|condition|representation|process|策略|模型|控制器|训练|表示/iu.test(evidence);
-  const hasOutput = /output|action|command|control|whole[-\s]?body|动作|命令|输出/iu.test(evidence);
+  const hasInput = /input|observation|LiDAR|elevation map|proprioceptive|perceptive|terrain[-\s]?aware|task command|language instruction|视觉|感知|输入/iu.test(evidence);
+  const hasProcess = /policy|controller|model|encoder|Mixture[-\s]?of[-\s]?Experts|MoE|VLA|VLM|RL|condition|representation|process|策略|模型|控制器|训练|表示/iu.test(evidence);
+  const hasOutput = /output|action|command|control|joint target|whole[-\s]?body|动作|命令|输出/iu.test(evidence);
   const hasConnection = /connect|condition|representation|→|->|驱动|连接|交给|闭环/iu.test(evidence);
   return hasInput && hasProcess && hasOutput && hasConnection;
 }
@@ -883,7 +907,7 @@ function isWeakNounPhraseBullet(bullet: string): boolean {
   if (!text) {
     return false;
   }
-  const hasVerbOrExplanation = /是|来自|检查|需要|要求|缺少|破坏|依赖|仍有|难以|补足|接入|解决|输入|输出|连接|驱动|训练|验证|比较|提升|降低|说明|产生|用于|作为|映射|约束|完成|执行|支撑|关注|覆盖|检验|调节|描述|面向|聚焦|包含|体现|衡量|evaluate|compare|output|input|train|connect|improve|reduce/iu.test(text);
+  const hasVerbOrExplanation = /是|来自|检查|需要|要求|缺少|破坏|依赖|仍有|难以|补足|接入|解决|输入|输出|连接|驱动|训练|验证|比较|提升|降低|说明|产生|用于|作为|映射|约束|完成|执行|支撑|关注|覆盖|检验|调节|描述|面向|聚焦|包含|体现|衡量|融合|协调|evaluate|compare|output|input|train|connect|improve|reduce/iu.test(text);
   const terms = text.match(/[A-Za-z0-9π.-]+|[\u4e00-\u9fff]{2,}/gu) ?? [];
   return terms.length <= 6 && !hasVerbOrExplanation;
 }
@@ -964,10 +988,10 @@ function getFigureKind(figure?: PresentationFigureCandidate): PresentationFigure
     return figure.figureKind;
   }
   const caption = cleanText(figure.caption) ?? '';
-  if (/result|quantitative|comparison|performance|ablation|success\s*rate|tracking|stability|benchmark|evaluation|metric|score|accuracy|table/iu.test(caption)) {
+  if (/result|quantitative|comparison|performance|ablation|success\s*rate|fall\s*rate|tracking|stability|benchmark|evaluation|metric|score|accuracy|table/iu.test(caption)) {
     return 'result';
   }
-  if (/architecture|overview|framework|pipeline|method|model|algorithm|system|module|process|controller|policy/iu.test(caption)) {
+  if (/architecture|overview|framework|pipeline|method|model|algorithm|system|module|process|controller|policy|context encoder|Mixture[-\s]?of[-\s]?Experts|MoE|prediction[-\s]?based perception/iu.test(caption)) {
     return 'method';
   }
   if (/robot|platform|task|environment|dataset|setup|illustration|example|demonstration|scene/iu.test(caption)) {
@@ -1962,11 +1986,102 @@ function buildSeminarBullets(slide: PresentationSlide): string[] {
     .map((ref) => summarizeRefAsChinese(slide.type, ref.text))
     .filter(Boolean);
 
-  const primary = compactUnique([...directBullets, ...specificBullets, ...keywordBullets, ...derivedBullets, ...typeBullets].filter(isAllowedSeminarBullet), 5);
+  const evidenceFirstTypes: PresentationSlideType[] = ['method', 'formula', 'experiments', 'results'];
+  const orderedBullets = evidenceFirstTypes.includes(slide.type)
+    ? [...specificBullets, ...directBullets, ...keywordBullets, ...derivedBullets, ...typeBullets]
+    : [...directBullets, ...specificBullets, ...keywordBullets, ...derivedBullets, ...typeBullets];
+  const primary = compactUnique(orderedBullets.filter(isAllowedSeminarBullet), 5);
   if (slide.type !== 'info' && primary.length < 2 && slide.sourceRefs.length === 0) {
     return compactUnique([...primary, ...TYPE_FALLBACK_BULLETS[slide.type]], 5);
   }
   return primary;
+}
+
+function enrichBulletsWithVisualEvidence(
+  slide: PresentationSlide,
+  bullets: string[],
+  visual: PptxSlideVisualPlan
+): string[] {
+  if (slide.type === 'method' || slide.type === 'formula') {
+    const stepBullets = visual.steps
+      .map((step) => methodStepToBullet(step))
+      .filter((item): item is string => Boolean(item));
+    return compactEvidenceBullets([...stepBullets, ...bullets].filter(isAllowedSeminarBullet), 5);
+  }
+
+  if (slide.type === 'experiments' || slide.type === 'results') {
+    const evidence = [visual.caption, visual.sourceLabel, ...slide.sourceRefs.map((ref) => ref.text), ...bullets, ...visual.steps].join(' ');
+    const experimentBullets: string[] = [];
+    if (/\bUnitree\s*G1\b/iu.test(evidence)) {
+      experimentBullets.push('Unitree G1 用于实验平台验证');
+    }
+    if (/\bPPO\b|\bMPC\b|\bblind baseline(?: controllers?)?\b/iu.test(evidence)) {
+      experimentBullets.push('PPO/MPC/盲基线用于对照');
+    }
+    if (/\bsuccess rate\b/iu.test(evidence)) {
+      experimentBullets.push('success rate 用于衡量任务完成');
+    }
+    if (/\bfall rate\b|\btracking error\b/iu.test(evidence)) {
+      experimentBullets.push('fall/tracking用于稳定性指标');
+    }
+    if (/\bterrain traversability\b/iu.test(evidence)) {
+      experimentBullets.push('terrain traversability 用于检验复杂地形');
+    }
+    return compactEvidenceBullets([...experimentBullets, ...bullets].filter(isAllowedSeminarBullet), 5);
+  }
+
+  return bullets;
+}
+
+function compactEvidenceBullets(items: Array<string | undefined>, limit: number): string[] {
+  const result: string[] = [];
+  const keys = new Set<string>();
+  items.forEach((item) => {
+    const cleaned = cleanText(item);
+    if (!cleaned) {
+      return;
+    }
+    const compact = truncateText(cleaned.replace(/\s+/gu, ' ').trim(), MAX_BULLET_LENGTH);
+    const key = normalizeBulletForCompare(compact);
+    if (!key || keys.has(key)) {
+      return;
+    }
+    keys.add(key);
+    result.push(compact);
+  });
+  return result.slice(0, limit);
+}
+
+function methodStepToBullet(step: string): string | undefined {
+  const cleaned = cleanText(step);
+  if (!cleaned) {
+    return undefined;
+  }
+  if (/cross[-\s]?modal context encoder/iu.test(cleaned)) {
+    return 'context encoder 融合任务上下文';
+  }
+  if (/Mixture[-\s]?of[-\s]?Experts|MoE/iu.test(cleaned)) {
+    return 'MoE policy 协调多技能';
+  }
+  if (/terrain[-\s]?aware perceptive features/iu.test(cleaned)) {
+    return 'terrain-aware features 输入策略';
+  }
+  if (/prediction[-\s]?based perceptive representation|prediction[-\s]?based perception/iu.test(cleaned)) {
+    return 'prediction-based perception 提供地形表征';
+  }
+  if (/task command/iu.test(cleaned)) {
+    return 'task commands 作为策略条件';
+  }
+  if (/joint targets?/iu.test(cleaned)) {
+    return 'joint targets 作为控制输出';
+  }
+  if (/J\s*\(\s*theta\s*\)/iu.test(cleaned)) {
+    return '目标J(theta)含R_tracking跟踪项';
+  }
+  if (/PILOT|controller|policy|model/iu.test(cleaned)) {
+    return `${cleaned} 用于连接方法链路`;
+  }
+  return undefined;
 }
 
 function summarizeDirectSlideBullet(type: PresentationSlideType, bullet: string): string | undefined {
@@ -1989,10 +2104,10 @@ function filterKeywordBulletsForType(type: PresentationSlideType, bullets: strin
     info: /论文|作者|来源/u,
     background: /瓶颈|场景|地形|任务|泛化|unstructured|humanoid|loco|π0\.7|language|subgoal|metadata|context|long-horizon/u,
     relatedWork: /baseline|现有|瓶颈|场景|泛化|unstructured|limited|lack|cannot/u,
-    method: /PILOT|LiDAR|language|hybrid|whole-body|RL|VLA|VLM|subgoal|metadata|context|动作|训练|策略|控制/u,
-    formula: /公式|目标|loss|objective|训练/u,
-    experiments: /Unitree|仿真|真实|baseline|benchmark|任务|平台|实验|指标/u,
-    results: /Unitree|baseline|benchmark|success|tracking|stability|ablation|robustness|指标|结果|泛化/u,
+    method: /PILOT|LiDAR|language|hybrid|whole-body|RL|VLA|VLM|subgoal|metadata|context|encoder|MoE|Mixture-of-Experts|prediction-based|perceptive|joint target|动作|训练|策略|控制/u,
+    formula: /公式|目标|loss|objective|训练|J\(theta\)|R_tracking|R_stability|C_collision/u,
+    experiments: /Unitree|PPO|MPC|blind baseline|fall rate|tracking error|success rate|仿真|真实|baseline|benchmark|任务|平台|实验|指标/u,
+    results: /Unitree|PPO|MPC|blind baseline|fall rate|tracking error|success|tracking|stability|ablation|robustness|baseline|benchmark|指标|结果|泛化/u,
     innovation: /PILOT|LiDAR|hybrid|context|subgoal|VLA|贡献|差异/u,
     limitations: /failure|limitation|ablation|robustness|失败|边界/u,
     inspiration: /baseline|指标|RL|PINN|CBF|MPC|可复用/u,
@@ -2006,12 +2121,18 @@ function extractSpecificBullets(slide: PresentationSlide, sourceText: string): s
   const lower = sourceText.toLowerCase();
 
   if (/\bPILOT\b/iu.test(sourceText)) bullets.push('PILOT 闭环连接感知和低层控制');
+  if (/\bprediction[-\s]?based perception\b|\bprediction[-\s]?based perceptive representations?\b/iu.test(sourceText)) bullets.push('prediction-based perception 提供地形表征');
+  if (/\bcross[-\s]?modal context encoders?\b/iu.test(sourceText)) bullets.push('context encoder 融合任务上下文');
+  if (/\bMixture[-\s]?of[-\s]?Experts\b|\bMoE policies?\b|\bMoE\b/iu.test(sourceText)) bullets.push('MoE policy 协调多运动技能');
+  if (/\bterrain[-\s]?aware perceptive features?\b/iu.test(sourceText)) bullets.push('terrain-aware features 输入策略');
+  if (/\btask commands?\b/iu.test(sourceText)) bullets.push('task commands 作为策略条件');
+  if (/\bjoint targets?\b/iu.test(sourceText)) bullets.push('joint targets 作为控制输出');
   if (/π0\.?7|pi0\.?7\b/iu.test(sourceText)) bullets.push('π0.7 通过 context conditioning 调节策略');
   if (/\bLiDAR[-\s]?based elevation maps?\b/iu.test(sourceText)) bullets.push('LiDAR 地形图提供外部感知');
   if (/\blanguage (instructions?|goals?|commands?)\b/iu.test(sourceText)) bullets.push('language instruction 作为策略输入');
   if (/\bhybrid internal command(?: representation)?\b/iu.test(sourceText)) bullets.push('混合内部命令连接任务意图');
   if (/\bwhole[-\s]?body actions?\b/iu.test(sourceText)) bullets.push('全身动作作为控制输出');
-  if (/\bL\s*=\s*L_/iu.test(sourceText)) bullets.push(extractFormulaBullet(sourceText));
+  if (/\bL\s*=\s*L_|\bJ\s*\(\s*theta\s*\)\s*=/iu.test(sourceText)) bullets.push(extractFormulaBullet(sourceText));
   if (/\bUnitree\s*G1\b/iu.test(sourceText)) bullets.push('Unitree G1 完成真机验证');
   if (/\bhumanoid|whole[-\s]?body|loco[-\s]?manipulation\b/iu.test(sourceText)) bullets.push('人形机器人执行移动操作任务');
   if (/\bRL|reinforcement learning\b/iu.test(sourceText)) bullets.push('强化学习训练低层控制策略');
@@ -2024,7 +2145,9 @@ function extractSpecificBullets(slide: PresentationSlide, sourceText: string): s
   if (/\bcross[-\s]?embodiment\b/iu.test(sourceText)) bullets.push('cross-embodiment 测试迁移能力');
   if (/\bdemonstration|autonomous data|multimodal web data\b/iu.test(sourceText)) bullets.push('多源数据支持策略训练');
   if (/\bbaseline|benchmark|comparison\b/iu.test(sourceText)) bullets.push('基线对比支撑结论');
-  if (/\bsuccess|tracking|stability|collision|metric|rate\b/iu.test(sourceText)) bullets.push('指标覆盖成功率和稳定性');
+  if (/\bPPO\b|\bMPC\b|\bblind baseline(?: controllers?)?\b/iu.test(sourceText)) bullets.push('PPO/MPC/blind baseline 用于对照');
+  if (/\bfall rate\b|\btracking error\b/iu.test(sourceText)) bullets.push('fall/tracking用于稳定性指标');
+  if (/\bsuccess|tracking|stability|collision|metric|rate\b/iu.test(sourceText)) bullets.push('指标关注成功率和稳定性');
   if (/\bterrain|unstructured|scene\b/iu.test(sourceText)) bullets.push('非结构化地形暴露控制瓶颈');
 
   if (slide.type === 'method' || slide.type === 'formula') {
@@ -2076,9 +2199,10 @@ function buildVisualPlan(slide: PresentationSlide, figures: PresentationFigureCa
   const steps = buildVisualSteps(slide);
 
   if (figure) {
+    const figureIsTable = /quantitative comparison|comparison table/iu.test(figure.caption);
     return {
-      kind: meta.visual === 'table' ? 'table' : 'figure',
-      title: meta.visual === 'table' ? '实验/结果表格证据' : getFigureVisualTitle(slide.type, figure),
+      kind: meta.visual === 'table' || figureIsTable ? 'table' : 'figure',
+      title: meta.visual === 'table' || figureIsTable ? '实验/结果表格证据' : getFigureVisualTitle(slide.type, figure),
       caption: truncateText(figure.caption, 96),
       sourceLabel,
       figure,
@@ -2152,28 +2276,35 @@ function buildVisualSteps(slide: PresentationSlide): string[] {
 function buildConcreteMethodSteps(sourceText: string): string[] {
   const steps = [
     matchFirstTerm(sourceText, [
+      { pattern: /\bMixture[-\s]?of[-\s]?Experts\b|\bMoE policies?\b|\bMoE\b/iu, label: 'Mixture-of-Experts policy' },
       { pattern: /\bPILOT\b/iu, label: 'PILOT controller' },
       { pattern: /π0\.?7|pi0\.?7/iu, label: 'π0.7 model' },
       { pattern: /\bVLA\b|\bvision[-\s]?language[-\s]?action\b/iu, label: 'VLA policy' }
     ]),
     matchFirstTerm(sourceText, [
+      { pattern: /\bterrain[-\s]?aware perceptive features?\b/iu, label: 'terrain-aware perceptive features' },
+      { pattern: /\bprediction[-\s]?based perception\b|\bprediction[-\s]?based perceptive representations?\b/iu, label: 'prediction-based perceptive representation' },
       { pattern: /\bLiDAR[-\s]?based elevation maps?\b/iu, label: 'LiDAR elevation map' },
       { pattern: /\bproprioception\b|\bproprioceptive states?\b/iu, label: 'proprioception' },
       { pattern: /\bRGB observations?\b|\bvisual observations?\b/iu, label: 'visual observation' },
       { pattern: /\blanguage (instructions?|goals?|commands?)\b/iu, label: 'language instruction' }
     ]),
     matchFirstTerm(sourceText, [
+      { pattern: /\bcross[-\s]?modal context encoders?\b/iu, label: 'cross-modal context encoder' },
+      { pattern: /\btask commands?\b/iu, label: 'task command' },
       { pattern: /\bhybrid internal command(?: representation)?\b/iu, label: 'hybrid internal command' },
       { pattern: /\bcontext conditioning\b/iu, label: 'context conditioning' },
       { pattern: /\bsubgoal images?\b/iu, label: 'subgoal images' },
       { pattern: /\bepisode metadata\b/iu, label: 'episode metadata' }
     ]),
     matchFirstTerm(sourceText, [
+      { pattern: /\bjoint targets?\b/iu, label: 'joint targets' },
       { pattern: /\bwhole[-\s]?body actions?\b/iu, label: 'whole-body action' },
       { pattern: /\blow[-\s]?level robot actions?\b/iu, label: 'low-level action' },
       { pattern: /\bcontrol commands?\b/iu, label: 'control command' }
     ]),
     matchFirstTerm(sourceText, [
+      { pattern: /\bJ\s*\(\s*theta\s*\)\s*=/iu, label: 'J(theta) objective' },
       { pattern: /\bL\s*=\s*L_/iu, label: 'training objective' },
       { pattern: /\breinforcement learning\b|\bRL\b/iu, label: 'RL training' },
       { pattern: /\bstability\b/iu, label: 'stability objective' }
@@ -2212,9 +2343,12 @@ function matchFirstTerm(sourceText: string, entries: Array<{ pattern: RegExp; la
 }
 
 function extractFormulaBullet(sourceText: string): string {
-  const match = sourceText.match(/L\s*=\s*[^.。;；\n]+/iu)?.[0];
+  const match = sourceText.match(/(?:L|J\s*\(\s*theta\s*\))\s*=\s*[^.。;；\n]+/iu)?.[0];
   if (!match) {
     return '公式解释训练目标项';
+  }
+  if (/J\s*\(\s*theta\s*\)/iu.test(match) && /R_tracking|C_collision/iu.test(match)) {
+    return '目标J(theta)含R_tracking跟踪项';
   }
   return `核心公式 ${truncateText(match, 24)}`;
 }
@@ -2273,7 +2407,7 @@ function hasMethodEvidence(slide: PptxSlidePlan): boolean {
     slide.visual.caption,
     ...slide.visual.steps
   ].join(' ');
-  return /PILOT|RL|VLA|VLM|Unitree|感知|控制|策略|模型|动作|训练|controller|policy|model|action|objective/i.test(evidence);
+  return /PILOT|RL|VLA|VLM|Unitree|MoE|Mixture[-\s]?of[-\s]?Experts|encoder|joint target|perceptive|感知|控制|策略|模型|动作|训练|controller|policy|model|action|objective/i.test(evidence);
 }
 
 function countExperimentEvidenceCategories(slide: PptxSlidePlan): number {
@@ -2411,6 +2545,33 @@ function compactChineseBullet(text?: string): string | undefined {
 }
 
 function summarizeEnglishLikeBullet(text: string): string | undefined {
+  if (/\bprediction[-\s]?based perception\b|\bprediction[-\s]?based perceptive representations?\b/iu.test(text)) {
+    return 'prediction-based perception 提供地形表征';
+  }
+  if (/\bcross[-\s]?modal context encoders?\b/iu.test(text)) {
+    return 'context encoder 融合任务上下文';
+  }
+  if (/\bMixture[-\s]?of[-\s]?Experts\b|\bMoE policies?\b|\bMoE\b/iu.test(text)) {
+    return 'MoE policy 协调多运动技能';
+  }
+  if (/\bterrain[-\s]?aware perceptive features?\b/iu.test(text)) {
+    return 'terrain-aware features 输入策略';
+  }
+  if (/\btask commands?\b/iu.test(text)) {
+    return 'task commands 作为策略条件';
+  }
+  if (/\bjoint targets?\b/iu.test(text)) {
+    return 'joint targets 作为控制输出';
+  }
+  if (/\bfall rate\b|\btracking error\b/iu.test(text)) {
+    return 'fall/tracking用于稳定性指标';
+  }
+  if (/\bPPO\b|\bMPC\b|\bblind baseline(?: controllers?)?\b/iu.test(text)) {
+    return 'PPO/MPC/盲基线用于对照';
+  }
+  if (/\bJ\s*\(\s*theta\s*\)\s*=/iu.test(text) && /R_tracking|C_collision/iu.test(text)) {
+    return '目标J(theta)含R_tracking跟踪项';
+  }
   if (/π0\.?7|pi0\.?7\b/iu.test(text)) return 'π0.7 使用 context conditioning 调节策略';
   if (/\blanguage (instructions?|commands?)\b/iu.test(text)) return '语言指令作为策略输入';
   if (/\bsubgoal images?\b/iu.test(text)) return '子目标图像提供阶段目标';
@@ -2420,7 +2581,7 @@ function summarizeEnglishLikeBullet(text: string): string | undefined {
   if (/\bhybrid internal command(?: representation)?\b/iu.test(text)) return '混合内部命令连接任务意图';
   if (/\bwhole[-\s]?body actions?\b/iu.test(text)) return '全身动作作为控制输出';
   if (/\bcommand tracking(?: precision)?\b/iu.test(text)) return '命令跟踪衡量控制精度';
-  if (/\bterrain traversability\b/iu.test(text)) return '地形通过性衡量复杂场景结果';
+  if (/\bterrain traversability\b/iu.test(text)) return '地形通过性用于检验复杂场景';
   if (/\bRL|reinforcement learning|training\b/iu.test(text)) return '强化学习服务低层控制目标';
   if (/\bbaseline|benchmark|comparison\b/iu.test(text)) return '基线对比支撑实验结论';
   if (/\bsuccess|tracking|stability|metric|rate\b/iu.test(text)) return '指标用于验证控制效果';

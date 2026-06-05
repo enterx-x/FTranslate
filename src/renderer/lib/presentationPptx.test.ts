@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PresentationDraft, PresentationFigureCandidate, PresentationSlide, PresentationSlideType } from './presentationOutline';
+import { buildLocalPresentationDraft } from './presentationOutline';
 import {
   SEMINAR_PPT_CANVAS,
   SEMINAR_PPT_LAYOUT,
@@ -746,5 +747,105 @@ describe('presentationPptx', () => {
     const zipText = new TextDecoder('latin1').decode(new Uint8Array(buffer));
 
     expect(zipText).toContain('ppt/media/');
+  });
+
+  it('keeps concrete method architecture and result table evidence in PPTX slide plans', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [
+        {
+          id: 'paper-specific-pptx',
+          pdfPath: 'D:/papers/pilot.pdf',
+          pdfName: 'pilot.pdf',
+          translationPath: '',
+          translationName: '',
+          chineseTitle: '',
+          englishTitle: 'PILOT: A Perceptive Integrated Low-level Controller',
+          journal: 'Robotics',
+          authors: 'Author A',
+          year: '2026',
+          notes: '',
+          lastOpenedAt: new Date(0).toISOString(),
+          lastPage: 1
+        }
+      ],
+      blocks: [
+        {
+          id: 'm1',
+          type: 'paragraph',
+          page: 4,
+          section: 'Method',
+          original:
+            'PILOT fuses prediction-based perceptive representations, a cross-modal context encoder, and a Mixture-of-Experts (MoE) policy architecture to coordinate diverse motor skills for loco-manipulation.',
+          translation: '',
+          sourceHash: 'm1'
+        },
+        {
+          id: 'm2',
+          type: 'paragraph',
+          page: 4,
+          section: 'Method',
+          original:
+            'The policy takes terrain-aware perceptive features, proprioceptive observations, and task commands, then outputs joint targets and whole-body control actions.',
+          translation: '',
+          sourceHash: 'm2'
+        },
+        {
+          id: 'f1',
+          type: 'formula',
+          page: 5,
+          section: 'Method',
+          original: 'The training objective is J(theta)=E[R_task + 0.6 R_tracking + 0.3 R_stability - 0.2 C_collision].',
+          translation: '',
+          sourceHash: 'f1'
+        },
+        {
+          id: 'c1',
+          type: 'caption',
+          page: 5,
+          section: 'Method',
+          original: 'Fig. 3. Architecture overview of prediction-based perception, cross-modal context encoder, and MoE policy.',
+          translation: '',
+          sourceHash: 'c1'
+        },
+        {
+          id: 'e1',
+          type: 'paragraph',
+          page: 7,
+          section: 'Experiments',
+          original:
+            'We evaluate obstacle crossing, slope traversal, narrow passage, and object transport tasks on Unitree G1, comparing against PPO, MPC, and blind baseline controllers using success rate, fall rate, tracking error, command tracking, and terrain traversability.',
+          translation: '',
+          sourceHash: 'e1'
+        },
+        {
+          id: 'c2',
+          type: 'caption',
+          page: 8,
+          section: 'Results',
+          original:
+            'Table 2. Quantitative comparison of success rate, fall rate, tracking error, command tracking, and terrain traversability against PPO, MPC, and blind baseline controllers.',
+          translation: '',
+          sourceHash: 'c2'
+        }
+      ],
+      targetSlideCount: 12
+    });
+
+    const plan = buildPptxSlidePlan(draft);
+    const method = plan.find((item) => item.type === 'method');
+    const formula = plan.find((item) => item.type === 'formula');
+    const results = plan.find((item) => item.type === 'results');
+
+    expect(method?.bullets.join(' ')).toMatch(/cross-modal context encoder|Mixture-of-Experts|MoE policy|joint targets/i);
+    expect(method?.visual.steps.join(' ')).toMatch(/terrain-aware perceptive features|cross-modal context encoder|MoE policy|joint targets/i);
+    expect(method?.visual.caption).toMatch(/prediction-based perception|cross-modal context encoder|MoE policy/i);
+    expect(formula?.bullets.join(' ')).toMatch(/J\(theta\)|R_tracking|C_collision/i);
+    expect(results?.bullets.join(' ')).toMatch(/Unitree G1|PPO|MPC|blind baseline|success rate|fall rate|tracking error/i);
+    expect(results?.visual.kind).toBe('table');
+    expect(results?.visual.caption).toMatch(/Quantitative comparison|success rate|fall rate|tracking error/i);
+    const focusedIssues = validatePptxQuality(plan.filter((item) => ['method', 'formula', 'experiments', 'results'].includes(item.type))).filter(
+      (issue) => !issue.includes('PPT 页数过少')
+    );
+    expect(focusedIssues).toEqual([]);
   });
 });

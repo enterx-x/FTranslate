@@ -783,4 +783,81 @@ describe('presentationOutline', () => {
     expect(resultsText).toContain('SAC');
     expect(resultsText).toContain('tracking error');
   });
+
+  it('preserves paper-specific architecture, formula, and metric terms for a robotics method paper', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [paper({ englishTitle: 'PILOT: A Perceptive Integrated Low-level Controller' })],
+      blocks: [
+        block({
+          section: 'Abstract',
+          page: 1,
+          original:
+            'PILOT addresses humanoid loco-manipulation in unstructured scenes where blind low-level controllers struggle with terrain awareness.'
+        }),
+        block({
+          section: 'Method',
+          page: 4,
+          original:
+            'PILOT fuses prediction-based perceptive representations, a cross-modal context encoder, and a Mixture-of-Experts (MoE) policy architecture to coordinate diverse motor skills for loco-manipulation.'
+        }),
+        block({
+          section: 'Method',
+          page: 4,
+          original:
+            'The policy takes terrain-aware perceptive features, proprioceptive observations, and task commands, then outputs joint targets and whole-body control actions.'
+        }),
+        block({
+          type: 'formula',
+          section: 'Method',
+          page: 5,
+          original:
+            'The training objective is J(theta)=E[R_task + 0.6 R_tracking + 0.3 R_stability - 0.2 C_collision].'
+        }),
+        block({
+          type: 'caption',
+          section: 'Method',
+          page: 5,
+          original:
+            'Fig. 3. Architecture overview of prediction-based perception, cross-modal context encoder, and MoE policy.'
+        }),
+        block({
+          section: 'Experiments',
+          page: 7,
+          original:
+            'We evaluate obstacle crossing, slope traversal, narrow passage, and object transport tasks on Unitree G1, comparing against PPO, MPC, and blind baseline controllers using success rate, fall rate, tracking error, command tracking, and terrain traversability.'
+        }),
+        block({
+          type: 'caption',
+          section: 'Results',
+          page: 8,
+          original:
+            'Table 2. Quantitative comparison of success rate, fall rate, tracking error, command tracking, and terrain traversability against PPO, MPC, and blind baseline controllers.'
+        })
+      ],
+      targetSlideCount: 12
+    });
+
+    const stageText = draft.methodMap?.method_stages.map((stage) => `${stage.input} ${stage.process} ${stage.output}`).join(' ') ?? '';
+    const methodText = draft.slides
+      .filter((slide) => slide.type === 'method' || slide.type === 'formula')
+      .flatMap((slide) => slide.bullets)
+      .join(' ');
+    const experimentText = draft.slides
+      .filter((slide) => slide.type === 'experiments' || slide.type === 'results')
+      .flatMap((slide) => slide.bullets)
+      .join(' ');
+
+    expect(stageText).toMatch(/prediction-based perceptive representation|cross-modal context encoder|Mixture-of-Experts|MoE policy/i);
+    expect(stageText).toMatch(/terrain-aware perceptive features|proprioceptive observations|task commands|joint targets/i);
+    expect(methodText).toMatch(/J\(theta\)|R_tracking|C_collision|cross-modal context encoder|MoE policy/i);
+    expect(experimentText).toMatch(/Unitree G1|PPO|MPC|blind baseline|success rate|fall rate|tracking error|terrain traversability/i);
+    expect(draft.figures.find((figure) => figure.imageId === 'fig-5-1')).toMatchObject({
+      suggestedSlide: 'method',
+      figureKind: 'method'
+    });
+    expect(draft.figures.find((figure) => figure.imageId === 'fig-8-2')).toMatchObject({
+      suggestedSlide: 'results',
+      figureKind: 'result'
+    });
+  });
 });
