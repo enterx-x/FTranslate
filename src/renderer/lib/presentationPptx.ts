@@ -2660,7 +2660,7 @@ function asciiRatio(text: string): number {
   return ascii / text.length;
 }
 
-function normalizePptxOutput(output: string | ArrayBuffer | Blob | Uint8Array): ArrayBuffer {
+export async function normalizePptxOutput(output: string | ArrayBuffer | Blob | Uint8Array): Promise<ArrayBuffer> {
   if (output instanceof ArrayBuffer) {
     return output;
   }
@@ -2676,7 +2676,10 @@ function normalizePptxOutput(output: string | ArrayBuffer | Blob | Uint8Array): 
     }
     return bytes.buffer;
   }
-  throw new Error('PPTX export returned a Blob; use the browser export path instead.');
+  if (typeof Blob !== 'undefined' && output instanceof Blob) {
+    return output.arrayBuffer();
+  }
+  throw new Error('PPTX export returned an unsupported binary payload.');
 }
 
 function formatDate(iso: string): string {

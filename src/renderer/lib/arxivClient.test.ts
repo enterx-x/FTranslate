@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   ARXIV_API_ENDPOINT,
+  ARXIV_RATE_LIMIT_COOLDOWN_MS,
   buildArxivApiUrl,
   buildArxivCacheKey,
+  buildArxivHttpErrorMessage,
+  buildArxivRateLimitMessage,
+  isArxivRateLimitStatus,
   parseArxivAtomFeed
 } from './arxivClient';
 
@@ -75,6 +79,18 @@ describe('arxivClient', () => {
         sortBy: 'relevance',
         sortOrder: 'descending'
       })
+    );
+  });
+
+  it('formats arXiv rate-limit failures as a retryable user-facing state', () => {
+    const now = Date.parse('2026-06-05T12:00:00.000Z');
+
+    expect(isArxivRateLimitStatus(429)).toBe(true);
+    expect(isArxivRateLimitStatus(500)).toBe(false);
+    expect(buildArxivRateLimitMessage(now + ARXIV_RATE_LIMIT_COOLDOWN_MS, now)).toContain('90 秒后再试');
+    expect(buildArxivHttpErrorMessage(429)).toBe('arXiv 官方 API 正在限流，请稍后再试。');
+    expect(buildArxivHttpErrorMessage(503, 'Service Unavailable')).toBe(
+      'arXiv API 请求失败：HTTP 503 Service Unavailable'
     );
   });
 });

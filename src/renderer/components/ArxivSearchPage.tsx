@@ -1,7 +1,11 @@
 import { useMemo, useState } from 'react';
 import {
+  ARXIV_RATE_LIMIT_COOLDOWN_MS,
   buildArxivApiUrl,
   buildArxivCacheKey,
+  buildArxivHttpErrorMessage,
+  buildArxivRateLimitMessage,
+  isArxivRateLimitStatus,
   parseArxivAtomFeed,
   type ArxivPaper,
   type ArxivSearchRequest,
@@ -17,6 +21,7 @@ interface ArxivSearchPageProps {
 }
 
 const ARXIV_CACHE_KEY = 'pdfTranslationReader:arxivSearchCache:v1';
+const ARXIV_RATE_LIMIT_KEY = 'pdfTranslationReader:arxivRateLimitUntil:v1';
 const ARXIV_CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CachedArxivSearch {
@@ -48,6 +53,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   );
   const [isSearching, setIsSearching] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [rateLimitUntil, setRateLimitUntil] = useState(readRateLimitUntil);
 
   const request = useMemo<ArxivSearchRequest>(
     () => ({
@@ -59,6 +65,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     }),
     [category, query, sortBy]
   );
+
+  const isRateLimited = Date.now() < rateLimitUntil;
 
   async function handleSearch(): Promise<void> {
     if (!query.trim()) {
@@ -74,13 +82,39 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       return;
     }
 
+    const now = Date.now();
+    if (now < rateLimitUntil) {
+      const stale = readCachedSearch(cacheKey, true);
+      if (stale) {
+        setPapers(stale);
+        setMessage(`${buildArxivRateLimitMessage(rateLimitUntil, now)} 已显示上次缓存的 ${stale.length} 篇结果。`);
+        return;
+      }
+      setMessage(buildArxivRateLimitMessage(rateLimitUntil, now));
+      return;
+    }
+
     try {
       setIsSearching(true);
       setMessage('正在调用 arXiv 官方 Atom API 检索...');
       const response = await fetch(buildArxivApiUrl(request));
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        if (isArxivRateLimitStatus(response.status)) {
+          const retryAt = Date.now() + ARXIV_RATE_LIMIT_COOLDOWN_MS;
+          writeRateLimitUntil(retryAt);
+          setRateLimitUntil(retryAt);
+          const stale = readCachedSearch(cacheKey, true);
+          if (stale) {
+            setPapers(stale);
+            setMessage(`${buildArxivRateLimitMessage(retryAt)} 已显示上次缓存的 ${stale.length} 篇结果。`);
+            return;
+          }
+          setMessage(buildArxivRateLimitMessage(retryAt));
+          return;
+        }
+        throw new Error(buildArxivHttpErrorMessage(response.status, response.statusText));
       }
+
       const xml = await response.text();
       const nextPapers = parseArxivAtomFeed(xml);
       setPapers(nextPapers);
@@ -157,9 +191,14 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               ))}
             </select>
           </label>
-          <button type="button" className="primary-button button-with-icon" disabled={isSearching} onClick={handleSearch}>
+          <button
+            type="button"
+            className="primary-button button-with-icon"
+            disabled={isSearching}
+            onClick={handleSearch}
+          >
             <img className="button-icon" src={searchIcon} alt="" />
-            <span>{isSearching ? '检索中' : '检索'}</span>
+            <span>{isSearching ? '检索中' : isRateLimited ? '稍后再试' : '检索'}</span>
           </button>
         </div>
         <p className="inline-hint">{message}</p>
@@ -209,11 +248,14 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   );
 }
 
-function readCachedSearch(key: string): ArxivPaper[] | null {
+function readCachedSearch(key: string, allowStale = false): ArxivPaper[] | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(ARXIV_CACHE_KEY) ?? '{}') as Record<string, CachedArxivSearch>;
     const entry = parsed[key];
-    if (!entry || Date.now() - entry.createdAt > ARXIV_CACHE_TTL_MS) {
+    if (!entry) {
+      return null;
+    }
+    if (!allowStale && Date.now() - entry.createdAt > ARXIV_CACHE_TTL_MS) {
       return null;
     }
     return entry.papers;
@@ -230,6 +272,15 @@ function writeCachedSearch(key: string, papers: ArxivPaper[]): void {
   } catch {
     // 缓存只用于减少重复请求，失败不影响检索结果。
   }
+}
+
+function readRateLimitUntil(): number {
+  const value = Number(localStorage.getItem(ARXIV_RATE_LIMIT_KEY) ?? 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function writeRateLimitUntil(value: number): void {
+  localStorage.setItem(ARXIV_RATE_LIMIT_KEY, String(value));
 }
 
 function sanitizeFileStem(value: string): string {

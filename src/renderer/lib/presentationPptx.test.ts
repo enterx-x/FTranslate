@@ -9,6 +9,7 @@ import {
   buildPptxEvidenceCards,
   buildPptxSlidePlan,
   createPresentationPptxBuffer,
+  normalizePptxOutput,
   validatePptxQuality,
   validatePptxSlidePlan
 } from './presentationPptx';
@@ -725,6 +726,15 @@ describe('presentationPptx', () => {
 
     expect(buffer.byteLength).toBeGreaterThan(1000);
     expect(String.fromCharCode(bytes[0], bytes[1])).toBe('PK');
+  });
+
+  it('normalizes browser Blob PPTX output before sending it to Electron for saving', async () => {
+    const buffer = await normalizePptxOutput(new Blob([new Uint8Array([80, 75, 3, 4])]));
+    const bytes = new Uint8Array(buffer);
+
+    expect(String.fromCharCode(bytes[0], bytes[1])).toBe('PK');
+    expect(bytes[2]).toBe(3);
+    expect(bytes[3]).toBe(4);
   });
 
   it('embeds cropped figure image assets instead of exporting only a placeholder', async () => {

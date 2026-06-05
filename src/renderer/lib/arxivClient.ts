@@ -26,6 +26,7 @@ export interface ArxivPaper {
 }
 
 const MAX_ARXIV_RESULTS = 50;
+export const ARXIV_RATE_LIMIT_COOLDOWN_MS = 90_000;
 
 export function buildArxivApiUrl(request: ArxivSearchRequest): string {
   const params = new URLSearchParams({
@@ -48,6 +49,23 @@ export function buildArxivCacheKey(request: ArxivSearchRequest): string {
     request.sortBy ?? 'relevance',
     request.sortOrder ?? 'descending'
   ].join('|');
+}
+
+export function isArxivRateLimitStatus(status: number): boolean {
+  return status === 429;
+}
+
+export function buildArxivRateLimitMessage(retryAt: number, now = Date.now()): string {
+  const seconds = Math.max(1, Math.ceil((retryAt - now) / 1000));
+  return `arXiv 官方 API 正在限流，请约 ${seconds} 秒后再试。已有结果会继续保留，避免重复请求触发更长限流。`;
+}
+
+export function buildArxivHttpErrorMessage(status: number, statusText = ''): string {
+  if (isArxivRateLimitStatus(status)) {
+    return 'arXiv 官方 API 正在限流，请稍后再试。';
+  }
+  const suffix = statusText.trim() ? ` ${statusText.trim()}` : '';
+  return `arXiv API 请求失败：HTTP ${status}${suffix}`;
 }
 
 export function parseArxivAtomFeed(xml: string): ArxivPaper[] {
