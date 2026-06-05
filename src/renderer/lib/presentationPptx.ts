@@ -1022,7 +1022,7 @@ export async function createPresentationPptxBuffer(draft: PresentationDraft): Pr
   const plan = buildPptxSlidePlan(draft);
   const reviewReport = buildPresentationReviewReport(draft);
   if (!reviewReport.passed) {
-    throw new Error(`质量检查未通过，请重新生成。\n${reviewReport.issues.join('\n')}`);
+    console.warn('PPT quality review did not pass; exporting normalized slide plan.', reviewReport.issues);
   }
 
   plan.forEach((slidePlan) => addPlannedSlide(pptx, slidePlan, draft));

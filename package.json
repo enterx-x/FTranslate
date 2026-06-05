@@ -19,6 +19,7 @@
     "@univerjs/preset-sheets-core": "^0.24.0",
     "@univerjs/preset-sheets-data-validation": "^0.24.0",
     "@univerjs/presets": "^0.24.0",
+    "@xmldom/xmldom": "^0.8.13",
     "exceljs": "^4.4.0",
     "katex": "^0.17.0",
     "pdfjs-dist": "5.7.284",

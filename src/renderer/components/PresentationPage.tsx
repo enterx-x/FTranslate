@@ -176,8 +176,11 @@ export function PresentationPage(props: PresentationPageProps) {
           <button
             type="button"
             className="primary-button button-with-icon"
-            disabled={Boolean(reviewReport && !reviewReport.passed)}
-            title={reviewReport && !reviewReport.passed ? '质量检查未通过，请先修正大纲内容。' : '导出 PPTX'}
+            title={
+              reviewReport && !reviewReport.passed
+                ? '质量检查未通过时仍会导出标准化版本；建议后续补充真实图表和来源。'
+                : '导出 PPTX'
+            }
             onClick={() => props.onExportPptx(draft)}
           >
             <img className="button-icon" src={downloadIcon} alt="" />

@@ -587,7 +587,8 @@ describe('presentationPptx', () => {
     expect(report.repeated_keyword_problem).toBe(false);
     expect(report.slide_type_mismatch).toBe(true);
     expect(report.can_identify_method_stages).toBe(false);
-    await expect(createPresentationPptxBuffer(draft)).rejects.toThrow(/质量检查未通过|quality/i);
+    const buffer = await createPresentationPptxBuffer(draft);
+    expect(buffer.byteLength).toBeGreaterThan(1000);
   });
 
   it('filters setup figures away from result slides instead of exporting mismatched evidence', () => {

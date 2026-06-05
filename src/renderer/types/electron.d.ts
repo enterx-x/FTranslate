@@ -1,3 +1,5 @@
+import type { ArxivSearchRequest, ArxivSearchServiceResult } from '../../shared/arxiv';
+
 export interface PdfFilePayload {
   filePath: string;
   fileName: string;
@@ -219,6 +221,7 @@ export interface ElectronApi {
     contentBase64: string;
     defaultFileName: string;
   }) => Promise<SaveTextResult | null>;
+  searchArxiv: (request: ArxivSearchRequest) => Promise<ArxivSearchServiceResult>;
   downloadArxivPdf: (request: {
     pdfUrl: string;
     defaultFileName: string;

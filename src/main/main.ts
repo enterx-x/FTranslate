@@ -43,6 +43,8 @@ import {
   type PdfTranslationInvocation,
   type PdfTranslationOutputMode
 } from '../shared/pdfTranslation';
+import { type ArxivSearchRequest } from '../shared/arxiv';
+import { ArxivService } from './arxivService';
 
 interface PdfFilePayload {
   filePath: string;
@@ -1007,15 +1009,15 @@ function sanitizeFileName(value: string): string {
   return value.replace(/[<>:"/\\|?*\u0000-\u001f]+/gu, '_').slice(0, 120) || 'paper';
 }
 
-function normalizeArxivPdfDownloadUrl(value: string): URL {
-  const url = new URL(value.trim().replace(/^http:\/\//iu, 'https://'));
-  if (url.protocol !== 'https:' || url.hostname !== 'arxiv.org' || !url.pathname.startsWith('/pdf/')) {
-    throw new Error('只允许下载 arXiv 官方 PDF 链接。');
+let arxivService: ArxivService | null = null;
+
+function getArxivService(): ArxivService {
+  if (!arxivService) {
+    arxivService = new ArxivService({
+      dbPath: path.join(app.getPath('userData'), 'arxiv-cache.sqlite')
+    });
   }
-  if (!url.pathname.toLowerCase().endsWith('.pdf')) {
-    url.pathname = `${url.pathname}.pdf`;
-  }
-  return url;
+  return arxivService;
 }
 
 async function exportResearchWorkbookToExcel(
@@ -2834,11 +2836,14 @@ function registerIpcHandlers(): void {
     };
   });
 
+  ipcMain.handle('arxiv:search', async (_event, request: ArxivSearchRequest) => {
+    return getArxivService().search(request, 'renderer:arxiv-search');
+  });
+
   ipcMain.handle('arxiv:download-pdf', async (_event, request: ArxivDownloadPdfRequest) => {
-    const pdfUrl = normalizeArxivPdfDownloadUrl(request.pdfUrl);
     const result = await dialog.showSaveDialog({
       title: '下载 arXiv PDF',
-      defaultPath: sanitizeFileName(request.defaultFileName || path.basename(pdfUrl.pathname)) || 'arxiv-paper.pdf',
+      defaultPath: sanitizeFileName(request.defaultFileName || 'arxiv-paper.pdf'),
       filters: [{ name: 'PDF', extensions: ['pdf'] }]
     });
 
@@ -2846,16 +2851,7 @@ function registerIpcHandlers(): void {
       return null;
     }
 
-    const response = await fetch(pdfUrl.toString());
-    if (!response.ok) {
-      throw new Error(`arXiv PDF 下载失败：HTTP ${response.status}`);
-    }
-
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.byteLength < 1024 || buffer.subarray(0, 4).toString('utf8') !== '%PDF') {
-      throw new Error('下载结果不是有效 PDF 文件。');
-    }
-
+    const buffer = await getArxivService().downloadPdf(request.pdfUrl, 'renderer:arxiv-download');
     await fs.writeFile(result.filePath, buffer);
     return readPdfFile(result.filePath);
   });
@@ -2905,6 +2901,8 @@ app.on('activate', () => {
 app.on('will-quit', () => {
   // 退出前释放全局快捷键，避免系统快捷键被残留占用。
   globalShortcut.unregisterAll();
+  arxivService?.close();
+  arxivService = null;
 });
 
 app.on('window-all-closed', () => {

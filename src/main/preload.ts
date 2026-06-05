@@ -91,6 +91,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('file:export-markdown', request),
   exportPptx: (request: { filePath?: string; contentBase64: string; defaultFileName: string }) =>
     ipcRenderer.invoke('file:export-pptx', request),
+  searchArxiv: (request: {
+    searchQuery: string;
+    category: string;
+    start: number;
+    maxResults: number;
+    sortBy: 'relevance' | 'lastUpdatedDate' | 'submittedDate';
+    sortOrder: 'ascending' | 'descending';
+  }) => ipcRenderer.invoke('arxiv:search', request),
   downloadArxivPdf: (request: { pdfUrl: string; defaultFileName: string }) =>
     ipcRenderer.invoke('arxiv:download-pdf', request),
   exportPdf: (request: { sourcePath: string; defaultFileName: string }) =>
