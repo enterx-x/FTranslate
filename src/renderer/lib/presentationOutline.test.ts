@@ -7,6 +7,7 @@ import {
   buildPresentationDraft,
   buildPresentationAiEnhancementPrompt,
   extractFigureCandidates,
+  inferFigureCropBoxFromCaptionBlock,
   serializePresentationMarkdown
 } from './presentationOutline';
 import type { PaperRecord } from './papers';
@@ -373,6 +374,79 @@ describe('presentationOutline', () => {
     expect(figures[0]).toMatchObject({ suggestedSlide: 'method' });
     expect(figures[1]).toMatchObject({ suggestedSlide: 'experiments' });
     expect(figures[2]).toMatchObject({ suggestedSlide: 'results' });
+  });
+
+  it('infers a wide real figure crop for full-width bottom method captions', () => {
+    const crop = inferFigureCropBoxFromCaptionBlock(
+      block({
+        type: 'caption',
+        section: 'Method',
+        page: 4,
+        original: 'Fig. 2. Architecture overview of the PILOT controller, LiDAR elevation map, and whole-body action output.',
+        bounds: {
+          x: 72,
+          y: 680,
+          width: 500,
+          height: 24,
+          pageWidth: 612,
+          pageHeight: 792
+        }
+      })
+    );
+
+    expect(crop).toBeDefined();
+    expect(crop!.x).toBeLessThanOrEqual(24);
+    expect(crop!.width).toBeGreaterThanOrEqual(560);
+    expect(crop!.y).toBeLessThan(430);
+    expect(crop!.y + crop!.height).toBeLessThan(680);
+    expect(crop!.height).toBeGreaterThan(250);
+  });
+
+  it('keeps source-grounded local bullets when AI enhancement returns generic claims', () => {
+    const draft = buildLocalPresentationDraft({
+      papers: [paper({ englishTitle: 'PILOT: Perceptive Integrated Low-level Controller' })],
+      blocks: [
+        block({
+          section: 'Method',
+          page: 4,
+          original:
+            'PILOT uses a robot-centric LiDAR-based elevation map, proprioceptive states, and a hybrid internal command representation to output whole-body actions.'
+        }),
+        block({
+          section: 'Training',
+          page: 5,
+          original:
+            'The controller is trained with reinforcement learning to improve stability, command tracking precision, and terrain traversability.'
+        })
+      ],
+      targetSlideCount: 12
+    });
+    const methodSlide = draft.slides.find((slide) => slide.type === 'method');
+    expect(methodSlide).toBeDefined();
+
+    const enhanced = applyAiEnhancedPresentationDraft(
+      draft,
+      JSON.stringify({
+        slides: [
+          {
+            id: methodSlide!.id,
+            title: methodSlide!.title,
+            bullets: [
+              'The method connects perception, planning, and execution.',
+              'It improves generalization in complex scenarios.',
+              'The architecture supports better policy behavior.'
+            ],
+            speakerNotes: 'Generic notes without paper-specific evidence.'
+          }
+        ]
+      })
+    );
+    const enhancedMethodText = enhanced.slides.find((slide) => slide.id === methodSlide!.id)?.bullets.join(' ') ?? '';
+
+    expect(enhancedMethodText).toContain('PILOT');
+    expect(enhancedMethodText).toContain('LiDAR');
+    expect(enhancedMethodText).toContain('hybrid internal command');
+    expect(enhancedMethodText).not.toMatch(/connects perception|improves generalization|complex scenarios|better policy behavior/iu);
   });
 
   it('keeps a stable slide even when experiments are missing', () => {

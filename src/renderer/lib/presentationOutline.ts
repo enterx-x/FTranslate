@@ -449,7 +449,10 @@ export function buildPresentationAiEnhancementPrompt(draft: PresentationDraft): 
         imageId: figure.imageId,
         pageNumber: figure.pageNumber,
         caption: figure.caption,
-        suggestedSlide: figure.suggestedSlide
+        suggestedSlide: figure.suggestedSlide,
+        figureKind: figure.figureKind,
+        cropStatus: figure.cropStatus,
+        cropBox: figure.cropBox
       }))
     }));
 
@@ -467,6 +470,8 @@ export function buildPresentationAiEnhancementPrompt(draft: PresentationDraft): 
       '- Keep each slide to 3-5 bullets.',
       '- Each bullet should be concrete and mention paper-specific objects, modules, tasks, metrics, baselines, platforms, or results when the sources support it.',
       '- At least two bullets on each non-cover slide must include exact source-backed details such as robot platform, input observation, output action, model module, training objective, baseline, metric, dataset, task, or figure caption.',
+      '- Reuse exact paper terms from methodMap and sources when present, for example named modules, observations, commands, formulas, baselines, metrics, robot platforms, and figure captions.',
+      '- If figures have cropStatus "image-ready" or a cropBox, keep the slide text aligned with that real figure/caption instead of inventing a generic diagram.',
       '- For robotics/RL/VLA/PINN papers, prefer details about robot platform, input observation, output action, training data/objective, baseline, metric, real robot validation, and limitation.',
       '- Do not use generic bullets such as “框架串联感知、策略、执行”, “任务指令转成机器人策略”, “方法强调模型、控制和执行协同”, “增强泛化能力”, or “面向复杂场景”.',
       '- If the source does not support a method diagram, say the missing detail explicitly instead of writing a generic placeholder.',
@@ -513,7 +518,7 @@ export function applyAiEnhancedPresentationDraft(draft: PresentationDraft, aiTex
         return slide;
       }
 
-      const bullets = sanitizeAiBullets(patch.bullets);
+      const bullets = sanitizeAiBullets(patch.bullets, slide);
       return {
         ...slide,
         title: typeof patch.title === 'string' && patch.title.trim() ? patch.title.trim() : slide.title,
@@ -555,15 +560,142 @@ function parseAiEnhancementResponse(aiText: string): { slides?: unknown[] } | nu
   }
 }
 
-function sanitizeAiBullets(value: unknown): string[] {
+function sanitizeAiBullets(value: unknown, slide: PresentationSlide): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
 
   return value
     .map((item) => (typeof item === 'string' ? normalizeInlineText(item, 96) : ''))
-    .filter(Boolean)
+    .filter((item) => item && isSourceGroundedAiBullet(item, slide))
     .slice(0, 5);
+}
+
+const AI_GENERIC_BULLET_PATTERNS = [
+  /\bconnects?\s+(perception|model|policy|planning).{0,32}(execution|control|behavior)\b/iu,
+  /\b(improves?|enhances?|boosts?)\s+(generalization|robustness|performance|policy behavior)\b/iu,
+  /\b(complex scenarios?|diverse scenarios?|better policy behavior|generic capabilities)\b/iu,
+  /\b(the method|this paper|the architecture)\s+(supports?|emphasizes?|improves?|enhances?)\b/iu,
+  /论文信息|研究对象|论点|方法线索|汇报目标|模型.*控制.*执行|增强泛化能力|复杂场景/u
+];
+
+const AI_STOP_TOKENS = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'from',
+  'that',
+  'this',
+  'method',
+  'model',
+  'paper',
+  'approach',
+  'system',
+  'uses',
+  'using',
+  'based',
+  'through',
+  'between',
+  'into',
+  'output',
+  'input'
+]);
+
+function isSourceGroundedAiBullet(text: string, slide: PresentationSlide): boolean {
+  if (/原文未明确|not specified|not clear|not reported|missing detail/iu.test(text)) {
+    return true;
+  }
+  if (AI_GENERIC_BULLET_PATTERNS.some((pattern) => pattern.test(text))) {
+    return false;
+  }
+  if (hasStrongTechnicalAnchor(text)) {
+    return true;
+  }
+
+  const evidenceText = [
+    slide.title,
+    slide.section ?? '',
+    ...slide.bullets,
+    ...slide.sourceRefs.map((ref) => `${ref.section} ${ref.text}`),
+    ...slide.figures.map((figure) => figure.caption)
+  ].join(' ');
+
+  if (!evidenceText.trim()) {
+    return true;
+  }
+
+  const bulletLower = text.toLowerCase();
+  const evidenceLower = evidenceText.toLowerCase();
+  const evidenceTerms = extractEvidenceTerms(evidenceText);
+  const exactTerms = [
+    ...evidenceTerms.methods,
+    ...evidenceTerms.observations,
+    ...evidenceTerms.commands,
+    ...evidenceTerms.outputs,
+    ...evidenceTerms.platforms,
+    ...evidenceTerms.tasks,
+    ...evidenceTerms.training,
+    ...evidenceTerms.baselines,
+    ...evidenceTerms.metrics,
+    ...evidenceTerms.constraints,
+    ...evidenceTerms.formulas
+  ].filter((term) => term.length >= 3);
+
+  if (exactTerms.some((term) => bulletLower.includes(term.toLowerCase()))) {
+    return true;
+  }
+
+  const bulletTokens = extractEvidenceTokens(text);
+  const evidenceTokens = new Set(extractEvidenceTokens(evidenceText));
+  const sharedTokens = bulletTokens.filter((token) => evidenceTokens.has(token));
+  if (sharedTokens.length >= 2) {
+    return true;
+  }
+
+  const hasNamedEntity = /\b[A-Z][A-Za-z0-9.+-]{2,}\b/u.test(text) || /\b\d+(?:\.\d+)?\b/u.test(text);
+  return hasNamedEntity && bulletTokens.some((token) => evidenceLower.includes(token));
+}
+
+function hasStrongTechnicalAnchor(text: string): boolean {
+  const lower = text.toLowerCase();
+  return [
+    'rgb',
+    'rgb-d',
+    'lidar',
+    'pilot',
+    'unitree g1',
+    'vla',
+    'vlm',
+    'mpc',
+    'cbf',
+    'ppo',
+    'sac',
+    'pinn',
+    'rl',
+    'world model',
+    'policy network',
+    'observation encoder',
+    'action head',
+    'low-level robot action',
+    'hybrid internal command',
+    'whole-body action',
+    'success rate',
+    'collision rate',
+    'tracking error',
+    'terrain traversability'
+  ].some((anchor) => lower.includes(anchor));
+}
+
+function extractEvidenceTokens(text: string): string[] {
+  return Array.from(
+    new Set(
+      (text.match(/[A-Za-z][A-Za-z0-9.+-]{2,}|[A-Za-z]+-[A-Za-z0-9-]+|\d+(?:\.\d+)?/gu) ?? [])
+        .filter((token) => token.length >= 4 || /^[A-Z0-9.+-]{2,}$/u.test(token))
+        .map((token) => token.toLowerCase())
+        .filter((token) => !AI_STOP_TOKENS.has(token))
+    )
+  );
 }
 
 export function extractFigureCandidates(blocks: ExtractedPdfBlock[]): PresentationFigureCandidate[] {
@@ -600,22 +732,33 @@ export function inferFigureCropBoxFromCaptionBlock(block: ExtractedPdfBlock): Pr
 
   const pageWidth = bounds.pageWidth;
   const pageHeight = bounds.pageHeight;
-  const horizontalMargin = Math.max(14, pageWidth * 0.025);
+  const figureKind = classifyFigureKind(block.original);
+  const isTableCaption = /^\s*(table|tab\.)\b/iu.test(block.original.trim());
+  const wideFigure = shouldUseWideFigureCrop(block, figureKind);
+  const horizontalMargin = wideFigure ? Math.max(18, pageWidth * 0.035) : Math.max(14, pageWidth * 0.025);
+  const verticalMargin = Math.max(18, pageHeight * 0.03);
   const figurePadding = Math.max(8, pageHeight * 0.012);
   const captionTop = clamp(bounds.y, 0, pageHeight);
-  const targetHeight = clamp(pageHeight * 0.32, pageHeight * 0.18, pageHeight * 0.48);
-  const captionLooksAboveVisual = /^table\b/iu.test(block.original.trim()) || captionTop < pageHeight * 0.22;
+  const targetHeight = clamp(pageHeight * getFigureCropHeightRatio(figureKind, isTableCaption), pageHeight * 0.18, pageHeight * 0.5);
+  const captionLooksAboveVisual = isTableCaption || captionTop < pageHeight * 0.22;
   const cropY = captionLooksAboveVisual
-    ? clamp(captionTop + bounds.height + figurePadding, pageHeight * 0.04, pageHeight * 0.82)
-    : clamp(captionTop - targetHeight - figurePadding, pageHeight * 0.04, Math.max(pageHeight * 0.04, captionTop - 30));
+    ? clamp(captionTop + bounds.height + figurePadding, verticalMargin, pageHeight * 0.82)
+    : clamp(captionTop - targetHeight - figurePadding, verticalMargin, Math.max(verticalMargin, captionTop - 30));
+  const maxCropHeight = captionLooksAboveVisual ? pageHeight - cropY - verticalMargin : captionTop - cropY - figurePadding;
   const cropHeight = captionLooksAboveVisual
-    ? clamp(targetHeight, pageHeight * 0.12, pageHeight - cropY - pageHeight * 0.04)
-    : clamp(captionTop - cropY - figurePadding, pageHeight * 0.12, pageHeight * 0.52);
-  const wideCaption = bounds.width >= pageWidth * 0.42;
-  const cropWidth = wideCaption
-    ? clamp(bounds.width + horizontalMargin * 2, pageWidth * 0.48, pageWidth * 0.92)
-    : clamp(Math.max(bounds.width + horizontalMargin * 2, pageWidth * 0.34), pageWidth * 0.28, pageWidth * 0.5);
-  const cropX = clamp(bounds.x - horizontalMargin, pageWidth * 0.03, Math.max(pageWidth * 0.03, pageWidth - cropWidth));
+    ? clamp(targetHeight, Math.min(pageHeight * 0.12, maxCropHeight), Math.max(1, maxCropHeight))
+    : clamp(maxCropHeight, Math.min(pageHeight * 0.12, pageHeight * 0.52), pageHeight * 0.52);
+  const wideCaption = bounds.width >= pageWidth * 0.42 || wideFigure;
+  const cropWidth = wideFigure
+    ? clamp(pageWidth - horizontalMargin * 2, pageWidth * 0.72, pageWidth * 0.94)
+    : wideCaption
+      ? clamp(bounds.width + horizontalMargin * 2, pageWidth * 0.48, pageWidth * 0.92)
+      : clamp(Math.max(bounds.width + horizontalMargin * 2, pageWidth * 0.34), pageWidth * 0.28, pageWidth * 0.5);
+  const cropX = wideFigure
+    ? horizontalMargin
+    : wideCaption
+      ? clamp(bounds.x - horizontalMargin, pageWidth * 0.03, Math.max(pageWidth * 0.03, pageWidth - cropWidth))
+      : clamp(bounds.x - horizontalMargin, pageWidth * 0.03, Math.max(pageWidth * 0.03, pageWidth - cropWidth));
 
   return {
     x: roundNumber(cropX),
@@ -625,6 +768,35 @@ export function inferFigureCropBoxFromCaptionBlock(block: ExtractedPdfBlock): Pr
     pageWidth: roundNumber(pageWidth),
     pageHeight: roundNumber(pageHeight)
   };
+}
+
+function shouldUseWideFigureCrop(block: ExtractedPdfBlock, figureKind: PresentationFigureKind): boolean {
+  const bounds = block.bounds;
+  if (!bounds?.pageWidth) {
+    return false;
+  }
+  const text = block.original;
+  const captionWidthRatio = bounds.width / bounds.pageWidth;
+  return (
+    captionWidthRatio >= 0.55 ||
+    figureKind === 'method' ||
+    figureKind === 'result' ||
+    /^\s*(table|tab\.)\b/iu.test(text.trim()) ||
+    /\b(architecture|overview|framework|pipeline|comparison|quantitative|ablation|results?|architecture overview)\b/iu.test(text)
+  );
+}
+
+function getFigureCropHeightRatio(figureKind: PresentationFigureKind, isTableCaption: boolean): number {
+  if (isTableCaption || figureKind === 'result') {
+    return 0.38;
+  }
+  if (figureKind === 'method') {
+    return 0.42;
+  }
+  if (figureKind === 'formula') {
+    return 0.26;
+  }
+  return 0.32;
 }
 
 function buildCoverSlide(title: string, paper: PaperRecord | undefined, speakerName?: string): PresentationSlide {
