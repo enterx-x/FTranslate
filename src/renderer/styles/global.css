@@ -8692,3 +8692,416 @@ body.is-resizing-layout .layout-resize-handle::after {
     position: static;
   }
 }
+
+/* arXiv responsive polish: CSS-only layout and presentation hardening. */
+:root {
+  --text-primary: var(--ink, var(--text));
+  --text-secondary: var(--muted);
+  --text-muted: #8a94a6;
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+}
+
+.arxiv-page.page-workspace {
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: clamp(12px, 1.4vw, 18px);
+}
+
+.arxiv-page .content-card {
+  min-width: 0;
+  border: 1px solid var(--line, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.arxiv-page-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.arxiv-page-header > div {
+  min-width: min(100%, 420px);
+  flex: 1 1 520px;
+}
+
+.arxiv-page-header h1,
+.arxiv-page-header p,
+.arxiv-paper-card h3,
+.arxiv-detail-section h3 {
+  overflow-wrap: anywhere;
+}
+
+.arxiv-page-header p {
+  max-width: 920px;
+  margin-bottom: 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.arxiv-query-row {
+  grid-template-columns:
+    minmax(220px, 1fr)
+    minmax(118px, 0.22fr)
+    minmax(118px, 0.2fr)
+    minmax(106px, 0.16fr)
+    max-content;
+}
+
+.arxiv-query-row input,
+.arxiv-query-row select,
+.arxiv-filter-panel select,
+.arxiv-pagination-card select {
+  height: var(--control-h, 34px);
+  border: 1px solid var(--line-strong, var(--border-strong));
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  background: #ffffff;
+  color: var(--text-primary);
+  box-shadow: inset 0 1px 0 rgba(16, 24, 40, 0.03);
+}
+
+.arxiv-query-row input:focus,
+.arxiv-query-row select:focus,
+.arxiv-filter-panel select:focus,
+.arxiv-pagination-card select:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  outline-offset: 1px;
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line-strong, var(--border-strong)));
+}
+
+.arxiv-query-row .primary-button {
+  white-space: nowrap;
+}
+
+.arxiv-message {
+  min-width: 0;
+  border-radius: var(--radius-sm);
+}
+
+.arxiv-message > span {
+  min-width: min(100%, 260px);
+  flex: 1 1 360px;
+  overflow-wrap: anywhere;
+}
+
+.arxiv-message.is-success {
+  border-color: color-mix(in srgb, var(--success, #067647) 24%, var(--line, var(--border)));
+  background: color-mix(in srgb, var(--success-soft) 56%, #ffffff);
+}
+
+.arxiv-message.is-loading {
+  background: color-mix(in srgb, var(--accent-soft) 62%, #ffffff);
+}
+
+.arxiv-history {
+  min-width: 0;
+}
+
+.arxiv-history .pill-button {
+  max-width: min(280px, 100%);
+  min-height: 28px;
+  border: 1px solid var(--line, var(--border));
+  border-radius: 999px;
+  padding: 0 10px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arxiv-layout-standard,
+.arxiv-layout-compact,
+.arxiv-layout-wide {
+  grid-template-columns: minmax(168px, 0.22fr) minmax(0, 1fr) minmax(260px, 0.34fr);
+}
+
+.arxiv-layout-compact {
+  grid-template-columns: minmax(156px, 0.2fr) minmax(0, 1fr) minmax(236px, 0.3fr);
+}
+
+.arxiv-layout-wide {
+  grid-template-columns: minmax(184px, 0.22fr) minmax(0, 0.92fr) minmax(300px, 0.42fr);
+}
+
+.arxiv-filter-panel,
+.arxiv-results-panel,
+.arxiv-detail-panel {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.arxiv-results-panel,
+.arxiv-detail-panel {
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+.arxiv-filter-panel {
+  max-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.arxiv-pagination-card {
+  border-color: var(--line, var(--border));
+  background: linear-gradient(180deg, #ffffff, var(--surface-muted));
+}
+
+.arxiv-pagination-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.arxiv-pagination-actions button {
+  min-width: 0;
+  width: 100%;
+}
+
+.arxiv-pagination-card .inline-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.arxiv-paper-card {
+  min-width: 0;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.arxiv-paper-card:hover,
+.arxiv-paper-card.is-selected {
+  box-shadow: 0 12px 28px rgba(16, 24, 40, 0.12);
+}
+
+.arxiv-paper-card h3 {
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.arxiv-title-en {
+  display: -webkit-box;
+  margin: -2px 0 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.arxiv-authors {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-secondary);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.arxiv-date-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.arxiv-date-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.arxiv-summary {
+  color: #475467;
+  overflow-wrap: anywhere;
+}
+
+.arxiv-paper-meta,
+.arxiv-tag-row,
+.arxiv-card-actions,
+.arxiv-detail-actions,
+.arxiv-detail-header,
+.panel-title-row,
+.arxiv-paper-card-top {
+  min-width: 0;
+}
+
+.arxiv-paper-meta .badge,
+.arxiv-tag-row .pill-tag,
+.arxiv-detail-actions .secondary-button,
+.arxiv-detail-actions .primary-button,
+.arxiv-card-actions button {
+  max-width: 100%;
+}
+
+.arxiv-paper-meta .badge,
+.arxiv-tag-row .pill-tag {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arxiv-page .accent-badge {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line, var(--border)));
+  background: color-mix(in srgb, var(--accent-soft) 70%, #ffffff);
+  color: var(--accent);
+}
+
+.arxiv-page .success-badge {
+  border-color: color-mix(in srgb, var(--success, #067647) 24%, var(--line, var(--border)));
+  background: var(--success-soft);
+  color: var(--success, #067647);
+}
+
+.arxiv-tag-row .pill-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid var(--line, var(--border));
+  border-radius: 999px;
+  padding: 0 9px;
+  background: #f8fafc;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 750;
+}
+
+.arxiv-card-actions button,
+.arxiv-detail-actions button,
+.arxiv-detail-actions a.secondary-button {
+  height: auto;
+  min-height: 32px;
+  min-width: 0;
+  padding-block: 7px;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.arxiv-card-actions {
+  gap: 8px;
+}
+
+.arxiv-score-strip > div,
+.arxiv-topic-grid > div,
+.arxiv-detail-section {
+  min-width: 0;
+}
+
+.arxiv-score-strip strong,
+.arxiv-topic-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.arxiv-detail-section {
+  border-color: var(--line, var(--border));
+  background: #fbfcfe;
+}
+
+.arxiv-detail-section p,
+.arxiv-detail-abstract {
+  overflow-wrap: anywhere;
+}
+
+.arxiv-detail-abstract {
+  max-height: min(34vh, 280px);
+}
+
+@media (max-width: 1320px) {
+  .arxiv-layout-standard,
+  .arxiv-layout-compact,
+  .arxiv-layout-wide {
+    grid-template-columns: minmax(168px, 0.25fr) minmax(0, 0.75fr);
+  }
+
+  .arxiv-detail-panel {
+    grid-column: 1 / -1;
+    max-height: min(44vh, 480px);
+  }
+}
+
+@media (max-width: 980px) {
+  .app-shell.desktop-shell {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+
+  .app-sidebar-brand span,
+  .app-sidebar-link span,
+  .app-sidebar-footer span {
+    display: none;
+  }
+
+  .app-sidebar {
+    padding-inline: 8px;
+  }
+
+  .app-sidebar-link {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .arxiv-page.page-workspace {
+    overflow: auto;
+    padding: 10px;
+  }
+
+  .arxiv-query-row,
+  .arxiv-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .arxiv-workbench {
+    min-height: auto;
+  }
+
+  .arxiv-filter-panel {
+    max-height: none;
+    overflow: visible;
+    position: static;
+  }
+
+  .arxiv-results-panel,
+  .arxiv-detail-panel {
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 640px) {
+  .arxiv-page-header {
+    align-items: stretch;
+  }
+
+  .arxiv-page-header > button,
+  .arxiv-query-row .primary-button {
+    width: 100%;
+  }
+
+  .arxiv-score-strip,
+  .arxiv-topic-grid,
+  .arxiv-pagination-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .arxiv-card-actions {
+    justify-content: stretch;
+  }
+
+  .arxiv-card-actions button {
+    flex: 1 1 150px;
+  }
+}

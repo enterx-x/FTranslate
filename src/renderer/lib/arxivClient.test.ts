@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { DOMParser as XmldomParser } from '@xmldom/xmldom';
-import { buildArxivApiUrl, buildArxivCacheKey, parseArxivFeed } from './arxivClient';
+import { buildArxivApiUrl, buildArxivCacheKey, parseArxivFeed, parseArxivSearchResult } from './arxivClient';
 
 const sampleFeed = `<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <opensearch:totalResults>3456</opensearch:totalResults>
+  <opensearch:startIndex>50</opensearch:startIndex>
+  <opensearch:itemsPerPage>50</opensearch:itemsPerPage>
   <entry>
     <id>http://arxiv.org/abs/2601.17440v1</id>
     <updated>2026-01-24T00:00:00Z</updated>
@@ -39,6 +42,23 @@ describe('arxivClient', () => {
     expect(url).not.toContain('ppt');
   });
 
+  it('expands common Chinese research terms before building an arXiv query', () => {
+    const url = buildArxivApiUrl({
+      searchQuery: '强化学习 机器人',
+      category: 'cs.RO',
+      start: 0,
+      maxResults: 50,
+      sortBy: 'relevance',
+      sortOrder: 'descending'
+    });
+    const parsed = new URL(url);
+    const searchQuery = parsed.searchParams.get('search_query') ?? '';
+
+    expect(searchQuery).not.toContain('强化学习');
+    expect(searchQuery).toContain('reinforcement learning');
+    expect(searchQuery).toContain('robot robotics');
+  });
+
   it('parses arXiv Atom feed into local-download-ready records', () => {
     const papers = parseArxivFeed(sampleFeed, XmldomParser as any);
 
@@ -52,6 +72,15 @@ describe('arxivClient', () => {
       pdfUrl: 'https://arxiv.org/pdf/2601.17440v1.pdf'
     });
     expect(papers[0].summary).toContain('perceptive loco-manipulation');
+  });
+
+  it('parses total result count from arXiv OpenSearch metadata', () => {
+    const result = parseArxivSearchResult(sampleFeed, XmldomParser as any);
+
+    expect(result.totalResults).toBe(3456);
+    expect(result.startIndex).toBe(50);
+    expect(result.itemsPerPage).toBe(50);
+    expect(result.papers).toHaveLength(1);
   });
 
   it('uses a stable cache key for throttled repeated searches', () => {

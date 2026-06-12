@@ -9,7 +9,9 @@ import {
   type ArxivPaperMeta,
   buildArxivBibTeX,
   buildArxivExportMarkdown,
-  buildArxivPaperInsight
+  buildArxivPaperInsight,
+  formatArxivResultRange,
+  parseArxivTitleAbstractTranslation
 } from '../lib/arxivUi';
 import searchIcon from '../assets/icons/duotone/search.svg';
 import downloadIcon from '../assets/icons/duotone/download.svg';
@@ -32,7 +34,7 @@ const ARXIV_HISTORY_STORAGE_KEY = 'pdfTranslationReader:arxivSearchHistory';
 const ARXIV_LAYOUT_STORAGE_KEY = 'pdfTranslationReader:arxivLayoutMode';
 const ARXIV_PPT_QUEUE_STORAGE_KEY = 'pdfTranslationReader:arxivPptQueue';
 
-const PAGE_SIZE_OPTIONS = [10, 12, 20, 30];
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 const CATEGORY_OPTIONS = [
   { value: '', label: '全部分类' },
@@ -62,11 +64,12 @@ const LAYOUT_OPTIONS: Array<{ value: LayoutMode; label: string }> = [
 
 export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [query, setQuery] = useState('reinforcement learning robot navigation');
-  const [category, setCategory] = useState('cs.RO');
+  const [category, setCategory] = useState('');
   const [sortBy, setSortBy] = useState<ArxivSortBy>('relevance');
   const [sortOrder, setSortOrder] = useState<ArxivSortOrder>('descending');
-  const [pageSize, setPageSize] = useState(12);
+  const [pageSize, setPageSize] = useState(50);
   const [start, setStart] = useState(0);
+  const [totalResults, setTotalResults] = useState(0);
   const [papers, setPapers] = useState<ArxivPaper[]>([]);
   const [metaById, setMetaById] = useState<Record<string, ArxivPaperMeta>>(() => loadArxivMeta());
   const [history, setHistory] = useState<string[]>(() => loadStringList(ARXIV_HISTORY_STORAGE_KEY));
@@ -169,6 +172,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       const result = await window.electronAPI.searchArxiv(nextRequest);
       setStart(nextStart);
       setPapers(result.papers);
+      setTotalResults(result.totalResults ?? result.papers.length);
       setSelectedPaperId(result.papers[0]?.id ?? null);
       setHistory((previous) => saveStringList(ARXIV_HISTORY_STORAGE_KEY, [searchQuery, ...previous]));
       if (result.papers.length === 0) {
@@ -177,11 +181,12 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         return;
       }
       setStatus('success');
+      const rangeText = formatArxivResultRange(nextStart, result.papers.length, result.totalResults ?? result.papers.length);
       if (result.cacheHit) {
-        setMessage(`已命中 SQLite 缓存：${result.papers.length} 篇。未访问 arXiv。`);
+        setMessage(`已命中 SQLite 缓存：${rangeText}。未访问 arXiv。`);
       } else {
         setMessage(
-          `检索完成：${result.papers.length} 篇。队列长度 ${result.queueSize}，距上次真实请求 ${formatGap(
+          `检索完成：${rangeText}。队列长度 ${result.queueSize}，距上次真实请求 ${formatGap(
             result.lastRequestGapMs
           )}。`
         );
@@ -217,29 +222,31 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
 
   async function handleTranslateAbstract(paper: ArxivPaper): Promise<void> {
     const currentMeta = getPaperMeta(paper, metaById);
-    if (currentMeta.abstractZh) {
+    if (currentMeta.abstractZh && currentMeta.titleZh) {
       setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
-      setMessage('当前论文摘要已有中文缓存，已切换到中文摘要。');
+      setMessage('当前论文标题和摘要已有中文缓存，已切换到中文摘要。');
       return;
     }
 
     try {
       setTranslatingId(paper.id);
-      setMessage('正在调用当前 AI 设置翻译摘要。失败时会保留英文，不影响检索结果。');
+      setMessage('正在调用当前 AI 设置翻译标题和摘要。失败时会保留英文，不影响检索结果。');
       const translation = await window.electronAPI.completeWithAi({
         systemPrompt:
-          '你是严谨的学术论文摘要翻译助手。请把英文 arXiv 摘要翻译为自然、准确的中文，保留 RL、PINN、CBF、MPC、VLM、World Model 等专业术语原文或常用译名，不添加解释。',
-        userPrompt: `标题：${paper.title}\n\n摘要：${paper.summary}`
+          '你是严谨的学术论文翻译助手。请把英文 arXiv 标题和摘要翻译为自然、准确的中文，保留 RL、PINN、CBF、MPC、VLM、World Model 等专业术语原文或常用译名。只输出 JSON，不要 Markdown，不要解释。JSON 字段必须是 titleZh 和 abstractZh。',
+        userPrompt: `请翻译这篇 arXiv 论文，输出 JSON：\n\nTitle: ${paper.title}\n\nAbstract: ${paper.summary}`
       });
+      const parsed = parseArxivTitleAbstractTranslation(translation, paper);
       updateMeta(paper, {
         ...currentMeta,
-        abstractZh: cleanAiText(translation),
+        titleZh: parsed.titleZh || currentMeta.titleZh,
+        abstractZh: parsed.abstractZh,
         translatedAt: new Date().toISOString()
       });
       setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
-      setMessage('摘要翻译已缓存到本机，下次不会重复调用 AI。');
+      setMessage('标题和摘要翻译已缓存到本机，下次不会重复调用 AI。');
     } catch (error) {
-      setMessage(`摘要翻译失败，已保留英文：${formatError(error)}`);
+      setMessage(`标题/摘要翻译失败，已保留英文：${formatError(error)}`);
     } finally {
       setTranslatingId(null);
     }
@@ -498,13 +505,17 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               <button
                 type="button"
                 className="secondary-button"
-                disabled={isSearching || papers.length < pageSize}
+                disabled={isSearching || start + papers.length >= totalResults}
                 onClick={() => void handleSearch(start + pageSize)}
               >
                 下一页
               </button>
             </div>
-            <p className="inline-hint">当前 start={start}。翻页同样走 ArxivService 队列和 SQLite 缓存。</p>
+            <p className="inline-hint">
+              {papers.length > 0
+                ? `当前显示 ${formatArxivResultRange(start, papers.length, totalResults)}。翻页同样走 ArxivService 队列和 SQLite 缓存。`
+                : '翻页同样走 ArxivService 队列和 SQLite 缓存。'}
+            </p>
           </div>
         </aside>
 
@@ -563,8 +574,13 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                     </button>
                   </div>
 
-                  <h3>{paper.title}</h3>
+                  <h3>{meta.titleZh || paper.title}</h3>
+                  {meta.titleZh ? <p className="arxiv-title-en">{paper.title}</p> : null}
                   <p className="arxiv-authors">{paper.authors.slice(0, 6).join(', ') || 'arXiv 未返回作者'}</p>
+                  <div className="arxiv-date-row">
+                    <span>发布 {formatDate(paper.publishedAt || paper.published)}</span>
+                    <span>更新 {formatDate(paper.updated)}</span>
+                  </div>
 
                   <div className="arxiv-score-strip">
                     <div>
@@ -618,7 +634,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       }}
                     >
                       <img className="button-icon" src={translateIcon} alt="" />
-                      {translatingId === paper.id ? '翻译中' : '翻译摘要'}
+                      {translatingId === paper.id ? '翻译中' : '翻译标题/摘要'}
                     </button>
                     <button
                       type="button"
@@ -662,10 +678,12 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               </div>
 
               <section className="arxiv-detail-section">
-                <h3>{selectedPaper.title}</h3>
+                <h3>{selectedMeta.titleZh || selectedPaper.title}</h3>
+                {selectedMeta.titleZh ? <p className="arxiv-title-en">{selectedPaper.title}</p> : null}
                 <p>{selectedPaper.authors.join(', ') || 'arXiv 未返回作者'}</p>
                 <div className="arxiv-paper-meta">
-                  <span className="badge">{formatDate(selectedPaper.publishedAt || selectedPaper.published)}</span>
+                  <span className="badge">发布 {formatDate(selectedPaper.publishedAt || selectedPaper.published)}</span>
+                  <span className="badge">更新 {formatDate(selectedPaper.updated)}</span>
                   {selectedPaper.categories.slice(0, 4).map((item) => (
                     <span key={item} className="badge">
                       {item}
@@ -827,10 +845,6 @@ function getPaperMeta(paper: ArxivPaper, metaById: Record<string, ArxivPaperMeta
 
 function sanitizeFileStem(value: string): string {
   return value.replace(/[<>:"/\\|?*\u0000-\u001f]+/gu, '_').replace(/\s+/gu, '-').slice(0, 72) || 'arxiv-paper';
-}
-
-function cleanAiText(value: string): string {
-  return value.replace(/^```[a-z]*\s*/iu, '').replace(/```$/u, '').trim();
 }
 
 function formatGap(value: number): string {

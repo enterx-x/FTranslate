@@ -27,6 +27,7 @@ export interface ArxivPaperInsight {
 export interface ArxivPaperMeta {
   favorite?: boolean;
   read?: boolean;
+  titleZh?: string;
   abstractZh?: string;
   insight?: ArxivPaperInsight;
   translatedAt?: string;
@@ -119,9 +120,11 @@ export function buildArxivPaperInsight(paper: ArxivPaper, query: string): ArxivP
 export function buildArxivExportMarkdown(paper: ArxivPaper, meta: ArxivPaperMeta = {}): string {
   const insight = meta.insight ?? buildArxivPaperInsight(paper, '');
   const authors = paper.authors.length > 0 ? paper.authors.join(', ') : 'arXiv 未返回作者';
+  const title = meta.titleZh || paper.title;
   return [
-    `# ${paper.title}`,
+    `# ${title}`,
     '',
+    ...(meta.titleZh ? [`- English title: ${paper.title}`] : []),
     `- arXiv ID: ${paper.stableId}`,
     `- Authors: ${authors}`,
     `- Published: ${formatDate(paper.publishedAt || paper.published)}`,
@@ -164,6 +167,52 @@ export function buildArxivBibTeX(paper: ArxivPaper): string {
     `  url={${paper.abstractUrl}}`,
     '}'
   ].join('\n');
+}
+
+export function parseArxivTitleAbstractTranslation(
+  value: string,
+  paper: ArxivPaper
+): { titleZh: string; abstractZh: string } {
+  const cleaned = cleanAiText(value);
+  const jsonText = extractJsonObject(cleaned);
+  if (jsonText) {
+    try {
+      const parsed = JSON.parse(jsonText) as {
+        titleZh?: unknown;
+        abstractZh?: unknown;
+        title?: unknown;
+        abstract?: unknown;
+      };
+      const titleZh = typeof parsed.titleZh === 'string' ? parsed.titleZh.trim() : '';
+      const abstractZh =
+        typeof parsed.abstractZh === 'string'
+          ? parsed.abstractZh.trim()
+          : typeof parsed.abstract === 'string'
+            ? parsed.abstract.trim()
+            : '';
+      if (titleZh || abstractZh) {
+        return {
+          titleZh,
+          abstractZh: abstractZh || cleaned
+        };
+      }
+    } catch {
+      // AI 可能返回带说明的非严格 JSON，兜底保留原文，避免按钮失败。
+    }
+  }
+  return {
+    titleZh: '',
+    abstractZh: cleaned || paper.summary
+  };
+}
+
+export function formatArxivResultRange(start: number, count: number, total: number): string {
+  if (count <= 0) {
+    return total > 0 ? `0 / ${total} 篇` : '0 篇';
+  }
+  const from = start + 1;
+  const to = start + count;
+  return total > 0 ? `${from}-${to} / ${total} 篇` : `${count} 篇`;
 }
 
 function buildTags(topicMatch: ArxivTopicMatch, haystack: string): string[] {
@@ -212,4 +261,14 @@ function getYear(value: string): string {
 
 function escapeBibTeX(value: string): string {
   return value.replace(/[{}]/gu, '');
+}
+
+function cleanAiText(value: string): string {
+  return value.replace(/^```[a-z]*\s*/iu, '').replace(/```$/u, '').trim();
+}
+
+function extractJsonObject(value: string): string {
+  const start = value.indexOf('{');
+  const end = value.lastIndexOf('}');
+  return start >= 0 && end > start ? value.slice(start, end + 1) : '';
 }

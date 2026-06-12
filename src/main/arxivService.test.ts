@@ -1,12 +1,16 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ArxivService } from './arxivService';
-import type { ArxivSearchRequest } from '../shared/arxiv';
+import { buildArxivCacheKey, type ArxivSearchRequest } from '../shared/arxiv';
 
 const sampleFeed = `<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <opensearch:totalResults>245</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <opensearch:itemsPerPage>10</opensearch:itemsPerPage>
   <entry>
     <id>http://arxiv.org/abs/2601.17440v1</id>
     <updated>2026-01-24T00:00:00Z</updated>
@@ -56,9 +60,72 @@ describe('ArxivService', () => {
 
       expect(first.cacheHit).toBe(false);
       expect(second.cacheHit).toBe(true);
+      expect(first.totalResults).toBe(245);
+      expect(second.totalResults).toBe(245);
       expect(second.papers).toHaveLength(1);
       expect(fetchCount).toBe(1);
       expect(service.getRecentLogs(2)[0]).toMatchObject({ source: 'test-search', cache_hit: 1, status: 'cache-hit' });
+    } finally {
+      service.close();
+    }
+  });
+
+  it('keeps reading legacy array-shaped cache entries', async () => {
+    const dbPath = path.join(tempDir, 'arxiv.sqlite');
+    const bootstrap = new ArxivService({
+      dbPath,
+      minRequestGapMs: 0,
+      fetchImpl: async () => new Response(sampleFeed, { status: 200 })
+    });
+    bootstrap.close();
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      const cacheKey = buildArxivCacheKey(request);
+      db.prepare(
+        `INSERT INTO arxiv_cache(cache_key, created_at, response_json)
+         VALUES (?, ?, ?)`
+      ).run(
+        cacheKey,
+        Date.now(),
+        JSON.stringify([
+          {
+            id: 'http://arxiv.org/abs/legacyv1',
+            stableId: 'legacy',
+            title: 'Legacy cached paper',
+            authors: [],
+            summary: 'Cached before totalResults existed.',
+            published: '',
+            publishedAt: '',
+            updated: '',
+            categories: [],
+            primaryCategory: '',
+            abstractUrl: 'http://arxiv.org/abs/legacyv1',
+            pdfUrl: 'https://arxiv.org/pdf/legacyv1.pdf'
+          }
+        ])
+      );
+    } finally {
+      db.close();
+    }
+
+    let fetchCount = 0;
+    const service = new ArxivService({
+      dbPath,
+      minRequestGapMs: 0,
+      fetchImpl: async () => {
+        fetchCount += 1;
+        return new Response(sampleFeed, { status: 200 });
+      }
+    });
+
+    try {
+      const result = await service.search(request, 'legacy-cache');
+
+      expect(result.cacheHit).toBe(true);
+      expect(result.totalResults).toBe(1);
+      expect(result.papers[0].title).toBe('Legacy cached paper');
+      expect(fetchCount).toBe(0);
     } finally {
       service.close();
     }

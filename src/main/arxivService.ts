@@ -1,12 +1,12 @@
 import { DOMParser as XmldomParser } from '@xmldom/xmldom';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  type ArxivPaper,
+  type ArxivParsedSearchResult,
   type ArxivSearchRequest,
   type ArxivSearchServiceResult,
   buildArxivApiUrl,
   buildArxivCacheKey,
-  parseArxivFeed
+  parseArxivSearchResult
 } from '../shared/arxiv';
 
 interface ArxivServiceOptions {
@@ -79,7 +79,7 @@ export class ArxivService {
         status: 'cache-hit'
       });
       return {
-        papers: cached,
+        ...cached,
         cacheHit: true,
         queueSize: 0,
         lastRequestGapMs: this.getLastRequestGapMs()
@@ -90,10 +90,10 @@ export class ArxivService {
     return this.enqueue(async () => {
       const url = buildArxivApiUrl(request);
       const { text, lastRequestGapMs } = await this.fetchText(url, source, cacheKey, queueSize);
-      const papers = parseArxivFeed(text, XmldomParser as any);
-      this.writeCache(cacheKey, papers);
+      const result = parseArxivSearchResult(text, XmldomParser as any);
+      this.writeCache(cacheKey, result);
       return {
-        papers,
+        ...result,
         cacheHit: false,
         queueSize,
         lastRequestGapMs
@@ -169,7 +169,7 @@ export class ArxivService {
     return run;
   }
 
-  private readCache(cacheKey: string): ArxivPaper[] | null {
+  private readCache(cacheKey: string): ArxivParsedSearchResult | null {
     const row = this.db
       .prepare('SELECT created_at, response_json FROM arxiv_cache WHERE cache_key = ?')
       .get(cacheKey) as { created_at: number; response_json: string } | undefined;
@@ -177,20 +177,38 @@ export class ArxivService {
       return null;
     }
     try {
-      return JSON.parse(row.response_json) as ArxivPaper[];
+      const parsed = JSON.parse(row.response_json) as unknown;
+      if (Array.isArray(parsed)) {
+        return {
+          papers: parsed,
+          totalResults: parsed.length,
+          startIndex: 0,
+          itemsPerPage: parsed.length
+        } as ArxivParsedSearchResult;
+      }
+      if (parsed && typeof parsed === 'object' && Array.isArray((parsed as ArxivParsedSearchResult).papers)) {
+        const result = parsed as ArxivParsedSearchResult;
+        return {
+          papers: result.papers,
+          totalResults: result.totalResults || result.papers.length,
+          startIndex: result.startIndex || 0,
+          itemsPerPage: result.itemsPerPage || result.papers.length
+        };
+      }
+      return null;
     } catch {
       return null;
     }
   }
 
-  private writeCache(cacheKey: string, papers: ArxivPaper[]): void {
+  private writeCache(cacheKey: string, result: ArxivParsedSearchResult): void {
     this.db
       .prepare(
         `INSERT INTO arxiv_cache(cache_key, created_at, response_json)
          VALUES (?, ?, ?)
          ON CONFLICT(cache_key) DO UPDATE SET created_at = excluded.created_at, response_json = excluded.response_json`
       )
-      .run(cacheKey, this.now(), JSON.stringify(papers));
+      .run(cacheKey, this.now(), JSON.stringify(result));
   }
 
   private async fetchText(

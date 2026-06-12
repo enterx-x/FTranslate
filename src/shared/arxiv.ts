@@ -27,21 +27,59 @@ export interface ArxivPaper {
 
 export interface ArxivSearchServiceResult {
   papers: ArxivPaper[];
+  totalResults: number;
+  startIndex: number;
+  itemsPerPage: number;
   cacheHit: boolean;
   queueSize: number;
   lastRequestGapMs: number;
 }
 
+export interface ArxivParsedSearchResult {
+  papers: ArxivPaper[];
+  totalResults: number;
+  startIndex: number;
+  itemsPerPage: number;
+}
+
 const ARXIV_ENDPOINT = 'https://export.arxiv.org/api/query';
 const XML_NS_ATOM = 'http://www.w3.org/2005/Atom';
 const XML_NS_ARXIV = 'http://arxiv.org/schemas/atom';
+const XML_NS_OPENSEARCH = 'http://a9.com/-/spec/opensearch/1.1/';
+
+const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
+  [/安全强化学习/gu, 'safe reinforcement learning'],
+  [/强化学习/gu, 'reinforcement learning'],
+  [/路径规划|运动规划/gu, 'path planning motion planning navigation'],
+  [/机器人/gu, 'robot robotics'],
+  [/具身智能/gu, 'embodied intelligence embodied AI'],
+  [/物理信息|物理约束/gu, 'physics-informed physical constraint'],
+  [/神经网络/gu, 'neural network'],
+  [/世界模型/gu, 'world model'],
+  [/控制屏障函数/gu, 'control barrier function CBF'],
+  [/模型预测控制/gu, 'model predictive control MPC']
+];
 
 export function normalizeArxivWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+export function normalizeArxivSearchQuery(value: string): string {
+  const cleanValue = normalizeArxivWhitespace(value);
+  const expansions = CHINESE_QUERY_EXPANSIONS.flatMap(([pattern, expansion]) => {
+    pattern.lastIndex = 0;
+    return pattern.test(cleanValue) ? [expansion] : [];
+  });
+  const latinRemainder = normalizeArxivWhitespace(
+    cleanValue
+      .replace(/[\u3400-\u9fff]+/gu, ' ')
+      .replace(/[，。；、：？！]/gu, ' ')
+  );
+  return normalizeArxivWhitespace([latinRemainder, ...expansions].join(' ')) || cleanValue;
+}
+
 export function buildArxivApiUrl(request: ArxivSearchRequest): string {
-  const cleanQuery = normalizeArxivWhitespace(request.searchQuery);
+  const cleanQuery = normalizeArxivSearchQuery(request.searchQuery);
   const query = request.category
     ? `cat:${request.category} AND all:${cleanQuery}`
     : `all:${cleanQuery}`;
@@ -56,7 +94,7 @@ export function buildArxivApiUrl(request: ArxivSearchRequest): string {
 
 export function buildArxivCacheKey(request: ArxivSearchRequest): string {
   return JSON.stringify({
-    search_query: `${request.category || 'all'}:${normalizeArxivWhitespace(request.searchQuery).toLowerCase()}`,
+    search_query: `${request.category || 'all'}:${normalizeArxivSearchQuery(request.searchQuery).toLowerCase()}`,
     start: request.start,
     max_results: request.maxResults,
     sortBy: request.sortBy,
@@ -68,11 +106,23 @@ function getTextContent(parent: Element, tagName: string, namespace = XML_NS_ATO
   return normalizeArxivWhitespace(parent.getElementsByTagNameNS(namespace, tagName)[0]?.textContent ?? '');
 }
 
+function getNumberContent(parent: Element, tagName: string, namespace = XML_NS_OPENSEARCH): number {
+  const parsed = Number(getTextContent(parent, tagName, namespace));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 type ArxivDomParserConstructor = new () => {
   parseFromString(source: string, mimeType: string): Document;
 };
 
 export function parseArxivFeed(xmlText: string, DomParserCtor?: ArxivDomParserConstructor): ArxivPaper[] {
+  return parseArxivSearchResult(xmlText, DomParserCtor).papers;
+}
+
+export function parseArxivSearchResult(
+  xmlText: string,
+  DomParserCtor?: ArxivDomParserConstructor
+): ArxivParsedSearchResult {
   const ParserCtor =
     DomParserCtor ?? (typeof DOMParser === 'undefined' ? undefined : (DOMParser as ArxivDomParserConstructor));
   if (!ParserCtor) {
@@ -87,7 +137,7 @@ export function parseArxivFeed(xmlText: string, DomParserCtor?: ArxivDomParserCo
   }
 
   const entries = Array.from(document.getElementsByTagNameNS(XML_NS_ATOM, 'entry'));
-  return entries.map((entry): ArxivPaper => {
+  const papers = entries.map((entry): ArxivPaper => {
     const id = getTextContent(entry, 'id');
     const title = getTextContent(entry, 'title');
     const summary = getTextContent(entry, 'summary');
@@ -126,6 +176,17 @@ export function parseArxivFeed(xmlText: string, DomParserCtor?: ArxivDomParserCo
       pdfUrl
     };
   });
+  const feed = document.documentElement;
+  const totalResults = getNumberContent(feed, 'totalResults') || papers.length;
+  const startIndex = getNumberContent(feed, 'startIndex');
+  const itemsPerPage = getNumberContent(feed, 'itemsPerPage') || papers.length;
+
+  return {
+    papers,
+    totalResults,
+    startIndex,
+    itemsPerPage
+  };
 }
 
 export function createArxivDomParser(): typeof DOMParser | null {
