@@ -104,6 +104,44 @@ arXiv 检索是一个独立模块，不会自动改写论文库或 PPT 草稿。
 - 下载完成后把 PDF 加入本地论文库；
 - 保持与 PPT 生成分离：需要生成 PPT 时，再从论文库、PDF 阅读页或组会 PPT 页面选择 PDF。
 
+#### arXiv 离线翻译配置
+
+arXiv 标题和摘要翻译只调用本机 `argos-translate`，不会自动切到 AI API。如果界面提示“离线翻译未配置”，可以在 Windows PowerShell 中按下面步骤安装：
+
+```powershell
+$venv = "$env:LOCALAPPDATA\FTranslate\argos-translate"
+py -3.11 -m venv $venv
+& "$venv\Scripts\python.exe" -m pip install --upgrade pip
+& "$venv\Scripts\python.exe" -m pip install argostranslate
+@'
+import argostranslate.package
+
+from_code = "en"
+to_code = "zh"
+
+argostranslate.package.update_package_index()
+available_packages = argostranslate.package.get_available_packages()
+package_to_install = next(
+    package for package in available_packages
+    if package.from_code == from_code and package.to_code == to_code
+)
+argostranslate.package.install_from_path(package_to_install.download())
+'@ | & "$venv\Scripts\python.exe"
+& "$venv\Scripts\argos-translate.exe" --from-lang en --to-lang zh "hello"
+```
+
+如果最后一行能输出中文结果，再把 CLI 目录加入当前用户 PATH，然后重启 FTranslate：
+
+```powershell
+$argosScripts = "$env:LOCALAPPDATA\FTranslate\argos-translate\Scripts"
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath -notlike "*$argosScripts*") {
+  [Environment]::SetEnvironmentVariable("Path", "$userPath;$argosScripts", "User")
+}
+```
+
+模型文件由 Argos Translate 安装到当前 Windows 用户的本地模型目录中；不需要放进本项目仓库，也不要提交到 git。如果你使用其他 Python 版本，把 `py -3.11` 改成机器上实际可用的 `py -3.10`、`py -3.12` 或完整 Python 路径。
+
 ### AI 助手
 
 AI 助手集中管理：

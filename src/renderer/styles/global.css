@@ -9672,3 +9672,263 @@ body.is-resizing-layout .layout-resize-handle::after {
   font-size: 12px;
   line-height: 1.45;
 }
+
+/* arXiv literature-result density: make the default list read like a search tool. */
+.arxiv-layout-compact {
+  grid-template-columns: minmax(150px, 0.18fr) minmax(0, 1.08fr) minmax(236px, 0.28fr);
+}
+
+.arxiv-layout-standard {
+  grid-template-columns: minmax(168px, 0.2fr) minmax(0, 1fr) minmax(268px, 0.32fr);
+}
+
+.arxiv-layout-wide {
+  grid-template-columns: minmax(178px, 0.2fr) minmax(0, 1.16fr) minmax(292px, 0.3fr);
+}
+
+.arxiv-results-panel {
+  --arxiv-result-gap: 8px;
+  --arxiv-result-padding: 10px;
+  --arxiv-result-title-size: 14px;
+  --arxiv-result-summary-size: 12px;
+  --arxiv-result-summary-lines: 3;
+  --arxiv-result-meta-size: 11px;
+}
+
+.arxiv-results-panel.arxiv-density-compact {
+  --arxiv-result-gap: 6px;
+  --arxiv-result-padding: 8px;
+  --arxiv-result-title-size: 13px;
+  --arxiv-result-summary-size: 11px;
+  --arxiv-result-summary-lines: 2;
+  --arxiv-result-meta-size: 10.5px;
+}
+
+.arxiv-results-panel.arxiv-density-wide {
+  --arxiv-result-gap: 9px;
+  --arxiv-result-padding: 11px;
+  --arxiv-result-title-size: 15px;
+  --arxiv-result-summary-size: 12px;
+  --arxiv-result-summary-lines: 4;
+  --arxiv-result-meta-size: 11px;
+}
+
+.arxiv-results-panel .arxiv-results-list {
+  gap: var(--arxiv-result-gap);
+}
+
+.arxiv-results-panel .arxiv-paper-card {
+  gap: var(--arxiv-result-gap);
+  padding: var(--arxiv-result-padding);
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.arxiv-results-panel .arxiv-paper-card:hover,
+.arxiv-results-panel .arxiv-paper-card.is-selected {
+  box-shadow:
+    0 8px 18px rgba(79, 70, 229, 0.11),
+    inset 3px 0 0 rgba(109, 93, 252, 0.72);
+}
+
+.arxiv-results-panel .arxiv-paper-card h3 {
+  font-size: var(--arxiv-result-title-size);
+  line-height: 1.24;
+}
+
+.arxiv-results-panel .arxiv-title-en {
+  font-size: var(--arxiv-result-meta-size);
+  line-height: 1.32;
+  -webkit-line-clamp: 1;
+}
+
+.arxiv-results-panel .arxiv-authors,
+.arxiv-results-panel .arxiv-date-row,
+.arxiv-results-panel .badge,
+.arxiv-results-panel .pill-tag {
+  font-size: var(--arxiv-result-meta-size);
+}
+
+.arxiv-results-panel .arxiv-authors {
+  -webkit-line-clamp: 1;
+}
+
+.arxiv-results-panel .arxiv-summary {
+  font-size: var(--arxiv-result-summary-size);
+  line-height: 1.42;
+  -webkit-line-clamp: var(--arxiv-result-summary-lines);
+}
+
+.arxiv-results-panel .arxiv-score-strip {
+  gap: 5px;
+}
+
+.arxiv-results-panel .arxiv-score-strip > div {
+  min-height: 0;
+  padding: 5px 7px;
+}
+
+.arxiv-results-panel .arxiv-score-strip span {
+  font-size: 10.5px;
+}
+
+.arxiv-results-panel .arxiv-score-strip strong {
+  font-size: 12px;
+}
+
+.arxiv-results-panel .arxiv-tag-row {
+  gap: 5px;
+  max-height: 24px;
+  overflow: hidden;
+}
+
+.arxiv-results-panel .arxiv-tag-row .pill-tag,
+.arxiv-results-panel .badge {
+  min-height: 20px;
+  padding: 2px 7px;
+}
+
+.arxiv-results-panel .arxiv-card-actions {
+  gap: 5px;
+  padding-top: 0;
+}
+
+.arxiv-results-panel .arxiv-card-actions button {
+  min-height: 28px;
+  padding: 5px 8px;
+  font-size: 11.5px;
+}
+
+.arxiv-count-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.arxiv-reading-queue-mini {
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid rgba(16, 185, 129, 0.16);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f3fff9, #fbfffd);
+}
+
+.arxiv-reading-queue-mini > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #14532d;
+  font-size: 11px;
+}
+
+.arxiv-reading-queue-mini strong {
+  font-size: 12px;
+}
+
+.arxiv-reading-queue-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-height: 58px;
+  overflow: hidden;
+}
+
+.arxiv-reading-queue-items .pill-button {
+  max-width: min(100%, 230px);
+  justify-content: flex-start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arxiv-results-panel.arxiv-density-compact .arxiv-title-en,
+.arxiv-results-panel.arxiv-density-compact .arxiv-score-strip {
+  display: none;
+}
+
+.arxiv-results-panel.arxiv-density-compact .arxiv-card-actions button {
+  min-height: 26px;
+  padding-inline: 7px;
+}
+
+@media (max-height: 820px) and (min-width: 1181px) {
+  .arxiv-results-panel .arxiv-paper-card {
+    border-radius: 9px;
+  }
+
+  .arxiv-results-panel.arxiv-density-compact .arxiv-summary,
+  .arxiv-results-panel.arxiv-density-standard .arxiv-summary {
+    -webkit-line-clamp: 2;
+  }
+
+  .arxiv-results-panel.arxiv-density-wide .arxiv-summary {
+    -webkit-line-clamp: 3;
+  }
+}
+
+@media (max-width: 1320px) {
+  .arxiv-layout-compact,
+  .arxiv-layout-standard,
+  .arxiv-layout-wide {
+    grid-template-columns: minmax(164px, 0.24fr) minmax(0, 0.76fr);
+  }
+}
+
+/* Make the three arXiv view modes visibly different:
+   compact = many papers per row, standard = balanced reader, wide = detail-rich. */
+.arxiv-workbench.arxiv-layout-compact {
+  grid-template-columns: minmax(160px, 180px) minmax(0, 1fr);
+}
+
+.arxiv-workbench.arxiv-layout-compact .arxiv-detail-panel {
+  display: none;
+}
+
+.arxiv-workbench.arxiv-layout-compact .arxiv-results-list {
+  grid-template-columns: repeat(auto-fit, minmax(292px, 1fr));
+  align-content: start;
+}
+
+.arxiv-workbench.arxiv-layout-compact .arxiv-paper-card h3 {
+  min-height: 2.45em;
+}
+
+.arxiv-workbench.arxiv-layout-compact .arxiv-paper-meta {
+  max-height: 44px;
+  overflow: hidden;
+}
+
+.arxiv-workbench.arxiv-layout-standard .arxiv-results-list,
+.arxiv-workbench.arxiv-layout-wide .arxiv-results-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.arxiv-workbench.arxiv-layout-standard {
+  grid-template-columns: minmax(176px, 0.19fr) minmax(0, 1fr) minmax(292px, 0.31fr);
+}
+
+.arxiv-workbench.arxiv-layout-wide {
+  grid-template-columns: minmax(176px, 0.17fr) minmax(0, 1.08fr) minmax(340px, 0.33fr);
+}
+
+@media (min-width: 1680px) {
+  .arxiv-workbench.arxiv-layout-wide .arxiv-results-list {
+    grid-template-columns: repeat(2, minmax(360px, 1fr));
+  }
+}
+
+@media (max-width: 1320px) {
+  .arxiv-workbench.arxiv-layout-compact,
+  .arxiv-workbench.arxiv-layout-standard,
+  .arxiv-workbench.arxiv-layout-wide {
+    grid-template-columns: minmax(154px, 176px) minmax(0, 1fr);
+  }
+
+  .arxiv-workbench.arxiv-layout-standard .arxiv-detail-panel,
+  .arxiv-workbench.arxiv-layout-wide .arxiv-detail-panel {
+    display: none;
+  }
+}

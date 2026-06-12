@@ -27,6 +27,7 @@ export interface ArxivPaperInsight {
 export interface ArxivPaperMeta {
   favorite?: boolean;
   read?: boolean;
+  queuedAt?: string;
   titleZh?: string;
   abstractZh?: string;
   insight?: ArxivPaperInsight;

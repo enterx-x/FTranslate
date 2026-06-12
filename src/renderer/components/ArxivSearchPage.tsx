@@ -25,13 +25,43 @@ interface ArxivSearchPageProps {
 }
 
 type SearchStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
-type LayoutMode = 'compact' | 'standard' | 'wide';
-type AbstractMode = 'en' | 'zh';
+export type LayoutMode = 'compact' | 'standard' | 'wide';
+export type AbstractMode = 'en' | 'zh';
+
+export interface ArxivResultDisplay {
+  title: string;
+  secondaryTitle: string;
+  abstractText: string;
+  abstractMode: AbstractMode;
+}
+
+export interface ArxivResultDensityConfig {
+  className: string;
+  summaryLines: number;
+}
+
+export interface ArxivQueuedPaper {
+  stableId: string;
+  title: string;
+  titleZh?: string;
+  summary: string;
+  abstractZh?: string;
+  authors: string[];
+  publishedAt: string;
+  updated: string;
+  categories: string[];
+  primaryCategory: string;
+  abstractUrl: string;
+  pdfUrl: string;
+  addedAt: string;
+}
 
 const ARXIV_META_STORAGE_KEY = 'pdfTranslationReader:arxivPaperMeta';
 const ARXIV_HISTORY_STORAGE_KEY = 'pdfTranslationReader:arxivSearchHistory';
 const ARXIV_LAYOUT_STORAGE_KEY = 'pdfTranslationReader:arxivLayoutMode';
 const ARXIV_PPT_QUEUE_STORAGE_KEY = 'pdfTranslationReader:arxivPptQueue';
+const ARXIV_READING_QUEUE_STORAGE_KEY = 'pdfTranslationReader:arxivReadingQueue';
+const OFFLINE_TRANSLATION_NOTICE_TITLE = '离线翻译未配置';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
 
@@ -61,6 +91,30 @@ const LAYOUT_OPTIONS: Array<{ value: LayoutMode; label: string }> = [
   { value: 'wide', label: '宽屏' }
 ];
 
+export function getArxivResultDisplay(
+  paper: ArxivPaper,
+  meta: ArxivPaperMeta,
+  requestedMode?: AbstractMode
+): ArxivResultDisplay {
+  const abstractMode: AbstractMode = requestedMode ?? (meta.abstractZh ? 'zh' : 'en');
+  return {
+    title: meta.titleZh || paper.title,
+    secondaryTitle: meta.titleZh ? paper.title : '',
+    abstractText: abstractMode === 'zh' && meta.abstractZh ? meta.abstractZh : paper.summary,
+    abstractMode
+  };
+}
+
+export function getArxivResultDensityConfig(layoutMode: LayoutMode): ArxivResultDensityConfig {
+  if (layoutMode === 'compact') {
+    return { className: 'arxiv-density-compact', summaryLines: 2 };
+  }
+  if (layoutMode === 'wide') {
+    return { className: 'arxiv-density-wide', summaryLines: 4 };
+  }
+  return { className: 'arxiv-density-standard', summaryLines: 3 };
+}
+
 export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [query, setQuery] = useState('reinforcement learning robot navigation');
   const [category, setCategory] = useState('');
@@ -75,12 +129,14 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [metaById, setMetaById] = useState<Record<string, ArxivPaperMeta>>(() => loadArxivMeta());
   const [history, setHistory] = useState<string[]>(() => loadStringList(ARXIV_HISTORY_STORAGE_KEY));
   const [pptQueue, setPptQueue] = useState<string[]>(() => loadStringList(ARXIV_PPT_QUEUE_STORAGE_KEY));
+  const [readingQueue, setReadingQueue] = useState<ArxivQueuedPaper[]>(() => loadArxivReadingQueue());
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => loadLayoutMode());
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
   const [abstractModes, setAbstractModes] = useState<Record<string, AbstractMode>>({});
   const [yearFilter, setYearFilter] = useState('all');
   const [tagFilter, setTagFilter] = useState('all');
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [queuedOnly, setQueuedOnly] = useState(false);
   const [translatedOnly, setTranslatedOnly] = useState(false);
   const [scoredOnly, setScoredOnly] = useState(false);
   const [status, setStatus] = useState<SearchStatus>('idle');
@@ -92,6 +148,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [translatingId, setTranslatingId] = useState<string | null>(null);
   const [backgroundTranslatingIds, setBackgroundTranslatingIds] = useState<Record<string, boolean>>({});
   const [exportingId, setExportingId] = useState<string | null>(null);
+  const [showOfflineTranslationHelp, setShowOfflineTranslationHelp] = useState(false);
 
   const request = useMemo<ArxivSearchRequest>(
     () => ({
@@ -129,6 +186,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       papers.filter((paper) => {
         const meta = getPaperMeta(paper, metaById);
         const insight = meta.insight ?? buildArxivPaperInsight(paper, query);
+        const isQueuedForReading = readingQueue.some((item) => item.stableId === paper.stableId);
         const year = getYear(paper.publishedAt || paper.published);
         if (yearFilter !== 'all' && year !== yearFilter) {
           return false;
@@ -139,6 +197,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         if (favoriteOnly && !meta.favorite) {
           return false;
         }
+        if (queuedOnly && !isQueuedForReading) {
+          return false;
+        }
         if (translatedOnly && !meta.abstractZh) {
           return false;
         }
@@ -147,7 +208,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         }
         return true;
       }),
-    [favoriteOnly, metaById, papers, query, scoredOnly, tagFilter, translatedOnly, yearFilter]
+    [favoriteOnly, metaById, papers, query, queuedOnly, readingQueue, scoredOnly, tagFilter, translatedOnly, yearFilter]
   );
 
   const selectedPaper = useMemo(
@@ -237,9 +298,12 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       setTranslatingId(paper.id);
       setMessage('正在使用本地 Argos 翻译标题和摘要，并写入 SQLite 缓存；此操作不会调用 AI API。');
       const result = await translatePaperMetadata(paper);
-      if (result) {
+      if (result?.status === 'completed' || result?.status === 'cached') {
         setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
         setMessage(result.message);
+      } else if (result?.status === 'unavailable') {
+        setStatus('error');
+        setShowOfflineTranslationHelp(true);
       }
     } catch (error) {
       setMessage(`标题/摘要本地翻译失败，已保留英文：${formatError(error)}`);
@@ -262,6 +326,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       try {
         const result = await translatePaperMetadata(paper, true);
         if (result?.status === 'unavailable') {
+          setStatus('error');
+          setShowOfflineTranslationHelp(true);
           setMessage(result.message);
           break;
         }
@@ -315,6 +381,28 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       ...currentMeta,
       favorite: !currentMeta.favorite
     });
+  }
+
+  function handleToggleReadingQueue(paper: ArxivPaper): void {
+    const currentMeta = getPaperMeta(paper, metaById);
+    const isQueued = readingQueue.some((item) => item.stableId === paper.stableId);
+    if (isQueued) {
+      const { queuedAt: _queuedAt, ...nextMeta } = currentMeta;
+      updateMeta(paper, nextMeta);
+      setReadingQueue((previous) => saveArxivReadingQueue(previous.filter((item) => item.stableId !== paper.stableId)));
+      setMessage(`已从备选论文库移出：${paper.stableId}。`);
+      return;
+    }
+
+    const addedAt = new Date().toISOString();
+    updateMeta(paper, {
+      ...currentMeta,
+      queuedAt: addedAt
+    });
+    setReadingQueue((previous) =>
+      saveArxivReadingQueue(upsertArxivQueuedPaper(previous, buildArxivQueuedPaper(paper, currentMeta, addedAt)))
+    );
+    setMessage(`已加入备选论文库：${paper.stableId}。下载 PDF 后可正式进入本地论文库。`);
   }
 
   function handleTogglePptQueue(paper: ArxivPaper): void {
@@ -378,6 +466,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const selectedAbstractMode = selectedPaper
     ? abstractModes[selectedPaper.id] ?? (selectedMeta.abstractZh ? 'zh' : 'en')
     : 'en';
+  const resultDensity = getArxivResultDensityConfig(layoutMode);
+  const isOfflineTranslationNotice = message.includes(OFFLINE_TRANSLATION_NOTICE_TITLE);
 
   return (
     <main className="arxiv-page page-workspace">
@@ -482,6 +572,32 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
 
         <div className={`arxiv-message is-${status}`}>
           <span>{message}</span>
+          {isOfflineTranslationNotice ? (
+            <div className="arxiv-history">
+              <button
+                type="button"
+                className="pill-button"
+                onClick={() => setShowOfflineTranslationHelp((value) => !value)}
+              >
+                查看安装说明
+              </button>
+              <button
+                type="button"
+                className="pill-button"
+                disabled={!selectedPaper || translatingId === selectedPaper.id}
+                onClick={() => selectedPaper && void handleTranslateAbstract(selectedPaper)}
+              >
+                稍后重试
+              </button>
+            </div>
+          ) : null}
+          {isOfflineTranslationNotice && showOfflineTranslationHelp ? (
+            <div className="inline-hint">
+              Windows 推荐先创建独立 Python 环境，再安装 Argos Translate CLI 和 en→zh 模型。README 中的
+              “arXiv 离线翻译配置”有完整命令；安装完成后重启应用或重新打开终端，确认
+              <code>argos-translate</code> 可以在 PATH 中运行。
+            </div>
+          ) : null}
           {history.length > 0 ? (
             <div className="arxiv-history">
               {history.slice(0, 5).map((item) => (
@@ -540,6 +656,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             <label>
               <input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />
               <span>只看收藏</span>
+            </label>
+            <label>
+              <input type="checkbox" checked={queuedOnly} onChange={(event) => setQueuedOnly(event.target.checked)} />
+              <span>只看备选论文</span>
             </label>
             <label>
               <input
@@ -613,14 +733,42 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           </div>
         </aside>
 
-        <section className="content-card arxiv-results-panel">
+        <section className={`content-card arxiv-results-panel ${resultDensity.className}`}>
           <div className="panel-title-row">
             <div>
               <span className="eyebrow">Results</span>
               <h2>论文列表</h2>
             </div>
-            <span className="badge accent-badge">PPT 候选 {pptQueue.length}</span>
+            <div className="arxiv-count-badges">
+              <span className="badge accent-badge">PPT 候选 {pptQueue.length}</span>
+              <span className="badge success-badge">备选论文 {readingQueue.length}</span>
+            </div>
           </div>
+
+          {readingQueue.length > 0 ? (
+            <div className="arxiv-reading-queue-mini">
+              <div>
+                <strong>备选论文库</strong>
+                <span>{readingQueue.length} 篇待下载或复核</span>
+              </div>
+              <div className="arxiv-reading-queue-items">
+                {readingQueue.slice(0, 4).map((item) => (
+                  <button
+                    key={item.stableId}
+                    type="button"
+                    className="pill-button"
+                    title={item.title}
+                    onClick={() => {
+                      setQuery(item.title);
+                      setMessage(`已填入备选论文标题：${item.title}。点击搜索可重新定位该论文。`);
+                    }}
+                  >
+                    {item.titleZh || item.title}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           {papers.length === 0 ? (
             <article className="empty-state arxiv-empty-card">
@@ -639,7 +787,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               const insight = meta.insight ?? buildArxivPaperInsight(paper, query);
               const isSelected = selectedPaper?.id === paper.id;
               const isQueued = pptQueue.includes(paper.stableId);
+              const isQueuedForReading =
+                Boolean(meta.queuedAt) || readingQueue.some((item) => item.stableId === paper.stableId);
               const abstractMode = abstractModes[paper.id] ?? (meta.abstractZh ? 'zh' : 'en');
+              const display = getArxivResultDisplay(paper, meta, abstractMode);
               const isTranslatingMetadata = translatingId === paper.id || backgroundTranslatingIds[paper.id];
               return (
                 <article
@@ -658,6 +809,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       {meta.abstractZh ? <span className="badge success-badge">中文摘要</span> : null}
                       {isTranslatingMetadata ? <span className="badge accent-badge">本地翻译中</span> : null}
                       {meta.favorite ? <span className="badge success-badge">已收藏</span> : null}
+                      {isQueuedForReading ? <span className="badge success-badge">备选库</span> : null}
                     </div>
                     <button
                       type="button"
@@ -672,8 +824,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                     </button>
                   </div>
 
-                  <h3>{meta.titleZh || paper.title}</h3>
-                  {meta.titleZh ? <p className="arxiv-title-en">{paper.title}</p> : null}
+                  <h3>{display.title}</h3>
+                  {display.secondaryTitle ? <p className="arxiv-title-en">{display.secondaryTitle}</p> : null}
                   <p className="arxiv-authors">{paper.authors.slice(0, 6).join(', ') || 'arXiv 未返回作者'}</p>
                   <div className="arxiv-date-row">
                     <span>发布 {formatDate(paper.publishedAt || paper.published)}</span>
@@ -704,7 +856,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   </div>
 
                   <p className="arxiv-summary">
-                    {abstractMode === 'zh' && meta.abstractZh ? meta.abstractZh : paper.summary}
+                    {display.abstractText}
                   </p>
 
                   <footer className="arxiv-card-actions">
@@ -754,6 +906,27 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       }}
                     >
                       {isQueued ? '已入 PPT' : '加入 PPT'}
+                    </button>
+                    <button
+                      type="button"
+                      className={isQueuedForReading ? 'primary-button' : 'secondary-button'}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleToggleReadingQueue(paper);
+                      }}
+                    >
+                      {isQueuedForReading ? '已备选' : '加入备选'}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={downloadingId === paper.id}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleDownload(paper);
+                      }}
+                    >
+                      {downloadingId === paper.id ? '下载中' : '下载入库'}
                     </button>
                   </footer>
                 </article>
@@ -885,6 +1058,13 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   >
                     {pptQueue.includes(selectedPaper.stableId) ? '移出 PPT 候选' : '加入 PPT 候选'}
                   </button>
+                  <button
+                    type="button"
+                    className={selectedMeta.queuedAt ? 'primary-button' : 'secondary-button'}
+                    onClick={() => handleToggleReadingQueue(selectedPaper)}
+                  >
+                    {selectedMeta.queuedAt ? '移出备选论文库' : '加入备选论文库'}
+                  </button>
                 </div>
               </section>
             </>
@@ -911,6 +1091,56 @@ function loadArxivMeta(): Record<string, ArxivPaperMeta> {
 
 function saveArxivMeta(next: Record<string, ArxivPaperMeta>): void {
   window.localStorage.setItem(ARXIV_META_STORAGE_KEY, JSON.stringify(next));
+}
+
+export function buildArxivQueuedPaper(
+  paper: ArxivPaper,
+  meta: ArxivPaperMeta = {},
+  addedAt = new Date().toISOString()
+): ArxivQueuedPaper {
+  return {
+    stableId: paper.stableId,
+    title: paper.title,
+    titleZh: meta.titleZh,
+    summary: paper.summary,
+    abstractZh: meta.abstractZh,
+    authors: paper.authors,
+    publishedAt: paper.publishedAt || paper.published,
+    updated: paper.updated,
+    categories: paper.categories,
+    primaryCategory: paper.primaryCategory,
+    abstractUrl: paper.abstractUrl,
+    pdfUrl: paper.pdfUrl,
+    addedAt
+  };
+}
+
+export function upsertArxivQueuedPaper(queue: ArxivQueuedPaper[], paper: ArxivQueuedPaper): ArxivQueuedPaper[] {
+  return [paper, ...queue.filter((item) => item.stableId !== paper.stableId)].slice(0, 300);
+}
+
+function loadArxivReadingQueue(): ArxivQueuedPaper[] {
+  try {
+    const raw = window.localStorage.getItem(ARXIV_READING_QUEUE_STORAGE_KEY);
+    const value = raw ? (JSON.parse(raw) as unknown) : [];
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return value
+      .filter((item): item is ArxivQueuedPaper => {
+        const candidate = item as Partial<ArxivQueuedPaper>;
+        return typeof candidate.stableId === 'string' && typeof candidate.title === 'string';
+      })
+      .slice(0, 300);
+  } catch {
+    return [];
+  }
+}
+
+function saveArxivReadingQueue(queue: ArxivQueuedPaper[]): ArxivQueuedPaper[] {
+  const next = queue.slice(0, 300);
+  window.localStorage.setItem(ARXIV_READING_QUEUE_STORAGE_KEY, JSON.stringify(next));
+  return next;
 }
 
 function loadStringList(key: string): string[] {

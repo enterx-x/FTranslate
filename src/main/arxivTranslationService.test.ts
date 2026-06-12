@@ -76,7 +76,9 @@ describe('ArxivTranslationService', () => {
       expect(result.status).toBe('unavailable');
       expect(result.engine).toBe('unavailable');
       expect(result.cacheHit).toBe(false);
-      expect(result.message).toContain('Argos');
+      expect(result.message).toContain('离线翻译未配置');
+      expect(result.message).toContain('查看 README');
+      expect(result.message).toContain('稍后重试');
     } finally {
       service.close();
     }

@@ -116,13 +116,14 @@ export class ArxivTranslationService {
           translatedAt
         };
       } catch (error) {
+        const isUnavailable = isArgosUnavailableError(error);
         const message = formatTranslationError(error);
         return {
           stableId,
           titleZh: '',
           abstractZh: '',
-          engine: message.includes('Argos') ? 'unavailable' : 'unavailable',
-          status: message.includes('Argos') ? 'unavailable' : 'failed',
+          engine: 'unavailable',
+          status: isUnavailable ? 'unavailable' : 'failed',
           cacheHit: false,
           message
         };
@@ -266,11 +267,23 @@ function translateWithArgosCli(text: string, timeoutMs: number): Promise<string>
 }
 
 function formatTranslationError(error: unknown): string {
-  if (isMissingArgosError(error)) {
-    return '未检测到 Argos 本地翻译命令 argos-translate。请安装 Argos Translate CLI 和 en→zh 模型；AI 翻译不会在 arXiv 检索页自动调用。';
+  if (isArgosUnavailableError(error)) {
+    return [
+      '离线翻译未配置：当前没有可用的 Argos Translate CLI 或 en→zh 模型，已保留英文标题和摘要。',
+      '查看 README 的“arXiv 离线翻译配置”安装说明后，回到本页点击“稍后重试”。',
+      'arXiv 检索页不会自动调用 AI 翻译。'
+    ].join(' ');
   }
   const message = error instanceof Error ? error.message : String(error);
   return `本地 arXiv 标题/摘要翻译失败：${message}`;
+}
+
+function isArgosUnavailableError(error: unknown): boolean {
+  if (isMissingArgosError(error)) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /translation package|no package|not installed|from[-_ ]?lang|to[-_ ]?lang|language pair/iu.test(message);
 }
 
 function isMissingArgosError(error: unknown): boolean {
