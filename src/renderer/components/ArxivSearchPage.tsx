@@ -34,7 +34,7 @@ const ARXIV_HISTORY_STORAGE_KEY = 'pdfTranslationReader:arxivSearchHistory';
 const ARXIV_LAYOUT_STORAGE_KEY = 'pdfTranslationReader:arxivLayoutMode';
 const ARXIV_PPT_QUEUE_STORAGE_KEY = 'pdfTranslationReader:arxivPptQueue';
 
-const PAGE_SIZE_OPTIONS = [20, 50, 100];
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
 
 const CATEGORY_OPTIONS = [
   { value: '', label: '全部分类' },
@@ -67,6 +67,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [category, setCategory] = useState('');
   const [sortBy, setSortBy] = useState<ArxivSortBy>('relevance');
   const [sortOrder, setSortOrder] = useState<ArxivSortOrder>('descending');
+  const [yearFrom, setYearFrom] = useState('');
+  const [yearTo, setYearTo] = useState('');
   const [pageSize, setPageSize] = useState(50);
   const [start, setStart] = useState(0);
   const [totalResults, setTotalResults] = useState(0);
@@ -98,9 +100,11 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       start,
       maxResults: pageSize,
       sortBy,
-      sortOrder
+      sortOrder,
+      yearFrom,
+      yearTo
     }),
-    [category, pageSize, query, sortBy, sortOrder, start]
+    [category, pageSize, query, sortBy, sortOrder, start, yearFrom, yearTo]
   );
 
   const availableYears = useMemo(() => {
@@ -168,7 +172,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     try {
       setIsSearching(true);
       setStatus('loading');
-      setMessage('正在通过 ArxivService 排队访问官方 Atom API...');
+      setMessage('正在通过 ArxivService 排队访问官方 Atom API；关键词会匹配标题和摘要。');
       const result = await window.electronAPI.searchArxiv(nextRequest);
       setStart(nextStart);
       setPapers(result.papers);
@@ -186,7 +190,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         setMessage(`已命中 SQLite 缓存：${rangeText}。未访问 arXiv。`);
       } else {
         setMessage(
-          `检索完成：${rangeText}。队列长度 ${result.queueSize}，距上次真实请求 ${formatGap(
+          `检索完成：${rangeText}。关键词已匹配标题/摘要，队列长度 ${result.queueSize}，距上次真实请求 ${formatGap(
             result.lastRequestGapMs
           )}。`
         );
@@ -346,7 +350,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   void handleSearch(0);
                 }
               }}
-              placeholder="safe RL robot navigation"
+              placeholder="标题/摘要关键词，例如 reinforcement learning robot navigation"
             />
           </label>
           <label>
@@ -390,6 +394,43 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           </button>
         </div>
 
+        <div className="arxiv-query-options">
+          <label>
+            <span>起始年份</span>
+            <input
+              value={yearFrom}
+              inputMode="numeric"
+              maxLength={4}
+              onChange={(event) => setYearFrom(normalizeYearInput(event.target.value))}
+              placeholder="不限"
+            />
+          </label>
+          <label>
+            <span>结束年份</span>
+            <input
+              value={yearTo}
+              inputMode="numeric"
+              maxLength={4}
+              onChange={(event) => setYearTo(normalizeYearInput(event.target.value))}
+              placeholder={String(new Date().getFullYear())}
+            />
+          </label>
+          <label>
+            <span>每页返回</span>
+            <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+              {PAGE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="arxiv-query-hints">
+            搜索会同时匹配 title 和 abstract；年份范围会写入 arXiv API 的 submittedDate。为避免再次触发限流，
+            不做自动无限抓取，可把每页设为 200 后用“下一页”继续浏览全部结果。
+          </p>
+        </div>
+
         <div className={`arxiv-message is-${status}`}>
           <span>{message}</span>
           {history.length > 0 ? (
@@ -423,7 +464,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           </div>
 
           <label>
-            <span>年份</span>
+            <span>页内年份</span>
             <select value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}>
               <option value="all">全部年份</option>
               {availableYears.map((year) => (
@@ -513,8 +554,12 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             </div>
             <p className="inline-hint">
               {papers.length > 0
-                ? `当前显示 ${formatArxivResultRange(start, papers.length, totalResults)}。翻页同样走 ArxivService 队列和 SQLite 缓存。`
-                : '翻页同样走 ArxivService 队列和 SQLite 缓存。'}
+                ? `当前显示 ${formatArxivResultRange(
+                    start,
+                    papers.length,
+                    totalResults
+                  )}。可继续翻页查看全部结果；翻页同样走 ArxivService 队列和 SQLite 缓存。`
+                : '可把每页设为 200 后继续翻页查看更多结果；翻页同样走 ArxivService 队列和 SQLite 缓存。'}
             </p>
           </div>
         </aside>
@@ -849,6 +894,10 @@ function sanitizeFileStem(value: string): string {
 
 function formatGap(value: number): string {
   return value < 0 ? '首次请求' : `${Math.round(value)} ms`;
+}
+
+function normalizeYearInput(value: string): string {
+  return value.replace(/\D/gu, '').slice(0, 4);
 }
 
 function formatError(error: unknown): string {

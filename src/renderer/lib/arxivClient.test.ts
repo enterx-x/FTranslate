@@ -37,9 +37,53 @@ describe('arxivClient', () => {
     expect(parsed.origin + parsed.pathname).toBe('https://export.arxiv.org/api/query');
     expect(parsed.searchParams.get('start')).toBe('5');
     expect(parsed.searchParams.get('max_results')).toBe('12');
-    expect(parsed.searchParams.get('search_query')).toBe('cat:cs.RO AND all:loco manipulation humanoid');
+    const searchQuery = parsed.searchParams.get('search_query') ?? '';
+    expect(searchQuery).toContain('cat:cs.RO AND');
+    expect(searchQuery).toContain('ti:loco');
+    expect(searchQuery).toContain('abs:humanoid');
     expect(url).not.toContain('presentation');
     expect(url).not.toContain('ppt');
+  });
+
+  it('builds a broad title and abstract query for multi-keyword searches', () => {
+    const url = buildArxivApiUrl({
+      searchQuery: 'reinforcement learning robot navigation',
+      category: '',
+      start: 0,
+      maxResults: 50,
+      sortBy: 'relevance',
+      sortOrder: 'descending'
+    });
+    const parsed = new URL(url);
+    const searchQuery = parsed.searchParams.get('search_query') ?? '';
+
+    expect(searchQuery).not.toBe('all:reinforcement learning robot navigation');
+    expect(searchQuery).toContain('ti:"reinforcement learning"');
+    expect(searchQuery).toContain('abs:"reinforcement learning"');
+    expect(searchQuery).toContain('ti:robot');
+    expect(searchQuery).toContain('abs:navigation');
+    expect(searchQuery).toContain(' OR ');
+  });
+
+  it('adds submittedDate range to the arXiv query and cache key when years are provided', () => {
+    const request = {
+      searchQuery: 'robot navigation',
+      category: 'cs.RO',
+      start: 0,
+      maxResults: 50,
+      sortBy: 'submittedDate' as const,
+      sortOrder: 'descending' as const,
+      yearFrom: '2020',
+      yearTo: '2026'
+    };
+    const url = buildArxivApiUrl(request);
+    const parsed = new URL(url);
+    const searchQuery = parsed.searchParams.get('search_query') ?? '';
+    const cacheKey = buildArxivCacheKey(request);
+
+    expect(searchQuery).toContain('submittedDate:[202001010000 TO 202612312359]');
+    expect(cacheKey).toContain('2020');
+    expect(cacheKey).toContain('2026');
   });
 
   it('expands common Chinese research terms before building an arXiv query', () => {
@@ -56,7 +100,8 @@ describe('arxivClient', () => {
 
     expect(searchQuery).not.toContain('强化学习');
     expect(searchQuery).toContain('reinforcement learning');
-    expect(searchQuery).toContain('robot robotics');
+    expect(searchQuery).toContain('ti:robot');
+    expect(searchQuery).toContain('abs:robotics');
   });
 
   it('parses arXiv Atom feed into local-download-ready records', () => {

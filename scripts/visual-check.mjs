@@ -177,7 +177,7 @@ async function evaluateJson(client, expression) {
 async function waitForAppReady(client) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => ({
-      ready: Boolean(document.querySelector('.home-page, .split-layout, .research-sheet-page, .ai-assistant-page, .knowledge-graph-page, .presentation-page, .settings-page')),
+      ready: Boolean(document.querySelector('.home-page, .split-layout, .research-sheet-page, .ai-assistant-page, .knowledge-graph-page, .presentation-page, .arxiv-page, .settings-page')),
       text: document.body.textContent ?? ''
     })`);
     if (snapshot.ready) {
@@ -910,6 +910,57 @@ async function runAiAssistantScenario(client) {
   return { before, after };
 }
 
+async function runArxivSearchScenario(client) {
+  await clickSidebarSection(client, 'arxiv');
+  await waitForAppReady(client);
+  await wait(700);
+
+  const snapshot = await evaluateJson(client, `() => {
+    const page = document.querySelector('.arxiv-page');
+    const searchCard = document.querySelector('.arxiv-search-card');
+    const inputs = [...document.querySelectorAll('.arxiv-search-card input')].map((input) => ({
+      placeholder: input.getAttribute('placeholder') ?? '',
+      value: input.value ?? ''
+    }));
+    const selects = [...document.querySelectorAll('.arxiv-search-card select')].map((select) => ({
+      value: select.value,
+      options: [...select.options].map((option) => option.value)
+    }));
+    const text = page?.textContent ?? '';
+    return {
+      hasPage: Boolean(page),
+      hasSearchCard: Boolean(searchCard),
+      hasYearInputs: /起始年份/.test(text) && /结束年份/.test(text),
+      hasTitleAbstractHint: /title 和 abstract|标题和摘要|标题\\/摘要/.test(text),
+      hasPageSize200: selects.some((select) => select.options.includes('200')),
+      hasEmptyState: Boolean(document.querySelector('.arxiv-empty-card')),
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+      inputs,
+      searchText: text.slice(0, 1200)
+    };
+  }`);
+
+  if (
+    !snapshot.hasPage ||
+    !snapshot.hasSearchCard ||
+    !snapshot.hasYearInputs ||
+    !snapshot.hasTitleAbstractHint ||
+    !snapshot.hasPageSize200 ||
+    snapshot.hasHorizontalOverflow
+  ) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'arxiv-search-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`arxiv: expected title/abstract search UI with year range and page-size controls, got ${JSON.stringify(snapshot)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'arxiv-search-page.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  return snapshot;
+}
+
 async function runSettingsScenario(client) {
   await clickSidebarSection(client, 'settings');
   await waitForAppReady(client);
@@ -1023,11 +1074,12 @@ async function main() {
     const wholePdfReader = await runWholePdfReaderScenario(client);
     const presentation = await runPresentationScenario(client);
     const aiAssistant = await runAiAssistantScenario(client);
+    const arxivSearch = await runArxivSearchScenario(client);
     const settings = await runSettingsScenario(client);
     client.close();
     console.log(
       JSON.stringify(
-        { pdfPath, home, researchSheet, wholePdfReader, presentation, aiAssistant, settings, outputDir },
+        { pdfPath, home, researchSheet, wholePdfReader, presentation, aiAssistant, arxivSearch, settings, outputDir },
         null,
         2
       )

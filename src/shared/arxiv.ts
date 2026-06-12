@@ -8,6 +8,8 @@ export interface ArxivSearchRequest {
   maxResults: number;
   sortBy: ArxivSortBy;
   sortOrder: ArxivSortOrder;
+  yearFrom?: string;
+  yearTo?: string;
 }
 
 export interface ArxivPaper {
@@ -60,6 +62,44 @@ const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
   [/模型预测控制/gu, 'model predictive control MPC']
 ];
 
+const KNOWN_ARXIV_QUERY_PHRASES = [
+  'reinforcement learning',
+  'safe reinforcement learning',
+  'robot navigation',
+  'robotic navigation',
+  'mobile robot',
+  'path planning',
+  'motion planning',
+  'trajectory planning',
+  'model predictive control',
+  'control barrier function',
+  'physics-informed',
+  'world model',
+  'vision language action',
+  'foundation model'
+];
+
+const ARXIV_QUERY_STOP_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'by',
+  'for',
+  'from',
+  'in',
+  'into',
+  'is',
+  'of',
+  'on',
+  'or',
+  'the',
+  'to',
+  'with'
+]);
+
 export function normalizeArxivWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
@@ -80,9 +120,7 @@ export function normalizeArxivSearchQuery(value: string): string {
 
 export function buildArxivApiUrl(request: ArxivSearchRequest): string {
   const cleanQuery = normalizeArxivSearchQuery(request.searchQuery);
-  const query = request.category
-    ? `cat:${request.category} AND all:${cleanQuery}`
-    : `all:${cleanQuery}`;
+  const query = buildArxivSearchExpression(cleanQuery, request);
   const url = new URL(ARXIV_ENDPOINT);
   url.searchParams.set('search_query', query);
   url.searchParams.set('start', String(request.start));
@@ -94,12 +132,84 @@ export function buildArxivApiUrl(request: ArxivSearchRequest): string {
 
 export function buildArxivCacheKey(request: ArxivSearchRequest): string {
   return JSON.stringify({
+    query_version: 'title-abstract-v2',
     search_query: `${request.category || 'all'}:${normalizeArxivSearchQuery(request.searchQuery).toLowerCase()}`,
+    yearFrom: normalizeArxivYear(request.yearFrom),
+    yearTo: normalizeArxivYear(request.yearTo),
     start: request.start,
     max_results: request.maxResults,
     sortBy: request.sortBy,
     sortOrder: request.sortOrder
   });
+}
+
+export function buildArxivSearchExpression(
+  cleanQuery: string,
+  request: Pick<ArxivSearchRequest, 'category' | 'yearFrom' | 'yearTo'>
+): string {
+  const queryParts = [buildTitleAbstractExpression(cleanQuery)];
+  const dateRange = buildSubmittedDateRange(request.yearFrom, request.yearTo);
+  if (dateRange) {
+    queryParts.push(dateRange);
+  }
+  const scopedQuery = queryParts.join(' AND ');
+  return request.category ? `cat:${request.category} AND ${scopedQuery}` : scopedQuery;
+}
+
+function buildTitleAbstractExpression(cleanQuery: string): string {
+  const normalized = normalizeArxivWhitespace(cleanQuery.toLowerCase());
+  const clauses: string[] = [];
+  KNOWN_ARXIV_QUERY_PHRASES.forEach((phrase) => {
+    if (normalized.includes(phrase)) {
+      clauses.push(buildFieldPairClause(phrase, true));
+    }
+  });
+  tokenizeArxivQuery(normalized).forEach((token) => {
+    clauses.push(buildFieldPairClause(token, false));
+  });
+
+  const uniqueClauses = Array.from(new Set(clauses));
+  if (uniqueClauses.length === 0) {
+    return `all:${escapeArxivTerm(cleanQuery, cleanQuery.includes(' '))}`;
+  }
+  return `(${uniqueClauses.join(' OR ')})`;
+}
+
+function buildFieldPairClause(value: string, phrase: boolean): string {
+  const term = escapeArxivTerm(value, phrase);
+  return `(ti:${term} OR abs:${term})`;
+}
+
+function tokenizeArxivQuery(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .split(/[^a-z0-9.+-]+/iu)
+        .map((term) => term.trim())
+        .filter((term) => term.length >= 2 && !ARXIV_QUERY_STOP_WORDS.has(term))
+    )
+  ).slice(0, 12);
+}
+
+function escapeArxivTerm(value: string, phrase: boolean): string {
+  const safeValue = value.replace(/["\\]/gu, ' ').replace(/\s+/gu, ' ').trim();
+  return phrase || safeValue.includes(' ') ? `"${safeValue}"` : safeValue;
+}
+
+function buildSubmittedDateRange(yearFrom?: string, yearTo?: string): string {
+  const from = normalizeArxivYear(yearFrom);
+  const to = normalizeArxivYear(yearTo);
+  if (!from && !to) {
+    return '';
+  }
+  const startYear = from || '1991';
+  const endYear = to || String(new Date().getFullYear());
+  return `submittedDate:[${startYear}01010000 TO ${endYear}12312359]`;
+}
+
+function normalizeArxivYear(value?: string): string {
+  const match = value?.match(/\b(19|20)\d{2}\b/u);
+  return match?.[0] ?? '';
 }
 
 function getTextContent(parent: Element, tagName: string, namespace = XML_NS_ATOM): string {
