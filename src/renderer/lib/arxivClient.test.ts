@@ -88,7 +88,7 @@ describe('arxivClient', () => {
 
   it('expands common Chinese research terms before building an arXiv query', () => {
     const url = buildArxivApiUrl({
-      searchQuery: '强化学习 机器人',
+      searchQuery: '无人机避障 强化学习',
       category: 'cs.RO',
       start: 0,
       maxResults: 50,
@@ -99,9 +99,13 @@ describe('arxivClient', () => {
     const searchQuery = parsed.searchParams.get('search_query') ?? '';
 
     expect(searchQuery).not.toContain('强化学习');
+    expect(searchQuery).not.toContain('无人机');
+    expect(searchQuery).not.toContain('避障');
     expect(searchQuery).toContain('reinforcement learning');
-    expect(searchQuery).toContain('ti:robot');
-    expect(searchQuery).toContain('abs:robotics');
+    expect(searchQuery).toContain('ti:uav');
+    expect(searchQuery).toContain('abs:drone');
+    expect(searchQuery).toContain('obstacle');
+    expect(searchQuery).toContain('abs:avoidance');
   });
 
   it('parses arXiv Atom feed into local-download-ready records', () => {

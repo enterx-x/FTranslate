@@ -9635,3 +9635,40 @@ body.is-resizing-layout .layout-resize-handle::after {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Final arXiv result-list guard: keep cards readable across DPI/scaled displays. */
+.arxiv-results-panel > .panel-title-row,
+.arxiv-results-panel > .arxiv-empty-card {
+  flex: 0 0 auto;
+}
+
+.arxiv-results-list {
+  display: grid;
+  gap: 12px;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.arxiv-results-list > .arxiv-paper-card {
+  flex: 0 0 auto;
+  min-height: 0;
+  height: auto;
+  overflow: hidden;
+}
+
+.arxiv-results-list .arxiv-summary {
+  display: -webkit-box;
+  max-height: none;
+  overflow: hidden;
+  line-height: 1.62;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.arxiv-results-list .arxiv-title-en,
+.arxiv-detail-panel .arxiv-title-en {
+  margin: -4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}

@@ -98,7 +98,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     maxResults: number;
     sortBy: 'relevance' | 'lastUpdatedDate' | 'submittedDate';
     sortOrder: 'ascending' | 'descending';
+    yearFrom?: string;
+    yearTo?: string;
   }) => ipcRenderer.invoke('arxiv:search', request),
+  translateArxivTitleAbstract: (request: {
+    stableId: string;
+    title: string;
+    summary: string;
+    targetLanguage?: 'zh';
+  }) => ipcRenderer.invoke('arxiv:translate-title-abstract', request),
   downloadArxivPdf: (request: { pdfUrl: string; defaultFileName: string }) =>
     ipcRenderer.invoke('arxiv:download-pdf', request),
   exportPdf: (request: { sourcePath: string; defaultFileName: string }) =>

@@ -43,8 +43,9 @@ import {
   type PdfTranslationInvocation,
   type PdfTranslationOutputMode
 } from '../shared/pdfTranslation';
-import { type ArxivSearchRequest } from '../shared/arxiv';
+import { type ArxivSearchRequest, type ArxivTitleAbstractTranslationRequest } from '../shared/arxiv';
 import { ArxivService } from './arxivService';
+import { ArxivTranslationService } from './arxivTranslationService';
 
 interface PdfFilePayload {
   filePath: string;
@@ -1010,6 +1011,7 @@ function sanitizeFileName(value: string): string {
 }
 
 let arxivService: ArxivService | null = null;
+let arxivTranslationService: ArxivTranslationService | null = null;
 
 function getArxivService(): ArxivService {
   if (!arxivService) {
@@ -1018,6 +1020,15 @@ function getArxivService(): ArxivService {
     });
   }
   return arxivService;
+}
+
+function getArxivTranslationService(): ArxivTranslationService {
+  if (!arxivTranslationService) {
+    arxivTranslationService = new ArxivTranslationService({
+      dbPath: path.join(app.getPath('userData'), 'arxiv-translation-cache.sqlite')
+    });
+  }
+  return arxivTranslationService;
 }
 
 async function exportResearchWorkbookToExcel(
@@ -2840,6 +2851,10 @@ function registerIpcHandlers(): void {
     return getArxivService().search(request, 'renderer:arxiv-search');
   });
 
+  ipcMain.handle('arxiv:translate-title-abstract', async (_event, request: ArxivTitleAbstractTranslationRequest) => {
+    return getArxivTranslationService().translatePaper(request);
+  });
+
   ipcMain.handle('arxiv:download-pdf', async (_event, request: ArxivDownloadPdfRequest) => {
     const result = await dialog.showSaveDialog({
       title: '下载 arXiv PDF',
@@ -2903,6 +2918,8 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   arxivService?.close();
   arxivService = null;
+  arxivTranslationService?.close();
+  arxivTranslationService = null;
 });
 
 app.on('window-all-closed', () => {

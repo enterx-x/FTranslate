@@ -37,6 +37,27 @@ export interface ArxivSearchServiceResult {
   lastRequestGapMs: number;
 }
 
+export interface ArxivTitleAbstractTranslationRequest {
+  stableId: string;
+  title: string;
+  summary: string;
+  targetLanguage?: 'zh';
+}
+
+export type ArxivTitleAbstractTranslationEngine = 'argos' | 'cache' | 'unavailable';
+export type ArxivTitleAbstractTranslationStatus = 'completed' | 'cached' | 'unavailable' | 'failed';
+
+export interface ArxivTitleAbstractTranslationResult {
+  stableId: string;
+  titleZh: string;
+  abstractZh: string;
+  engine: ArxivTitleAbstractTranslationEngine;
+  status: ArxivTitleAbstractTranslationStatus;
+  cacheHit: boolean;
+  message: string;
+  translatedAt?: string;
+}
+
 export interface ArxivParsedSearchResult {
   papers: ArxivPaper[];
   totalResults: number;
@@ -51,15 +72,22 @@ const XML_NS_OPENSEARCH = 'http://a9.com/-/spec/opensearch/1.1/';
 
 const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
   [/安全强化学习/gu, 'safe reinforcement learning'],
+  [/深度强化学习/gu, 'deep reinforcement learning'],
   [/强化学习/gu, 'reinforcement learning'],
-  [/路径规划|运动规划/gu, 'path planning motion planning navigation'],
-  [/机器人/gu, 'robot robotics'],
-  [/具身智能/gu, 'embodied intelligence embodied AI'],
-  [/物理信息|物理约束/gu, 'physics-informed physical constraint'],
+  [/机器人导航|导航机器人/gu, 'robot navigation robotic navigation mobile robot navigation'],
+  [/机器人|机械臂/gu, 'robot robotics manipulator'],
+  [/无人机|飞行器/gu, 'uav drone aerial robot'],
+  [/避障|障碍物规避|动态障碍/gu, 'obstacle avoidance collision avoidance dynamic obstacle'],
+  [/路径规划|运动规划|轨迹规划/gu, 'path planning motion planning trajectory planning navigation'],
+  [/具身智能|具身/gu, 'embodied intelligence embodied AI'],
+  [/物理信息|物理约束|物理先验/gu, 'physics-informed physical constraint physics prior'],
   [/神经网络/gu, 'neural network'],
   [/世界模型/gu, 'world model'],
-  [/控制屏障函数/gu, 'control barrier function CBF'],
-  [/模型预测控制/gu, 'model predictive control MPC']
+  [/视觉语言动作|视觉语言|多模态/gu, 'vision language action VLA vision language model VLM multimodal'],
+  [/控制屏障函数|安全屏障|屏障函数/gu, 'control barrier function CBF safety constraint'],
+  [/模型预测控制/gu, 'model predictive control MPC'],
+  [/物理信息神经网络|PINN/giu, 'physics-informed neural network PINN'],
+  [/移动操作|运动操作|locomanipulation|loco-manipulation/giu, 'loco-manipulation mobile manipulation']
 ];
 
 const KNOWN_ARXIV_QUERY_PHRASES = [

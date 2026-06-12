@@ -954,6 +954,127 @@ async function runArxivSearchScenario(client) {
     throw new Error(`arxiv: expected title/abstract search UI with year range and page-size controls, got ${JSON.stringify(snapshot)}`);
   }
 
+  const mockInstalled = await evaluateJson(client, `() => {
+    const papers = Array.from({ length: 6 }, (_, index) => ({
+      id: 'http://arxiv.org/abs/2601.1744' + index + 'v1',
+      stableId: '2601.1744' + index,
+      title: index === 0
+        ? 'Reinforcement Learning for Active Perception in Autonomous Navigation'
+        : 'Robot Navigation with Reinforcement Learning and Dynamic Obstacle Avoidance ' + index,
+      authors: ['Grzegorz Malczyk', 'Mihir Kulkarni', 'Kostas Alexis'],
+      summary: 'This paper studies reinforcement learning for robot navigation with active perception, dynamic obstacle avoidance, local planning, and real robot evaluation. The abstract is intentionally long enough to verify result-card layout and wrapping in the arXiv search page.',
+      published: '2026-02-01T00:00:00Z',
+      publishedAt: '2026-02-01T00:00:00Z',
+      updated: '2026-02-01T00:00:00Z',
+      categories: ['cs.RO', 'cs.LG'],
+      primaryCategory: 'cs.RO',
+      abstractUrl: 'https://arxiv.org/abs/2601.1744' + index,
+      pdfUrl: 'https://arxiv.org/pdf/2601.1744' + index + '.pdf'
+    }));
+    const searchMock = async () => ({
+      papers,
+      totalResults: 38019,
+      startIndex: 0,
+      itemsPerPage: papers.length,
+      cacheHit: true,
+      queueSize: 0,
+      lastRequestGapMs: -1
+    });
+    const translateMock = async (request) => ({
+      stableId: request.stableId,
+      titleZh: '强化学习机器人导航：' + request.stableId,
+      abstractZh: '本文研究强化学习在机器人导航、主动感知、动态避障和真实机器人评估中的应用，用于检查中文摘要在检索列表中直接显示。',
+      engine: 'cache',
+      status: 'cached',
+      cacheHit: true,
+      message: 'visual mock cached',
+      translatedAt: '2026-05-30T00:00:00.000Z'
+    });
+    try {
+      window.electronAPI.searchArxiv = searchMock;
+      window.electronAPI.translateArxivTitleAbstract = translateMock;
+      if (
+        window.electronAPI.searchArxiv === searchMock &&
+        window.electronAPI.translateArxivTitleAbstract === translateMock
+      ) {
+        return true;
+      }
+    } catch {
+      // contextBridge 暴露对象在部分 Electron 版本中会静默拒绝赋值，下面再尝试 defineProperty。
+    }
+    try {
+      Object.defineProperty(window.electronAPI, 'searchArxiv', { configurable: true, value: searchMock });
+      Object.defineProperty(window.electronAPI, 'translateArxivTitleAbstract', { configurable: true, value: translateMock });
+      return (
+        window.electronAPI.searchArxiv === searchMock &&
+        window.electronAPI.translateArxivTitleAbstract === translateMock
+      );
+    } catch {
+      try {
+        window.__ftranslateVisualArxivSearchMock = searchMock;
+        window.__ftranslateVisualArxivTranslateMock = translateMock;
+      } catch {
+        // ignore
+      }
+      return false;
+    }
+  }`);
+
+  if (mockInstalled) {
+    await client.send('Runtime.evaluate', {
+      expression: `
+        (() => {
+          const input = document.querySelector('.arxiv-query-input input');
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+          setter?.call(input, 'reinforcement learning robot navigation');
+          input?.dispatchEvent(new Event('input', { bubbles: true }));
+          [...document.querySelectorAll('.arxiv-search-card button')]
+            .find((button) => /搜索/.test(button.textContent ?? ''))?.click();
+        })();
+      `
+    });
+
+    let resultsSnapshot = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      resultsSnapshot = await evaluateJson(client, `() => {
+        const cards = [...document.querySelectorAll('.arxiv-results-list > .arxiv-paper-card')];
+        const cardRects = cards.map((card) => {
+          const rect = card.getBoundingClientRect();
+          return { width: rect.width, height: rect.height, text: card.textContent?.slice(0, 500) ?? '' };
+        });
+        return {
+          hasResultsList: Boolean(document.querySelector('.arxiv-results-list')),
+          cardCount: cards.length,
+          cardRects,
+          zhCount: cards.filter((card) => /强化学习|中文摘要/.test(card.textContent ?? '')).length,
+          hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+        };
+      }`);
+      if (resultsSnapshot.cardCount >= 3 && resultsSnapshot.zhCount >= 1) {
+        break;
+      }
+      await wait(250);
+    }
+
+    const compressedCard = resultsSnapshot.cardRects.find((card) => card.height < 150);
+    if (
+      !resultsSnapshot.hasResultsList ||
+      resultsSnapshot.cardCount < 3 ||
+      resultsSnapshot.zhCount < 1 ||
+      compressedCard ||
+      resultsSnapshot.hasHorizontalOverflow
+    ) {
+      await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+        writeFile(path.join(outputDir, 'arxiv-search-results-failed.png'), Buffer.from(shot.data, 'base64'))
+      );
+      throw new Error(`arxiv: expected readable translated result cards, got ${JSON.stringify(resultsSnapshot)}`);
+    }
+
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'arxiv-search-results.png'), Buffer.from(shot.data, 'base64'))
+    );
+  }
+
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'arxiv-search-page.png'), Buffer.from(shot.data, 'base64'))
   );

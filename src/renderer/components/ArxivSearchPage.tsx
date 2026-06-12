@@ -10,8 +10,7 @@ import {
   buildArxivBibTeX,
   buildArxivExportMarkdown,
   buildArxivPaperInsight,
-  formatArxivResultRange,
-  parseArxivTitleAbstractTranslation
+  formatArxivResultRange
 } from '../lib/arxivUi';
 import searchIcon from '../assets/icons/duotone/search.svg';
 import downloadIcon from '../assets/icons/duotone/download.svg';
@@ -91,6 +90,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [isSearching, setIsSearching] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [translatingId, setTranslatingId] = useState<string | null>(null);
+  const [backgroundTranslatingIds, setBackgroundTranslatingIds] = useState<Record<string, boolean>>({});
   const [exportingId, setExportingId] = useState<string | null>(null);
 
   const request = useMemo<ArxivSearchRequest>(
@@ -186,6 +186,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       }
       setStatus('success');
       const rangeText = formatArxivResultRange(nextStart, result.papers.length, result.totalResults ?? result.papers.length);
+      void queueOfflineTranslations(result.papers);
       if (result.cacheHit) {
         setMessage(`已命中 SQLite 缓存：${rangeText}。未访问 arXiv。`);
       } else {
@@ -234,26 +235,68 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
 
     try {
       setTranslatingId(paper.id);
-      setMessage('正在调用当前 AI 设置翻译标题和摘要。失败时会保留英文，不影响检索结果。');
-      const translation = await window.electronAPI.completeWithAi({
-        systemPrompt:
-          '你是严谨的学术论文翻译助手。请把英文 arXiv 标题和摘要翻译为自然、准确的中文，保留 RL、PINN、CBF、MPC、VLM、World Model 等专业术语原文或常用译名。只输出 JSON，不要 Markdown，不要解释。JSON 字段必须是 titleZh 和 abstractZh。',
-        userPrompt: `请翻译这篇 arXiv 论文，输出 JSON：\n\nTitle: ${paper.title}\n\nAbstract: ${paper.summary}`
-      });
-      const parsed = parseArxivTitleAbstractTranslation(translation, paper);
-      updateMeta(paper, {
-        ...currentMeta,
-        titleZh: parsed.titleZh || currentMeta.titleZh,
-        abstractZh: parsed.abstractZh,
-        translatedAt: new Date().toISOString()
-      });
-      setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
-      setMessage('标题和摘要翻译已缓存到本机，下次不会重复调用 AI。');
+      setMessage('正在使用本地 Argos 翻译标题和摘要，并写入 SQLite 缓存；此操作不会调用 AI API。');
+      const result = await translatePaperMetadata(paper);
+      if (result) {
+        setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
+        setMessage(result.message);
+      }
     } catch (error) {
-      setMessage(`标题/摘要翻译失败，已保留英文：${formatError(error)}`);
+      setMessage(`标题/摘要本地翻译失败，已保留英文：${formatError(error)}`);
     } finally {
       setTranslatingId(null);
     }
+  }
+
+  async function queueOfflineTranslations(nextPapers: ArxivPaper[]): Promise<void> {
+    const missing = nextPapers.filter((paper) => {
+      const meta = getPaperMeta(paper, metaById);
+      return !meta.titleZh || !meta.abstractZh;
+    });
+    if (missing.length === 0) {
+      return;
+    }
+
+    for (const paper of missing) {
+      setBackgroundTranslatingIds((previous) => ({ ...previous, [paper.id]: true }));
+      try {
+        const result = await translatePaperMetadata(paper, true);
+        if (result?.status === 'unavailable') {
+          setMessage(result.message);
+          break;
+        }
+      } finally {
+        setBackgroundTranslatingIds((previous) => {
+          const next = { ...previous };
+          delete next[paper.id];
+          return next;
+        });
+      }
+    }
+  }
+
+  async function translatePaperMetadata(paper: ArxivPaper, silent = false) {
+    const result = await window.electronAPI.translateArxivTitleAbstract({
+      stableId: paper.stableId,
+      title: paper.title,
+      summary: paper.summary,
+      targetLanguage: 'zh'
+    });
+    if (result.status === 'completed' || result.status === 'cached') {
+      patchMeta(paper, {
+        titleZh: result.titleZh,
+        abstractZh: result.abstractZh,
+        translatedAt: result.translatedAt ?? new Date().toISOString()
+      });
+      if (!silent) {
+        setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
+      }
+      return result;
+    }
+    if (!silent) {
+      setMessage(result.message);
+    }
+    return result;
   }
 
   function handleScorePaper(paper: ArxivPaper): void {
@@ -319,11 +362,22 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     });
   }
 
+  function patchMeta(paper: ArxivPaper, patch: Partial<ArxivPaperMeta>): void {
+    setMetaById((previous) => {
+      const nextMeta = { ...(previous[paper.stableId] ?? {}), ...patch };
+      const next = { ...previous, [paper.stableId]: nextMeta };
+      saveArxivMeta(next);
+      return next;
+    });
+  }
+
   const selectedMeta = selectedPaper ? getPaperMeta(selectedPaper, metaById) : {};
   const selectedInsight = selectedPaper
     ? selectedMeta.insight ?? buildArxivPaperInsight(selectedPaper, query)
     : null;
-  const selectedAbstractMode = selectedPaper ? abstractModes[selectedPaper.id] ?? 'en' : 'en';
+  const selectedAbstractMode = selectedPaper
+    ? abstractModes[selectedPaper.id] ?? (selectedMeta.abstractZh ? 'zh' : 'en')
+    : 'en';
 
   return (
     <main className="arxiv-page page-workspace">
@@ -345,11 +399,6 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  void handleSearch(0);
-                }
-              }}
               placeholder="标题/摘要关键词，例如 reinforcement learning robot navigation"
             />
           </label>
@@ -584,12 +633,14 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               <p>可以关闭收藏/翻译/评分筛选，或改用更宽的年份和标签条件。</p>
             </article>
           ) : (
-            filteredPapers.map((paper) => {
+            <div className="arxiv-results-list">
+              {filteredPapers.map((paper) => {
               const meta = getPaperMeta(paper, metaById);
               const insight = meta.insight ?? buildArxivPaperInsight(paper, query);
               const isSelected = selectedPaper?.id === paper.id;
               const isQueued = pptQueue.includes(paper.stableId);
-              const abstractMode = abstractModes[paper.id] ?? 'en';
+              const abstractMode = abstractModes[paper.id] ?? (meta.abstractZh ? 'zh' : 'en');
+              const isTranslatingMetadata = translatingId === paper.id || backgroundTranslatingIds[paper.id];
               return (
                 <article
                   key={paper.id}
@@ -604,6 +655,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       <span className="badge accent-badge">{insight.totalScore}/100</span>
                       <span className="badge">{paper.stableId}</span>
                       <span className="badge">{paper.primaryCategory || paper.categories[0] || 'arXiv'}</span>
+                      {meta.abstractZh ? <span className="badge success-badge">中文摘要</span> : null}
+                      {isTranslatingMetadata ? <span className="badge accent-badge">本地翻译中</span> : null}
                       {meta.favorite ? <span className="badge success-badge">已收藏</span> : null}
                     </div>
                     <button
@@ -672,14 +725,14 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                     <button
                       type="button"
                       className="secondary-button"
-                      disabled={translatingId === paper.id}
+                      disabled={isTranslatingMetadata}
                       onClick={(event) => {
                         event.stopPropagation();
                         void handleTranslateAbstract(paper);
                       }}
                     >
                       <img className="button-icon" src={translateIcon} alt="" />
-                      {translatingId === paper.id ? '翻译中' : '翻译标题/摘要'}
+                      {isTranslatingMetadata ? '本地翻译中' : '本地翻译标题/摘要'}
                     </button>
                     <button
                       type="button"
@@ -705,7 +758,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   </footer>
                 </article>
               );
-            })
+            })}
+            </div>
           )}
         </section>
 
