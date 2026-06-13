@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ArxivTranslationService, resolveArgosCliCommand } from './arxivTranslationService';
+import { ArxivTranslationService, resolveArgosChildEnv, resolveArgosCliCommand } from './arxivTranslationService';
 
 describe('ArxivTranslationService', () => {
   let tempDir: string;
@@ -29,6 +29,24 @@ describe('ArxivTranslationService', () => {
         delete process.env.FTRANSLATE_ARGOS_CLI;
       } else {
         process.env.FTRANSLATE_ARGOS_CLI = previous;
+      }
+    }
+  });
+
+  it('maps the FTranslate Argos package directory to Argos native environment variables', () => {
+    const previous = process.env.FTRANSLATE_ARGOS_PACKAGES_DIR;
+
+    try {
+      process.env.FTRANSLATE_ARGOS_PACKAGES_DIR = 'E:\\FTranslateTools\\argos-data\\packages';
+      const env = resolveArgosChildEnv();
+
+      expect(env.ARGOS_PACKAGES_DIR).toBe('E:\\FTranslateTools\\argos-data\\packages');
+      expect(env.ARGOS_TRANSLATE_PACKAGE_DIR).toBe('E:\\FTranslateTools\\argos-data\\packages');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.FTRANSLATE_ARGOS_PACKAGES_DIR;
+      } else {
+        process.env.FTRANSLATE_ARGOS_PACKAGES_DIR = previous;
       }
     }
   });

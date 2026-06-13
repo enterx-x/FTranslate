@@ -232,6 +232,7 @@ function normalizeTranslatedText(value: string): string {
 function translateWithArgosCli(text: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(resolveArgosCliCommand(), ['--from-lang', 'en', '--to-lang', 'zh'], {
+      env: resolveArgosChildEnv(),
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -268,6 +269,18 @@ function translateWithArgosCli(text: string, timeoutMs: number): Promise<string>
 
 export function resolveArgosCliCommand(): string {
   return process.env.FTRANSLATE_ARGOS_CLI?.trim() || 'argos-translate';
+}
+
+export function resolveArgosChildEnv(): NodeJS.ProcessEnv {
+  const packagesDir = process.env.FTRANSLATE_ARGOS_PACKAGES_DIR?.trim();
+  if (!packagesDir) {
+    return process.env;
+  }
+  return {
+    ...process.env,
+    ARGOS_PACKAGES_DIR: packagesDir,
+    ARGOS_TRANSLATE_PACKAGE_DIR: packagesDir
+  };
 }
 
 function formatTranslationError(error: unknown): string {

@@ -8,7 +8,11 @@
 - Python：Conda 环境内 Python 3.10
 - CLI：`E:\FTranslateTools\argos-conda\Scripts\argos-translate.exe`
 - 模型：Argos Translate `en -> zh`
+- 模型目录：`E:\FTranslateTools\argos-data\packages`
 - 用户环境变量：`FTRANSLATE_ARGOS_CLI=E:\FTranslateTools\argos-conda\Scripts\argos-translate.exe`
+- 用户环境变量：`FTRANSLATE_ARGOS_PACKAGES_DIR=E:\FTranslateTools\argos-data\packages`
+- Argos 原生环境变量：`ARGOS_PACKAGES_DIR=E:\FTranslateTools\argos-data\packages`
+- Argos 兼容环境变量：`ARGOS_TRANSLATE_PACKAGE_DIR=E:\FTranslateTools\argos-data\packages`
 - 用户 PATH 已追加：
   - `E:\FTranslateTools\argos-conda`
   - `E:\FTranslateTools\argos-conda\Scripts`
@@ -16,6 +20,7 @@
 ## 验证命令
 
 ```powershell
+$env:ARGOS_PACKAGES_DIR='E:\FTranslateTools\argos-data\packages'
 & 'E:\FTranslateTools\argos-conda\Scripts\argos-translate.exe' --from-lang en --to-lang zh 'Safe reinforcement learning for robot navigation'
 ```
 
@@ -28,6 +33,8 @@
 ## 应用侧配置
 
 `src/main/arxivTranslationService.ts` 会优先读取 `FTRANSLATE_ARGOS_CLI`。如果环境变量不存在，才回退到系统 PATH 中的 `argos-translate`。
+
+应用启动后还会读取 `FTRANSLATE_ARGOS_PACKAGES_DIR`，并传给子进程的 `ARGOS_PACKAGES_DIR` / `ARGOS_TRANSLATE_PACKAGE_DIR`，确保 en→zh 模型从 E 盘加载。
 
 这样做的原因是：安装目录放在 E 盘，Electron 安装版未必能立即继承当前 shell 的 PATH，但可以在重启应用后读取用户级环境变量。
 
