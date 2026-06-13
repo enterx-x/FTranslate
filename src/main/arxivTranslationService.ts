@@ -231,7 +231,7 @@ function normalizeTranslatedText(value: string): string {
 
 function translateWithArgosCli(text: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('argos-translate', ['--from-lang', 'en', '--to-lang', 'zh'], {
+    const child = spawn(resolveArgosCliCommand(), ['--from-lang', 'en', '--to-lang', 'zh'], {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -264,6 +264,10 @@ function translateWithArgosCli(text: string, timeoutMs: number): Promise<string>
     });
     child.stdin.end(text);
   });
+}
+
+export function resolveArgosCliCommand(): string {
+  return process.env.FTRANSLATE_ARGOS_CLI?.trim() || 'argos-translate';
 }
 
 function formatTranslationError(error: unknown): string {

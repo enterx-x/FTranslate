@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ArxivTranslationService } from './arxivTranslationService';
+import { ArxivTranslationService, resolveArgosCliCommand } from './arxivTranslationService';
 
 describe('ArxivTranslationService', () => {
   let tempDir: string;
@@ -13,6 +13,24 @@ describe('ArxivTranslationService', () => {
 
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('uses FTRANSLATE_ARGOS_CLI before falling back to PATH lookup', () => {
+    const previous = process.env.FTRANSLATE_ARGOS_CLI;
+
+    try {
+      process.env.FTRANSLATE_ARGOS_CLI = 'E:\\FTranslateTools\\argos-conda\\Scripts\\argos-translate.exe';
+      expect(resolveArgosCliCommand()).toBe('E:\\FTranslateTools\\argos-conda\\Scripts\\argos-translate.exe');
+
+      delete process.env.FTRANSLATE_ARGOS_CLI;
+      expect(resolveArgosCliCommand()).toBe('argos-translate');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.FTRANSLATE_ARGOS_CLI;
+      } else {
+        process.env.FTRANSLATE_ARGOS_CLI = previous;
+      }
+    }
   });
 
   it('translates title and abstract once, then serves the same paper from SQLite cache', async () => {
