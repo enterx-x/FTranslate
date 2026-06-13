@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { TextDecoder } from 'node:util';
 import type {
   ArxivTitleAbstractTranslationRequest,
   ArxivTitleAbstractTranslationResult
@@ -163,6 +164,9 @@ export class ArxivTranslationService {
     if (!row?.title_zh || !row.abstract_zh) {
       return null;
     }
+    if (hasMojibakeText(row.title_zh) || hasMojibakeText(row.abstract_zh)) {
+      return null;
+    }
     return row;
   }
 
@@ -236,20 +240,18 @@ function translateWithArgosCli(text: string, timeoutMs: number): Promise<string>
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
-    let stdout = '';
-    let stderr = '';
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`Argos 本地翻译超时：${Math.round(timeoutMs / 1000)} 秒`));
     }, timeoutMs);
 
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => {
-      stdout += chunk;
+    child.stdout.on('data', (chunk: Buffer | string) => {
+      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
-    child.stderr.on('data', (chunk: string) => {
-      stderr += chunk;
+    child.stderr.on('data', (chunk: Buffer | string) => {
+      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
     child.on('error', (error) => {
       clearTimeout(timer);
@@ -257,10 +259,12 @@ function translateWithArgosCli(text: string, timeoutMs: number): Promise<string>
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      const stdout = decodeArgosCliOutput(Buffer.concat(stdoutChunks));
       if (code === 0 && stdout.trim()) {
         resolve(stdout.trim());
         return;
       }
+      const stderr = decodeArgosCliOutput(Buffer.concat(stderrChunks));
       reject(new Error(`Argos 本地翻译失败：${stderr.trim() || `exit ${code}`}`));
     });
     child.stdin.end(text);
@@ -281,6 +285,22 @@ export function resolveArgosChildEnv(): NodeJS.ProcessEnv {
     ARGOS_PACKAGES_DIR: packagesDir,
     ARGOS_TRANSLATE_PACKAGE_DIR: packagesDir
   };
+}
+
+export function decodeArgosCliOutput(buffer: Buffer): string {
+  const utf8Text = buffer.toString('utf8');
+  if (!hasMojibakeText(utf8Text)) {
+    return utf8Text;
+  }
+  try {
+    return new TextDecoder('gb18030').decode(buffer);
+  } catch {
+    return utf8Text;
+  }
+}
+
+function hasMojibakeText(value: string): boolean {
+  return value.includes('\uFFFD');
 }
 
 function formatTranslationError(error: unknown): string {

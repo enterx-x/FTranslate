@@ -1,8 +1,14 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ArxivTranslationService, resolveArgosChildEnv, resolveArgosCliCommand } from './arxivTranslationService';
+import {
+  ArxivTranslationService,
+  decodeArgosCliOutput,
+  resolveArgosChildEnv,
+  resolveArgosCliCommand
+} from './arxivTranslationService';
 
 describe('ArxivTranslationService', () => {
   let tempDir: string;
@@ -51,6 +57,15 @@ describe('ArxivTranslationService', () => {
     }
   });
 
+  it('decodes Windows Argos CLI output encoded as GB18030 without mojibake', () => {
+    const bytes = Buffer.from([
+      0xbb, 0xfa, 0xc6, 0xf7, 0xc8, 0xcb, 0xb5, 0xbc, 0xba, 0xbd, 0xb0, 0xb2, 0xc8, 0xab, 0xc7, 0xbf,
+      0xbb, 0xaf, 0xd1, 0xa7, 0xcf, 0xb0
+    ]);
+
+    expect(decodeArgosCliOutput(bytes)).toBe('机器人导航安全强化学习');
+  });
+
   it('translates title and abstract once, then serves the same paper from SQLite cache', async () => {
     const calls: string[] = [];
     const service = new ArxivTranslationService({
@@ -86,6 +101,51 @@ describe('ArxivTranslationService', () => {
         status: 'cached',
         cacheHit: true
       });
+      expect(calls).toHaveLength(2);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('ignores mojibake rows already stored in SQLite cache and retranslates them', async () => {
+    const dbPath = path.join(tempDir, 'arxiv-translation.sqlite');
+    const request = {
+      stableId: '2209.09079',
+      title: 'MSVIPER: Improved Policy Distillation for Reinforcement-Learning-Based Robot Navigation',
+      summary: 'We present policy distillation for robot navigation.'
+    };
+    const bootstrap = new ArxivTranslationService({
+      dbPath,
+      translateText: async (text) => (text.startsWith('MSVIPER') ? 'MSVIPER：改进策略蒸馏' : '提出机器人导航策略蒸馏方法。')
+    });
+    await bootstrap.translatePaper(request);
+    bootstrap.close();
+
+    const db = new DatabaseSync(dbPath);
+    db.prepare(
+      `UPDATE arxiv_translation_cache
+       SET title_zh = ?, abstract_zh = ?`
+    ).run(
+      'MSVIPER:��ǿ-ѧϰ-�����˵����Ľ����ߵ���',
+      '���ǽ���ͨ��������ȡ(MSVIPER)���п���֤��ǿ��ѧϰ�Ķ������'
+    );
+    db.close();
+
+    const calls: string[] = [];
+    const service = new ArxivTranslationService({
+      dbPath,
+      translateText: async (text) => {
+        calls.push(text);
+        return text.startsWith('MSVIPER') ? 'MSVIPER：改进策略蒸馏' : '提出机器人导航策略蒸馏方法。';
+      }
+    });
+
+    try {
+      const result = await service.translatePaper(request);
+
+      expect(result.status).toBe('completed');
+      expect(result.cacheHit).toBe(false);
+      expect(result.titleZh).toBe('MSVIPER：改进策略蒸馏');
       expect(calls).toHaveLength(2);
     } finally {
       service.close();
