@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { DOMParser as XmldomParser } from '@xmldom/xmldom';
-import { buildArxivApiUrl, buildArxivCacheKey, parseArxivFeed, parseArxivSearchResult } from './arxivClient';
+import {
+  buildArxivApiUrl,
+  buildArxivCacheKey,
+  isMojibakeTranslationText,
+  parseArxivFeed,
+  parseArxivSearchResult
+} from './arxivClient';
 
 const sampleFeed = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
@@ -86,6 +92,23 @@ describe('arxivClient', () => {
     expect(cacheKey).toContain('2026');
   });
 
+  it('maps comprehensive sorting to arXiv submittedDate while keeping its own cache key', () => {
+    const request = {
+      searchQuery: 'robot navigation tactile sensing',
+      category: '',
+      start: 0,
+      maxResults: 50,
+      sortBy: 'comprehensive' as const,
+      sortOrder: 'descending' as const
+    };
+    const url = buildArxivApiUrl(request);
+    const parsed = new URL(url);
+    const cacheKey = buildArxivCacheKey(request);
+
+    expect(parsed.searchParams.get('sortBy')).toBe('submittedDate');
+    expect(cacheKey).toContain('"sortBy":"comprehensive"');
+  });
+
   it('expands common Chinese research terms before building an arXiv query', () => {
     const url = buildArxivApiUrl({
       searchQuery: '无人机避障 强化学习',
@@ -106,6 +129,36 @@ describe('arxivClient', () => {
     expect(searchQuery).toContain('abs:drone');
     expect(searchQuery).toContain('obstacle');
     expect(searchQuery).toContain('abs:avoidance');
+  });
+
+  it('expands Chinese haptic terms into English title and abstract synonyms', () => {
+    const request = {
+      searchQuery: '触觉 触觉感知 机器人',
+      category: '',
+      start: 0,
+      maxResults: 50,
+      sortBy: 'relevance' as const,
+      sortOrder: 'descending' as const
+    };
+    const url = buildArxivApiUrl(request);
+    const parsed = new URL(url);
+    const searchQuery = parsed.searchParams.get('search_query') ?? '';
+    const cacheKey = buildArxivCacheKey(request);
+
+    expect(searchQuery).not.toContain('触觉');
+    expect(searchQuery).toContain('ti:haptic');
+    expect(searchQuery).toContain('abs:tactile');
+    expect(searchQuery).toContain('tactile sensing');
+    expect(searchQuery).toContain('robot');
+    expect(cacheKey).toContain('title-abstract-v3');
+  });
+
+  it('detects common mojibake translation text without rejecting normal Chinese', () => {
+    expect(isMojibakeTranslationText('\u93c8\u54c4\u6ad2')).toBe(true);
+    expect(isMojibakeTranslationText('\u9422\u3124\u7c2c robot navigation')).toBe(true);
+    expect(isMojibakeTranslationText('\u00e6\u0153\u00ba\u00e5\u2122\u00a8\u00e4\u00ba\u00ba')).toBe(true);
+    expect(isMojibakeTranslationText('互出互出互出互出互出')).toBe(true);
+    expect(isMojibakeTranslationText('机器人导航强化学习')).toBe(false);
   });
 
   it('parses arXiv Atom feed into local-download-ready records', () => {

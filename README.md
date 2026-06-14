@@ -97,6 +97,8 @@ arXiv 检索是一个独立模块，不会自动改写论文库或 PPT 草稿。
 - 显示标题、中文标题、作者、发布日期、更新时间、分类、英文摘要、中文摘要、arXiv 链接和 PDF 链接；
 - 使用本地启发式评分生成相关性、新颖性、实验线索、阅读优先级和研究标签；
 - 可自动排队翻译当前结果页的标题和摘要；默认走本地离线 Argos Translate + SQLite 缓存，不消耗 AI API token；
+- 离线翻译使用批量队列和持久 Python worker：首次翻译需要加载模型，后续同一运行期间会复用 worker，批量标题 / 摘要翻译会明显更快；
+- 翻译缓存会自动拒绝常见乱码结果；旧缓存中如果出现 `���`、`æœºå™¨`、`鏈哄櫒` 等编码损坏文本，界面会退回英文并允许重新翻译；
 - 如果未安装 Argos Translate 或未安装 en -> zh 模型，界面会保留英文标题/摘要并提示本地翻译不可用；AI 翻译仍只在 AI 助手或明确 AI 操作中使用；
 - 可复制 BibTeX、复制 / 导出 Markdown 摘要；
 - 可收藏论文，或加入组会 PPT 候选队列；PPT 生成仍只读取用户已下载或手动选择的本地 PDF；
@@ -141,6 +143,15 @@ if ($userPath -notlike "*$argosScripts*") {
 ```
 
 模型文件由 Argos Translate 安装到当前 Windows 用户的本地模型目录中；不需要放进本项目仓库，也不要提交到 git。如果你使用其他 Python 版本，把 `py -3.11` 改成机器上实际可用的 `py -3.10`、`py -3.12` 或完整 Python 路径。
+
+如果你把 Argos 安装在空间更充足的 `D:` / `E:` 盘，可以用环境变量显式指定路径，避免应用只从 PATH 查找：
+
+```powershell
+[Environment]::SetEnvironmentVariable("FTRANSLATE_ARGOS_CLI", "E:\FTranslateTools\argos-conda\Scripts\argos-translate.exe", "User")
+[Environment]::SetEnvironmentVariable("FTRANSLATE_ARGOS_PACKAGES_DIR", "E:\FTranslateTools\argos-data\packages", "User")
+```
+
+修改后重启 FTranslate。SQLite 翻译缓存位于 Electron 用户数据目录下的 `arxiv-translation-cache.sqlite`，同一篇论文标题 / 摘要命中缓存后不会重复调用 Argos。
 
 ### AI 助手
 

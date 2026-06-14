@@ -1,11 +1,13 @@
 import { DOMParser as XmldomParser } from '@xmldom/xmldom';
 import { DatabaseSync } from 'node:sqlite';
 import {
+  type ArxivPaper,
   type ArxivParsedSearchResult,
   type ArxivSearchRequest,
   type ArxivSearchServiceResult,
   buildArxivApiUrl,
   buildArxivCacheKey,
+  normalizeArxivSearchQuery,
   parseArxivSearchResult
 } from '../shared/arxiv';
 
@@ -68,7 +70,7 @@ export class ArxivService {
 
   async search(request: ArxivSearchRequest, source = 'renderer:arxiv-search'): Promise<ArxivSearchServiceResult> {
     const cacheKey = buildArxivCacheKey(request);
-    const cached = this.readCache(cacheKey);
+    const cached = request.forceRefresh ? null : this.readCache(cacheKey);
     if (cached) {
       this.writeLog({
         source,
@@ -90,7 +92,7 @@ export class ArxivService {
     return this.enqueue(async () => {
       const url = buildArxivApiUrl(request);
       const { text, lastRequestGapMs } = await this.fetchText(url, source, cacheKey, queueSize);
-      const result = parseArxivSearchResult(text, XmldomParser as any);
+      const result = applyLocalArxivSort(parseArxivSearchResult(text, XmldomParser as any), request);
       this.writeCache(cacheKey, result);
       return {
         ...result,
@@ -401,6 +403,58 @@ export class ArxivService {
         entry.status
       );
   }
+}
+
+function applyLocalArxivSort(result: ArxivParsedSearchResult, request: ArxivSearchRequest): ArxivParsedSearchResult {
+  if (request.sortBy !== 'comprehensive' || result.papers.length <= 1) {
+    return result;
+  }
+  const queryTerms = tokenizeLocalRankingQuery(normalizeArxivSearchQuery(request.searchQuery));
+  const sorted = [...result.papers].sort((left, right) => {
+    const rightScore = scoreComprehensivePaper(right, queryTerms, request.category);
+    const leftScore = scoreComprehensivePaper(left, queryTerms, request.category);
+    return request.sortOrder === 'ascending' ? leftScore - rightScore : rightScore - leftScore;
+  });
+  return {
+    ...result,
+    papers: sorted
+  };
+}
+
+function tokenizeLocalRankingQuery(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .toLowerCase()
+        .split(/[^a-z0-9.+-]+/iu)
+        .map((term) => term.trim())
+        .filter((term) => term.length >= 2)
+    )
+  );
+}
+
+function scoreComprehensivePaper(paper: ArxivPaper, queryTerms: string[], category: string): number {
+  const title = paper.title.toLowerCase();
+  const summary = paper.summary.toLowerCase();
+  const categoryBonus = category && paper.categories.includes(category) ? 8 : 0;
+  const titleHits = queryTerms.filter((term) => title.includes(term)).length;
+  const abstractHits = queryTerms.filter((term) => summary.includes(term)).length;
+  const relevance = titleHits * 12 + abstractHits * 5;
+  const recency = scoreRecency(paper.updated || paper.publishedAt || paper.published);
+  const experimentalCue = /\b(experiment|benchmark|baseline|result|real-world|dataset|simulation)\b/iu.test(summary) ? 6 : 0;
+  const methodCue = /\b(method|model|framework|policy|controller|planner|architecture|algorithm)\b/iu.test(summary)
+    ? 5
+    : 0;
+  return relevance + recency + categoryBonus + experimentalCue + methodCue;
+}
+
+function scoreRecency(value: string): number {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) {
+    return 0;
+  }
+  const days = Math.max(0, (Date.now() - time) / 86_400_000);
+  return Math.max(0, 18 - Math.min(18, days / 30));
 }
 
 export function normalizeArxivPdfDownloadUrl(value: string): URL {

@@ -23,6 +23,33 @@ const sampleFeed = `<?xml version="1.0" encoding="UTF-8"?>
   </entry>
 </feed>`;
 
+const multiPaperFeed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <opensearch:totalResults>2</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <opensearch:itemsPerPage>2</opensearch:itemsPerPage>
+  <entry>
+    <id>http://arxiv.org/abs/2606.00001v1</id>
+    <updated>2026-06-01T00:00:00Z</updated>
+    <published>2026-06-01T00:00:00Z</published>
+    <title>General Robot Control Notes</title>
+    <summary>A short systems note.</summary>
+    <author><name>Author A</name></author>
+    <category term="cs.RO" />
+    <link title="pdf" href="http://arxiv.org/pdf/2606.00001v1" rel="related" type="application/pdf" />
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2201.00002v1</id>
+    <updated>2022-01-01T00:00:00Z</updated>
+    <published>2022-01-01T00:00:00Z</published>
+    <title>Tactile Sensing and Haptic Feedback for Robot Navigation</title>
+    <summary>We study tactile perception, haptic force feedback, robot navigation, and contact-rich manipulation experiments.</summary>
+    <author><name>Author B</name></author>
+    <category term="cs.RO" />
+    <link title="pdf" href="http://arxiv.org/pdf/2201.00002v1" rel="related" type="application/pdf" />
+  </entry>
+</feed>`;
+
 const request: ArxivSearchRequest = {
   searchQuery: 'loco manipulation',
   category: 'cs.RO',
@@ -65,6 +92,55 @@ describe('ArxivService', () => {
       expect(second.papers).toHaveLength(1);
       expect(fetchCount).toBe(1);
       expect(service.getRecentLogs(2)[0]).toMatchObject({ source: 'test-search', cache_hit: 1, status: 'cache-hit' });
+    } finally {
+      service.close();
+    }
+  });
+
+  it('bypasses SQLite cache when an explicit force refresh is requested', async () => {
+    let fetchCount = 0;
+    const service = new ArxivService({
+      dbPath: path.join(tempDir, 'arxiv.sqlite'),
+      minRequestGapMs: 0,
+      fetchImpl: async () => {
+        fetchCount += 1;
+        return new Response(sampleFeed, { status: 200 });
+      }
+    });
+
+    try {
+      const first = await service.search(request, 'test-search');
+      const refreshed = await service.search({ ...request, forceRefresh: true }, 'test-search');
+
+      expect(first.cacheHit).toBe(false);
+      expect(refreshed.cacheHit).toBe(false);
+      expect(fetchCount).toBe(2);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('re-ranks comprehensive searches by title and abstract relevance after fetching by date', async () => {
+    const service = new ArxivService({
+      dbPath: path.join(tempDir, 'arxiv.sqlite'),
+      minRequestGapMs: 0,
+      fetchImpl: async () => new Response(multiPaperFeed, { status: 200 })
+    });
+
+    try {
+      const result = await service.search(
+        {
+          searchQuery: 'tactile robot navigation',
+          category: '',
+          start: 0,
+          maxResults: 2,
+          sortBy: 'comprehensive',
+          sortOrder: 'descending'
+        },
+        'comprehensive-rank'
+      );
+
+      expect(result.papers.map((paper) => paper.stableId)).toEqual(['2201.00002', '2606.00001']);
     } finally {
       service.close();
     }

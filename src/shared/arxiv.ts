@@ -1,4 +1,4 @@
-export type ArxivSortBy = 'relevance' | 'lastUpdatedDate' | 'submittedDate';
+export type ArxivSortBy = 'comprehensive' | 'relevance' | 'lastUpdatedDate' | 'submittedDate';
 export type ArxivSortOrder = 'ascending' | 'descending';
 
 export interface ArxivSearchRequest {
@@ -10,6 +10,7 @@ export interface ArxivSearchRequest {
   sortOrder: ArxivSortOrder;
   yearFrom?: string;
   yearTo?: string;
+  forceRefresh?: boolean;
 }
 
 export interface ArxivPaper {
@@ -65,6 +66,54 @@ export interface ArxivParsedSearchResult {
   itemsPerPage: number;
 }
 
+const MOJIBAKE_TOKEN_PATTERN =
+  /锟斤拷|����|(?:鏈哄櫒)|(?:鐢ㄤ簬)|(?:鐨)|(?:鍦)|(?:浜哄)|(?:涓)|(?:瑙﹁)|(?:瀛︿範)|(?:缈昏瘧)|(?:鎽樿)|(?:瀵艰埅)|(?:璺緞)|(?:æœº)|(?:å™¨)|(?:çš„)|(?:ç”¨)|(?:äºŽ)/u;
+
+export function isMojibakeTranslationText(value?: string): boolean {
+  const text = value ?? '';
+  if (!text.trim()) {
+    return false;
+  }
+  if (text.includes('\uFFFD') || /[\uE000-\uF8FF]/u.test(text)) {
+    return true;
+  }
+  if (MOJIBAKE_TOKEN_PATTERN.test(text)) {
+    return true;
+  }
+  if (hasLowInformationRepeatedChinese(text)) {
+    return true;
+  }
+  const latinMojibakeHits = text.match(/[ÃÂÐÑæåäçèé]/gu)?.length ?? 0;
+  const cjkHits = text.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
+  return latinMojibakeHits >= 2 && cjkHits >= 1;
+}
+
+function hasLowInformationRepeatedChinese(value: string): boolean {
+  const compact = value.replace(/\s+/gu, '');
+  if (compact.length < 6) {
+    return false;
+  }
+  const cjkChars = compact.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
+  if (cjkChars / compact.length < 0.7) {
+    return false;
+  }
+  if (/^([\u3400-\u9fff]{1,4})\1{2,}$/u.test(compact)) {
+    return true;
+  }
+  if (/([\u3400-\u9fff]{1,3})\1{3,}/u.test(compact)) {
+    return true;
+  }
+  const pairs = new Map<string, number>();
+  for (let index = 0; index < compact.length - 1; index += 2) {
+    const pair = compact.slice(index, index + 2);
+    if (/^[\u3400-\u9fff]{2}$/u.test(pair)) {
+      pairs.set(pair, (pairs.get(pair) ?? 0) + 1);
+    }
+  }
+  const maxPairCount = Math.max(0, ...pairs.values());
+  return maxPairCount >= 4 && maxPairCount * 2 >= compact.length * 0.55;
+}
+
 const ARXIV_ENDPOINT = 'https://export.arxiv.org/api/query';
 const XML_NS_ATOM = 'http://www.w3.org/2005/Atom';
 const XML_NS_ARXIV = 'http://arxiv.org/schemas/atom';
@@ -76,6 +125,7 @@ const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
   [/强化学习/gu, 'reinforcement learning'],
   [/机器人导航|导航机器人/gu, 'robot navigation robotic navigation mobile robot navigation'],
   [/机器人|机械臂/gu, 'robot robotics manipulator'],
+  [/触觉感知|触觉传感|触觉|力觉|接触感知|接触丰富/gu, 'haptic tactile haptics tactile sensing tactile perception force feedback contact-rich manipulation visuotactile'],
   [/无人机|飞行器/gu, 'uav drone aerial robot'],
   [/避障|障碍物规避|动态障碍/gu, 'obstacle avoidance collision avoidance dynamic obstacle'],
   [/路径规划|运动规划|轨迹规划/gu, 'path planning motion planning trajectory planning navigation'],
@@ -96,6 +146,11 @@ const KNOWN_ARXIV_QUERY_PHRASES = [
   'robot navigation',
   'robotic navigation',
   'mobile robot',
+  'tactile sensing',
+  'tactile perception',
+  'visuotactile',
+  'force feedback',
+  'contact-rich manipulation',
   'path planning',
   'motion planning',
   'trajectory planning',
@@ -153,14 +208,14 @@ export function buildArxivApiUrl(request: ArxivSearchRequest): string {
   url.searchParams.set('search_query', query);
   url.searchParams.set('start', String(request.start));
   url.searchParams.set('max_results', String(request.maxResults));
-  url.searchParams.set('sortBy', request.sortBy);
+  url.searchParams.set('sortBy', toArxivApiSortBy(request.sortBy));
   url.searchParams.set('sortOrder', request.sortOrder);
   return url.toString();
 }
 
 export function buildArxivCacheKey(request: ArxivSearchRequest): string {
   return JSON.stringify({
-    query_version: 'title-abstract-v2',
+    query_version: 'title-abstract-v3',
     search_query: `${request.category || 'all'}:${normalizeArxivSearchQuery(request.searchQuery).toLowerCase()}`,
     yearFrom: normalizeArxivYear(request.yearFrom),
     yearTo: normalizeArxivYear(request.yearTo),
@@ -169,6 +224,10 @@ export function buildArxivCacheKey(request: ArxivSearchRequest): string {
     sortBy: request.sortBy,
     sortOrder: request.sortOrder
   });
+}
+
+export function toArxivApiSortBy(sortBy: ArxivSortBy): Exclude<ArxivSortBy, 'comprehensive'> {
+  return sortBy === 'comprehensive' ? 'submittedDate' : sortBy;
 }
 
 export function buildArxivSearchExpression(

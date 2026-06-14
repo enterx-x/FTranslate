@@ -230,6 +230,9 @@ export interface ElectronApi {
   translateArxivTitleAbstract: (
     request: ArxivTitleAbstractTranslationRequest
   ) => Promise<ArxivTitleAbstractTranslationResult>;
+  translateArxivTitleAbstractBatch: (
+    request: ArxivTitleAbstractTranslationRequest[]
+  ) => Promise<ArxivTitleAbstractTranslationResult[]>;
   downloadArxivPdf: (request: {
     pdfUrl: string;
     defaultFileName: string;

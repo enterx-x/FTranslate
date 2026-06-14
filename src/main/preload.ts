@@ -96,10 +96,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     category: string;
     start: number;
     maxResults: number;
-    sortBy: 'relevance' | 'lastUpdatedDate' | 'submittedDate';
+    sortBy: 'comprehensive' | 'relevance' | 'lastUpdatedDate' | 'submittedDate';
     sortOrder: 'ascending' | 'descending';
     yearFrom?: string;
     yearTo?: string;
+    forceRefresh?: boolean;
   }) => ipcRenderer.invoke('arxiv:search', request),
   translateArxivTitleAbstract: (request: {
     stableId: string;
@@ -107,6 +108,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     summary: string;
     targetLanguage?: 'zh';
   }) => ipcRenderer.invoke('arxiv:translate-title-abstract', request),
+  translateArxivTitleAbstractBatch: (request: Array<{
+    stableId: string;
+    title: string;
+    summary: string;
+    targetLanguage?: 'zh';
+  }>) => ipcRenderer.invoke('arxiv:translate-title-abstract-batch', request),
   downloadArxivPdf: (request: { pdfUrl: string; defaultFileName: string }) =>
     ipcRenderer.invoke('arxiv:download-pdf', request),
   exportPdf: (request: { sourcePath: string; defaultFileName: string }) =>

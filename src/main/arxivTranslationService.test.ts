@@ -5,9 +5,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ArxivTranslationService,
+  buildArgosCombinedPayload,
   decodeArgosCliOutput,
   resolveArgosChildEnv,
-  resolveArgosCliCommand
+  resolveArgosCliCommand,
+  splitArgosCombinedOutput
 } from './arxivTranslationService';
 
 describe('ArxivTranslationService', () => {
@@ -66,6 +68,16 @@ describe('ArxivTranslationService', () => {
     expect(decodeArgosCliOutput(bytes)).toBe('机器人导航安全强化学习');
   });
 
+  it('prefers GB18030 when GB bytes are also syntactically valid UTF-8', () => {
+    expect(decodeArgosCliOutput(Buffer.from([0xd2, 0xbb]))).toBe('一');
+  });
+
+  it('keeps valid UTF-8 output even when it contains non-ASCII Latin characters', () => {
+    const bytes = Buffer.from('保留 Ñ 与 Â 标识', 'utf8');
+
+    expect(decodeArgosCliOutput(bytes)).toBe('保留 Ñ 与 Â 标识');
+  });
+
   it('translates title and abstract once, then serves the same paper from SQLite cache', async () => {
     const calls: string[] = [];
     const service = new ArxivTranslationService({
@@ -105,6 +117,121 @@ describe('ArxivTranslationService', () => {
     } finally {
       service.close();
     }
+  });
+
+  it('translates multiple uncached papers through one batch translator call', async () => {
+    const batches: string[][] = [];
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) => {
+        batches.push(texts);
+        return texts.map((text) => `ZH:${text.slice(0, 18)}`);
+      },
+      now: () => 1_764_000_000_000
+    });
+
+    try {
+      const requests = [
+        {
+          stableId: '2606.13679',
+          title: 'Robot tactile navigation with haptic sensing',
+          summary: 'We use tactile sensing and haptic feedback for robot navigation.'
+        },
+        {
+          stableId: '2606.13680',
+          title: 'Contact-rich manipulation with reinforcement learning',
+          summary: 'The policy learns contact-rich manipulation from robot demonstrations.'
+        }
+      ];
+
+      const first = await service.translatePapers(requests);
+      const second = await service.translatePapers(requests);
+
+      expect(first).toHaveLength(2);
+      expect(first.every((item) => item.status === 'completed')).toBe(true);
+      expect(second.every((item) => item.status === 'cached')).toBe(true);
+      expect(batches).toEqual([
+        [
+          requests[0].title,
+          requests[0].summary,
+          requests[1].title,
+          requests[1].summary
+        ]
+      ]);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('returns failed rows instead of throwing for malformed batch items', async () => {
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async () => {
+        throw new Error('translator should not be called for invalid items');
+      }
+    });
+
+    try {
+      const results = await service.translatePapers([
+        { stableId: '2606.00001', title: 'Robot Navigation', summary: '' },
+        { stableId: null, title: 42, summary: undefined } as unknown as {
+          stableId: string;
+          title: string;
+          summary: string;
+        }
+      ]);
+
+      expect(results).toHaveLength(2);
+      expect(results.every((item) => item.status === 'failed')).toBe(true);
+      expect(results[0].message).toContain('缺少');
+    } finally {
+      service.close();
+    }
+  });
+
+  it('rejects repetitive low-quality Argos output instead of caching it', async () => {
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async () => ['互出互出互出互出', '互出互出互出互出互出互出']
+    });
+
+    try {
+      const [result] = await service.translatePapers([
+        {
+          stableId: 'bad-translation',
+          title: 'Interleaved robotic generation',
+          summary: 'The paper studies robot navigation and embodied interaction.'
+        }
+      ]);
+
+      expect(result.status).toBe('failed');
+      expect(result.cacheHit).toBe(false);
+      expect(result.titleZh).toBe('');
+      expect(result.abstractZh).toBe('');
+    } finally {
+      service.close();
+    }
+  });
+
+  it('combines Argos inputs into one inference and restores every translated segment', () => {
+    const payload = buildArgosCombinedPayload([
+      'Tactile sensing for robot manipulation',
+      'We study tactile perception for dexterous robots.',
+      'Reinforcement learning for robot navigation'
+    ]);
+    const translated = [
+      '用于机器人操纵的触觉传感',
+      `${payload.markers[0]} (中文(简体) ).`,
+      '我们研究灵巧机器人的触觉感知。',
+      `${payload.markers[1]} (英语).`,
+      '机器人导航强化学习'
+    ].join('\n\n');
+
+    expect(splitArgosCombinedOutput(translated, payload.markers, 3)).toEqual([
+      '用于机器人操纵的触觉传感',
+      '我们研究灵巧机器人的触觉感知。',
+      '机器人导航强化学习'
+    ]);
   });
 
   it('ignores mojibake rows already stored in SQLite cache and retranslates them', async () => {

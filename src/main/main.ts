@@ -2855,6 +2855,11 @@ function registerIpcHandlers(): void {
     return getArxivTranslationService().translatePaper(request);
   });
 
+  ipcMain.handle('arxiv:translate-title-abstract-batch', async (_event, request: ArxivTitleAbstractTranslationRequest[]) => {
+    const safeRequest = Array.isArray(request) ? request.slice(0, 100) : [];
+    return getArxivTranslationService().translatePapers(safeRequest);
+  });
+
   ipcMain.handle('arxiv:download-pdf', async (_event, request: ArxivDownloadPdfRequest) => {
     const result = await dialog.showSaveDialog({
       title: '下载 arXiv PDF',

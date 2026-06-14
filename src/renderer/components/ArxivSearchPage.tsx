@@ -3,7 +3,9 @@ import {
   type ArxivPaper,
   type ArxivSearchRequest,
   type ArxivSortBy,
-  type ArxivSortOrder
+  type ArxivSortOrder,
+  type ArxivTitleAbstractTranslationResult,
+  isMojibakeTranslationText
 } from '../lib/arxivClient';
 import {
   type ArxivPaperMeta,
@@ -64,6 +66,7 @@ const ARXIV_READING_QUEUE_STORAGE_KEY = 'pdfTranslationReader:arxivReadingQueue'
 const OFFLINE_TRANSLATION_NOTICE_TITLE = '离线翻译未配置';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
+const OFFLINE_TRANSLATION_BATCH_SIZE = 12;
 
 const CATEGORY_OPTIONS = [
   { value: '', label: '全部分类' },
@@ -75,6 +78,7 @@ const CATEGORY_OPTIONS = [
 ];
 
 const SORT_OPTIONS: Array<{ value: ArxivSortBy; label: string }> = [
+  { value: 'comprehensive', label: '综合排序' },
   { value: 'relevance', label: '相关性' },
   { value: 'submittedDate', label: '提交时间' },
   { value: 'lastUpdatedDate', label: '更新时间' }
@@ -118,7 +122,7 @@ export function getArxivResultDensityConfig(layoutMode: LayoutMode): ArxivResult
 export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [query, setQuery] = useState('reinforcement learning robot navigation');
   const [category, setCategory] = useState('');
-  const [sortBy, setSortBy] = useState<ArxivSortBy>('relevance');
+  const [sortBy, setSortBy] = useState<ArxivSortBy>('comprehensive');
   const [sortOrder, setSortOrder] = useState<ArxivSortOrder>('descending');
   const [yearFrom, setYearFrom] = useState('');
   const [yearTo, setYearTo] = useState('');
@@ -216,7 +220,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     [filteredPapers, selectedPaperId]
   );
 
-  async function handleSearch(nextStart = 0): Promise<void> {
+  async function handleSearch(
+    nextStart = 0,
+    options: { forceRefresh?: boolean; resetFilters?: boolean } = {}
+  ): Promise<void> {
     const searchQuery = query.trim();
     if (!searchQuery) {
       setMessage('请输入关键词后再搜索。');
@@ -227,13 +234,33 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     const nextRequest: ArxivSearchRequest = {
       ...request,
       searchQuery,
-      start: nextStart
+      start: nextStart,
+      forceRefresh: Boolean(options.forceRefresh)
     };
 
     try {
       setIsSearching(true);
       setStatus('loading');
-      setMessage('正在通过 ArxivService 排队访问官方 Atom API；关键词会匹配标题和摘要。');
+      if (options.resetFilters) {
+        setYearFilter('all');
+        setTagFilter('all');
+        setFavoriteOnly(false);
+        setQueuedOnly(false);
+        setTranslatedOnly(false);
+        setScoredOnly(false);
+        setAbstractModes({});
+      }
+      if (nextStart === 0) {
+        setStart(0);
+        setPapers([]);
+        setTotalResults(0);
+        setSelectedPaperId(null);
+      }
+      setMessage(
+        options.forceRefresh
+          ? '正在实时刷新 arXiv 官方 Atom API；关键词会同时匹配标题和摘要。'
+          : '正在通过 ArxivService 查询；翻页会优先复用本地 SQLite 缓存。'
+      );
       const result = await window.electronAPI.searchArxiv(nextRequest);
       setStart(nextStart);
       setPapers(result.papers);
@@ -252,7 +279,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         setMessage(`已命中 SQLite 缓存：${rangeText}。未访问 arXiv。`);
       } else {
         setMessage(
-          `检索完成：${rangeText}。关键词已匹配标题/摘要，队列长度 ${result.queueSize}，距上次真实请求 ${formatGap(
+          `检索完成：${rangeText}。已按标题/摘要和日期做综合候选排序，队列长度 ${result.queueSize}，距上次真实请求 ${formatGap(
             result.lastRequestGapMs
           )}。`
         );
@@ -321,33 +348,62 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       return;
     }
 
-    for (const paper of missing) {
-      setBackgroundTranslatingIds((previous) => ({ ...previous, [paper.id]: true }));
+    for (let offset = 0; offset < missing.length; offset += OFFLINE_TRANSLATION_BATCH_SIZE) {
+      const batch = missing.slice(offset, offset + OFFLINE_TRANSLATION_BATCH_SIZE);
+      setBackgroundTranslatingIds((previous) => ({
+        ...previous,
+        ...Object.fromEntries(batch.map((paper) => [paper.id, true]))
+      }));
       try {
-        const result = await translatePaperMetadata(paper, true);
-        if (result?.status === 'unavailable') {
+        const results = await window.electronAPI.translateArxivTitleAbstractBatch(
+          batch.map((paper) => ({
+            stableId: paper.stableId,
+            title: paper.title,
+            summary: paper.summary,
+            targetLanguage: 'zh'
+          }))
+        );
+        let unavailableMessage = '';
+        let failedMessage = '';
+        results.forEach((result, index) => {
+          const paper = batch[index];
+          if (!paper || applyTranslationResult(paper, result, true)) {
+            return;
+          }
+          if (result.status === 'unavailable') {
+            unavailableMessage = result.message;
+          } else {
+            failedMessage = result.message;
+          }
+        });
+        if (unavailableMessage) {
           setStatus('error');
           setShowOfflineTranslationHelp(true);
-          setMessage(result.message);
-          break;
+          setMessage(unavailableMessage);
+          return;
         }
+        if (failedMessage) {
+          setMessage(failedMessage);
+        }
+      } catch (error) {
+        setMessage(`后台离线翻译失败，已保留英文：${formatError(error)}`);
       } finally {
         setBackgroundTranslatingIds((previous) => {
           const next = { ...previous };
-          delete next[paper.id];
+          batch.forEach((paper) => {
+            delete next[paper.id];
+          });
           return next;
         });
       }
     }
   }
 
-  async function translatePaperMetadata(paper: ArxivPaper, silent = false) {
-    const result = await window.electronAPI.translateArxivTitleAbstract({
-      stableId: paper.stableId,
-      title: paper.title,
-      summary: paper.summary,
-      targetLanguage: 'zh'
-    });
+  function applyTranslationResult(
+    paper: ArxivPaper,
+    result: ArxivTitleAbstractTranslationResult,
+    silent = false
+  ): boolean {
     if (result.status === 'completed' || result.status === 'cached') {
       patchMeta(paper, {
         titleZh: result.titleZh,
@@ -357,10 +413,23 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       if (!silent) {
         setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
       }
-      return result;
+      return true;
     }
     if (!silent) {
       setMessage(result.message);
+    }
+    return false;
+  }
+
+  async function translatePaperMetadata(paper: ArxivPaper, silent = false) {
+    const result = await window.electronAPI.translateArxivTitleAbstract({
+      stableId: paper.stableId,
+      title: paper.title,
+      summary: paper.summary,
+      targetLanguage: 'zh'
+    });
+    if (applyTranslationResult(paper, result, silent)) {
+      return result;
     }
     return result;
   }
@@ -467,6 +536,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     ? abstractModes[selectedPaper.id] ?? (selectedMeta.abstractZh ? 'zh' : 'en')
     : 'en';
   const resultDensity = getArxivResultDensityConfig(layoutMode);
+  const selectedIsTranslating = selectedPaper
+    ? translatingId === selectedPaper.id || Boolean(backgroundTranslatingIds[selectedPaper.id])
+    : false;
   const isOfflineTranslationNotice = message.includes(OFFLINE_TRANSLATION_NOTICE_TITLE);
 
   return (
@@ -526,7 +598,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             type="button"
             className="primary-button button-with-icon"
             disabled={isSearching}
-            onClick={() => void handleSearch(0)}
+            onClick={() => void handleSearch(0, { forceRefresh: true, resetFilters: true })}
           >
             <img className="button-icon" src={searchIcon} alt="" />
             <span>{isSearching ? '搜索中' : '搜索'}</span>
@@ -1028,6 +1100,15 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   </a>
                   <button
                     type="button"
+                    className="secondary-button button-with-icon"
+                    disabled={selectedIsTranslating}
+                    onClick={() => void handleTranslateAbstract(selectedPaper)}
+                  >
+                    <img className="button-icon" src={translateIcon} alt="" />
+                    {selectedIsTranslating ? '本地翻译中' : '本地翻译标题/摘要'}
+                  </button>
+                  <button
+                    type="button"
                     className="secondary-button"
                     disabled={exportingId === selectedPaper.id}
                     onClick={() => void handleExportMarkdown(selectedPaper)}
@@ -1169,7 +1250,16 @@ function loadLayoutMode(): LayoutMode {
 }
 
 function getPaperMeta(paper: ArxivPaper, metaById: Record<string, ArxivPaperMeta>): ArxivPaperMeta {
-  return metaById[paper.stableId] ?? {};
+  const meta = metaById[paper.stableId] ?? {};
+  return {
+    ...meta,
+    titleZh: hasDisplayMojibakeText(meta.titleZh) ? undefined : meta.titleZh,
+    abstractZh: hasDisplayMojibakeText(meta.abstractZh) ? undefined : meta.abstractZh
+  };
+}
+
+function hasDisplayMojibakeText(value?: string): boolean {
+  return isMojibakeTranslationText(value);
 }
 
 function sanitizeFileStem(value: string): string {

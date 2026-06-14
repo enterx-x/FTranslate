@@ -990,12 +990,27 @@ async function runArxivSearchScenario(client) {
       message: 'visual mock cached',
       translatedAt: '2026-05-30T00:00:00.000Z'
     });
+    const translateMockClean = async (request) => ({
+      stableId: request.stableId,
+      titleZh: '\\u5f3a\\u5316\\u5b66\\u4e60\\u673a\\u5668\\u4eba\\u5bfc\\u822a\\uff1a' + request.stableId,
+      abstractZh:
+        '\\u672c\\u6587\\u7814\\u7a76\\u5f3a\\u5316\\u5b66\\u4e60\\u5728\\u673a\\u5668\\u4eba\\u5bfc\\u822a\\u3001\\u4e3b\\u52a8\\u611f\\u77e5\\u3001\\u52a8\\u6001\\u907f\\u969c\\u548c\\u771f\\u5b9e\\u673a\\u5668\\u4eba\\u8bc4\\u4f30\\u4e2d\\u7684\\u5e94\\u7528\\uff0c\\u7528\\u4e8e\\u68c0\\u67e5\\u4e2d\\u6587\\u6458\\u8981\\u5728\\u68c0\\u7d22\\u5217\\u8868\\u4e2d\\u76f4\\u63a5\\u663e\\u793a\\u3002',
+      engine: 'cache',
+      status: 'cached',
+      cacheHit: true,
+      message: 'visual mock cached',
+      translatedAt: '2026-05-30T00:00:00.000Z'
+    });
+    const translateBatchMock = async (requests) =>
+      Promise.all((requests || []).map((request) => translateMockClean(request)));
     try {
       window.electronAPI.searchArxiv = searchMock;
-      window.electronAPI.translateArxivTitleAbstract = translateMock;
+      window.electronAPI.translateArxivTitleAbstract = translateMockClean;
+      window.electronAPI.translateArxivTitleAbstractBatch = translateBatchMock;
       if (
         window.electronAPI.searchArxiv === searchMock &&
-        window.electronAPI.translateArxivTitleAbstract === translateMock
+        window.electronAPI.translateArxivTitleAbstract === translateMockClean &&
+        window.electronAPI.translateArxivTitleAbstractBatch === translateBatchMock
       ) {
         return true;
       }
@@ -1004,15 +1019,21 @@ async function runArxivSearchScenario(client) {
     }
     try {
       Object.defineProperty(window.electronAPI, 'searchArxiv', { configurable: true, value: searchMock });
-      Object.defineProperty(window.electronAPI, 'translateArxivTitleAbstract', { configurable: true, value: translateMock });
+      Object.defineProperty(window.electronAPI, 'translateArxivTitleAbstract', { configurable: true, value: translateMockClean });
+      Object.defineProperty(window.electronAPI, 'translateArxivTitleAbstractBatch', {
+        configurable: true,
+        value: translateBatchMock
+      });
       return (
         window.electronAPI.searchArxiv === searchMock &&
-        window.electronAPI.translateArxivTitleAbstract === translateMock
+        window.electronAPI.translateArxivTitleAbstract === translateMockClean &&
+        window.electronAPI.translateArxivTitleAbstractBatch === translateBatchMock
       );
     } catch {
       try {
         window.__ftranslateVisualArxivSearchMock = searchMock;
-        window.__ftranslateVisualArxivTranslateMock = translateMock;
+        window.__ftranslateVisualArxivTranslateMock = translateMockClean;
+        window.__ftranslateVisualArxivTranslateBatchMock = translateBatchMock;
       } catch {
         // ignore
       }
