@@ -34,8 +34,11 @@ export interface ArxivSearchServiceResult {
   startIndex: number;
   itemsPerPage: number;
   cacheHit: boolean;
+  cacheStale?: boolean;
   queueSize: number;
   lastRequestGapMs: number;
+  cooldownRemainingMs?: number;
+  warning?: string;
 }
 
 export interface ArxivTitleAbstractTranslationRequest {
@@ -245,26 +248,147 @@ export function buildArxivSearchExpression(
 
 function buildTitleAbstractExpression(cleanQuery: string): string {
   const normalized = normalizeArxivWhitespace(cleanQuery.toLowerCase());
-  const clauses: string[] = [];
-  KNOWN_ARXIV_QUERY_PHRASES.forEach((phrase) => {
-    if (normalized.includes(phrase)) {
-      clauses.push(buildFieldPairClause(phrase, true));
-    }
-  });
-  tokenizeArxivQuery(normalized).forEach((token) => {
-    clauses.push(buildFieldPairClause(token, false));
-  });
-
-  const uniqueClauses = Array.from(new Set(clauses));
-  if (uniqueClauses.length === 0) {
+  const groups = buildSemanticTitleAbstractGroups(normalized);
+  if (groups.length === 0) {
     return `all:${escapeArxivTerm(cleanQuery, cleanQuery.includes(' '))}`;
   }
-  return `(${uniqueClauses.join(' OR ')})`;
+  return `(${groups.map((group) => `(${group})`).join(' OR ')})`;
 }
 
 function buildFieldPairClause(value: string, phrase: boolean): string {
   const term = escapeArxivTerm(value, phrase);
   return `(ti:${term} OR abs:${term})`;
+}
+
+function buildSemanticTitleAbstractGroups(normalized: string): string[] {
+  const groups: string[] = [];
+  const consumedTokens = new Set<string>();
+
+  const addGroup = (clause: string, consumedTerms: string[]): void => {
+    if (groups.includes(clause)) {
+      return;
+    }
+    groups.push(clause);
+    consumedTerms.forEach((term) => {
+      tokenizeArxivQuery(term).forEach((token) => consumedTokens.add(token));
+    });
+  };
+
+  if (containsAny(normalized, ['tactile', 'haptic', 'haptics', 'visuotactile', 'force feedback', 'contact-rich'])) {
+    addGroup(
+      orClauses([
+        buildFieldPairClause('tactile', false),
+        buildFieldPairClause('haptic', false),
+        buildFieldPairClause('haptics', false),
+        buildFieldPairClause('visuotactile', false),
+        buildFieldPairClause('tactile sensing', true),
+        buildFieldPairClause('tactile perception', true),
+        buildFieldPairClause('force feedback', true),
+        buildFieldPairClause('contact-rich manipulation', true)
+      ]),
+      ['tactile', 'haptic', 'haptics', 'visuotactile', 'force feedback', 'contact-rich manipulation']
+    );
+  }
+
+  if (containsAny(normalized, ['reinforcement learning', 'reinforcement-learning', 'rl'])) {
+    addGroup(
+      orClauses([
+        buildFieldPairClause('reinforcement learning', true),
+        andClauses([buildFieldPairClause('reinforcement', false), buildFieldPairClause('learning', false)]),
+        buildFieldPairClause('rl', false)
+      ]),
+      ['reinforcement learning', 'reinforcement-learning', 'rl']
+    );
+  }
+
+  if (containsAny(normalized, ['robot navigation', 'robotic navigation', 'mobile robot navigation'])) {
+    addGroup(
+      orClauses([
+        buildFieldPairClause('robot navigation', true),
+        buildFieldPairClause('robotic navigation', true),
+        buildFieldPairClause('mobile robot navigation', true),
+        andClauses([
+          orClauses([
+            buildFieldPairClause('robot', false),
+            buildFieldPairClause('robotic', false),
+            buildFieldPairClause('robots', false),
+            buildFieldPairClause('mobile robot', true)
+          ]),
+          buildFieldPairClause('navigation', false)
+        ])
+      ]),
+      ['robot navigation', 'robotic navigation', 'mobile robot navigation', 'robot', 'robotic', 'robots', 'navigation']
+    );
+  }
+
+  if (containsAny(normalized, ['path planning', 'motion planning', 'trajectory planning'])) {
+    addGroup(
+      orClauses([
+        buildFieldPairClause('path planning', true),
+        buildFieldPairClause('motion planning', true),
+        buildFieldPairClause('trajectory planning', true),
+        andClauses([
+          orClauses([
+            buildFieldPairClause('path', false),
+            buildFieldPairClause('motion', false),
+            buildFieldPairClause('trajectory', false)
+          ]),
+          buildFieldPairClause('planning', false)
+        ])
+      ]),
+      ['path planning', 'motion planning', 'trajectory planning', 'path', 'motion', 'trajectory', 'planning']
+    );
+  }
+
+  if (
+    !containsAny(normalized, ['robot navigation', 'robotic navigation', 'mobile robot navigation']) &&
+    containsAny(normalized, ['robot', 'robotic', 'robots', 'robotics', 'manipulator', 'humanoid'])
+  ) {
+    addGroup(
+      orClauses([
+        buildFieldPairClause('robot', false),
+        buildFieldPairClause('robotic', false),
+        buildFieldPairClause('robots', false),
+        buildFieldPairClause('robotics', false),
+        buildFieldPairClause('manipulator', false),
+        buildFieldPairClause('manipulation', false),
+        buildFieldPairClause('humanoid', false)
+      ]),
+      ['robot', 'robotic', 'robots', 'robotics', 'manipulator', 'manipulation', 'humanoid']
+    );
+  }
+
+  KNOWN_ARXIV_QUERY_PHRASES.forEach((phrase) => {
+    if (normalized.includes(phrase) && !phrase.split(/\s+/u).every((token) => consumedTokens.has(token))) {
+      addGroup(
+        orClauses([
+          buildFieldPairClause(phrase, true),
+          andClauses(phrase.split(/\s+/u).map((token) => buildFieldPairClause(token, false)))
+        ]),
+        [phrase]
+      );
+    }
+  });
+
+  tokenizeArxivQuery(normalized)
+    .filter((token) => !consumedTokens.has(token))
+    .forEach((token) => {
+      addGroup(buildFieldPairClause(token, false), [token]);
+    });
+
+  return groups;
+}
+
+function containsAny(value: string, needles: string[]): boolean {
+  return needles.some((needle) => value.includes(needle));
+}
+
+function orClauses(clauses: string[]): string {
+  return Array.from(new Set(clauses)).join(' OR ');
+}
+
+function andClauses(clauses: string[]): string {
+  return `(${Array.from(new Set(clauses)).join(' AND ')})`;
 }
 
 function tokenizeArxivQuery(value: string): string[] {

@@ -295,8 +295,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       setStatus('success');
       const rangeText = formatArxivResultRange(nextStart, result.papers.length, result.totalResults ?? result.papers.length);
       void queueOfflineTranslations(result.papers);
-      if (result.cacheHit) {
-        setMessage(`已命中 SQLite 缓存：${rangeText}。未访问 arXiv。`);
+      if (result.warning) {
+        setMessage(`${result.warning} 当前显示：${rangeText}。`);
+      } else if (result.cacheHit) {
+        setMessage(result.cacheStale ? `已显示过期 SQLite 缓存：${rangeText}。未访问 arXiv。` : `已命中 SQLite 缓存：${rangeText}。未访问 arXiv。`);
       } else {
         setMessage(
           `检索完成：${rangeText}。已按标题/摘要和日期做综合候选排序，队列长度 ${result.queueSize}，距上次真实请求 ${formatGap(

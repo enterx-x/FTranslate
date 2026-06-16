@@ -13,6 +13,14 @@ $modelDir = Join-Path $ToolsRoot "models\nllb-200-distilled-600M-ct2-int8"
 $hfCacheDir = Join-Path $ToolsRoot "hf-cache"
 $pythonExe = Join-Path $venvDir "Scripts\python.exe"
 $hfSnapshotDir = Join-Path $ToolsRoot "hf-cache\nllb-200-distilled-600M-snapshot"
+$cudaDllCandidates = @(
+  "E:\Anaconda\envs\pytorch\Lib\site-packages\torch\lib",
+  "E:\Anaconda\envs\SB3_RL\Lib\site-packages\torch\lib",
+  "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.7\bin",
+  "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin",
+  "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\bin",
+  "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin"
+)
 
 New-Item -ItemType Directory -Force -Path $ToolsRoot | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path $modelDir -Parent) | Out-Null
@@ -117,6 +125,18 @@ Write-Host "Writing user environment variables..."
 [Environment]::SetEnvironmentVariable("FTRANSLATE_NLLB_MODEL_DIR", $modelDir, "User")
 [Environment]::SetEnvironmentVariable("FTRANSLATE_NLLB_TOKENIZER_DIR", $hfSnapshotDir, "User")
 [Environment]::SetEnvironmentVariable("FTRANSLATE_NLLB_DEVICE", "auto", "User")
+$cudaDllDirs = @()
+foreach ($candidate in $cudaDllCandidates) {
+  if ((Test-Path (Join-Path $candidate "cublas64_12.dll")) -and (Test-Path (Join-Path $candidate "cudart64_12.dll"))) {
+    $cudaDllDirs += $candidate
+  }
+}
+if ($cudaDllDirs.Count -gt 0) {
+  [Environment]::SetEnvironmentVariable("FTRANSLATE_NLLB_CUDA_DLL_DIRS", ($cudaDllDirs -join ";"), "User")
+  Write-Host "CUDA DLL directories: $($cudaDllDirs -join ';')"
+} else {
+  Write-Host "CUDA DLL directories were not found. NLLB will run on CPU unless CUDA runtime is installed later."
+}
 
 Write-Host "Running smoke test..."
 $smoke = @'
@@ -147,4 +167,7 @@ Write-Host "NLLB CTranslate2 int8 is installed."
 Write-Host "Python: $pythonExe"
 Write-Host "Model : $modelDir"
 Write-Host "Tokenizer: $hfSnapshotDir"
+if ($cudaDllDirs.Count -gt 0) {
+  Write-Host "CUDA DLL dirs: $($cudaDllDirs -join ';')"
+}
 Write-Host "Restart FTranslate so Electron can read the updated user environment variables."

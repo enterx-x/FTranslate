@@ -41,6 +41,14 @@ const DEFAULT_NLLB_VENV_PYTHON = path.join(DEFAULT_NLLB_ROOT, 'nllb-ctranslate2'
 const DEFAULT_NLLB_MODEL_DIR = path.join(DEFAULT_NLLB_ROOT, 'models', 'nllb-200-distilled-600M-ct2-int8');
 const DEFAULT_NLLB_HF_HOME = path.join(DEFAULT_NLLB_ROOT, 'hf-cache');
 const DEFAULT_NLLB_TOKENIZER_DIR = path.join(DEFAULT_NLLB_HF_HOME, 'nllb-200-distilled-600M-snapshot');
+const DEFAULT_NLLB_CUDA_DLL_DIR_CANDIDATES = [
+  'E:\\Anaconda\\envs\\pytorch\\Lib\\site-packages\\torch\\lib',
+  'E:\\Anaconda\\envs\\SB3_RL\\Lib\\site-packages\\torch\\lib',
+  'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.7\\bin',
+  'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.6\\bin',
+  'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.5\\bin',
+  'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.4\\bin'
+];
 const DEFAULT_NLLB_TIMEOUT_MS = 120_000;
 const DEFAULT_NLLB_MODEL_NAME = 'nllb-200-distilled-600M-ct2-int8';
 
@@ -67,6 +75,17 @@ export function resolveNllbDevice(): LocalTranslationDevicePreference {
   return configured === 'cuda' || configured === 'cpu' ? configured : 'auto';
 }
 
+export function resolveNllbCudaDllDirs(): string[] {
+  const configured = process.env.FTRANSLATE_NLLB_CUDA_DLL_DIRS?.trim();
+  const configuredDirs = configured
+    ? configured.split(';').map((item) => item.trim()).filter(Boolean)
+    : [];
+  const dirs = [...configuredDirs, ...DEFAULT_NLLB_CUDA_DLL_DIR_CANDIDATES];
+  return Array.from(new Set(dirs)).filter((dir) =>
+    fs.existsSync(path.join(dir, 'cublas64_12.dll')) && fs.existsSync(path.join(dir, 'cudart64_12.dll'))
+  );
+}
+
 export function resolveLocalTranslationPreference(): LocalTranslationPreference {
   const configured = process.env.FTRANSLATE_LOCAL_TRANSLATION_ENGINE?.trim().toLowerCase();
   if (
@@ -81,14 +100,20 @@ export function resolveLocalTranslationPreference(): LocalTranslationPreference 
 }
 
 export function resolveNllbChildEnv(): NodeJS.ProcessEnv {
+  const cudaDllDirs = resolveNllbCudaDllDirs();
+  const inheritedPath = process.env.Path ?? process.env.PATH ?? '';
+  const pathValue = [...cudaDllDirs, inheritedPath].filter(Boolean).join(path.delimiter);
   return {
     ...process.env,
     FTRANSLATE_NLLB_MODEL_DIR: resolveNllbModelDir(),
     FTRANSLATE_NLLB_TOKENIZER_DIR: resolveNllbTokenizerDir(),
+    FTRANSLATE_NLLB_CUDA_DLL_DIRS: cudaDllDirs.join(path.delimiter),
     FTRANSLATE_NLLB_DEVICE: resolveNllbDevice(),
     HF_HOME: process.env.HF_HOME?.trim() || DEFAULT_NLLB_HF_HOME,
     TRANSFORMERS_OFFLINE: '1',
     HF_HUB_OFFLINE: '1',
+    PATH: pathValue,
+    Path: pathValue,
     PYTHONIOENCODING: 'utf-8',
     PYTHONUTF8: '1'
   };
@@ -315,12 +340,17 @@ class NllbCTranslate2Runtime {
 function buildNllbWorkerScript(): string {
   return [
     'import json, os, sys, traceback',
-    'import ctranslate2',
     'MODEL_NAME = "facebook/nllb-200-distilled-600M"',
     'SRC_LANG = "eng_Latn"',
     'TGT_LANG = "zho_Hans"',
     'model_dir = os.environ.get("FTRANSLATE_NLLB_MODEL_DIR")',
     'tokenizer_dir = os.environ.get("FTRANSLATE_NLLB_TOKENIZER_DIR") or MODEL_NAME',
+    'cuda_dll_dirs = [p for p in os.environ.get("FTRANSLATE_NLLB_CUDA_DLL_DIRS", "").split(os.pathsep) if p]',
+    'if hasattr(os, "add_dll_directory"):',
+    '    for dll_dir in cuda_dll_dirs:',
+    '        if os.path.isdir(dll_dir):',
+    '            os.add_dll_directory(dll_dir)',
+    'import ctranslate2',
     'device_pref = os.environ.get("FTRANSLATE_NLLB_DEVICE", "auto").lower()',
     'hf_home = os.environ.get("HF_HOME")',
     'translator = None',

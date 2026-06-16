@@ -34,8 +34,8 @@ interface ArxivLogEntry {
 
 const DEFAULT_MIN_REQUEST_GAP_MS = 3200;
 const DEFAULT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_FIRST_COOLDOWN_MS = 10 * 60 * 1000;
-const DEFAULT_REPEATED_COOLDOWN_MS = 30 * 60 * 1000;
+const DEFAULT_FIRST_COOLDOWN_MS = 2 * 60 * 1000;
+const DEFAULT_REPEATED_COOLDOWN_MS = 10 * 60 * 1000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30 * 1000;
 
 export class ArxivService {
@@ -70,7 +70,7 @@ export class ArxivService {
 
   async search(request: ArxivSearchRequest, source = 'renderer:arxiv-search'): Promise<ArxivSearchServiceResult> {
     const cacheKey = buildArxivCacheKey(request);
-    const cached = request.forceRefresh ? null : this.readCache(cacheKey);
+    const cached = request.forceRefresh ? null : this.readCacheEntry(cacheKey, false);
     if (cached) {
       this.writeLog({
         source,
@@ -81,11 +81,39 @@ export class ArxivService {
         status: 'cache-hit'
       });
       return {
-        ...cached,
+        ...cached.result,
         cacheHit: true,
+        cacheStale: false,
         queueSize: 0,
         lastRequestGapMs: this.getLastRequestGapMs()
       };
+    }
+
+    const cooldown = this.getCooldownStatus();
+    if (cooldown.remainingMs > 0) {
+      const staleCache = this.readCacheEntry(cacheKey, true);
+      if (staleCache) {
+        const warning = `arXiv 正在保护冷却，已显示本地缓存结果；约 ${formatRemainingCooldown(
+          cooldown.remainingMs
+        )} 后可再次实时刷新。`;
+        this.writeLog({
+          source,
+          query: cacheKey,
+          cacheHit: true,
+          queueSize: 0,
+          lastRequestGapMs: this.getLastRequestGapMs(),
+          status: staleCache.stale ? 'stale-cache-cooldown' : 'cache-hit-cooldown'
+        });
+        return {
+          ...staleCache.result,
+          cacheHit: true,
+          cacheStale: staleCache.stale,
+          queueSize: 0,
+          lastRequestGapMs: this.getLastRequestGapMs(),
+          cooldownRemainingMs: cooldown.remainingMs,
+          warning
+        };
+      }
     }
 
     const queueSize = this.queuedRequests;
@@ -171,30 +199,43 @@ export class ArxivService {
     return run;
   }
 
-  private readCache(cacheKey: string): ArxivParsedSearchResult | null {
+  private readCacheEntry(
+    cacheKey: string,
+    allowStale: boolean
+  ): { result: ArxivParsedSearchResult; stale: boolean } | null {
     const row = this.db
       .prepare('SELECT created_at, response_json FROM arxiv_cache WHERE cache_key = ?')
       .get(cacheKey) as { created_at: number; response_json: string } | undefined;
-    if (!row || this.now() - row.created_at > this.cacheTtlMs) {
+    if (!row) {
+      return null;
+    }
+    const stale = this.now() - row.created_at > this.cacheTtlMs;
+    if (stale && !allowStale) {
       return null;
     }
     try {
       const parsed = JSON.parse(row.response_json) as unknown;
       if (Array.isArray(parsed)) {
         return {
-          papers: parsed,
-          totalResults: parsed.length,
-          startIndex: 0,
-          itemsPerPage: parsed.length
-        } as ArxivParsedSearchResult;
+          result: {
+            papers: parsed,
+            totalResults: parsed.length,
+            startIndex: 0,
+            itemsPerPage: parsed.length
+          } as ArxivParsedSearchResult,
+          stale
+        };
       }
       if (parsed && typeof parsed === 'object' && Array.isArray((parsed as ArxivParsedSearchResult).papers)) {
         const result = parsed as ArxivParsedSearchResult;
         return {
-          papers: result.papers,
-          totalResults: result.totalResults || result.papers.length,
-          startIndex: result.startIndex || 0,
-          itemsPerPage: result.itemsPerPage || result.papers.length
+          result: {
+            papers: result.papers,
+            totalResults: result.totalResults || result.papers.length,
+            startIndex: result.startIndex || 0,
+            itemsPerPage: result.itemsPerPage || result.papers.length
+          },
+          stale
         };
       }
       return null;
@@ -332,13 +373,16 @@ export class ArxivService {
   }
 
   private getCooldownError(): Error | null {
-    const cooldownUntil = this.getStateNumber('cooldown_until', 0);
-    const remainingMs = cooldownUntil - this.now();
-    if (remainingMs <= 0) {
+    const cooldown = this.getCooldownStatus();
+    if (cooldown.remainingMs <= 0) {
       return null;
     }
-    const remainingMinutes = Math.ceil(remainingMs / 60000);
-    return new Error(`arXiv 请求正在冷却中，约 ${remainingMinutes} 分钟后再试。冷却期间不会访问 arXiv。`);
+    return new Error(`arXiv 请求正在保护冷却中，约 ${formatRemainingCooldown(cooldown.remainingMs)} 后再试。冷却期间不会访问 arXiv。`);
+  }
+
+  private getCooldownStatus(): { remainingMs: number } {
+    const cooldownUntil = this.getStateNumber('cooldown_until', 0);
+    return { remainingMs: Math.max(0, cooldownUntil - this.now()) };
   }
 
   private async openCircuit(reason: string): Promise<void> {
@@ -410,14 +454,18 @@ function applyLocalArxivSort(result: ArxivParsedSearchResult, request: ArxivSear
     return result;
   }
   const queryTerms = tokenizeLocalRankingQuery(normalizeArxivSearchQuery(request.searchQuery));
-  const sorted = [...result.papers].sort((left, right) => {
-    const rightScore = scoreComprehensivePaper(right, queryTerms, request.category);
-    const leftScore = scoreComprehensivePaper(left, queryTerms, request.category);
-    return request.sortOrder === 'ascending' ? leftScore - rightScore : rightScore - leftScore;
+  const scored = result.papers
+    .map((paper) => ({ paper, score: scoreComprehensivePaper(paper, queryTerms, request.category) }))
+    .filter((entry) => entry.score.textHits > 0);
+  const sorted = scored.length > 0 ? scored : result.papers.map((paper) => ({ paper, score: scoreComprehensivePaper(paper, queryTerms, request.category) }));
+  sorted.sort((left, right) => {
+    return request.sortOrder === 'ascending' ? left.score.value - right.score.value : right.score.value - left.score.value;
   });
   return {
     ...result,
-    papers: sorted
+    papers: sorted.map((entry) => entry.paper),
+    totalResults: result.totalResults,
+    itemsPerPage: sorted.length
   };
 }
 
@@ -433,19 +481,27 @@ function tokenizeLocalRankingQuery(value: string): string[] {
   );
 }
 
-function scoreComprehensivePaper(paper: ArxivPaper, queryTerms: string[], category: string): number {
+function scoreComprehensivePaper(
+  paper: ArxivPaper,
+  queryTerms: string[],
+  category: string
+): { value: number; textHits: number } {
   const title = paper.title.toLowerCase();
   const summary = paper.summary.toLowerCase();
   const categoryBonus = category && paper.categories.includes(category) ? 8 : 0;
   const titleHits = queryTerms.filter((term) => title.includes(term)).length;
   const abstractHits = queryTerms.filter((term) => summary.includes(term)).length;
+  const textHits = titleHits + abstractHits;
+  if (textHits === 0) {
+    return { value: 0, textHits };
+  }
   const relevance = titleHits * 12 + abstractHits * 5;
   const recency = scoreRecency(paper.updated || paper.publishedAt || paper.published);
   const experimentalCue = /\b(experiment|benchmark|baseline|result|real-world|dataset|simulation)\b/iu.test(summary) ? 6 : 0;
   const methodCue = /\b(method|model|framework|policy|controller|planner|architecture|algorithm)\b/iu.test(summary)
     ? 5
     : 0;
-  return relevance + recency + categoryBonus + experimentalCue + methodCue;
+  return { value: relevance + recency + categoryBonus + experimentalCue + methodCue, textHits };
 }
 
 function scoreRecency(value: string): number {
@@ -455,6 +511,16 @@ function scoreRecency(value: string): number {
   }
   const days = Math.max(0, (Date.now() - time) / 86_400_000);
   return Math.max(0, 18 - Math.min(18, days / 30));
+}
+
+function formatRemainingCooldown(remainingMs: number): string {
+  if (remainingMs <= 0) {
+    return '0 秒';
+  }
+  if (remainingMs < 60_000) {
+    return `${Math.ceil(remainingMs / 1000)} 秒`;
+  }
+  return `${Math.ceil(remainingMs / 60_000)} 分钟`;
 }
 
 export function normalizeArxivPdfDownloadUrl(value: string): URL {
