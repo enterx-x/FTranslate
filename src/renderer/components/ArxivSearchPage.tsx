@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   type ArxivPaper,
   type ArxivSearchRequest,
@@ -19,7 +19,7 @@ import downloadIcon from '../assets/icons/duotone/download.svg';
 import translateIcon from '../assets/icons/duotone/translate.svg';
 import analysisIcon from '../assets/icons/duotone/analysis.svg';
 import saveIcon from '../assets/icons/duotone/save.svg';
-import type { PdfFilePayload } from '../types/electron';
+import type { LocalTranslationStatus, PdfFilePayload } from '../types/electron';
 
 interface ArxivSearchPageProps {
   onBackHome: () => void;
@@ -153,6 +153,26 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [backgroundTranslatingIds, setBackgroundTranslatingIds] = useState<Record<string, boolean>>({});
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [showOfflineTranslationHelp, setShowOfflineTranslationHelp] = useState(false);
+  const [localTranslationStatus, setLocalTranslationStatus] = useState<LocalTranslationStatus | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    window.electronAPI
+      .getLocalTranslationStatus()
+      .then((result) => {
+        if (!disposed) {
+          setLocalTranslationStatus(result);
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setLocalTranslationStatus(null);
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   const request = useMemo<ArxivSearchRequest>(
     () => ({
@@ -323,7 +343,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
 
     try {
       setTranslatingId(paper.id);
-      setMessage('正在使用本地 Argos 翻译标题和摘要，并写入 SQLite 缓存；此操作不会调用 AI API。');
+      setMessage('正在使用本地离线引擎翻译标题和摘要，并写入 SQLite 缓存；优先 NLLB，失败回退 Argos，不会调用 AI API。');
       const result = await translatePaperMetadata(paper);
       if (result?.status === 'completed' || result?.status === 'cached') {
         setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
@@ -644,6 +664,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
 
         <div className={`arxiv-message is-${status}`}>
           <span>{message}</span>
+          <span className="badge">{describeLocalTranslationStatus(localTranslationStatus)}</span>
           {isOfflineTranslationNotice ? (
             <div className="arxiv-history">
               <button
@@ -1260,6 +1281,19 @@ function getPaperMeta(paper: ArxivPaper, metaById: Record<string, ArxivPaperMeta
 
 function hasDisplayMojibakeText(value?: string): boolean {
   return isMojibakeTranslationText(value);
+}
+
+function describeLocalTranslationStatus(status: LocalTranslationStatus | null): string {
+  if (!status) {
+    return '本地翻译状态未知';
+  }
+  if (status.nllb.available) {
+    const device = status.worker.running && status.nllb.runtimeDevice !== 'unknown'
+      ? status.nllb.runtimeDevice.toUpperCase()
+      : status.nllb.device.toUpperCase();
+    return `NLLB 可用 · ${device}`;
+  }
+  return 'NLLB 未配置 · Argos fallback';
 }
 
 function sanitizeFileStem(value: string): string {

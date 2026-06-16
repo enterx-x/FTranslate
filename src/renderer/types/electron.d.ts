@@ -82,6 +82,35 @@ export interface AiModelsResult {
   checkedAt?: string;
 }
 
+export interface LocalTranslationStatus {
+  preferredEngine: 'nllb-first' | 'argos-first' | 'nllb-only' | 'argos-only';
+  nllb: {
+    configured: boolean;
+    available: boolean;
+    pythonPath: string;
+    modelDir: string;
+    tokenizerDir: string;
+    device: 'auto' | 'cuda' | 'cpu';
+    runtimeDevice: 'cuda' | 'cpu' | 'unknown';
+    message: string;
+  };
+  fallback: {
+    engine: 'argos';
+    message: string;
+  };
+  worker: {
+    running: boolean;
+    pending: number;
+  };
+}
+
+export interface LocalTranslateBatchResult {
+  texts: string[];
+  engine: 'nllb-ct2-int8' | 'argos';
+  device?: 'cuda' | 'cpu' | 'unknown';
+  model?: string;
+}
+
 export interface AiFillSheetCellResult {
   text: string;
   provider: AiProviderId;
@@ -205,6 +234,14 @@ export interface ElectronApi {
   testAiConnection: () => Promise<AiConnectionTestResult>;
   getAiBalance: () => Promise<AiBalanceResult>;
   getAiModels: () => Promise<AiModelsResult>;
+  getLocalTranslationStatus: () => Promise<LocalTranslationStatus>;
+  checkLocalTranslationInstall: () => Promise<LocalTranslationStatus>;
+  warmUpLocalTranslation: () => Promise<LocalTranslationStatus>;
+  translateLocalBatch: (request: {
+    texts: string[];
+    forceEngine?: 'nllb-ct2' | 'argos';
+    timeoutMs?: number;
+  }) => Promise<LocalTranslateBatchResult>;
   saveTextFile: (request: {
     filePath?: string;
     content: string;

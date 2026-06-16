@@ -153,6 +153,43 @@ if ($userPath -notlike "*$argosScripts*") {
 
 修改后重启 FTranslate。SQLite 翻译缓存位于 Electron 用户数据目录下的 `arxiv-translation-cache.sqlite`，同一篇论文标题 / 摘要命中缓存后不会重复调用 Argos。
 
+### NLLB + CTranslate2 离线高质量翻译
+
+FTranslate 现在支持本地 `NLLB-200 distilled 600M + CTranslate2 int8` 翻译层，用于：
+
+- arXiv 检索页标题和摘要的本地批量翻译；
+- JSON / 段落翻译队列的本地批量翻译；
+- Argos 翻译质量不足时的高质量离线替代。
+
+它不会替换 PDFMathTranslate / pdf2zh 的整篇双语 PDF 引擎。整篇 PDF 排版翻译仍由 PDFMathTranslate 处理；NLLB 主要负责标题、摘要和段落级文本。
+
+默认安装位置在空间较大的 `E:\FTranslateTools\`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-nllb-ct2.ps1
+```
+
+脚本会创建：
+
+```text
+E:\FTranslateTools\nllb-ctranslate2
+E:\FTranslateTools\models\nllb-200-distilled-600M-ct2-int8
+E:\FTranslateTools\hf-cache\nllb-200-distilled-600M-snapshot
+```
+
+并写入用户环境变量：
+
+```text
+FTRANSLATE_NLLB_PYTHON
+FTRANSLATE_NLLB_MODEL_DIR
+FTRANSLATE_NLLB_TOKENIZER_DIR
+FTRANSLATE_NLLB_DEVICE
+```
+
+`FTRANSLATE_NLLB_DEVICE` 默认是 `auto`：应用会优先尝试 CUDA，失败后自动回退 CPU。安装后请重启 FTranslate，让 Electron 读取新的用户环境变量。
+
+如果 NLLB 环境不可用，应用会自动回退到 Argos。SQLite 缓存会记录实际使用的 engine，避免同一标题/摘要重复翻译。
+
 ### AI 助手
 
 AI 助手集中管理：

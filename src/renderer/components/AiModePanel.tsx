@@ -53,6 +53,8 @@ interface AiModePanelProps {
   onTranslateCurrent: (force?: boolean) => void;
   onTranslateItem: (index: number, force?: boolean) => void;
   onTranslatePending: () => void;
+  onLocalTranslateCurrent?: (force?: boolean) => void;
+  onLocalTranslatePending?: () => void;
   onSelectItem: (index: number) => void;
 }
 
@@ -74,6 +76,11 @@ export function AiModePanel(props: AiModePanelProps) {
           <button type="button" disabled={props.isBusy} onClick={() => props.onTranslateCurrent(false)}>
             AI 翻译当前段
           </button>
+          {props.onLocalTranslateCurrent ? (
+            <button type="button" disabled={props.isBusy} onClick={() => props.onLocalTranslateCurrent?.(false)}>
+              本地 NLLB 当前段
+            </button>
+          ) : null}
           <button type="button" disabled={props.isBusy} onClick={() => props.onTranslateCurrent(true)}>
             重新翻译
           </button>
@@ -84,6 +91,15 @@ export function AiModePanel(props: AiModePanelProps) {
           >
             批量翻译未缓存
           </button>
+          {props.onLocalTranslatePending ? (
+            <button
+              type="button"
+              disabled={props.isBusy || queueStats.pending === 0}
+              onClick={props.onLocalTranslatePending}
+            >
+              本地批量未缓存
+            </button>
+          ) : null}
         </div>
       ) : null}
 

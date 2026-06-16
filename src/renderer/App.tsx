@@ -1196,6 +1196,117 @@ export default function App() {
     }
   }
 
+  async function handleTranslateCurrentWithLocal(force = false): Promise<void> {
+    await translateAiItemWithLocal(aiParagraphIndex, force);
+  }
+
+  async function translateAiItemWithLocal(targetIndex: number, force = false): Promise<void> {
+    const document = ensureJsonDocumentForAi();
+    if (!document) {
+      return;
+    }
+
+    const index = Math.min(Math.max(0, targetIndex), document.items.length - 1);
+    const item = document.items[index];
+    if (!item) {
+      setStatusMessage('当前没有可翻译的段落。');
+      return;
+    }
+
+    try {
+      setIsAiBusy(true);
+      setAiParagraphIndex(index);
+      let workingDocument = await ensureAiCacheSaved(document);
+      if (!workingDocument) {
+        return;
+      }
+
+      const workingItem = workingDocument.items[index] ?? item;
+      if (!force && !shouldTranslateItem(workingItem)) {
+        setStatusMessage('当前段已有缓存译文，本地翻译未重复执行。');
+        return;
+      }
+
+      setStatusMessage(`本地 NLLB 正在翻译第 ${index + 1} 段...`);
+      const result = await window.electronAPI.translateLocalBatch({
+        texts: [workingItem.original],
+        timeoutMs: 120_000
+      });
+      const translation = result.texts[0]?.trim() ?? '';
+      if (!translation) {
+        setStatusMessage('本地翻译返回空结果，已保留原缓存。');
+        return;
+      }
+
+      workingDocument = updateAiCacheItem(workingDocument, index, {
+        translation,
+        translatedAt: new Date().toISOString(),
+        provider: 'local',
+        model: result.model ?? result.engine
+      }) ?? workingDocument;
+      setAiCacheDocument(workingDocument);
+      setShowTranslation(true);
+      await persistAiCache(workingDocument);
+      setStatusMessage(`本地 ${result.engine} 已翻译第 ${index + 1} 段并保存缓存。`);
+    } catch (error) {
+      setStatusMessage(`本地翻译当前段失败：${String(error)}`);
+    } finally {
+      setIsAiBusy(false);
+    }
+  }
+
+  async function handleTranslatePendingWithLocal(): Promise<void> {
+    const document = ensureJsonDocumentForAi();
+    if (!document) {
+      return;
+    }
+
+    try {
+      setIsAiBusy(true);
+      let workingDocument = await ensureAiCacheSaved(document);
+      if (!workingDocument) {
+        return;
+      }
+
+      const pendingEntries = workingDocument.items
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => shouldTranslateItem(item));
+      let translatedCount = 0;
+      const batchSize = 8;
+
+      for (let offset = 0; offset < pendingEntries.length; offset += batchSize) {
+        const batch = pendingEntries.slice(offset, offset + batchSize);
+        setStatusMessage(`本地 NLLB 正在翻译 ${offset + 1}-${offset + batch.length} / ${pendingEntries.length} 段...`);
+        const result = await window.electronAPI.translateLocalBatch({
+          texts: batch.map(({ item }) => item.original),
+          timeoutMs: 180_000
+        });
+        batch.forEach(({ index }, batchIndex) => {
+          const translation = result.texts[batchIndex]?.trim();
+          if (!translation) {
+            return;
+          }
+          workingDocument = updateAiCacheItem(workingDocument, index, {
+            translation,
+            translatedAt: new Date().toISOString(),
+            provider: 'local',
+            model: result.model ?? result.engine
+          }) ?? workingDocument;
+          translatedCount += 1;
+        });
+        setAiCacheDocument(workingDocument);
+        await persistAiCache(workingDocument);
+      }
+
+      setShowTranslation(true);
+      setStatusMessage(`本地批量翻译完成，本次新增 ${translatedCount} 段译文。`);
+    } catch (error) {
+      setStatusMessage(`本地批量翻译失败：${String(error)}`);
+    } finally {
+      setIsAiBusy(false);
+    }
+  }
+
   async function handleCopyCurrentPrompt(): Promise<void> {
     const prompt = buildCurrentJsonPrompt(getCurrentPromptItem());
     await navigator.clipboard.writeText(prompt);

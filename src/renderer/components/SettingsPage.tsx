@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import settingsIcon from '../assets/icons/duotone/settings.svg';
 import saveIcon from '../assets/icons/duotone/save.svg';
 import refreshIcon from '../assets/icons/duotone/refresh.svg';
@@ -14,6 +14,7 @@ import {
   type ExportPathSettings,
   type ReferenceTranslationStrategy
 } from '../lib/appSettings';
+import type { LocalTranslationStatus } from '../types/electron';
 
 type SettingsCategory =
   | 'general'
@@ -64,7 +65,28 @@ export function SettingsPage(props: SettingsPageProps) {
     parseAppSettings(localStorage.getItem(APP_SETTINGS_KEY))
   );
   const [savedMessage, setSavedMessage] = useState('');
+  const [localTranslationStatus, setLocalTranslationStatus] = useState<LocalTranslationStatus | null>(null);
+  const [localTranslationMessage, setLocalTranslationMessage] = useState('');
   const localStorageUsage = useMemo(() => calculateLocalStorageUsage(), [savedMessage]);
+
+  useEffect(() => {
+    let disposed = false;
+    window.electronAPI
+      .getLocalTranslationStatus()
+      .then((status) => {
+        if (!disposed) {
+          setLocalTranslationStatus(status);
+        }
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setLocalTranslationMessage(`本地翻译状态读取失败：${String(error)}`);
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   function saveSettings(nextSettings = settings): void {
     localStorage.setItem(APP_SETTINGS_KEY, serializeAppSettings(nextSettings));
@@ -84,6 +106,28 @@ export function SettingsPage(props: SettingsPageProps) {
     const defaults = buildDefaultAppSettings();
     setSettings(defaults);
     saveSettings(defaults);
+  }
+
+  async function refreshLocalTranslationStatus(): Promise<void> {
+    try {
+      setLocalTranslationMessage('正在检查本地翻译环境...');
+      const status = await window.electronAPI.checkLocalTranslationInstall();
+      setLocalTranslationStatus(status);
+      setLocalTranslationMessage(status.nllb.available ? 'NLLB 环境可用。' : status.nllb.message);
+    } catch (error) {
+      setLocalTranslationMessage(`本地翻译环境检查失败：${String(error)}`);
+    }
+  }
+
+  async function warmUpLocalTranslation(): Promise<void> {
+    try {
+      setLocalTranslationMessage('正在预热 NLLB worker...');
+      const status = await window.electronAPI.warmUpLocalTranslation();
+      setLocalTranslationStatus(status);
+      setLocalTranslationMessage(status.nllb.available ? 'NLLB worker 已预热。' : status.nllb.message);
+    } catch (error) {
+      setLocalTranslationMessage(`NLLB 预热失败：${String(error)}`);
+    }
   }
 
   return (
@@ -606,6 +650,54 @@ export function SettingsPage(props: SettingsPageProps) {
             </SettingsCard>
           ) : null}
 
+          {activeCategory === 'ai' ? (
+            <SettingsCard
+              title="本地离线翻译"
+              badge={describeLocalTranslationBadge(localTranslationStatus)}
+              description="arXiv 标题/摘要和 JSON 段落翻译优先使用 NLLB-200 distilled 600M + CTranslate2 int8；未配置或失败时回退 Argos。"
+            >
+              <div className="settings-summary-list">
+                <p>
+                  <strong>NLLB Python</strong>
+                  <span>{localTranslationStatus?.nllb.pythonPath ?? 'E:\\FTranslateTools\\nllb-ctranslate2\\Scripts\\python.exe'}</span>
+                </p>
+                <p>
+                  <strong>NLLB 模型目录</strong>
+                  <span>{localTranslationStatus?.nllb.modelDir ?? 'E:\\FTranslateTools\\models\\nllb-200-distilled-600M-ct2-int8'}</span>
+                </p>
+                <p>
+                  <strong>NLLB tokenizer</strong>
+                  <span>{localTranslationStatus?.nllb.tokenizerDir ?? 'E:\\FTranslateTools\\hf-cache\\nllb-200-distilled-600M-snapshot'}</span>
+                </p>
+                <p>
+                  <strong>设备策略</strong>
+                  <span>
+                    {localTranslationStatus?.nllb.device ?? 'auto'} / runtime {localTranslationStatus?.nllb.runtimeDevice ?? 'unknown'}
+                  </span>
+                </p>
+                <p>
+                  <strong>Worker</strong>
+                  <span>
+                    {localTranslationStatus?.worker.running ? '运行中' : '未启动'}
+                    {localTranslationStatus ? `，队列 ${localTranslationStatus.worker.pending}` : ''}
+                  </span>
+                </p>
+              </div>
+              <div className="settings-actions">
+                <button type="button" className="secondary-button button-with-icon" onClick={refreshLocalTranslationStatus}>
+                  <img className="button-icon" src={refreshIcon} alt="" />
+                  <span>检查环境</span>
+                </button>
+                <button type="button" className="primary-button" onClick={warmUpLocalTranslation}>
+                  预热 NLLB
+                </button>
+              </div>
+              <p className="inline-message">
+                {localTranslationMessage || '安装命令：powershell -ExecutionPolicy Bypass -File .\\scripts\\install-nllb-ct2.ps1'}
+              </p>
+            </SettingsCard>
+          ) : null}
+
           {activeCategory === 'general' || activeCategory === 'ai' || activeCategory === 'web' || activeCategory === 'data' ? (
             <SettingsCard
               title={categories.find((category) => category.id === activeCategory)?.title ?? '设置'}
@@ -673,6 +765,19 @@ function CheckboxSetting(props: {
       <span>{props.label}</span>
     </label>
   );
+}
+
+function describeLocalTranslationBadge(status: LocalTranslationStatus | null): string {
+  if (!status) {
+    return '状态未知';
+  }
+  if (status.nllb.available) {
+    const device = status.worker.running && status.nllb.runtimeDevice !== 'unknown'
+      ? status.nllb.runtimeDevice.toUpperCase()
+      : status.nllb.device.toUpperCase();
+    return `NLLB 可用 · ${device}`;
+  }
+  return 'Argos fallback';
 }
 
 function calculateLocalStorageUsage(): number {

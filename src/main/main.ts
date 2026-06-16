@@ -45,7 +45,15 @@ import {
 } from '../shared/pdfTranslation';
 import { type ArxivSearchRequest, type ArxivTitleAbstractTranslationRequest } from '../shared/arxiv';
 import { ArxivService } from './arxivService';
-import { ArxivTranslationService } from './arxivTranslationService';
+import { ArxivTranslationService, translateTextsWithArgosEngine } from './arxivTranslationService';
+import {
+  checkLocalTranslationInstall,
+  getLocalTranslationStatus,
+  resetNllbRuntime,
+  type LocalTranslateBatchResult,
+  translateTextsWithNllbCTranslate2,
+  warmUpNllbTranslator
+} from './localTranslationService';
 
 interface PdfFilePayload {
   filePath: string;
@@ -75,6 +83,12 @@ interface SaveBinaryRequest {
 interface ArxivDownloadPdfRequest {
   pdfUrl: string;
   defaultFileName: string;
+}
+
+interface LocalTranslateBatchRequest {
+  texts: string[];
+  forceEngine?: 'nllb-ct2' | 'argos';
+  timeoutMs?: number;
 }
 
 interface ResearchWorkbookExcelRequest {
@@ -1029,6 +1043,30 @@ function getArxivTranslationService(): ArxivTranslationService {
     });
   }
   return arxivTranslationService;
+}
+
+async function translateWithLocalEngine(request: LocalTranslateBatchRequest): Promise<LocalTranslateBatchResult> {
+  const texts = Array.isArray(request.texts)
+    ? request.texts.map((text) => (typeof text === 'string' ? text : '')).slice(0, 256)
+    : [];
+  const timeoutMs = Number.isFinite(request.timeoutMs) ? Math.max(10_000, Number(request.timeoutMs)) : 120_000;
+  if (texts.length === 0) {
+    return { texts: [], engine: 'nllb-ct2-int8', device: 'unknown' };
+  }
+
+  if (request.forceEngine === 'argos') {
+    return translateTextsWithArgosEngine(texts, timeoutMs);
+  }
+
+  if (request.forceEngine === 'nllb-ct2') {
+    return translateTextsWithNllbCTranslate2(texts, timeoutMs);
+  }
+
+  try {
+    return await translateTextsWithNllbCTranslate2(texts, timeoutMs);
+  } catch {
+    return translateTextsWithArgosEngine(texts, timeoutMs);
+  }
 }
 
 async function exportResearchWorkbookToExcel(
@@ -2647,6 +2685,22 @@ function registerIpcHandlers(): void {
     return getAiModels();
   });
 
+  ipcMain.handle('local-translation:status', async () => {
+    return getLocalTranslationStatus();
+  });
+
+  ipcMain.handle('local-translation:install-check', async () => {
+    return checkLocalTranslationInstall();
+  });
+
+  ipcMain.handle('local-translation:warmup', async () => {
+    return warmUpNllbTranslator();
+  });
+
+  ipcMain.handle('local-translation:translate-batch', async (_event, request: LocalTranslateBatchRequest) => {
+    return translateWithLocalEngine(request);
+  });
+
   ipcMain.handle('pdf-translation:check-engine', async () => {
     return checkPdfTranslationEngine();
   });
@@ -2925,6 +2979,7 @@ app.on('will-quit', () => {
   arxivService = null;
   arxivTranslationService?.close();
   arxivTranslationService = null;
+  resetNllbRuntime();
 });
 
 app.on('window-all-closed', () => {

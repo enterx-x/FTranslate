@@ -76,6 +76,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   testAiConnection: () => ipcRenderer.invoke('ai:test-connection'),
   getAiBalance: () => ipcRenderer.invoke('ai:balance'),
   getAiModels: () => ipcRenderer.invoke('ai:models'),
+  getLocalTranslationStatus: () => ipcRenderer.invoke('local-translation:status'),
+  checkLocalTranslationInstall: () => ipcRenderer.invoke('local-translation:install-check'),
+  warmUpLocalTranslation: () => ipcRenderer.invoke('local-translation:warmup'),
+  translateLocalBatch: (request: {
+    texts: string[];
+    forceEngine?: 'nllb-ct2' | 'argos';
+    timeoutMs?: number;
+  }) => ipcRenderer.invoke('local-translation:translate-batch', request),
   saveTextFile: (request: {
     filePath?: string;
     content: string;

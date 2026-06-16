@@ -163,6 +163,101 @@ describe('ArxivTranslationService', () => {
     }
   });
 
+  it('stores the concrete NLLB engine name when the NLLB translator succeeds', async () => {
+    const batches: string[][] = [];
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTextsWithEngine: async (texts) => {
+        batches.push(texts);
+        return {
+          texts: texts.map((text) => `NLLB:${text.slice(0, 16)}`),
+          engine: 'nllb-ct2-int8'
+        };
+      },
+      now: () => 1_764_000_000_000
+    });
+
+    try {
+      const request = {
+        stableId: '2606.13679',
+        title: 'Robot tactile navigation with haptic sensing',
+        summary: 'We use tactile sensing and haptic feedback for robot navigation.'
+      };
+      const first = await service.translatePaper(request);
+      const second = await service.translatePaper(request);
+
+      expect(first).toMatchObject({
+        stableId: '2606.13679',
+        engine: 'nllb-ct2-int8',
+        status: 'completed',
+        cacheHit: false
+      });
+      expect(second).toMatchObject({
+        engine: 'cache',
+        status: 'cached',
+        cacheHit: true
+      });
+      expect(batches).toEqual([[request.title, request.summary]]);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('falls back to Argos when the preferred NLLB translator fails', async () => {
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTextsWithEngine: async () => {
+        throw new Error('NLLB worker unavailable');
+      },
+      fallbackTranslateTextsWithEngine: async (texts) => ({
+        texts: texts.map((text) => `ARGOS:${text.slice(0, 16)}`),
+        engine: 'argos'
+      }),
+      now: () => 1_764_000_000_000
+    });
+
+    try {
+      const result = await service.translatePaper({
+        stableId: 'fallback-paper',
+        title: 'Reinforcement learning robot navigation',
+        summary: 'The paper studies robot navigation with reinforcement learning.'
+      });
+
+      expect(result.status).toBe('completed');
+      expect(result.engine).toBe('argos');
+      expect(result.message).toContain('Argos');
+    } finally {
+      service.close();
+    }
+  });
+
+  it('rejects mojibake returned by NLLB instead of caching it', async () => {
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTextsWithEngine: async () => ({
+        texts: [
+          '锟斤拷锟斤拷锟斤拷锟斤拷',
+          '锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷'
+        ],
+        engine: 'nllb-ct2-int8'
+      })
+    });
+
+    try {
+      const result = await service.translatePaper({
+        stableId: 'bad-nllb',
+        title: 'Robot navigation',
+        summary: 'The paper studies robot navigation.'
+      });
+
+      expect(result.status).toBe('failed');
+      expect(result.cacheHit).toBe(false);
+      expect(result.engine).toBe('unavailable');
+    } finally {
+      service.close();
+    }
+  });
+
   it('returns failed rows instead of throwing for malformed batch items', async () => {
     const service = new ArxivTranslationService({
       dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),

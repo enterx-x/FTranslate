@@ -45,7 +45,7 @@ export interface ArxivTitleAbstractTranslationRequest {
   targetLanguage?: 'zh';
 }
 
-export type ArxivTitleAbstractTranslationEngine = 'argos' | 'cache' | 'unavailable';
+export type ArxivTitleAbstractTranslationEngine = 'nllb-ct2-int8' | 'argos' | 'cache' | 'unavailable';
 export type ArxivTitleAbstractTranslationStatus = 'completed' | 'cached' | 'unavailable' | 'failed';
 
 export interface ArxivTitleAbstractTranslationResult {

@@ -8,11 +8,18 @@ import type {
   ArxivTitleAbstractTranslationResult
 } from '../shared/arxiv';
 import { isMojibakeTranslationText } from '../shared/arxiv';
+import {
+  type LocalTranslateBatchResult,
+  resetNllbRuntime,
+  translateTextsWithNllbCTranslate2
+} from './localTranslationService';
 
 interface ArxivTranslationServiceOptions {
   dbPath: string;
   translateText?: (text: string) => Promise<string>;
   translateTexts?: (texts: string[]) => Promise<string[]>;
+  translateTextsWithEngine?: (texts: string[]) => Promise<LocalTranslateBatchResult>;
+  fallbackTranslateTextsWithEngine?: (texts: string[]) => Promise<LocalTranslateBatchResult>;
   now?: () => number;
   timeoutMs?: number;
 }
@@ -29,7 +36,8 @@ let argosPythonRuntime: ArgosPythonRuntime | null = null;
 
 export class ArxivTranslationService {
   private readonly db: DatabaseSync;
-  private readonly translateTexts: (texts: string[]) => Promise<string[]>;
+  private readonly translateTextsWithEngine: (texts: string[]) => Promise<LocalTranslateBatchResult>;
+  private readonly fallbackTranslateTextsWithEngine?: (texts: string[]) => Promise<LocalTranslateBatchResult>;
   private readonly now: () => number;
   private readonly timeoutMs: number;
   private translationTail: Promise<unknown> = Promise.resolve();
@@ -38,11 +46,21 @@ export class ArxivTranslationService {
     this.db = new DatabaseSync(options.dbPath);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TRANSLATION_TIMEOUT_MS;
     const usesInjectedTranslator = Boolean(options.translateText || options.translateTexts);
-    this.translateTexts =
-      options.translateTexts ??
-      (options.translateText
-        ? ((texts) => Promise.all(texts.map((text) => options.translateText?.(text) ?? '')))
-        : ((texts) => translateTextsWithArgos(texts, this.timeoutMs)));
+    this.translateTextsWithEngine =
+      options.translateTextsWithEngine ??
+      (options.translateTexts
+        ? (async (texts) => ({ texts: (await options.translateTexts?.(texts)) ?? [], engine: 'argos' }))
+        : options.translateText
+          ? (async (texts) => ({
+              texts: await Promise.all(texts.map((text) => options.translateText?.(text) ?? '')),
+              engine: 'argos'
+            }))
+          : ((texts) => translateTextsWithNllbCTranslate2(texts, this.timeoutMs)));
+    this.fallbackTranslateTextsWithEngine =
+      options.fallbackTranslateTextsWithEngine ??
+      (options.translateTextsWithEngine || (!options.translateText && !options.translateTexts)
+        ? ((texts) => translateTextsWithArgosEngine(texts, this.timeoutMs))
+        : undefined);
     this.now = options.now ?? Date.now;
     this.initDatabase();
     if (!usesInjectedTranslator) {
@@ -56,6 +74,7 @@ export class ArxivTranslationService {
       argosPythonRuntime.close();
       argosPythonRuntime = null;
     }
+    resetNllbRuntime();
   }
 
   async translatePaper(
@@ -121,7 +140,8 @@ export class ArxivTranslationService {
 
       try {
         const texts = remaining.flatMap((item) => [item.title, item.summary]);
-        const translatedTexts = await this.translateTexts(texts);
+        const translationResult = await this.translateTextsWithFallback(texts);
+        const translatedTexts = translationResult.texts;
         const translatedAt = new Date(this.now()).toISOString();
 
         remaining.forEach((item, itemIndex) => {
@@ -142,16 +162,16 @@ export class ArxivTranslationService {
             titleZh,
             abstractZh,
             translatedAt,
-            engine: 'argos'
+            engine: translationResult.engine
           });
           results[item.index] = {
             stableId: item.stableId,
             titleZh,
             abstractZh,
-            engine: 'argos',
+            engine: translationResult.engine,
             status: 'completed',
             cacheHit: false,
-            message: '已使用本地 Argos 批量翻译并写入 SQLite 缓存。',
+            message: buildCompletedTranslationMessage(translationResult.engine),
             translatedAt
           };
         });
@@ -255,6 +275,17 @@ export class ArxivTranslationService {
         value.engine
       );
   }
+
+  private async translateTextsWithFallback(texts: string[]): Promise<LocalTranslateBatchResult> {
+    try {
+      return await this.translateTextsWithEngine(texts);
+    } catch (error) {
+      if (!this.fallbackTranslateTextsWithEngine) {
+        throw error;
+      }
+      return this.fallbackTranslateTextsWithEngine(texts);
+    }
+  }
 }
 
 function buildTranslationCacheKey(input: { stableId: string; title: string; summary: string }): string {
@@ -278,6 +309,12 @@ function normalizeTranslatedText(value: string): string {
 
 function isUsableTranslatedText(value: string): boolean {
   return Boolean(value.trim()) && !isMojibakeTranslationText(value);
+}
+
+function buildCompletedTranslationMessage(engine: LocalTranslateBatchResult['engine']): string {
+  return engine === 'nllb-ct2-int8'
+    ? '已使用本地 NLLB CTranslate2 int8 批量翻译并写入 SQLite 缓存。'
+    : '已使用本地 Argos 批量翻译并写入 SQLite 缓存。';
 }
 
 function buildCachedTranslationResult(
@@ -310,6 +347,16 @@ function buildFailedTranslationResult(stableId: string, message: string): ArxivT
 
 function coerceTranslationInput(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+export async function translateTextsWithArgosEngine(
+  texts: string[],
+  timeoutMs: number
+): Promise<LocalTranslateBatchResult> {
+  return {
+    texts: await translateTextsWithArgos(texts, timeoutMs),
+    engine: 'argos'
+  };
 }
 
 async function translateTextsWithArgos(texts: string[], timeoutMs: number): Promise<string[]> {
