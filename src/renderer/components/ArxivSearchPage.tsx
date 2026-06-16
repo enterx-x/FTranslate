@@ -66,7 +66,8 @@ const ARXIV_READING_QUEUE_STORAGE_KEY = 'pdfTranslationReader:arxivReadingQueue'
 const OFFLINE_TRANSLATION_NOTICE_TITLE = '离线翻译未配置';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
-const OFFLINE_TRANSLATION_BATCH_SIZE = 12;
+const OFFLINE_TRANSLATION_BATCH_SIZE = 50;
+const OFFLINE_TRANSLATION_BATCH_CONCURRENCY = 2;
 
 const CATEGORY_OPTIONS = [
   { value: '', label: '全部分类' },
@@ -117,6 +118,32 @@ export function getArxivResultDensityConfig(layoutMode: LayoutMode): ArxivResult
     return { className: 'arxiv-density-wide', summaryLines: 4 };
   }
   return { className: 'arxiv-density-standard', summaryLines: 3 };
+}
+
+export function buildArxivTranslationBatches<T>(items: T[], batchSize = OFFLINE_TRANSLATION_BATCH_SIZE): T[][] {
+  const safeBatchSize = Math.max(1, Math.floor(batchSize));
+  const batches: T[][] = [];
+  for (let offset = 0; offset < items.length; offset += safeBatchSize) {
+    batches.push(items.slice(offset, offset + safeBatchSize));
+  }
+  return batches;
+}
+
+export async function runArxivTranslationBatches<T>(
+  batches: T[][],
+  worker: (batch: T[], index: number) => Promise<void>,
+  concurrency = OFFLINE_TRANSLATION_BATCH_CONCURRENCY
+): Promise<void> {
+  const safeConcurrency = Math.max(1, Math.floor(concurrency));
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(safeConcurrency, batches.length) }, async () => {
+    while (nextIndex < batches.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      await worker(batches[currentIndex], currentIndex);
+    }
+  });
+  await Promise.all(workers);
 }
 
 export function ArxivSearchPage(props: ArxivSearchPageProps) {
@@ -289,7 +316,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       setHistory((previous) => saveStringList(ARXIV_HISTORY_STORAGE_KEY, [searchQuery, ...previous]));
       if (result.papers.length === 0) {
         setStatus('empty');
-        setMessage('没有找到匹配论文。可以换一个关键词，或放宽分类条件。');
+        setMessage(result.warning ?? '没有找到匹配论文。可以换一个关键词，或放宽分类条件。');
         return;
       }
       setStatus('success');
@@ -370,8 +397,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       return;
     }
 
-    for (let offset = 0; offset < missing.length; offset += OFFLINE_TRANSLATION_BATCH_SIZE) {
-      const batch = missing.slice(offset, offset + OFFLINE_TRANSLATION_BATCH_SIZE);
+    const batches = buildArxivTranslationBatches(missing, OFFLINE_TRANSLATION_BATCH_SIZE);
+    await runArxivTranslationBatches(batches, async (batch) => {
       setBackgroundTranslatingIds((previous) => ({
         ...previous,
         ...Object.fromEntries(batch.map((paper) => [paper.id, true]))
@@ -418,7 +445,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           return next;
         });
       }
-    }
+    });
   }
 
   function applyTranslationResult(

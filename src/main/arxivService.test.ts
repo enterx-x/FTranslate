@@ -285,7 +285,7 @@ describe('ArxivService', () => {
     }
   });
 
-  it('opens a local circuit breaker after 429 and does not access arXiv during cooldown', async () => {
+  it('opens a local circuit breaker after 429 and returns an empty warning result during cooldown', async () => {
     let fetchCount = 0;
     let now = 1000;
     const service = new ArxivService({
@@ -300,12 +300,16 @@ describe('ArxivService', () => {
     });
 
     try {
-      await expect(service.search(request, 'limited')).rejects.toThrow(/HTTP 429/);
+      const limited = await service.search(request, 'limited');
       now += 1000;
-      await expect(service.search({ ...request, start: 20 }, 'cooldown')).rejects.toThrow(/冷却/);
+      const cooldown = await service.search({ ...request, start: 20 }, 'cooldown');
 
       expect(fetchCount).toBe(1);
-      expect(service.getRecentLogs(2).map((log) => log.status)).toContain('circuit-open-local');
+      expect(limited.papers).toEqual([]);
+      expect(limited.warning).toContain('arXiv');
+      expect(cooldown.papers).toEqual([]);
+      expect(cooldown.warning).toContain('arXiv');
+      expect(service.getRecentLogs(2).map((log) => log.status)).toContain('cooldown-empty');
     } finally {
       service.close();
     }
@@ -325,7 +329,9 @@ describe('ArxivService', () => {
     });
 
     try {
-      await expect(service.search(request, 'limited')).rejects.toThrow(/HTTP 429/);
+      const limited = await service.search(request, 'limited');
+      expect(limited.papers).toEqual([]);
+      expect(limited.warning).toContain('arXiv');
       now += 2 * 60 * 1000 + 1;
 
       const result = await service.search({ ...request, start: 20 }, 'after-short-cooldown');

@@ -114,20 +114,75 @@ export class ArxivService {
           warning
         };
       }
+      const warning = `arXiv 正在保护冷却，约 ${formatRemainingCooldown(
+        cooldown.remainingMs
+      )} 后可重试；当前查询没有可用缓存，所以先显示空结果，不再继续访问 arXiv。`;
+      this.writeLog({
+        source,
+        query: cacheKey,
+        cacheHit: false,
+        queueSize: 0,
+        lastRequestGapMs: this.getLastRequestGapMs(),
+        status: 'cooldown-empty'
+      });
+      return this.buildEmptySearchResult(request, warning, 0, this.getLastRequestGapMs(), cooldown.remainingMs);
     }
 
     const queueSize = this.queuedRequests;
     return this.enqueue(async () => {
-      const url = buildArxivApiUrl(request);
-      const { text, lastRequestGapMs } = await this.fetchText(url, source, cacheKey, queueSize);
-      const result = applyLocalArxivSort(parseArxivSearchResult(text, XmldomParser as any), request);
-      this.writeCache(cacheKey, result);
-      return {
-        ...result,
-        cacheHit: false,
-        queueSize,
-        lastRequestGapMs
-      };
+      try {
+        const url = buildArxivApiUrl(request);
+        const { text, lastRequestGapMs } = await this.fetchText(url, source, cacheKey, queueSize);
+        const result = applyLocalArxivSort(parseArxivSearchResult(text, XmldomParser as any), request);
+        this.writeCache(cacheKey, result);
+        return {
+          ...result,
+          cacheHit: false,
+          queueSize,
+          lastRequestGapMs
+        };
+      } catch (error) {
+        const staleCache = this.readCacheEntry(cacheKey, true);
+        const cooldownAfterFailure = this.getCooldownStatus();
+        if (staleCache) {
+          const warning = `arXiv 暂时不可用，已回退到本地缓存结果。原因：${formatSearchError(error)}`;
+          this.writeLog({
+            source,
+            query: cacheKey,
+            cacheHit: true,
+            queueSize,
+            lastRequestGapMs: this.getLastRequestGapMs(),
+            status: staleCache.stale ? 'stale-cache-failure' : 'cache-hit-failure'
+          });
+          return {
+            ...staleCache.result,
+            cacheHit: true,
+            cacheStale: staleCache.stale,
+            queueSize,
+            lastRequestGapMs: this.getLastRequestGapMs(),
+            cooldownRemainingMs:
+              cooldownAfterFailure.remainingMs > 0 ? cooldownAfterFailure.remainingMs : undefined,
+            warning
+          };
+        }
+
+        const warning = `arXiv 暂时不可用，已返回空结果；稍后可重新搜索。原因：${formatSearchError(error)}`;
+        this.writeLog({
+          source,
+          query: cacheKey,
+          cacheHit: false,
+          queueSize,
+          lastRequestGapMs: this.getLastRequestGapMs(),
+          status: 'failure-empty'
+        });
+        return this.buildEmptySearchResult(
+          request,
+          warning,
+          queueSize,
+          this.getLastRequestGapMs(),
+          cooldownAfterFailure.remainingMs > 0 ? cooldownAfterFailure.remainingMs : undefined
+        );
+      }
     });
   }
 
@@ -187,6 +242,27 @@ export class ArxivService {
         status TEXT NOT NULL
       );
     `);
+  }
+
+  private buildEmptySearchResult(
+    request: ArxivSearchRequest,
+    warning: string,
+    queueSize: number,
+    lastRequestGapMs: number,
+    cooldownRemainingMs?: number
+  ): ArxivSearchServiceResult {
+    return {
+      papers: [],
+      totalResults: 0,
+      startIndex: request.start ?? 0,
+      itemsPerPage: 0,
+      cacheHit: false,
+      cacheStale: false,
+      queueSize,
+      lastRequestGapMs,
+      cooldownRemainingMs,
+      warning
+    };
   }
 
   private async enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -521,6 +597,13 @@ function formatRemainingCooldown(remainingMs: number): string {
     return `${Math.ceil(remainingMs / 1000)} 秒`;
   }
   return `${Math.ceil(remainingMs / 60_000)} 分钟`;
+}
+
+function formatSearchError(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return String(error);
 }
 
 export function normalizeArxivPdfDownloadUrl(value: string): URL {

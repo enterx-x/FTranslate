@@ -3,8 +3,10 @@ import type { ArxivPaper } from '../lib/arxivClient';
 import type { ArxivPaperMeta } from '../lib/arxivUi';
 import {
   buildArxivQueuedPaper,
+  buildArxivTranslationBatches,
   getArxivResultDensityConfig,
   getArxivResultDisplay,
+  runArxivTranslationBatches,
   upsertArxivQueuedPaper
 } from './ArxivSearchPage';
 
@@ -97,5 +99,43 @@ describe('ArxivSearchPage result display', () => {
 
     expect(queue).toHaveLength(1);
     expect(queue[0].title).toBe('Updated title');
+  });
+
+  it('groups a full arXiv result page into a single large local translation batch', () => {
+    const papers = Array.from({ length: 50 }, (_, index) => ({
+      ...paper,
+      id: `${paper.id}-${index}`,
+      stableId: `2601.${String(index).padStart(5, '0')}`
+    }));
+
+    const batches = buildArxivTranslationBatches(papers, 50);
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(50);
+  });
+
+  it('limits background translation workers while still allowing parallel batches', async () => {
+    const batches = [[1], [2], [3], [4]];
+    const started: number[] = [];
+    const completed: number[] = [];
+    let active = 0;
+    let maxActive = 0;
+
+    await runArxivTranslationBatches(
+      batches,
+      async (batch) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        started.push(batch[0]);
+        await Promise.resolve();
+        completed.push(batch[0]);
+        active -= 1;
+      },
+      2
+    );
+
+    expect(started).toEqual([1, 2, 3, 4]);
+    expect(completed).toEqual([1, 2, 3, 4]);
+    expect(maxActive).toBe(2);
   });
 });
