@@ -530,10 +530,14 @@ function applyLocalArxivSort(result: ArxivParsedSearchResult, request: ArxivSear
     return result;
   }
   const queryTerms = tokenizeLocalRankingQuery(normalizeArxivSearchQuery(request.searchQuery));
+  const requiredTermGroups = buildRequiredLocalTermGroups(request.searchQuery);
   const scored = result.papers
     .map((paper) => ({ paper, score: scoreComprehensivePaper(paper, queryTerms, request.category) }))
-    .filter((entry) => entry.score.textHits > 0);
-  const sorted = scored.length > 0 ? scored : result.papers.map((paper) => ({ paper, score: scoreComprehensivePaper(paper, queryTerms, request.category) }));
+    .filter((entry) => entry.score.textHits > 0 && matchesRequiredTermGroups(entry.paper, requiredTermGroups));
+  const sorted =
+    scored.length > 0 || requiredTermGroups.length > 0
+      ? scored
+      : result.papers.map((paper) => ({ paper, score: scoreComprehensivePaper(paper, queryTerms, request.category) }));
   sorted.sort((left, right) => {
     return request.sortOrder === 'ascending' ? left.score.value - right.score.value : right.score.value - left.score.value;
   });
@@ -543,6 +547,32 @@ function applyLocalArxivSort(result: ArxivParsedSearchResult, request: ArxivSear
     totalResults: result.totalResults,
     itemsPerPage: sorted.length
   };
+}
+
+function buildRequiredLocalTermGroups(searchQuery: string): string[][] {
+  if (/触觉感知|触觉传感|触觉|力觉|接触感知|接触丰富/u.test(searchQuery)) {
+    return [
+      [
+        'tactile',
+        'haptic',
+        'haptics',
+        'visuotactile',
+        'touch sensing',
+        'contact sensing',
+        'tactile sensing',
+        'tactile perception'
+      ]
+    ];
+  }
+  return [];
+}
+
+function matchesRequiredTermGroups(paper: ArxivPaper, groups: string[][]): boolean {
+  if (groups.length === 0) {
+    return true;
+  }
+  const text = `${paper.title} ${paper.summary}`.toLowerCase();
+  return groups.every((group) => group.some((term) => text.includes(term)));
 }
 
 function tokenizeLocalRankingQuery(value: string): string[] {

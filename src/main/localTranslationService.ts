@@ -42,6 +42,9 @@ const DEFAULT_NLLB_MODEL_DIR = path.join(DEFAULT_NLLB_ROOT, 'models', 'nllb-200-
 const DEFAULT_NLLB_HF_HOME = path.join(DEFAULT_NLLB_ROOT, 'hf-cache');
 const DEFAULT_NLLB_TOKENIZER_DIR = path.join(DEFAULT_NLLB_HF_HOME, 'nllb-200-distilled-600M-snapshot');
 const DEFAULT_NLLB_CUDA_DLL_DIR_CANDIDATES = [
+  path.join(DEFAULT_NLLB_ROOT, 'cuda-runtime', 'nvidia', 'cublas', 'bin'),
+  path.join(DEFAULT_NLLB_ROOT, 'cuda-runtime', 'nvidia', 'cuda_runtime', 'bin'),
+  path.join(DEFAULT_NLLB_ROOT, 'cuda-runtime', 'nvidia', 'cudnn', 'bin'),
   'E:\\Anaconda\\envs\\pytorch\\Lib\\site-packages\\torch\\lib',
   'E:\\Anaconda\\envs\\SB3_RL\\Lib\\site-packages\\torch\\lib',
   'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.7\\bin',
@@ -81,8 +84,9 @@ export function resolveNllbCudaDllDirs(): string[] {
     ? configured.split(';').map((item) => item.trim()).filter(Boolean)
     : [];
   const dirs = [...configuredDirs, ...DEFAULT_NLLB_CUDA_DLL_DIR_CANDIDATES];
+  const cudaRuntimeDlls = ['cublas64_12.dll', 'cudart64_12.dll', 'cudnn64_9.dll', 'cudnn64_8.dll'];
   return Array.from(new Set(dirs)).filter((dir) =>
-    fs.existsSync(path.join(dir, 'cublas64_12.dll')) && fs.existsSync(path.join(dir, 'cudart64_12.dll'))
+    cudaRuntimeDlls.some((dll) => fs.existsSync(path.join(dir, dll)))
   );
 }
 

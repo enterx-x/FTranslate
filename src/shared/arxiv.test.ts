@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildArxivApiUrl, normalizeArxivSearchQuery, type ArxivSearchRequest } from './arxiv';
+import { buildArxivApiUrl, isMojibakeTranslationText, normalizeArxivSearchQuery, type ArxivSearchRequest } from './arxiv';
 
 function getSearchExpression(searchQuery: string): string {
   const request: ArxivSearchRequest = {
@@ -23,6 +23,8 @@ describe('arXiv query builder', () => {
     expect(expression).not.toContain('abs:robot');
     expect(expression).not.toContain('robot navigation');
     expect(expression).not.toContain('reinforcement learning');
+    expect(expression).not.toContain('contact-rich manipulation');
+    expect(expression).not.toContain('ti:manipulation');
   });
 
   it('keeps multi-keyword searches broad while including all requested semantic terms', () => {
@@ -38,5 +40,11 @@ describe('arXiv query builder', () => {
 
     expect(normalized.toLowerCase()).toContain('tactile');
     expect(normalized.toLowerCase()).toContain('haptic');
+    expect(normalized.toLowerCase()).not.toContain('contact-rich manipulation');
+  });
+
+  it('treats repeated local translation artifacts as unusable text', () => {
+    expect(isMojibakeTranslationText('互出强化代理互出')).toBe(true);
+    expect(isMojibakeTranslationText('分析分析分析分析分析')).toBe(true);
   });
 });

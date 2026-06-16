@@ -52,9 +52,9 @@ const multiPaperFeed = `<?xml version="1.0" encoding="UTF-8"?>
 
 const noisyTactileFeed = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
-  <opensearch:totalResults>2</opensearch:totalResults>
+  <opensearch:totalResults>3</opensearch:totalResults>
   <opensearch:startIndex>0</opensearch:startIndex>
-  <opensearch:itemsPerPage>2</opensearch:itemsPerPage>
+  <opensearch:itemsPerPage>3</opensearch:itemsPerPage>
   <entry>
     <id>http://arxiv.org/abs/2606.99999v1</id>
     <updated>2026-06-16T00:00:00Z</updated>
@@ -64,6 +64,16 @@ const noisyTactileFeed = `<?xml version="1.0" encoding="UTF-8"?>
     <author><name>Author Noise</name></author>
     <category term="cs.RO" />
     <link title="pdf" href="http://arxiv.org/pdf/2606.99999v1" rel="related" type="application/pdf" />
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2606.99998v1</id>
+    <updated>2026-06-15T00:00:00Z</updated>
+    <published>2026-06-15T00:00:00Z</published>
+    <title>Video-Based Optimal Transport for Feedback-Efficient Reinforcement Learning</title>
+    <summary>This paper studies feedback-efficient offline preference-based reinforcement learning with video feedback.</summary>
+    <author><name>Author Feedback</name></author>
+    <category term="cs.RO" />
+    <link title="pdf" href="http://arxiv.org/pdf/2606.99998v1" rel="related" type="application/pdf" />
   </entry>
   <entry>
     <id>http://arxiv.org/abs/2301.00003v1</id>

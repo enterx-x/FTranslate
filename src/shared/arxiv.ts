@@ -114,7 +114,14 @@ function hasLowInformationRepeatedChinese(value: string): boolean {
     }
   }
   const maxPairCount = Math.max(0, ...pairs.values());
-  return maxPairCount >= 4 && maxPairCount * 2 >= compact.length * 0.55;
+  if (maxPairCount >= 4 && maxPairCount * 2 >= compact.length * 0.55) {
+    return true;
+  }
+  const suspiciousRepeatedTerms = ['互出', '分析'];
+  return suspiciousRepeatedTerms.some((term) => {
+    const count = compact.split(term).length - 1;
+    return count >= 2 && count * term.length >= compact.length * 0.35;
+  });
 }
 
 const ARXIV_ENDPOINT = 'https://export.arxiv.org/api/query';
@@ -128,7 +135,7 @@ const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
   [/强化学习/gu, 'reinforcement learning'],
   [/机器人导航|导航机器人/gu, 'robot navigation robotic navigation mobile robot navigation'],
   [/机器人|机械臂/gu, 'robot robotics manipulator'],
-  [/触觉感知|触觉传感|触觉|力觉|接触感知|接触丰富/gu, 'haptic tactile haptics tactile sensing tactile perception force feedback contact-rich manipulation visuotactile'],
+  [/触觉感知|触觉传感|触觉|力觉|接触感知|接触丰富/gu, 'haptic tactile haptics tactile sensing tactile perception force feedback touch sensing contact sensing visuotactile'],
   [/无人机|飞行器/gu, 'uav drone aerial robot'],
   [/避障|障碍物规避|动态障碍/gu, 'obstacle avoidance collision avoidance dynamic obstacle'],
   [/路径规划|运动规划|轨迹规划/gu, 'path planning motion planning trajectory planning navigation'],
@@ -153,7 +160,8 @@ const KNOWN_ARXIV_QUERY_PHRASES = [
   'tactile perception',
   'visuotactile',
   'force feedback',
-  'contact-rich manipulation',
+  'touch sensing',
+  'contact sensing',
   'path planning',
   'motion planning',
   'trajectory planning',
@@ -274,7 +282,17 @@ function buildSemanticTitleAbstractGroups(normalized: string): string[] {
     });
   };
 
-  if (containsAny(normalized, ['tactile', 'haptic', 'haptics', 'visuotactile', 'force feedback', 'contact-rich'])) {
+  if (
+    containsAny(normalized, [
+      'tactile',
+      'haptic',
+      'haptics',
+      'visuotactile',
+      'force feedback',
+      'touch sensing',
+      'contact sensing'
+    ])
+  ) {
     addGroup(
       orClauses([
         buildFieldPairClause('tactile', false),
@@ -284,9 +302,10 @@ function buildSemanticTitleAbstractGroups(normalized: string): string[] {
         buildFieldPairClause('tactile sensing', true),
         buildFieldPairClause('tactile perception', true),
         buildFieldPairClause('force feedback', true),
-        buildFieldPairClause('contact-rich manipulation', true)
+        buildFieldPairClause('touch sensing', true),
+        buildFieldPairClause('contact sensing', true)
       ]),
-      ['tactile', 'haptic', 'haptics', 'visuotactile', 'force feedback', 'contact-rich manipulation']
+      ['tactile', 'haptic', 'haptics', 'visuotactile', 'force feedback', 'touch sensing', 'contact sensing']
     );
   }
 

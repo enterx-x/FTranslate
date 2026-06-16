@@ -66,7 +66,8 @@ const ARXIV_READING_QUEUE_STORAGE_KEY = 'pdfTranslationReader:arxivReadingQueue'
 const OFFLINE_TRANSLATION_NOTICE_TITLE = '离线翻译未配置';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
-const OFFLINE_TRANSLATION_BATCH_SIZE = 50;
+const OFFLINE_TRANSLATION_PRIORITY_COUNT = 12;
+const OFFLINE_TRANSLATION_BATCH_SIZE = 24;
 const OFFLINE_TRANSLATION_BATCH_CONCURRENCY = 2;
 
 const CATEGORY_OPTIONS = [
@@ -129,6 +130,20 @@ export function buildArxivTranslationBatches<T>(items: T[], batchSize = OFFLINE_
   return batches;
 }
 
+export function buildArxivPriorityTranslationBatches<T>(
+  items: T[],
+  priorityCount = OFFLINE_TRANSLATION_PRIORITY_COUNT,
+  batchSize = OFFLINE_TRANSLATION_BATCH_SIZE
+): T[][] {
+  const safePriorityCount = Math.max(0, Math.floor(priorityCount));
+  const priority = items.slice(0, safePriorityCount);
+  const rest = items.slice(safePriorityCount);
+  return [
+    ...(priority.length > 0 ? [priority] : []),
+    ...buildArxivTranslationBatches(rest, batchSize)
+  ];
+}
+
 export async function runArxivTranslationBatches<T>(
   batches: T[][],
   worker: (batch: T[], index: number) => Promise<void>,
@@ -189,6 +204,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       .then((result) => {
         if (!disposed) {
           setLocalTranslationStatus(result);
+          if (result.nllb.available) {
+            void window.electronAPI.warmUpLocalTranslation().catch(() => undefined);
+          }
         }
       })
       .catch(() => {
@@ -397,7 +415,11 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       return;
     }
 
-    const batches = buildArxivTranslationBatches(missing, OFFLINE_TRANSLATION_BATCH_SIZE);
+    const batches = buildArxivPriorityTranslationBatches(
+      missing,
+      OFFLINE_TRANSLATION_PRIORITY_COUNT,
+      OFFLINE_TRANSLATION_BATCH_SIZE
+    );
     await runArxivTranslationBatches(batches, async (batch) => {
       setBackgroundTranslatingIds((previous) => ({
         ...previous,
@@ -647,10 +669,19 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             type="button"
             className="primary-button button-with-icon"
             disabled={isSearching}
-            onClick={() => void handleSearch(0, { forceRefresh: true, resetFilters: true })}
+            onClick={() => void handleSearch(0, { resetFilters: true })}
           >
             <img className="button-icon" src={searchIcon} alt="" />
             <span>{isSearching ? '搜索中' : '搜索'}</span>
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={isSearching}
+            title="跳过本地 SQLite 缓存，真实访问 arXiv 官方 API。arXiv 仍可能因发布批次和时区延迟暂时没有当天论文。"
+            onClick={() => void handleSearch(0, { forceRefresh: true, resetFilters: true })}
+          >
+            查最新
           </button>
         </div>
 

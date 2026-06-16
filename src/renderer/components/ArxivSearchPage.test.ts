@@ -3,6 +3,7 @@ import type { ArxivPaper } from '../lib/arxivClient';
 import type { ArxivPaperMeta } from '../lib/arxivUi';
 import {
   buildArxivQueuedPaper,
+  buildArxivPriorityTranslationBatches,
   buildArxivTranslationBatches,
   getArxivResultDensityConfig,
   getArxivResultDisplay,
@@ -101,17 +102,33 @@ describe('ArxivSearchPage result display', () => {
     expect(queue[0].title).toBe('Updated title');
   });
 
-  it('groups a full arXiv result page into a single large local translation batch', () => {
+  it('prioritizes the first visible arXiv papers before translating the rest in the background', () => {
     const papers = Array.from({ length: 50 }, (_, index) => ({
       ...paper,
       id: `${paper.id}-${index}`,
       stableId: `2601.${String(index).padStart(5, '0')}`
     }));
 
-    const batches = buildArxivTranslationBatches(papers, 50);
+    const batches = buildArxivPriorityTranslationBatches(papers, 12, 24);
 
-    expect(batches).toHaveLength(1);
-    expect(batches[0]).toHaveLength(50);
+    expect(batches).toHaveLength(3);
+    expect(batches[0]).toHaveLength(12);
+    expect(batches[0][0].stableId).toBe('2601.00000');
+    expect(batches[1]).toHaveLength(24);
+    expect(batches[2]).toHaveLength(14);
+  });
+
+  it('can still split translation work into fixed-size batches', () => {
+    const papers = Array.from({ length: 50 }, (_, index) => ({
+      ...paper,
+      id: `${paper.id}-${index}`,
+      stableId: `2601.${String(index).padStart(5, '0')}`
+    }));
+
+    const batches = buildArxivTranslationBatches(papers, 24);
+
+    expect(batches).toHaveLength(3);
+    expect(batches.map((batch) => batch.length)).toEqual([24, 24, 2]);
   });
 
   it('limits background translation workers while still allowing parallel batches', async () => {
