@@ -42,7 +42,7 @@ npm run dist
 安装包输出在 `dist/`，例如：
 
 ```text
-dist/PDF Translation Reader Setup 0.1.7.exe
+dist/PDF Translation Reader Setup 0.1.12.exe
 ```
 
 安装完成后会创建桌面快捷方式和开始菜单快捷方式。
@@ -416,26 +416,68 @@ set VISUAL_CHECK_PDF=D:\path\to\paper.pdf
 npm run visual:check
 ```
 
+当前视觉质量门还会检查：
+
+- PDF 阅读页初始居中，避免首次打开只看到页面左半边；
+- PDF 右侧栏窄宽拖拽、折叠和展开状态下的横向溢出；
+- arXiv 三列 / 双列 / 单列布局的卡片宽度、标题高度、分页高度和右侧详情栏宽度；
+- arXiv 备选论文库是否被结果卡片遮挡，以及是否使用会盖住卡片的原生长 `title` tooltip；
+- 研究表格顶部工具区高度、命令栏溢出和表格主体可用高度；
+- 设置页默认“通用设置”是否真的显示表单控件。
+
+## 架构边界
+
+当前代码已经开始从早期的单文件集中状态拆分为可组合的领域模块：
+
+- `src/renderer/hooks/`：承载 PDF 会话、论文库、研究表格、AI 设置、AI 翻译、双语 PDF 生成、状态队列、阅读器侧栏和视图切换等状态逻辑；
+- `src/renderer/contexts/`：提供 PDF 会话、论文库、AI 翻译和 UI 状态的 Context 边界，减少跨页面 prop drilling；
+- `src/main/ipc/handlers/`：按 AI、arXiv、PDF、文件导出和项目加载拆分 IPC handler 注册入口；
+- `src/main/aiResponseParsing.ts`、`src/main/ipcSafety.ts`、`src/main/excelExportSafety.ts`：集中处理 AI JSON 解析、IPC 输入安全和 Excel 导出安全检查；
+- `scripts/visual-check.mjs`：作为 UI 回归质量门，不只是截图脚本，失败时会保留定位截图。
+
 ## 项目结构
 
 ```text
 src/
   main/
-    main.ts                 Electron 主进程、文件读写、AI IPC、PDF 翻译 sidecar
+    main.ts                 Electron 窗口生命周期、sidecar 编排和 IPC 注册入口
     preload.ts              暴露给 React 的安全 IPC API
+    ipc/
+      handlers/             AI、arXiv、PDF、文件导出和项目加载 IPC handler
+    aiResponseParsing.ts    AI JSON/Responses 解析与友好错误
+    ipcSafety.ts            IPC 输入路径和参数安全检查
+    excelExportSafety.ts    Excel 导出路径与扩展名保护
   renderer/
-    App.tsx                 顶层路由和应用状态
+    App.tsx                 顶层视图路由、Provider 组合和页面布局
     components/
       HomePage.tsx          工作台首页和论文库
       PdfViewer.tsx         PDF.js 阅读器
       ResearchSheetPage.tsx 独立研究表格
       AiAssistantPage.tsx   AI 助手
+      PaperTutorPage.tsx    论文导师问答
+      StatusBar.tsx         底部状态消息队列展示
+      ErrorBoundary.tsx     懒加载页面错误边界
       KnowledgeGraphPage.tsx 知识图谱
       PresentationPage.tsx  组会 PPT 草稿预览与导出
       ArxivSearchPage.tsx   arXiv 检索与 PDF 下载
+      PdfFigureAssetsPanel.tsx PDF 图表候选展示
       NotesPanel.tsx        阅读笔记
       SettingsPage.tsx      设置页
       MarkdownDocument.tsx  Markdown + 公式渲染组件
+    contexts/
+      PdfSessionContext.tsx PDF 会话状态边界
+      PaperLibraryContext.tsx 论文库和研究表格状态边界
+      AiTranslationContext.tsx AI 翻译状态边界
+      UiContext.tsx         UI 视图、状态栏和侧栏状态边界
+    hooks/
+      usePdfSession.ts      当前 PDF、页码、缩放和视图模式
+      usePaperLibrary.ts    论文库 CRUD 和 localStorage 同步
+      useResearchWorkbook.ts 研究表格、绑定和导入导出状态
+      useAiTranslation.ts   段落翻译、AI cache 和批量翻译状态
+      usePdfTranslation.ts  双语 PDF 生成进度和 sidecar 状态
+      useReaderSidePanel.ts PDF 阅读侧栏宽度、折叠和持久化
+      useStatusQueue.ts     多条状态消息队列
+      useViewTransition.ts  轻量视图切换过渡
     lib/
       arxivClient.ts        arXiv 官方 Atom API 查询与解析
       appSettings.ts        本地设置解析与默认值
@@ -443,14 +485,17 @@ src/
       presentationOutline.ts 组会 PPT 大纲生成与 Markdown 导出
       presentationPptx.ts    组会 PPTX 版式计划与 PptxGenJS 导出
       markdownDocument.ts   安全文档渲染
+      paperTutor.ts         论文导师上下文、证据和追问逻辑
       papers.ts             论文库记录
       researchWorkbook.ts   研究表格本地模型
       translation.ts        JSON/Markdown/TXT 兼容解析
   shared/
     aiTranslation.ts        OpenAI-compatible chat completions
+    academicTranslationQuality.ts 学术标题/摘要翻译质量修复
     pdfTranslation.ts       PDFMathTranslate 命令、缓存和输出路径
 scripts/
-  visual-check.mjs          打包后视觉检查脚本
+  visual-check.mjs          开发/打包后 UI 视觉回归检查脚本
+  install-nllb-ct2.ps1      NLLB + CTranslate2 本地翻译环境安装脚本
 assets/
   icon.ico                  Windows 安装包与快捷方式图标
 ```

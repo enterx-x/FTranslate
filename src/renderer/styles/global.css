@@ -14151,16 +14151,23 @@ summary:focus-visible {
 }
 
 .arxiv-results-panel .arxiv-paper-card {
-  overflow: visible;
+  overflow: hidden;
+}
+
+.arxiv-results-panel .arxiv-reading-queue-mini {
+  position: relative;
+  z-index: 2;
+  margin-bottom: 14px;
 }
 
 .arxiv-workbench.arxiv-columns-three .arxiv-results-list > .arxiv-paper-card {
-  min-height: 236px;
+  min-height: 220px;
 }
 
 .arxiv-workbench.arxiv-columns-three .arxiv-paper-card h3 {
-  min-height: calc(1.32em * 3);
-  -webkit-line-clamp: 3;
+  min-height: 0;
+  line-height: 1.26;
+  -webkit-line-clamp: 2;
 }
 
 .arxiv-paper-card-top {
@@ -14217,11 +14224,11 @@ summary:focus-visible {
   }
 
   .arxiv-workbench.arxiv-columns-three .arxiv-results-list > .arxiv-paper-card {
-    min-height: 228px;
+    min-height: 216px;
   }
 
   .arxiv-workbench.arxiv-columns-three .arxiv-paper-card h3 {
-    min-height: calc(1.3em * 3);
+    min-height: 0;
   }
 }
 

@@ -474,12 +474,31 @@ async function readArxivResultLayout(client) {
     const resultsToolbarRect = resultsToolbar?.getBoundingClientRect();
     const pagination = document.querySelector('.arxiv-results-pagination');
     const paginationRect = pagination?.getBoundingClientRect();
+    const readingQueue = document.querySelector('.arxiv-reading-queue-mini');
+    const readingQueueRect = readingQueue?.getBoundingClientRect();
+    const readingQueueButtons = [...document.querySelectorAll('.arxiv-reading-queue-list .arxiv-reading-queue-paper')];
+    const readingQueueNativeTitleCount = readingQueueButtons.filter((button) => button.hasAttribute('title')).length;
+    const readingQueueOcclusionCount = readingQueueButtons.reduce((count, button) => {
+      const rect = button.getBoundingClientRect();
+      const x = Math.round(rect.left + rect.width / 2);
+      const y = Math.round(rect.bottom - 4);
+      const topElement = document.elementFromPoint(x, y);
+      return button.contains(topElement) || readingQueue?.contains(topElement) ? count : count + 1;
+    }, 0);
     const pageFilterPanel = document.querySelector('.arxiv-filter-panel');
     const advancedFilters = document.querySelector('.arxiv-query-options');
     const searchButton = [...document.querySelectorAll('.arxiv-search-primary-row button')]
       .find((button) => /搜索/.test(button.textContent ?? ''));
     const searchButtonStyle = searchButton ? getComputedStyle(searchButton) : null;
     const resultsListStyle = getComputedStyle(document.querySelector('.arxiv-results-list') ?? document.body);
+    const cardTitleRects = [...document.querySelectorAll('.arxiv-results-list > .arxiv-paper-card h3')].map((title) => {
+      const rect = title.getBoundingClientRect();
+      return {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        text: title.textContent?.slice(0, 160) ?? ''
+      };
+    });
     const rectHeight = (item) => item ? Math.round(item.getBoundingClientRect().height) : 0;
     const maxHeight = (items) => items.reduce((max, item) => Math.max(max, rectHeight(item)), 0);
     const primaryControls = [...document.querySelectorAll('.arxiv-search-primary-row input, .arxiv-search-primary-row button')];
@@ -492,6 +511,8 @@ async function readArxivResultLayout(client) {
       cardRects,
       minCardWidth: cardRects.reduce((min, rect) => Math.min(min, rect.width), Number.POSITIVE_INFINITY),
       minCardHeight: cardRects.reduce((min, rect) => Math.min(min, rect.height), Number.POSITIVE_INFINITY),
+      maxCardTitleHeight: cardTitleRects.reduce((max, rect) => Math.max(max, rect.height), 0),
+      cardTitleRects,
       zhCount: cards.filter((card) => /强化学习|中文摘要/.test(card.textContent ?? '')).length,
       gridTemplateColumns: resultsListStyle.gridTemplateColumns,
       detailVisible: Boolean(
@@ -520,6 +541,20 @@ async function readArxivResultLayout(client) {
           }
         : null,
       pageHeaderHeight: pageHeaderRect ? Math.round(pageHeaderRect.height) : null,
+      readingQueueRect: readingQueueRect
+        ? {
+            left: Math.round(readingQueueRect.left),
+            top: Math.round(readingQueueRect.top),
+            bottom: Math.round(readingQueueRect.bottom),
+            width: Math.round(readingQueueRect.width),
+            height: Math.round(readingQueueRect.height)
+          }
+        : null,
+      readingQueueToFirstCardGap: readingQueueRect && Number.isFinite(firstTop)
+        ? Math.round(firstTop - readingQueueRect.bottom)
+        : null,
+      readingQueueNativeTitleCount,
+      readingQueueOcclusionCount,
       resultsPanelRect: resultsPanelRect
         ? {
             left: Math.round(resultsPanelRect.left),
@@ -1959,12 +1994,16 @@ async function runArxivSearchScenario(client) {
       (threeColumnLayout.paginationHeight ?? 0) > 46 ||
       threeColumnLayout.maxDetailActionHeight > 38 ||
       threeColumnLayout.maxTopicTileHeight > 58 ||
+      threeColumnLayout.maxCardTitleHeight > 44 ||
+      (threeColumnLayout.readingQueueToFirstCardGap ?? 8) < 8 ||
+      threeColumnLayout.readingQueueNativeTitleCount > 0 ||
+      threeColumnLayout.readingQueueOcclusionCount > 0 ||
       Math.abs(threeColumnLayout.detailSearchTopDelta ?? Number.POSITIVE_INFINITY) > 16
     ) {
       await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
         writeFile(path.join(outputDir, 'arxiv-search-results-three-failed.png'), Buffer.from(shot.data, 'base64'))
       );
-      throw new Error(`arxiv: three-column cards are too compressed, got ${JSON.stringify(threeColumnLayout)}`);
+      throw new Error(`arxiv: three-column cards are sparse, compressed, or misaligned, got ${JSON.stringify(threeColumnLayout)}`);
     }
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'arxiv-search-results-three.png'), Buffer.from(shot.data, 'base64'))

@@ -1238,7 +1238,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       key={item.stableId}
                       type="button"
                       className="arxiv-reading-queue-paper"
-                      title={item.title}
+                      aria-label={`填入备选论文：${item.title}`}
                       onClick={() => {
                         setQuery(item.title);
                         setMessage(`已填入备选论文标题：${item.title}。点击搜索可重新定位该论文。`);
