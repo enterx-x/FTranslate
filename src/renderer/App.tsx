@@ -1,49 +1,63 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
-  AI_PROVIDER_PRESETS,
-  AI_PROVIDER_MODEL_OPTIONS,
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode
+} from 'react';
+import {
   AI_REASONING_EFFORT_OPTIONS,
   AI_THINKING_MODE_OPTIONS,
   describeAiRuntimeOptions,
-  mergeAiModelOptions,
   shouldTranslateItem,
-  withDefaultAiRuntimeOptions,
-  type AiModelOption,
   type AiProviderId,
+  type GenericChatCompletionInput,
   type AiReasoningEffort,
   type AiThinkingMode
 } from '../shared/aiTranslation';
 import { formatPdfTranslationProgressMessage } from '../shared/pdfTranslation';
 import type { AiAssistantFocus } from './components/AiAssistantPage';
-import type { AiFormState } from './components/AiModePanel';
 import { AppSidebar, type AppSidebarSection } from './components/AppSidebar';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { HomePage } from './components/HomePage';
 import { buildKnowledgeGraph } from './lib/knowledgeGraph';
-import { APP_SETTINGS_KEY, describeReferenceStrategy, parseAppSettings } from './lib/appSettings';
+import { describeReferenceStrategy } from './lib/appSettings';
 import {
   buildPresentationDraft,
+  extractFigureCandidates,
   serializePresentationMarkdown,
-  type PresentationDraft
+  type PresentationDraft,
+  type PresentationFigureCandidate
 } from './lib/presentationOutline';
 import type { ArxivPaper } from './lib/arxivClient';
 import { arrayBufferToBase64 } from './lib/binaryEncoding';
 import { createPresentationPptxBuffer } from './lib/presentationPptx';
-import { enrichPresentationDraftWithPdfFigureCrops } from './lib/presentationFigureAssets';
+import {
+  enrichPresentationDraftWithPdfFigureCrops,
+  extractPdfFigureAssets,
+  mergePdfFigureAssetUpdate
+} from './lib/presentationFigureAssets';
 import { NotesPanel } from './components/NotesPanel';
+import { PdfFigureAssetsPanel } from './components/PdfFigureAssetsPanel';
 import { PdfViewer } from './components/PdfViewer';
 import { extractPdfBlocksFromData } from './lib/pdfOutlineExtraction';
-import type { PdfViewportState } from './lib/pdfViewportSync';
 import { Toolbar } from './components/Toolbar';
+import { ConnectedStatusBar } from './components/StatusBar';
 import translateIcon from './assets/icons/duotone/translate.svg';
 import uploadIcon from './assets/icons/duotone/upload.svg';
 import downloadIcon from './assets/icons/duotone/download.svg';
 import refreshIcon from './assets/icons/duotone/refresh.svg';
 import searchIcon from './assets/icons/duotone/search.svg';
 import settingsIcon from './assets/icons/duotone/settings.svg';
+import backIcon from './assets/icons/duotone/back.svg';
+import forwardIcon from './assets/icons/duotone/forward.svg';
 import {
-  buildAiCacheDocument,
-  cloneJsonDocumentForAi,
   getDefaultAiCacheFileName,
+  cloneJsonDocumentForAi,
   updateAiCacheItem
 } from './lib/aiMode';
 import { buildPaperCellPrompt } from './lib/paperCellAi';
@@ -52,35 +66,22 @@ import {
   parseLiteratureGapResponse
 } from './lib/literatureInsight';
 import {
-  RESEARCH_SHEET_LINKS_KEY,
-  RESEARCH_WORKBOOK_KEY,
   ensurePaperRow,
-  migrateLegacyPaperSheetCells,
-  parseResearchSheetLinks,
-  parseResearchWorkbook,
-  serializeResearchSheetLinks,
-  serializeResearchWorkbook,
-  getResearchRowValues,
-  type ResearchSheetLink,
-  type ResearchWorkbook
+  getResearchRowValues
 } from './lib/researchWorkbook';
 import { buildFreshPdfSessionState } from './lib/projectSession';
-import { buildSheetCellsPrompt, parseSheetCellsAiResponse } from './lib/sheetCellAi';
+import { buildSheetCellsPrompt, cleanSheetCellAiValue, parseSheetCellsAiResponse } from './lib/sheetCellAi';
+import type { PaperTutorEvidenceStoreEntry } from './lib/paperTutor';
 import {
   exportBilingualMarkdown,
-  parseTranslationFile,
   serializeTranslationDocument,
-  updateTranslationAtIndex,
   type TranslationDocument,
   type TranslationItem
 } from './lib/translation';
 import type { ExtractedPdfBlock } from './lib/pdfTextStructure';
 import {
   buildPaperRecord,
-  PAPER_LIBRARY_KEY,
   PAPER_RESEARCH_COLUMNS,
-  parsePaperLibrary,
-  serializePaperLibrary,
   updatePaperRecord,
   updatePaperSheetCell,
   upsertPaperRecord,
@@ -89,14 +90,9 @@ import {
 } from './lib/papers';
 import { buildCurrentJsonPrompt, buildFullJsonPrompt } from './lib/promptTemplates';
 import type {
-  AiSettingsView,
-  AiBalanceResult,
   PdfFilePayload,
-  PdfTranslationEngineResult,
-  PdfTranslationProgress,
   PdfTranslationResult,
-  SaveTextResult,
-  TextFilePayload
+  SaveTextResult
 } from './types/electron';
 import type {
   AnalyzeLiteratureGapRequest,
@@ -104,25 +100,27 @@ import type {
   FillResearchCellResult,
   FillResearchCellsRequest
 } from './components/ResearchSheetPage';
+import { usePaperLibrary } from './hooks/usePaperLibrary';
+import {
+  readLegacyPapersWithSheetCells,
+  useResearchWorkbook
+} from './hooks/useResearchWorkbook';
+import { usePdfTranslation } from './hooks/usePdfTranslation';
+import { useStatusQueue } from './hooks/useStatusQueue';
+import { usePdfSession, type PdfState } from './hooks/usePdfSession';
+import { useAiTranslation } from './hooks/useAiTranslation';
+import { useAiSettings } from './hooks/useAiSettings';
+import { useReaderSidePanel } from './hooks/useReaderSidePanel';
+import { useRecentProject } from './hooks/useRecentProject';
+import { useViewTransition } from './hooks/useViewTransition';
+import { useAppSettings } from './hooks/useAppSettings';
+import { AiTranslationProvider } from './contexts/AiTranslationContext';
+import { PaperLibraryProvider } from './contexts/PaperLibraryContext';
+import { PdfSessionProvider } from './contexts/PdfSessionContext';
+import { UiProvider, type AppView } from './contexts/UiContext';
 
-interface PdfState {
-  filePath: string;
-  fileName: string;
-  data: Uint8Array;
-}
-
-interface RecentProject {
-  pdfPath?: string;
-  translationPath?: string;
-  aiCachePath?: string;
-}
-
-type AppView = 'home' | 'reader' | 'researchSheet' | 'aiAssistant' | 'knowledgeGraph' | 'presentation' | 'arxivSearch' | 'settings';
 type ReaderMode = 'manual' | 'ai';
-type PdfViewMode = 'source' | 'parallel' | 'translated';
-type BuiltInProviderId = Exclude<AiProviderId, 'custom'>;
 
-const RECENT_PROJECT_KEY = 'pdfTranslationReader:lastProject';
 const ResearchSheetPage = lazy(async () => {
   const module = await import('./components/ResearchSheetPage');
   return { default: module.ResearchSheetPage };
@@ -130,6 +128,10 @@ const ResearchSheetPage = lazy(async () => {
 const AiAssistantPage = lazy(async () => {
   const module = await import('./components/AiAssistantPage');
   return { default: module.AiAssistantPage };
+});
+const PaperTutorPage = lazy(async () => {
+  const module = await import('./components/PaperTutorPage');
+  return { default: module.PaperTutorPage };
 });
 const KnowledgeGraphPage = lazy(async () => {
   const module = await import('./components/KnowledgeGraphPage');
@@ -150,72 +152,148 @@ const SettingsPage = lazy(async () => {
 
 export default function App() {
   const [view, setView] = useState<AppView>('home');
+  const { getAppMainClassName } = useViewTransition(view);
   const [homeSection, setHomeSection] = useState<'hub' | 'library'>('hub');
   const [aiAssistantFocus, setAiAssistantFocus] = useState<AiAssistantFocus>('analysis');
   const [readerMode, setReaderMode] = useState<ReaderMode>('manual');
-  const [paperLibrary, setPaperLibrary] = useState<PaperRecord[]>(() =>
-    parsePaperLibrary(localStorage.getItem(PAPER_LIBRARY_KEY))
+  const {
+    initialPaperLibraryRaw,
+    paperLibrary,
+    setPaperLibrary,
+    updatePaper: handleUpdatePaper,
+    removePaper: handleRemovePaper
+  } = usePaperLibrary();
+  const legacyPapersWithSheetCells = useMemo(
+    () => readLegacyPapersWithSheetCells(initialPaperLibraryRaw, paperLibrary),
+    [initialPaperLibraryRaw, paperLibrary]
   );
-  const [researchWorkbook, setResearchWorkbook] = useState<ResearchWorkbook>(() =>
-    parseResearchWorkbook(localStorage.getItem(RESEARCH_WORKBOOK_KEY))
-  );
-  const [researchSheetLinks, setResearchSheetLinks] = useState<ResearchSheetLink[]>(() =>
-    parseResearchSheetLinks(localStorage.getItem(RESEARCH_SHEET_LINKS_KEY))
-  );
+  const {
+    researchWorkbook,
+    setResearchWorkbook,
+    researchSheetLinks,
+    setResearchSheetLinks
+  } = useResearchWorkbook(legacyPapersWithSheetCells);
   const [researchFocusPaperId, setResearchFocusPaperId] = useState<string | null>(null);
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
-  const [pdf, setPdf] = useState<PdfState | null>(null);
-  const [translatedPdf, setTranslatedPdf] = useState<PdfState | null>(null);
-  const [translatedMonoPdf, setTranslatedMonoPdf] = useState<PdfState | null>(null);
+  const {
+    pdf,
+    setPdf,
+    translatedPdf,
+    setTranslatedPdf,
+    translatedMonoPdf,
+    setTranslatedMonoPdf,
+    pdfViewMode,
+    setPdfViewMode,
+    pdfViewportState,
+    setPdfViewportState,
+    currentPage,
+    setCurrentPage,
+    pageCount,
+    setPageCount,
+    scale,
+    setScale,
+    displayedPdf,
+    parallelTranslationPdf
+  } = usePdfSession();
   const [presentationDraft, setPresentationDraft] = useState<PresentationDraft | null>(null);
-  const [pdfViewMode, setPdfViewMode] = useState<PdfViewMode>('source');
-  const [pdfViewportState, setPdfViewportState] = useState<PdfViewportState | null>(null);
-  const [translationDocument, setTranslationDocument] = useState<TranslationDocument | null>(null);
-  const [aiCacheDocument, setAiCacheDocument] = useState<TranslationDocument | null>(null);
+  const {
+    translationDocument,
+    setTranslationDocument,
+    aiCacheDocument,
+    setAiCacheDocument,
+    currentParagraphIndex,
+    setCurrentParagraphIndex,
+    aiParagraphIndex,
+    setAiParagraphIndex,
+    showTranslation,
+    setShowTranslation,
+    isEditing,
+    setIsEditing,
+    editingText,
+    setEditingText,
+    currentItem,
+    applyTranslationPayload,
+    applyAiCachePayload,
+    buildCacheFromPdfBlocks,
+    showPreviousParagraph: handlePreviousParagraph,
+    showNextParagraph: handleNextParagraph,
+    showCurrentTranslation: handleShowTranslation,
+    startEditingCurrentTranslation: handleStartEdit,
+    applyCurrentEdit,
+    resetParagraphDisplay
+  } = useAiTranslation();
   const [extractedPdfBlocks, setExtractedPdfBlocks] = useState<ExtractedPdfBlock[]>([]);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageCount, setPageCount] = useState(0);
-  const [scale, setScale] = useState(1.15);
-  const [currentParagraphIndex, setCurrentParagraphIndex] = useState(0);
-  const [aiParagraphIndex, setAiParagraphIndex] = useState(0);
+  const [pdfFigureAssets, setPdfFigureAssets] = useState<PresentationFigureCandidate[]>([]);
+  const [paperTutorEvidenceByPaperId, setPaperTutorEvidenceByPaperId] = useState<
+    Record<string, PaperTutorEvidenceStoreEntry>
+  >({});
   const [activeNotes, setActiveNotes] = useState('');
   const [isPdfAiSettingsOpen, setIsPdfAiSettingsOpen] = useState(false);
-  const [showTranslation, setShowTranslation] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editingText, setEditingText] = useState('');
-  const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null);
-  const [aiBalance, setAiBalance] = useState<AiBalanceResult | null>(null);
-  const [runtimeModelOptions, setRuntimeModelOptions] = useState<
-    Partial<Record<BuiltInProviderId, AiModelOption[]>>
-  >({});
-  const [aiForm, setAiForm] = useState<AiFormState>(() => ({
-    ...withDefaultAiRuntimeOptions(AI_PROVIDER_PRESETS.deepseek),
-    apiKey: ''
-  }));
-  const [isAiBusy, setIsAiBusy] = useState(false);
-  const [isPdfTranslationBusy, setIsPdfTranslationBusy] = useState(false);
+  const {
+    isReaderSidePanelCollapsed,
+    setIsReaderSidePanelCollapsed,
+    readerSidePanelRatio,
+    handleReaderSidePanelResizeStart
+  } = useReaderSidePanel();
   const [isPresentationGenerating, setIsPresentationGenerating] = useState(false);
-  const [pdfTranslationEngine, setPdfTranslationEngine] =
-    useState<PdfTranslationEngineResult | null>(null);
-  const [pdfTranslationStatus, setPdfTranslationStatus] = useState('');
-  const [statusMessage, setStatusMessage] = useState('请在论文库中新建或打开一个翻译项目。');
+  const [isPdfFigureExtracting, setIsPdfFigureExtracting] = useState(false);
+  const activePdfPathRef = useRef<string | null>(null);
+  const displayedPdfPathRef = useRef<string | null>(null);
+  const sourcePdfRef = useRef<PdfState | null>(null);
+  const displayedPdfRef = useRef<PdfState | null>(null);
+  const pdfViewModeRef = useRef(pdfViewMode);
+  const extractedPdfBlocksReadyRef = useRef<(blocks: ExtractedPdfBlock[]) => void>(() => undefined);
+  const pdfTranslationRunRef = useRef(0);
+  const pdfFigureExtractionRunRef = useRef(0);
+  const presentationGenerationRunRef = useRef(0);
+  const { statusMessage, statusMessages, setStatusMessage } = useStatusQueue(
+    '请在论文库中新建或打开一个翻译项目。'
+  );
+  const {
+    aiSettings,
+    aiBalance,
+    aiForm,
+    isAiBusy,
+    setIsAiBusy,
+    modelOptions,
+    handleProviderChange,
+    handleAiFormChange,
+    handleSaveAiSettings,
+    handleTestAiConnection,
+    handleRefreshAiBalance,
+    handleRefreshAiModels
+  } = useAiSettings(setStatusMessage);
+  const {
+    pdfTranslationEngine,
+    pdfTranslationStatus,
+    isPdfTranslationBusy,
+    setPdfTranslationStatus,
+    setIsPdfTranslationBusy,
+    refreshPdfTranslationEngine
+  } = usePdfTranslation();
 
-  const currentItem = translationDocument?.items[currentParagraphIndex] ?? null;
-  const displayedPdf = pdfViewMode === 'translated' && translatedPdf ? translatedPdf : pdf;
-  const parallelTranslationPdf = translatedMonoPdf ?? translatedPdf;
-  const activePaper = activePaperId
-    ? paperLibrary.find((paper) => paper.id === activePaperId) ?? null
-    : null;
-  const activePaperResearchLink = activePaperId
-    ? researchSheetLinks.find((link) => link.paperId === activePaperId)
-    : undefined;
-  const activePaperResearchRowIndex = activePaperResearchLink
-    ? researchWorkbook.rows.findIndex((row) => row.id === activePaperResearchLink.rowId)
-    : -1;
-  const activePaperResearchRowValues =
-    activePaperResearchRowIndex > 0
-      ? getResearchRowValues(researchWorkbook, activePaperResearchRowIndex)
-      : null;
+  const activePaper = useMemo(
+    () => (activePaperId ? paperLibrary.find((paper) => paper.id === activePaperId) ?? null : null),
+    [activePaperId, paperLibrary]
+  );
+  const activePaperResearchLink = useMemo(
+    () => (activePaperId ? researchSheetLinks.find((link) => link.paperId === activePaperId) : undefined),
+    [activePaperId, researchSheetLinks]
+  );
+  const activePaperResearchRowIndex = useMemo(
+    () =>
+      activePaperResearchLink
+        ? researchWorkbook.rows.findIndex((row) => row.id === activePaperResearchLink.rowId)
+        : -1,
+    [activePaperResearchLink, researchWorkbook.rows]
+  );
+  const activePaperResearchRowValues = useMemo(
+    () =>
+      activePaperResearchRowIndex > 0
+        ? getResearchRowValues(researchWorkbook, activePaperResearchRowIndex)
+        : null,
+    [activePaperResearchRowIndex, researchWorkbook]
+  );
   const knowledgeGraphSummary = useMemo(
     () =>
       buildKnowledgeGraph({
@@ -226,99 +304,27 @@ export default function App() {
       }).stats,
     [paperLibrary, researchWorkbook, researchSheetLinks]
   );
-  const appSettings = useMemo(
-    () => parseAppSettings(localStorage.getItem(APP_SETTINGS_KEY)),
-    [view]
-  );
+  const appSettings = useAppSettings(view);
+
+  useRecentProject({
+    pdfPath: pdf?.filePath,
+    translationPath: translationDocument?.sourcePath,
+    aiCachePath: aiCacheDocument?.sourcePath
+  });
 
   useEffect(() => {
-    window.electronAPI
-      .loadAiSettings()
-      .then((settings) => {
-        setAiSettings(settings);
-        setAiForm({
-          ...withDefaultAiRuntimeOptions(settings),
-          apiKey: ''
-        });
-        setAiBalance(null);
-      })
-      .catch((error) => {
-        setStatusMessage(`读取 AI 设置失败：${String(error)}`);
-      });
-  }, []);
+    sourcePdfRef.current = pdf;
+    activePdfPathRef.current = pdf?.filePath ?? null;
+  }, [pdf]);
 
   useEffect(() => {
-    window.electronAPI
-      .checkPdfTranslationEngine()
-      .then((engine) => {
-        setPdfTranslationEngine(engine);
-        setPdfTranslationStatus(engine.message);
-      })
-      .catch((error) => {
-        setPdfTranslationStatus(`PDF 翻译引擎检查失败：${String(error)}`);
-      });
-  }, []);
+    displayedPdfRef.current = displayedPdf;
+    displayedPdfPathRef.current = displayedPdf?.filePath ?? null;
+  }, [displayedPdf]);
 
   useEffect(() => {
-    return window.electronAPI.onPdfTranslationProgress((progress: PdfTranslationProgress) => {
-      setPdfTranslationStatus(formatPdfTranslationProgressMessage(progress.message));
-      if (progress.status === 'running') {
-        setIsPdfTranslationBusy(true);
-      }
-      if (progress.status === 'completed' || progress.status === 'failed') {
-        setIsPdfTranslationBusy(false);
-      }
-    });
-  }, []);
-
-  const recentProject = useMemo<RecentProject>(() => {
-    return {
-      pdfPath: pdf?.filePath,
-      translationPath: translationDocument?.sourcePath,
-      aiCachePath: aiCacheDocument?.sourcePath
-    };
-  }, [aiCacheDocument?.sourcePath, pdf?.filePath, translationDocument?.sourcePath]);
-
-  useEffect(() => {
-    localStorage.setItem(PAPER_LIBRARY_KEY, serializePaperLibrary(paperLibrary));
-  }, [paperLibrary]);
-
-  useEffect(() => {
-    localStorage.setItem(RESEARCH_WORKBOOK_KEY, serializeResearchWorkbook(researchWorkbook));
-  }, [researchWorkbook]);
-
-  useEffect(() => {
-    localStorage.setItem(RESEARCH_SHEET_LINKS_KEY, serializeResearchSheetLinks(researchSheetLinks));
-  }, [researchSheetLinks]);
-
-  useEffect(() => {
-    const legacyPapers = readLegacyPapersWithSheetCells(
-      localStorage.getItem(PAPER_LIBRARY_KEY),
-      paperLibrary
-    );
-
-    if (legacyPapers.length === 0) {
-      return;
-    }
-
-    const migrated = migrateLegacyPaperSheetCells(
-      researchWorkbook,
-      researchSheetLinks,
-      legacyPapers
-    );
-    setResearchWorkbook(migrated.workbook);
-    setResearchSheetLinks(migrated.links);
-  // 旧版 sheetCells 只需要在启动后尝试迁移一次，之后独立工作簿负责保存。
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!recentProject.pdfPath && !recentProject.translationPath) {
-      return;
-    }
-
-    localStorage.setItem(RECENT_PROJECT_KEY, JSON.stringify(recentProject));
-  }, [recentProject]);
+    pdfViewModeRef.current = pdfViewMode;
+  }, [pdfViewMode]);
 
   useEffect(() => {
     if (!activePaperId || view !== 'reader') {
@@ -354,7 +360,9 @@ export default function App() {
       setPdfViewMode('source');
     }
     setExtractedPdfBlocks([]);
+    setPdfFigureAssets([]);
     setAiCacheDocument(null);
+    setPdfViewportState(null);
     setCurrentPage(initialPage);
     setAiParagraphIndex(0);
     setPageCount(0);
@@ -367,40 +375,121 @@ export default function App() {
     setTranslatedPdf(nextPdf);
     setTranslatedMonoPdf(monoPayload ? buildPdfState(monoPayload) : null);
     setPdfViewMode(monoPayload ? 'parallel' : 'translated');
+    setPdfViewportState(null);
     setPageCount(0);
     return nextPdf;
   }
+
+  function buildPaperTutorTextSnippets(blocks: ExtractedPdfBlock[]): string[] {
+    return blocks
+      .filter((block) => block.original.trim())
+      .slice(0, 24)
+      .map((block) => `p.${block.page} ${block.section ? `[${block.section}] ` : ''}${block.original}`);
+  }
+
+  function rememberPaperTutorEvidence(
+    paperId: string | null | undefined,
+    updates: Partial<PaperTutorEvidenceStoreEntry>
+  ): void {
+    if (!paperId) {
+      return;
+    }
+
+    setPaperTutorEvidenceByPaperId((current) => {
+      const previous = current[paperId] ?? { figures: [], pdfTextSnippets: [] };
+      return {
+        ...current,
+        [paperId]: {
+          figures: updates.figures ?? previous.figures,
+          pdfTextSnippets: updates.pdfTextSnippets ?? previous.pdfTextSnippets
+        }
+      };
+    });
+  }
+
+  function handleExtractedPdfBlocksReady(blocks: ExtractedPdfBlock[]): void {
+    setExtractedPdfBlocks(blocks);
+    rememberPaperTutorEvidence(activePaperId, {
+      pdfTextSnippets: buildPaperTutorTextSnippets(blocks)
+    });
+  }
+
+  useEffect(() => {
+    extractedPdfBlocksReadyRef.current = handleExtractedPdfBlocksReady;
+  });
+
+  const handleSourceDocumentLoad = useCallback((nextPageCount: number) => {
+    const sourcePdf = sourcePdfRef.current;
+    if (sourcePdf && activePdfPathRef.current !== sourcePdf.filePath) {
+      return;
+    }
+    setPageCount(nextPageCount);
+    setCurrentPage((page) => Math.min(Math.max(1, page), nextPageCount));
+  }, []);
+
+  const handleSourceCurrentPageChange = useCallback((page: number) => {
+    const sourcePdf = sourcePdfRef.current;
+    if (sourcePdf && activePdfPathRef.current !== sourcePdf.filePath) {
+      return;
+    }
+    setCurrentPage((current) => (current === page ? current : page));
+  }, []);
+
+  const handleSourceExtractedTextReady = useCallback((blocks: ExtractedPdfBlock[]) => {
+    const sourcePdf = sourcePdfRef.current;
+    if (sourcePdf && activePdfPathRef.current === sourcePdf.filePath) {
+      extractedPdfBlocksReadyRef.current(blocks);
+    }
+  }, []);
+
+  const handleParallelTranslationDocumentLoad = useCallback((nextPageCount: number) => {
+    const sourcePdf = sourcePdfRef.current;
+    if (sourcePdf && activePdfPathRef.current !== sourcePdf.filePath) {
+      return;
+    }
+    setPageCount((count) => Math.max(count, nextPageCount));
+  }, []);
+
+  const handleIgnoredExtractedTextReady = useCallback(() => undefined, []);
+
+  const handleDisplayedDocumentLoad = useCallback((nextPageCount: number) => {
+    const nextDisplayedPdf = displayedPdfRef.current;
+    if (nextDisplayedPdf?.filePath && displayedPdfPathRef.current !== nextDisplayedPdf.filePath) {
+      return;
+    }
+    setPageCount(nextPageCount);
+    setCurrentPage((page) => Math.min(Math.max(1, page), nextPageCount));
+  }, []);
+
+  const handleDisplayedCurrentPageChange = useCallback((page: number) => {
+    const nextDisplayedPdf = displayedPdfRef.current;
+    if (nextDisplayedPdf?.filePath && displayedPdfPathRef.current !== nextDisplayedPdf.filePath) {
+      return;
+    }
+    setCurrentPage((current) => (current === page ? current : page));
+  }, []);
+
+  const handleDisplayedExtractedTextReady = useCallback((blocks: ExtractedPdfBlock[]) => {
+    const sourcePdf = sourcePdfRef.current;
+    if (
+      pdfViewModeRef.current === 'source' &&
+      sourcePdf?.filePath &&
+      activePdfPathRef.current === sourcePdf.filePath
+    ) {
+      extractedPdfBlocksReadyRef.current(blocks);
+    }
+  }, []);
 
   function isSamePdfFilePath(left?: string | null, right?: string | null): boolean {
     if (!left || !right) {
       return false;
     }
 
-    return left.trim().toLowerCase() === right.trim().toLowerCase();
+    return normalizeFilePathForCompare(left) === normalizeFilePathForCompare(right);
   }
 
-  function applyTranslationPayload(payload: TextFilePayload): TranslationDocument {
-    const document = parseTranslationFile(payload.content, payload.fileName, payload.filePath);
-    setTranslationDocument(document);
-    setAiCacheDocument(cloneJsonDocumentForAi(document));
-    setCurrentParagraphIndex(0);
-    setAiParagraphIndex(0);
-    setShowTranslation(document.kind === 'markdown');
-    setIsEditing(false);
-    setEditingText('');
-    return document;
-  }
-
-  function applyAiCachePayload(payload: TextFilePayload): TranslationDocument | null {
-    const document = parseTranslationFile(payload.content, payload.fileName, payload.filePath);
-    const aiDocument = cloneJsonDocumentForAi(document);
-    if (!aiDocument) {
-      return null;
-    }
-
-    setAiCacheDocument(aiDocument);
-    setAiParagraphIndex(0);
-    return aiDocument;
+  function normalizeFilePathForCompare(value: string): string {
+    return value.trim().replace(/\\/gu, '/').toLowerCase();
   }
 
   function rememberPaper(record: PaperRecord): PaperRecord {
@@ -440,6 +529,7 @@ export default function App() {
         result.translatedMonoPdf && !isSamePdfFilePath(result.translatedMonoPdf.filePath, result.pdf.filePath)
       );
       const hasReadableTranslatedPdf = hasDistinctTranslatedPdf || hasDistinctTranslatedMonoPdf;
+      const resourceWarnings = [...result.errors];
 
       applyPdfPayload(result.pdf, paper.lastPage, { keepTranslatedPdf: hasReadableTranslatedPdf });
       if (result.translation) {
@@ -452,12 +542,14 @@ export default function App() {
       if (result.aiCache) {
         const aiDocument = applyAiCachePayload(result.aiCache);
         if (!aiDocument) {
-          setStatusMessage('AI 缓存不是 JSON 翻译数组，已只打开手动翻译文件。');
+          resourceWarnings.push('AI 缓存不是 JSON 翻译数组，已只打开手动翻译文件。');
         }
       }
-      if (result.translatedPdf && hasReadableTranslatedPdf) {
-        applyTranslatedPdfPayload(result.translatedPdf, result.translatedMonoPdf);
+      const translatedDisplayPdf = result.translatedPdf ?? result.translatedMonoPdf;
+      if (translatedDisplayPdf && hasReadableTranslatedPdf) {
+        applyTranslatedPdfPayload(translatedDisplayPdf, result.translatedPdf ? result.translatedMonoPdf : null);
       }
+      const translatedPdfLabel = result.translatedPdf ? '双语 PDF' : '中文 PDF';
       const updated = updatePaperRecord(paper, {
         lastOpenedAt: new Date().toISOString()
       });
@@ -465,14 +557,20 @@ export default function App() {
         library.map((item) => (item.id === paper.id ? updated : item))
       );
       setActivePaperId(paper.id);
+      const cachedTutorEvidence = paperTutorEvidenceByPaperId[paper.id];
+      setPdfFigureAssets(cachedTutorEvidence?.figures ?? []);
       setActiveNotes(paper.notes ?? '');
       setView('reader');
-      setStatusMessage(
+      const openedMessage =
         hasReadableTranslatedPdf
-          ? `已打开论文并切换到双语 PDF：${paper.chineseTitle || paper.englishTitle}`
+          ? `已打开论文并切换到${translatedPdfLabel}：${paper.chineseTitle || paper.englishTitle}`
           : result.aiCache
             ? `已打开论文并自动导入 AI 缓存：${paper.chineseTitle || paper.englishTitle}`
-            : `已打开论文：${paper.chineseTitle || paper.englishTitle}`
+            : `已打开论文：${paper.chineseTitle || paper.englishTitle}`;
+      setStatusMessage(
+        resourceWarnings.length > 0
+          ? `${openedMessage}；部分资源未加载：${resourceWarnings.join('；')}`
+          : openedMessage
       );
     } catch (error) {
       setStatusMessage(`打开论文记录失败：${String(error)}`);
@@ -532,9 +630,7 @@ export default function App() {
 
   async function handleCheckPdfTranslationEngine(): Promise<void> {
     try {
-      const engine = await window.electronAPI.checkPdfTranslationEngine();
-      setPdfTranslationEngine(engine);
-      setPdfTranslationStatus(engine.message);
+      const engine = await refreshPdfTranslationEngine();
       setStatusMessage(engine.message);
     } catch (error) {
       const message = `PDF 翻译引擎检查失败：${String(error)}`;
@@ -556,6 +652,12 @@ export default function App() {
       return;
     }
 
+    const translationRunId = pdfTranslationRunRef.current + 1;
+    pdfTranslationRunRef.current = translationRunId;
+    const sourcePdfPath = sourcePdf.filePath;
+    const isCurrentTranslation = (): boolean =>
+      pdfTranslationRunRef.current === translationRunId && activePdfPathRef.current === sourcePdfPath;
+
     try {
       setIsPdfTranslationBusy(true);
       setReaderMode('ai');
@@ -567,24 +669,42 @@ export default function App() {
         force
       });
 
+      if (!isCurrentTranslation()) {
+        return;
+      }
       applyTranslatedPdfPayload(result.pdf, result.monoPdf);
       rememberTranslatedPdfResult(paper.id, result);
       setStatusMessage(result.message);
       setPdfTranslationStatus(result.message);
     } catch (error) {
+      if (!isCurrentTranslation()) {
+        return;
+      }
       const detail = formatPdfTranslationProgressMessage(String(error)) || String(error);
       const message = `生成双语 PDF 失败：${detail}`;
       setStatusMessage(message);
       setPdfTranslationStatus(message);
     } finally {
-      setIsPdfTranslationBusy(false);
+      if (pdfTranslationRunRef.current === translationRunId) {
+        setIsPdfTranslationBusy(false);
+      }
     }
   }
 
   async function handleImportTranslatedPdf(): Promise<void> {
+    if (!pdf) {
+      setStatusMessage('请先打开原文 PDF，再导入对应的中文/双语 PDF。');
+      return;
+    }
+    const sourcePdfPath = pdf?.filePath ?? null;
     try {
       const payload = await window.electronAPI.openTranslatedPdf();
       if (!payload) {
+        return;
+      }
+
+      if (sourcePdfPath && activePdfPathRef.current !== sourcePdfPath) {
+        setStatusMessage('当前原文 PDF 已切换，已取消绑定刚选择的中文/双语 PDF。');
         return;
       }
 
@@ -640,6 +760,90 @@ export default function App() {
     }
   }
 
+  async function handleExtractPdfFigures(): Promise<void> {
+    if (!pdf) {
+      setStatusMessage('请先打开原文 PDF，再提取文献图片。');
+      return;
+    }
+
+    const extractionRunId = pdfFigureExtractionRunRef.current + 1;
+    pdfFigureExtractionRunRef.current = extractionRunId;
+    const sourcePdfPath = pdf.filePath;
+    const isCurrentExtraction = (): boolean =>
+      pdfFigureExtractionRunRef.current === extractionRunId && activePdfPathRef.current === sourcePdfPath;
+
+    try {
+      const evidencePaper = ensureActivePaperForCurrentPdf();
+      setIsPdfFigureExtracting(true);
+      setStatusMessage('正在解析 PDF caption 并提取文献图片...');
+      let blocks = extractedPdfBlocks;
+      if (blocks.length === 0) {
+        blocks = await extractPdfBlocksFromData(pdf.data);
+        if (!isCurrentExtraction()) {
+          return;
+        }
+        setExtractedPdfBlocks(blocks);
+        rememberPaperTutorEvidence(evidencePaper?.id ?? activePaperId, {
+          pdfTextSnippets: buildPaperTutorTextSnippets(blocks)
+        });
+      }
+
+      const candidates = extractFigureCandidates(blocks);
+      if (candidates.length === 0) {
+        if (!isCurrentExtraction()) {
+          return;
+        }
+        setPdfFigureAssets([]);
+        rememberPaperTutorEvidence(evidencePaper?.id ?? activePaperId, { figures: [] });
+        setStatusMessage('没有在当前 PDF 中识别到 Figure/Table caption，暂未提取到图片。');
+        return;
+      }
+      const visibleCandidates = candidates.slice(0, 8);
+      setPdfFigureAssets(candidates);
+
+      const figures = await extractPdfFigureAssets(pdf.data, candidates, {
+        maxFigures: 8,
+        renderScale: 1.1,
+        isCancelled: () => !isCurrentExtraction(),
+        onFigureExtracted: (figure) => {
+          if (!isCurrentExtraction()) {
+            return;
+          }
+          setPdfFigureAssets((currentFigures) =>
+            currentFigures.length > 0
+              ? mergePdfFigureAssetUpdate(currentFigures, figure)
+              : mergePdfFigureAssetUpdate(visibleCandidates, figure)
+          );
+        }
+      });
+      if (!isCurrentExtraction()) {
+        return;
+      }
+      setPdfFigureAssets(figures);
+      rememberPaperTutorEvidence(evidencePaper?.id ?? activePaperId, {
+        figures,
+        pdfTextSnippets: buildPaperTutorTextSnippets(blocks)
+      });
+      const imageReadyCount = figures.filter((figure) => figure.imageDataUrl).length;
+      const nativeImageCount = figures.filter((figure) => figure.imageExtractionMethod === 'native-image').length;
+      const nativeCompositeCount = figures.filter((figure) => figure.imageExtractionMethod === 'native-image-composite').length;
+      const pageCropCount = figures.filter((figure) => figure.imageExtractionMethod === 'page-crop').length;
+      setStatusMessage(
+        imageReadyCount > 0
+          ? `已识别 ${figures.length} 个图表候选，提取 ${imageReadyCount} 张图像：PDF 内嵌图像 ${nativeImageCount} 张，PDF 内嵌组合 ${nativeCompositeCount} 张，页面裁剪兜底 ${pageCropCount} 张。`
+          : `已识别 ${figures.length} 个图表 caption，但未能可靠提取图像；仍可把 caption 提供给 AI。`
+      );
+    } catch (error) {
+      if (isCurrentExtraction()) {
+        setStatusMessage(`提取 PDF 图片失败：${String(error)}`);
+      }
+    } finally {
+      if (pdfFigureExtractionRunRef.current === extractionRunId) {
+        setIsPdfFigureExtracting(false);
+      }
+    }
+  }
+
   async function handleGeneratePresentationFromCurrentPdf(): Promise<void> {
     if (!pdf) {
       setStatusMessage('请先打开原文 PDF，再生成组会 PPT。');
@@ -653,6 +857,12 @@ export default function App() {
       return;
     }
 
+    const presentationRunId = presentationGenerationRunRef.current + 1;
+    presentationGenerationRunRef.current = presentationRunId;
+    const sourcePdfPath = pdf.filePath;
+    const isCurrentPresentationGeneration = (): boolean =>
+      presentationGenerationRunRef.current === presentationRunId && activePdfPathRef.current === sourcePdfPath;
+
     setView('presentation');
     try {
       setIsPresentationGenerating(true);
@@ -660,7 +870,13 @@ export default function App() {
       let blocks = extractedPdfBlocks;
       if (blocks.length === 0) {
         blocks = await extractPdfBlocksFromData(pdf.data);
+        if (!isCurrentPresentationGeneration()) {
+          return;
+        }
         setExtractedPdfBlocks(blocks);
+        rememberPaperTutorEvidence(paper.id, {
+          pdfTextSnippets: buildPaperTutorTextSnippets(blocks)
+        });
       }
 
       let draft = buildPresentationDraft({
@@ -675,7 +891,8 @@ export default function App() {
           draft,
           enrichPresentationDraftWithPdfFigureCrops(draft, pdf.data, {
             maxFigures: 4,
-            renderScale: 1.25
+            renderScale: 1.25,
+            isCancelled: () => !isCurrentPresentationGeneration()
           }),
           12000
         );
@@ -683,6 +900,9 @@ export default function App() {
         console.warn('Failed to crop presentation figures from PDF pages.', figureError);
       }
 
+      if (!isCurrentPresentationGeneration()) {
+        return;
+      }
       setPresentationDraft(draft);
       setStatusMessage(
         blocks.length > 0
@@ -695,10 +915,15 @@ export default function App() {
         blocks: extractedPdfBlocks,
         targetSlideCount: 12
       });
+      if (!isCurrentPresentationGeneration()) {
+        return;
+      }
       setPresentationDraft(draft);
       setStatusMessage(`PDF 正文提取失败，已生成基础 PPT 草稿：${String(error)}`);
     } finally {
-      setIsPresentationGenerating(false);
+      if (presentationGenerationRunRef.current === presentationRunId) {
+        setIsPresentationGenerating(false);
+      }
     }
   }
 
@@ -789,8 +1014,8 @@ export default function App() {
     }
 
     const existing = activePaperId
-      ? paperLibrary.find((paper) => paper.id === activePaperId && paper.pdfPath === pdf.filePath)
-      : paperLibrary.find((paper) => paper.pdfPath === pdf.filePath);
+      ? paperLibrary.find((paper) => paper.id === activePaperId && isSamePdfFilePath(paper.pdfPath, pdf.filePath))
+      : paperLibrary.find((paper) => isSamePdfFilePath(paper.pdfPath, pdf.filePath));
 
     if (existing) {
       setActivePaperId(existing.id);
@@ -949,134 +1174,17 @@ export default function App() {
     }
   }
 
-  function handleProviderChange(provider: AiProviderId): void {
-    setAiBalance(null);
-    if (provider === 'custom') {
-      setAiForm((value) => ({ ...value, provider }));
-      return;
-    }
-
-    const preset = AI_PROVIDER_PRESETS[provider];
-    setAiForm((value) => ({
-      ...value,
-      ...withDefaultAiRuntimeOptions({
-        provider,
-        baseURL: preset.baseURL,
-        model: preset.model
-      })
-    }));
-  }
-
-  function handleAiFormChange(patch: Partial<AiFormState>): void {
-    if (
-      patch.provider ||
-      patch.baseURL ||
-      patch.model ||
-      patch.apiKey ||
-      patch.thinkingMode ||
-      patch.reasoningEffort ||
-      patch.temperature !== undefined ||
-      patch.topP !== undefined ||
-      patch.maxTokens !== undefined
-    ) {
-      setAiBalance(null);
-    }
-    setAiForm((value) => {
-      const next = { ...value, ...patch };
-      if (patch.provider || patch.model || patch.thinkingMode) {
-        const nextDefaults = withDefaultAiRuntimeOptions({
-          ...next,
-          temperature: undefined,
-          topP: undefined
-        });
-        return {
-          ...next,
-          ...nextDefaults,
-          apiKey: next.apiKey
-        };
-      }
-      return next;
-    });
-  }
-
-  async function handleSaveAiSettings(): Promise<void> {
-    try {
-      setIsAiBusy(true);
-      const settings = await window.electronAPI.saveAiSettings(aiForm);
-      setAiSettings(settings);
-      setAiBalance(null);
-      setAiForm({
-        ...withDefaultAiRuntimeOptions(settings),
-        apiKey: ''
-      });
-      setStatusMessage('AI 设置已保存。');
-    } catch (error) {
-      setStatusMessage(`保存 AI 设置失败：${String(error)}`);
-    } finally {
-      setIsAiBusy(false);
-    }
-  }
-
-  async function handleTestAiConnection(): Promise<void> {
-    try {
-      setIsAiBusy(true);
-      setStatusMessage('正在测试 AI 连接...');
-      const result = await window.electronAPI.testAiConnection();
-      setStatusMessage(result.ok ? `AI 连接成功：${result.message}` : `AI 连接失败：${result.message}`);
-    } catch (error) {
-      setStatusMessage(`AI 连接测试失败：${String(error)}`);
-    } finally {
-      setIsAiBusy(false);
-    }
-  }
-
-  async function handleRefreshAiBalance(): Promise<void> {
-    try {
-      setIsAiBusy(true);
-      setStatusMessage('正在查询 API 余额...');
-      const balance = await window.electronAPI.getAiBalance();
-      setAiBalance(balance);
-      setStatusMessage(balance.supported ? `API 余额：${balance.message}` : balance.message);
-    } catch (error) {
-      setStatusMessage(`API 余额查询失败：${String(error)}`);
-    } finally {
-      setIsAiBusy(false);
-    }
-  }
-
-  async function handleRefreshAiModels(): Promise<void> {
-    try {
-      setIsAiBusy(true);
-      setStatusMessage('正在刷新当前 Provider 的模型列表...');
-      const result = await window.electronAPI.getAiModels();
-      if (result.supported && result.provider !== 'custom') {
-        const provider = result.provider as BuiltInProviderId;
-        setRuntimeModelOptions((value) => ({
-          ...value,
-          [provider]: mergeAiModelOptions(
-            AI_PROVIDER_MODEL_OPTIONS[provider],
-            result.options,
-            aiForm.model
-          )
-        }));
-      }
-      setStatusMessage(result.message);
-    } catch (error) {
-      setStatusMessage(`模型列表刷新失败：${String(error)}`);
-    } finally {
-      setIsAiBusy(false);
-    }
-  }
-
   function handleBuildAiCacheDocument(): void {
     if (extractedPdfBlocks.length === 0) {
       setStatusMessage('还没有可用的 PDF 文本提取结果，请先等待 PDF 渲染完成。');
       return;
     }
 
-    const document = buildAiCacheDocument(extractedPdfBlocks, pdf?.fileName, aiCacheDocument ?? translationDocument);
-    setAiCacheDocument(document);
-    setAiParagraphIndex(0);
+    const document = buildCacheFromPdfBlocks(
+      extractedPdfBlocks,
+      pdf?.fileName,
+      aiCacheDocument ?? translationDocument
+    );
     setShowTranslation(true);
     setReaderMode('ai');
     setStatusMessage(`已生成 AI JSON 缓存草稿：${document.items.length} 段。`);
@@ -1319,58 +1427,10 @@ export default function App() {
     setStatusMessage('已复制全文 JSON 提示词。');
   }
 
-  function handlePreviousParagraph(): void {
-    setCurrentParagraphIndex((value) => Math.max(0, value - 1));
-    resetParagraphDisplay();
-  }
-
-  function handleNextParagraph(): void {
-    if (!translationDocument) {
-      return;
-    }
-
-    setCurrentParagraphIndex((value) => Math.min(translationDocument.items.length - 1, value + 1));
-    resetParagraphDisplay();
-  }
-
-  function handleShowTranslation(): void {
-    setShowTranslation(true);
-  }
-
-  function handleStartEdit(): void {
-    if (!currentItem) {
-      return;
-    }
-
-    setEditingText(currentItem.translation);
-    setIsEditing(true);
-    setShowTranslation(true);
-  }
-
   function handleApplyEdit(): void {
-    if (!translationDocument) {
-      return;
+    if (applyCurrentEdit()) {
+      setStatusMessage('当前译文已更新，请点击“保存翻译”写入本地文件。');
     }
-
-    setTranslationDocument(updateTranslationAtIndex(translationDocument, currentParagraphIndex, editingText));
-    setIsEditing(false);
-    setShowTranslation(true);
-    setStatusMessage('当前译文已更新，请点击“保存翻译”写入本地文件。');
-  }
-
-  function resetParagraphDisplay(): void {
-    setIsEditing(false);
-    setEditingText('');
-    setShowTranslation(translationDocument?.kind === 'markdown');
-  }
-
-  function handlePageChange(nextPage: number): void {
-    if (pageCount === 0) {
-      setCurrentPage(Math.max(1, nextPage));
-      return;
-    }
-
-    setCurrentPage(Math.min(pageCount, Math.max(1, nextPage)));
   }
 
   function ensureJsonDocumentForAi(): TranslationDocument | null {
@@ -1390,9 +1450,7 @@ export default function App() {
       return null;
     }
 
-    const document = buildAiCacheDocument(extractedPdfBlocks, pdf?.fileName, translationDocument);
-    setAiCacheDocument(document);
-    setAiParagraphIndex(0);
+    const document = buildCacheFromPdfBlocks(extractedPdfBlocks, pdf?.fileName, translationDocument);
     setShowTranslation(true);
     return document;
   }
@@ -1650,6 +1708,28 @@ export default function App() {
     }
   }
 
+  async function handlePaperTutorChat(request: GenericChatCompletionInput): Promise<string> {
+    if (!aiSettings?.apiKeyConfigured) {
+      const message = '请先在阅读器右侧 AI 设置中保存 API Key，再使用论文导师问答。';
+      setStatusMessage(message);
+      return message;
+    }
+
+    try {
+      setIsAiBusy(true);
+      setStatusMessage('论文导师正在根据选中论文和图表生成反馈...');
+      const text = await window.electronAPI.completeWithAi(request);
+      setStatusMessage('论文导师问答已返回。');
+      return text;
+    } catch (error) {
+      const message = `论文导师问答失败：${String(error)}`;
+      setStatusMessage(message);
+      return message;
+    } finally {
+      setIsAiBusy(false);
+    }
+  }
+
   function applySavedAiCachePath(
     document: TranslationDocument,
     result: SaveTextResult
@@ -1697,6 +1777,10 @@ export default function App() {
     openAiAssistant('analysis');
   }
 
+  function openPaperTutorFromSidebar(): void {
+    setView('paperTutor');
+  }
+
   function openResearchSheetFromSidebar(): void {
     void handleOpenResearchSheet();
   }
@@ -1706,9 +1790,15 @@ export default function App() {
   }
 
   function openPresentationGenerator(): void {
-    if (presentationDraft) {
+    const draftMatchesActivePaper =
+      !activePaperId ||
+      presentationDraft?.sourcePapers.some((paper) => paper.paperId === activePaperId);
+    if (presentationDraft && draftMatchesActivePaper) {
       setView('presentation');
       return;
+    }
+    if (presentationDraft && !draftMatchesActivePaper) {
+      setPresentationDraft(null);
     }
     setView('presentation');
     void handleGeneratePresentationFromCurrentPdf();
@@ -1727,11 +1817,44 @@ export default function App() {
     setView('settings');
   }
 
-  function getCurrentModelOptions(): AiModelOption[] {
-    return aiForm.provider === 'custom'
-      ? []
-      : runtimeModelOptions[aiForm.provider] ?? AI_PROVIDER_MODEL_OPTIONS[aiForm.provider];
-  }
+  const handleOpenAiAssistantForSheet = useCallback(() => {
+    setAiAssistantFocus('analysis');
+    setView('aiAssistant');
+  }, []);
+
+  const handleOpenAiAssistantForSettings = useCallback(() => {
+    setAiAssistantFocus('settings');
+    setView('aiAssistant');
+  }, []);
+
+  const handleZoomIn = useCallback(() => {
+    setScale((value) => Math.min(2.4, Number((value + 0.1).toFixed(2))));
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    setScale((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))));
+  }, []);
+
+  const handlePageChange = useCallback((nextPage: number): void => {
+    if (pageCount === 0) {
+      setCurrentPage(Math.max(1, nextPage));
+      return;
+    }
+
+    setCurrentPage(Math.min(pageCount, Math.max(1, nextPage)));
+  }, [pageCount, setCurrentPage]);
+
+  const handlePreviousPage = useCallback(() => {
+    handlePageChange(currentPage - 1);
+  }, [currentPage, handlePageChange]);
+
+  const handleNextPage = useCallback(() => {
+    handlePageChange(currentPage + 1);
+  }, [currentPage, handlePageChange]);
+
+  const handleScaleChange = useCallback((nextScale: number) => {
+    setScale(nextScale);
+  }, []);
 
   function getSidebarActiveSection(): AppSidebarSection {
     if (view === 'researchSheet') {
@@ -1754,6 +1877,10 @@ export default function App() {
       return 'ai';
     }
 
+    if (view === 'paperTutor') {
+      return 'paperTutor';
+    }
+
     if (view === 'settings') {
       return 'settings';
     }
@@ -1765,10 +1892,126 @@ export default function App() {
     return homeSection === 'library' ? 'library' : 'workspace';
   }
 
+  const activeSidebarSection = useMemo(() => getSidebarActiveSection(), [homeSection, view]);
+
+  const pdfSessionContextValue = useMemo(
+    () => ({
+      pdf,
+      setPdf,
+      translatedPdf,
+      setTranslatedPdf,
+      translatedMonoPdf,
+      setTranslatedMonoPdf,
+      pdfViewMode,
+      setPdfViewMode,
+      pdfViewportState,
+      setPdfViewportState,
+      currentPage,
+      setCurrentPage,
+      pageCount,
+      setPageCount,
+      scale,
+      setScale,
+      displayedPdf,
+      parallelTranslationPdf,
+      onZoomIn: handleZoomIn,
+      onZoomOut: handleZoomOut,
+      onPreviousPage: handlePreviousPage,
+      onNextPage: handleNextPage,
+      onPageChange: handlePageChange
+    }),
+    [
+      currentPage,
+      displayedPdf,
+      handleNextPage,
+      handlePageChange,
+      handlePreviousPage,
+      handleZoomIn,
+      handleZoomOut,
+      pageCount,
+      parallelTranslationPdf,
+      pdf,
+      pdfViewMode,
+      pdfViewportState,
+      scale,
+      translatedMonoPdf,
+      translatedPdf
+    ]
+  );
+
+  const paperLibraryContextValue = useMemo(
+    () => ({
+      paperLibrary,
+      setPaperLibrary,
+      activePaperId,
+      setActivePaperId,
+      activePaper,
+      researchWorkbook,
+      setResearchWorkbook,
+      researchSheetLinks,
+      setResearchSheetLinks
+    }),
+    [activePaper, activePaperId, paperLibrary, researchSheetLinks, researchWorkbook, setPaperLibrary]
+  );
+
+  const aiTranslationContextValue = useMemo(
+    () => ({
+      translationDocument,
+      setTranslationDocument,
+      aiCacheDocument,
+      setAiCacheDocument,
+      currentParagraphIndex,
+      setCurrentParagraphIndex,
+      aiParagraphIndex,
+      setAiParagraphIndex,
+      currentItem
+    }),
+    [aiCacheDocument, aiParagraphIndex, currentItem, currentParagraphIndex, translationDocument]
+  );
+
+  const uiContextValue = useMemo(
+    () => ({
+      view,
+      setView,
+      homeSection,
+      setHomeSection,
+      activeSidebarSection,
+      statusMessage,
+      statusMessages,
+      setStatusMessage,
+      isReaderSidePanelCollapsed,
+      setIsReaderSidePanelCollapsed,
+      readerSidePanelRatio,
+      handleReaderSidePanelResizeStart
+    }),
+    [
+      activeSidebarSection,
+      handleReaderSidePanelResizeStart,
+      homeSection,
+      isReaderSidePanelCollapsed,
+      readerSidePanelRatio,
+      statusMessage,
+      statusMessages,
+      view
+    ]
+  );
+
+  function renderWithContexts(content: ReactNode) {
+    return (
+      <UiProvider value={uiContextValue}>
+        <PaperLibraryProvider value={paperLibraryContextValue}>
+          <PdfSessionProvider value={pdfSessionContextValue}>
+            <AiTranslationProvider value={aiTranslationContextValue}>{content}</AiTranslationProvider>
+          </PdfSessionProvider>
+        </PaperLibraryProvider>
+      </UiProvider>
+    );
+  }
+
   function renderSidebar() {
     return (
       <AppSidebar
-        activeSection={getSidebarActiveSection()}
+        activeSection={activeSidebarSection}
         onOpenWorkspace={openWorkspace}
         onOpenLibrary={openLibrary}
         onOpenResearchSheet={openResearchSheetFromSidebar}
@@ -1776,6 +2019,7 @@ export default function App() {
         onOpenPresentation={openPresentationGenerator}
         onOpenArxiv={openArxivSearch}
         onOpenReader={openReaderFromSidebar}
+        onOpenPaperTutor={openPaperTutorFromSidebar}
         onOpenAi={openAiFromSidebar}
         onOpenSettings={openSettings}
       />
@@ -1783,10 +2027,10 @@ export default function App() {
   }
 
   if (view === 'home') {
-    return (
+    return renderWithContexts(
       <div className="app-shell desktop-shell home-shell">
         {renderSidebar()}
-        <div className="app-main">
+        <div className={getAppMainClassName()}>
           <HomePage
             papers={paperLibrary}
             activeSection={homeSection}
@@ -1797,175 +2041,208 @@ export default function App() {
             onOpenKnowledgeGraph={openKnowledgeGraph}
             onOpenPresentationGenerator={openPresentationGenerator}
             knowledgeGraphStats={knowledgeGraphSummary}
-            onUpdatePaper={(paper) =>
-              setPaperLibrary((library) => library.map((item) => (item.id === paper.id ? paper : item)))
-            }
-            onRemovePaper={(paper) =>
-              setPaperLibrary((library) => library.filter((item) => item.id !== paper.id))
-            }
+            onUpdatePaper={handleUpdatePaper}
+            onRemovePaper={handleRemovePaper}
           />
-          <footer className="status-bar">{statusMessage}</footer>
+          <ConnectedStatusBar />
         </div>
       </div>
     );
   }
 
   if (view === 'researchSheet') {
-    return (
+    return renderWithContexts(
       <div className="app-shell desktop-shell research-shell">
         {renderSidebar()}
-        <div className="app-main">
-          <Suspense fallback={<main className="research-sheet-loading">正在加载研究表格...</main>}>
-            <ResearchSheetPage
-              papers={paperLibrary}
-              workbook={researchWorkbook}
-              links={researchSheetLinks}
-              focusPaperId={researchFocusPaperId}
-              isAiBusy={isAiBusy}
-              onBackHome={openWorkspace}
-              onOpenPaper={handleOpenPaper}
-              onWorkbookChange={setResearchWorkbook}
-              onLinksChange={setResearchSheetLinks}
-              onFillCellsWithAi={handleFillResearchCellsWithAi}
-              onAnalyzeLiteratureGap={handleAnalyzeLiteratureGap}
-              onOpenAiAssistant={() => openAiAssistant('analysis')}
-              onOpenKnowledgeGraph={openKnowledgeGraph}
-            />
-          </Suspense>
-          <footer className="status-bar">{statusMessage}</footer>
+        <div className={getAppMainClassName()}>
+          <ErrorBoundary fallback={<main className="research-sheet-loading">研究表格加载失败，请返回后重试。</main>}>
+            <Suspense fallback={<main className="research-sheet-loading">正在加载研究表格...</main>}>
+              <ResearchSheetPage
+                papers={paperLibrary}
+                workbook={researchWorkbook}
+                links={researchSheetLinks}
+                focusPaperId={researchFocusPaperId}
+                isAiBusy={isAiBusy}
+                onBackHome={openWorkspace}
+                onOpenPaper={handleOpenPaper}
+                onWorkbookChange={setResearchWorkbook}
+                onLinksChange={setResearchSheetLinks}
+                onFillCellsWithAi={handleFillResearchCellsWithAi}
+                onAnalyzeLiteratureGap={handleAnalyzeLiteratureGap}
+                onOpenAiAssistant={handleOpenAiAssistantForSheet}
+                onOpenKnowledgeGraph={openKnowledgeGraph}
+              />
+            </Suspense>
+          </ErrorBoundary>
+          <ConnectedStatusBar />
         </div>
       </div>
     );
   }
 
   if (view === 'aiAssistant') {
-    return (
+    return renderWithContexts(
       <div className="app-shell desktop-shell ai-assistant-shell">
         {renderSidebar()}
-        <div className="app-main">
-          <Suspense fallback={<main className="ai-assistant-loading">正在加载 AI 助手...</main>}>
-            <AiAssistantPage
-              papers={paperLibrary}
-              workbook={researchWorkbook}
-              links={researchSheetLinks}
-              activePaperId={activePaperId}
-              focus={aiAssistantFocus}
-              aiSettings={aiSettings}
-              aiBalance={aiBalance}
-              aiForm={aiForm}
-              modelOptions={getCurrentModelOptions()}
-              isBusy={isAiBusy}
-              onOpenResearchSheet={openResearchSheetFromSidebar}
-              onOpenPaper={handleOpenPaper}
-              onProviderChange={handleProviderChange}
-              onAiFormChange={handleAiFormChange}
-              onSaveSettings={handleSaveAiSettings}
-              onTestConnection={handleTestAiConnection}
-              onRefreshBalance={handleRefreshAiBalance}
-              onRefreshModels={handleRefreshAiModels}
-              onAnalyzeLiteratureGap={handleAnalyzeLiteratureGap}
-            />
-          </Suspense>
-          <footer className="status-bar">{statusMessage}</footer>
+        <div className={getAppMainClassName()}>
+          <ErrorBoundary fallback={<main className="ai-assistant-loading">AI 助手加载失败，请返回后重试。</main>}>
+            <Suspense fallback={<main className="ai-assistant-loading">正在加载 AI 助手...</main>}>
+              <AiAssistantPage
+                papers={paperLibrary}
+                workbook={researchWorkbook}
+                links={researchSheetLinks}
+                activePaperId={activePaperId}
+                focus={aiAssistantFocus}
+                aiSettings={aiSettings}
+                aiBalance={aiBalance}
+                aiForm={aiForm}
+                modelOptions={modelOptions}
+                isBusy={isAiBusy}
+                onOpenResearchSheet={openResearchSheetFromSidebar}
+                onOpenPaper={handleOpenPaper}
+                onProviderChange={handleProviderChange}
+                onAiFormChange={handleAiFormChange}
+                onSaveSettings={handleSaveAiSettings}
+                onTestConnection={handleTestAiConnection}
+                onRefreshBalance={handleRefreshAiBalance}
+                onRefreshModels={handleRefreshAiModels}
+                onAnalyzeLiteratureGap={handleAnalyzeLiteratureGap}
+              />
+            </Suspense>
+          </ErrorBoundary>
+          <ConnectedStatusBar />
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'paperTutor') {
+    return renderWithContexts(
+      <div className="app-shell desktop-shell paper-tutor-shell">
+        {renderSidebar()}
+        <div className={getAppMainClassName()}>
+          <ErrorBoundary fallback={<main className="paper-tutor-loading">AI 问答加载失败，请返回后重试。</main>}>
+            <Suspense fallback={<main className="paper-tutor-loading">正在加载 AI 问答...</main>}>
+              <PaperTutorPage
+                papers={paperLibrary}
+                activePaperId={activePaperId}
+                figures={pdfFigureAssets}
+                pdfBlocks={extractedPdfBlocks}
+                evidenceByPaperId={paperTutorEvidenceByPaperId}
+                isBusy={isAiBusy}
+                onBackHome={openWorkspace}
+                onOpenReader={openReaderFromSidebar}
+                onOpenPaper={handleOpenPaper}
+                onPaperTutorChat={handlePaperTutorChat}
+              />
+            </Suspense>
+          </ErrorBoundary>
+          <ConnectedStatusBar />
         </div>
       </div>
     );
   }
 
   if (view === 'knowledgeGraph') {
-    return (
+    return renderWithContexts(
       <div className="app-shell desktop-shell knowledge-shell">
         {renderSidebar()}
-        <div className="app-main">
-          <Suspense fallback={<main className="knowledge-graph-loading">正在加载知识图谱...</main>}>
-            <KnowledgeGraphPage
-              papers={paperLibrary}
-              workbook={researchWorkbook}
-              links={researchSheetLinks}
-              onBackHome={openWorkspace}
-              onOpenPaper={handleOpenPaper}
-              onOpenResearchSheet={handleOpenResearchSheet}
-            />
-          </Suspense>
-          <footer className="status-bar">{statusMessage}</footer>
+        <div className={getAppMainClassName()}>
+          <ErrorBoundary fallback={<main className="knowledge-graph-loading">知识图谱加载失败，请返回后重试。</main>}>
+            <Suspense fallback={<main className="knowledge-graph-loading">正在加载知识图谱...</main>}>
+              <KnowledgeGraphPage
+                papers={paperLibrary}
+                workbook={researchWorkbook}
+                links={researchSheetLinks}
+                onBackHome={openWorkspace}
+                onOpenPaper={handleOpenPaper}
+                onOpenResearchSheet={handleOpenResearchSheet}
+              />
+            </Suspense>
+          </ErrorBoundary>
+          <ConnectedStatusBar />
         </div>
       </div>
     );
   }
 
   if (view === 'presentation') {
-    return (
+    return renderWithContexts(
       <div className="app-shell desktop-shell presentation-shell">
         {renderSidebar()}
-        <div className="app-main">
-          <Suspense fallback={<main className="presentation-loading">正在加载组会 PPT 生成器...</main>}>
-            <PresentationPage
-              draft={presentationDraft}
-              onBackHome={openWorkspace}
-              onOpenReader={openReaderFromSidebar}
-              onRegenerate={handleGeneratePresentationFromCurrentPdf}
-              onExportMarkdown={handleExportPresentationMarkdown}
-              onExportJson={handleExportPresentationJson}
-              onExportPptx={handleExportPresentationPptx}
-            />
-          </Suspense>
-          <footer className="status-bar">{statusMessage}</footer>
+        <div className={getAppMainClassName()}>
+          <ErrorBoundary fallback={<main className="presentation-loading">组会 PPT 生成器加载失败，请返回后重试。</main>}>
+            <Suspense fallback={<main className="presentation-loading">正在加载组会 PPT 生成器...</main>}>
+              <PresentationPage
+                draft={presentationDraft}
+                onBackHome={openWorkspace}
+                onOpenReader={openReaderFromSidebar}
+                onRegenerate={handleGeneratePresentationFromCurrentPdf}
+                onExportMarkdown={handleExportPresentationMarkdown}
+                onExportJson={handleExportPresentationJson}
+                onExportPptx={handleExportPresentationPptx}
+              />
+            </Suspense>
+          </ErrorBoundary>
+          <ConnectedStatusBar />
         </div>
       </div>
     );
   }
 
   if (view === 'arxivSearch') {
-    return (
+    return renderWithContexts(
       <div className="app-shell desktop-shell arxiv-shell">
         {renderSidebar()}
-        <div className="app-main">
-          <Suspense fallback={<main className="arxiv-loading">正在加载 arXiv 检索...</main>}>
-            <ArxivSearchPage
-              onBackHome={openWorkspace}
-              onDownloadedPaper={handleArxivPaperDownloaded}
-            />
-          </Suspense>
+        <div className={getAppMainClassName()}>
+          <ErrorBoundary fallback={<main className="arxiv-loading">arXiv 检索加载失败，请返回后重试。</main>}>
+            <Suspense fallback={<main className="arxiv-loading">正在加载 arXiv 检索...</main>}>
+              <ArxivSearchPage
+                onBackHome={openWorkspace}
+                onDownloadedPaper={handleArxivPaperDownloaded}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       </div>
     );
   }
 
   if (view === 'settings') {
-    return (
+    return renderWithContexts(
       <div className="app-shell desktop-shell settings-shell">
         {renderSidebar()}
-        <div className="app-main">
-          <Suspense fallback={<main className="settings-loading">正在加载设置...</main>}>
-            <SettingsPage
-              onBackHome={openWorkspace}
-              onOpenAiAssistant={() => openAiAssistant('settings')}
-            />
-          </Suspense>
+        <div className={getAppMainClassName()}>
+          <ErrorBoundary fallback={<main className="settings-loading">设置加载失败，请返回后重试。</main>}>
+            <Suspense fallback={<main className="settings-loading">正在加载设置...</main>}>
+              <SettingsPage
+                onBackHome={openWorkspace}
+                onOpenAiAssistant={handleOpenAiAssistantForSettings}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       </div>
     );
   }
 
-  return (
+  return renderWithContexts(
     <div className="app-shell desktop-shell reader-shell">
       {renderSidebar()}
-      <div className="app-main reader-main">
+      <div className={getAppMainClassName('reader-main')}>
         <Toolbar
-          currentPage={currentPage}
-          pageCount={pageCount}
-          scale={scale}
           onGoHome={openWorkspace}
           onNewProject={handleNewPdfTranslationProject}
           onOpenPdf={handleOpenPdf}
-          onZoomIn={() => setScale((value) => Math.min(2.4, Number((value + 0.1).toFixed(2))))}
-          onZoomOut={() => setScale((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}
-          onPreviousPage={() => handlePageChange(currentPage - 1)}
-          onNextPage={() => handlePageChange(currentPage + 1)}
-          onPageChange={handlePageChange}
         />
 
-        <main className={`split-layout${pdfViewMode === 'parallel' ? ' is-parallel-pdf' : ''}`}>
+        <main
+          className={`split-layout${pdfViewMode === 'parallel' ? ' is-parallel-pdf' : ''}${
+            isReaderSidePanelCollapsed ? ' is-reader-side-collapsed' : ''
+          }`}
+          data-extracted-pdf-block-count={extractedPdfBlocks.length}
+          style={{ '--reader-side-panel-ratio': `${readerSidePanelRatio * 100}%` } as CSSProperties}
+        >
         <section className={`pdf-pane${pdfViewMode === 'parallel' ? ' is-parallel' : ''}`}>
           {pdfViewMode === 'parallel' && pdf && parallelTranslationPdf ? (
             <div className="parallel-pdf-viewer" aria-label="左右双语 PDF 阅读">
@@ -1978,15 +2255,10 @@ export default function App() {
                 viewportSyncId="source"
                 viewportState={pdfViewportState}
                 onViewportStateChange={setPdfViewportState}
-                onScaleChange={(nextScale) => setScale(nextScale)}
-                onDocumentLoad={(nextPageCount) => {
-                  setPageCount(nextPageCount);
-                  setCurrentPage((page) => Math.min(Math.max(1, page), nextPageCount));
-                }}
-                onCurrentPageChange={(page) => {
-                  setCurrentPage((current) => (current === page ? current : page));
-                }}
-                onExtractedTextReady={setExtractedPdfBlocks}
+                onScaleChange={handleScaleChange}
+                onDocumentLoad={handleSourceDocumentLoad}
+                onCurrentPageChange={handleSourceCurrentPageChange}
+                onExtractedTextReady={handleSourceExtractedTextReady}
                 onHighlightStatusChange={setStatusMessage}
                 onStatusChange={setStatusMessage}
               />
@@ -1999,14 +2271,10 @@ export default function App() {
                 viewportSyncId="translation"
                 viewportState={pdfViewportState}
                 onViewportStateChange={setPdfViewportState}
-                onScaleChange={(nextScale) => setScale(nextScale)}
-                onDocumentLoad={(nextPageCount) => {
-                  setPageCount((count) => Math.max(count, nextPageCount));
-                }}
-                onCurrentPageChange={(page) => {
-                  setCurrentPage((current) => (current === page ? current : page));
-                }}
-                onExtractedTextReady={() => undefined}
+                onScaleChange={handleScaleChange}
+                onDocumentLoad={handleParallelTranslationDocumentLoad}
+                onCurrentPageChange={handleSourceCurrentPageChange}
+                onExtractedTextReady={handleIgnoredExtractedTextReady}
                 onHighlightStatusChange={setStatusMessage}
                 onStatusChange={setStatusMessage}
               />
@@ -2018,19 +2286,10 @@ export default function App() {
               currentPage={currentPage}
               scale={scale}
               highlightText=""
-              onScaleChange={(nextScale) => setScale(nextScale)}
-              onDocumentLoad={(nextPageCount) => {
-                setPageCount(nextPageCount);
-                setCurrentPage((page) => Math.min(Math.max(1, page), nextPageCount));
-              }}
-              onCurrentPageChange={(page) => {
-                setCurrentPage((current) => (current === page ? current : page));
-              }}
-              onExtractedTextReady={(blocks) => {
-                if (pdfViewMode === 'source') {
-                  setExtractedPdfBlocks(blocks);
-                }
-              }}
+              onScaleChange={handleScaleChange}
+              onDocumentLoad={handleDisplayedDocumentLoad}
+              onCurrentPageChange={handleDisplayedCurrentPageChange}
+              onExtractedTextReady={handleDisplayedExtractedTextReady}
               onHighlightStatusChange={setStatusMessage}
               onStatusChange={setStatusMessage}
             />
@@ -2038,8 +2297,36 @@ export default function App() {
         </section>
 
         <section className="translation-pane">
-          <div className="side-panel">
-            <section className="whole-pdf-panel" aria-label="整体双语 PDF">
+          {!isReaderSidePanelCollapsed ? (
+            <div
+              className="reader-layout-resize-handle"
+              role="separator"
+              aria-orientation="vertical"
+              title="拖拽调整 PDF 侧边栏宽度，双击恢复默认"
+              onPointerDown={handleReaderSidePanelResizeStart}
+            />
+          ) : null}
+          <button
+            type="button"
+            className="reader-side-panel-toggle"
+            aria-expanded={!isReaderSidePanelCollapsed}
+            aria-controls="reader-side-panel"
+            aria-label={isReaderSidePanelCollapsed ? '展开 PDF 侧边栏' : '收起 PDF 侧边栏'}
+            title={isReaderSidePanelCollapsed ? '展开 PDF 侧边栏' : '收起 PDF 侧边栏'}
+            onClick={() => setIsReaderSidePanelCollapsed((value) => !value)}
+          >
+            <img
+              className="button-icon"
+              src={isReaderSidePanelCollapsed ? backIcon : forwardIcon}
+              alt=""
+            />
+            <span>{isReaderSidePanelCollapsed ? '展开侧栏' : '收起侧栏'}</span>
+          </button>
+          <div id="reader-side-panel" className="side-panel" hidden={isReaderSidePanelCollapsed}>
+            <section
+              className={`whole-pdf-panel${pdfFigureAssets.length > 0 ? ' has-figure-assets' : ''}`}
+              aria-label="整体双语 PDF"
+            >
               <div className="whole-pdf-header">
                 <strong className="summary-title-with-icon">
                   <img className="panel-title-icon" src={translateIcon} alt="" />
@@ -2098,7 +2385,7 @@ export default function App() {
                   <img className="button-icon" src={refreshIcon} alt="" />
                   <span>重新生成</span>
                 </button>
-                <button type="button" className="secondary-button button-with-icon" disabled={isPdfTranslationBusy} onClick={handleImportTranslatedPdf}>
+                <button type="button" className="secondary-button button-with-icon" disabled={!pdf || isPdfTranslationBusy} onClick={handleImportTranslatedPdf}>
                   <img className="button-icon" src={uploadIcon} alt="" />
                   <span>导入中文/双语 PDF</span>
                 </button>
@@ -2110,11 +2397,21 @@ export default function App() {
                   <img className="button-icon" src={translateIcon} alt="" />
                   <span>{isPresentationGenerating ? '正在生成 PPT...' : '生成组会 PPT'}</span>
                 </button>
+                <button
+                  type="button"
+                  className="secondary-button button-with-icon"
+                  disabled={!pdf || isPdfFigureExtracting}
+                  onClick={handleExtractPdfFigures}
+                >
+                  <img className="button-icon" src={searchIcon} alt="" />
+                  <span>{isPdfFigureExtracting ? '正在提取...' : '提取 PDF 图表'}</span>
+                </button>
                 <button type="button" className="ghost-button button-with-icon" disabled={isPdfTranslationBusy} onClick={handleCheckPdfTranslationEngine}>
                   <img className="button-icon" src={searchIcon} alt="" />
                   <span>检查引擎</span>
                 </button>
               </div>
+              <PdfFigureAssetsPanel figures={pdfFigureAssets} />
               <p>
                 {pdfTranslationStatus ||
                   pdfTranslationEngine?.message ||
@@ -2181,7 +2478,7 @@ export default function App() {
                       value={aiForm.model}
                       onChange={(event) => handleAiFormChange({ model: event.target.value })}
                     >
-                      {(runtimeModelOptions[aiForm.provider] ?? AI_PROVIDER_MODEL_OPTIONS[aiForm.provider]).map((model) => (
+                      {modelOptions.map((model) => (
                         <option key={model.value} value={model.value}>
                           {model.label}
                         </option>
@@ -2314,7 +2611,7 @@ export default function App() {
                 <button type="button" disabled={isAiBusy} onClick={handleRefreshAiBalance}>
                   查询余额
                 </button>
-                <button type="button" className="secondary-button" onClick={() => openAiAssistant('settings')}>
+                <button type="button" className="secondary-button" onClick={handleOpenAiAssistantForSettings}>
                   前往 AI 助手配置
                 </button>
               </div>
@@ -2334,7 +2631,7 @@ export default function App() {
         </section>
       </main>
 
-        <footer className="status-bar">{statusMessage}</footer>
+        <ConnectedStatusBar />
       </div>
     </div>
   );
@@ -2342,13 +2639,7 @@ export default function App() {
 
 function base64ToUint8Array(base64: string): Uint8Array {
   const binaryString = window.atob(base64);
-  const bytes = new Uint8Array(binaryString.length);
-
-  for (let index = 0; index < binaryString.length; index += 1) {
-    bytes[index] = binaryString.charCodeAt(index);
-  }
-
-  return bytes;
+  return Uint8Array.from(binaryString, (character) => character.charCodeAt(0));
 }
 
 function buildExportFileName(sourceName?: string): string {
@@ -2369,10 +2660,11 @@ function buildPdfExportFileName(sourceName?: string): string {
 
 function buildPresentationExportFileName(title: string, extension: 'json' | 'md' | 'pptx'): string {
   const safeTitle = title
-    .replace(/[\\/:*?"<>|]+/gu, '-')
+    .replace(/[\\/:*?"<>|\u0000-\u001f]+/gu, '-')
     .replace(/\s+/gu, '-')
     .replace(/-+/gu, '-')
     .replace(/^-|-$/gu, '')
+    .replace(/[. ]+$/gu, '')
     .slice(0, 80);
   return `${safeTitle || 'seminar-presentation'}-slides.${extension}`;
 }
@@ -2390,53 +2682,8 @@ async function withPresentationCropTimeout(
   ]);
 }
 
-function readLegacyPapersWithSheetCells(
-  rawValue: string | null,
-  papers: PaperRecord[]
-): Array<PaperRecord & { sheetCells?: Record<string, string> }> {
-  if (!rawValue) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(rawValue) as unknown;
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    const legacyPapers: Array<PaperRecord & { sheetCells?: Record<string, string> }> = [];
-
-    parsed.forEach((entry) => {
-      if (!isObjectRecord(entry) || !isObjectRecord(entry.sheetCells)) {
-        return;
-      }
-
-      const paper = papers.find((item) => item.id === entry.id);
-      if (!paper) {
-        return;
-      }
-
-      legacyPapers.push({
-        ...paper,
-        sheetCells: Object.fromEntries(
-          Object.entries(entry.sheetCells)
-            .filter(([, value]) => typeof value === 'string')
-            .map(([key, value]) => [key, String(value)])
-        )
-      });
-    });
-
-    return legacyPapers;
-  } catch {
-    return [];
-  }
-}
-
 function cleanAiCellText(value: string): string {
-  return value
-    .replace(/^```(?:markdown|text)?\s*/iu, '')
-    .replace(/```$/u, '')
-    .trim();
+  return cleanSheetCellAiValue(value);
 }
 
 function readOptionalNumberInput(value: string): number | undefined {
@@ -2456,8 +2703,4 @@ function hashText(value: string): string {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }

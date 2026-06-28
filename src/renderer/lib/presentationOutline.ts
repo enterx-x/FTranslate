@@ -44,6 +44,9 @@ export interface PresentationFigureCandidate {
   cropStatus?: 'caption-only' | 'crop-ready' | 'image-ready';
   imageDataUrl?: string;
   imageMimeType?: 'image/png' | 'image/jpeg';
+  imageExtractionMethod?: 'native-image' | 'native-image-composite' | 'page-crop';
+  imagePixelWidth?: number;
+  imagePixelHeight?: number;
 }
 
 export interface PresentationFigureCropBox {
@@ -741,33 +744,95 @@ export function inferFigureCropBoxFromCaptionBlock(block: ExtractedPdfBlock): Pr
   const captionTop = clamp(bounds.y, 0, pageHeight);
   const targetHeight = clamp(pageHeight * getFigureCropHeightRatio(figureKind, isTableCaption), pageHeight * 0.18, pageHeight * 0.5);
   const captionLooksAboveVisual = isTableCaption || captionTop < pageHeight * 0.22;
-  const cropY = captionLooksAboveVisual
+  const initialCropY = captionLooksAboveVisual
     ? clamp(captionTop + bounds.height + figurePadding, verticalMargin, pageHeight * 0.82)
     : clamp(captionTop - targetHeight - figurePadding, verticalMargin, Math.max(verticalMargin, captionTop - 30));
-  const maxCropHeight = captionLooksAboveVisual ? pageHeight - cropY - verticalMargin : captionTop - cropY - figurePadding;
-  const cropHeight = captionLooksAboveVisual
+  const maxCropHeight = captionLooksAboveVisual ? pageHeight - initialCropY - verticalMargin : captionTop - initialCropY - figurePadding;
+  const initialCropHeight = captionLooksAboveVisual
     ? clamp(targetHeight, Math.min(pageHeight * 0.12, maxCropHeight), Math.max(1, maxCropHeight))
     : clamp(maxCropHeight, Math.min(pageHeight * 0.12, pageHeight * 0.52), pageHeight * 0.52);
   const wideCaption = bounds.width >= pageWidth * 0.42 || wideFigure;
-  const cropWidth = wideFigure
+  const initialCropWidth = wideFigure
     ? clamp(pageWidth - horizontalMargin * 2, pageWidth * 0.72, pageWidth * 0.94)
     : wideCaption
       ? clamp(bounds.width + horizontalMargin * 2, pageWidth * 0.48, pageWidth * 0.92)
       : clamp(Math.max(bounds.width + horizontalMargin * 2, pageWidth * 0.34), pageWidth * 0.28, pageWidth * 0.5);
-  const cropX = wideFigure
+  const initialCropX = wideFigure
     ? horizontalMargin
     : wideCaption
-      ? clamp(bounds.x - horizontalMargin, pageWidth * 0.03, Math.max(pageWidth * 0.03, pageWidth - cropWidth))
-      : clamp(bounds.x - horizontalMargin, pageWidth * 0.03, Math.max(pageWidth * 0.03, pageWidth - cropWidth));
+      ? clamp(bounds.x - horizontalMargin, pageWidth * 0.03, Math.max(pageWidth * 0.03, pageWidth - initialCropWidth))
+      : clamp(bounds.x - horizontalMargin, pageWidth * 0.03, Math.max(pageWidth * 0.03, pageWidth - initialCropWidth));
+  const expandedCrop = expandLikelyPartialFigureCrop({
+    x: initialCropX,
+    y: initialCropY,
+    width: initialCropWidth,
+    height: initialCropHeight,
+    pageWidth,
+    pageHeight,
+    figureKind,
+    isTableCaption,
+    captionLooksAboveVisual
+  });
 
   return {
-    x: roundNumber(cropX),
-    y: roundNumber(cropY),
-    width: roundNumber(clamp(cropWidth, 1, pageWidth - cropX)),
-    height: roundNumber(clamp(cropHeight, 1, pageHeight - cropY)),
+    x: roundNumber(expandedCrop.x),
+    y: roundNumber(expandedCrop.y),
+    width: roundNumber(clamp(expandedCrop.width, 1, pageWidth - expandedCrop.x)),
+    height: roundNumber(clamp(expandedCrop.height, 1, pageHeight - expandedCrop.y)),
     pageWidth: roundNumber(pageWidth),
     pageHeight: roundNumber(pageHeight)
   };
+}
+
+function expandLikelyPartialFigureCrop(input: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  pageWidth: number;
+  pageHeight: number;
+  figureKind: PresentationFigureKind;
+  isTableCaption: boolean;
+  captionLooksAboveVisual: boolean;
+}): { x: number; y: number; width: number; height: number } {
+  const needsFullWidth =
+    input.isTableCaption ||
+    input.figureKind === 'result' ||
+    input.figureKind === 'method' ||
+    input.width < input.pageWidth * 0.65;
+  const marginX = Math.max(18, input.pageWidth * 0.035);
+  const marginY = Math.max(18, input.pageHeight * 0.025);
+  const expandedX = needsFullWidth ? marginX : input.x;
+  const expandedWidth = needsFullWidth ? input.pageWidth - marginX * 2 : input.width;
+  const verticalExpansion = input.captionLooksAboveVisual
+    ? Math.max(18, input.pageHeight * 0.04)
+    : Math.max(28, input.pageHeight * 0.06);
+  const expandedY = input.captionLooksAboveVisual
+    ? Math.max(marginY, input.y - verticalExpansion * 0.35)
+    : Math.max(marginY, input.y - verticalExpansion);
+  const minimumHeightRatio = getExpandedFigureMinimumHeightRatio(input.figureKind, input.isTableCaption);
+  const desiredHeight = Math.max(input.height + verticalExpansion, input.pageHeight * minimumHeightRatio);
+  const expandedHeight = clamp(desiredHeight, input.pageHeight * 0.18, input.pageHeight - expandedY - marginY);
+
+  return {
+    x: clamp(expandedX, 0, input.pageWidth - 1),
+    y: clamp(expandedY, 0, input.pageHeight - 1),
+    width: clamp(expandedWidth, 1, input.pageWidth - expandedX),
+    height: expandedHeight
+  };
+}
+
+function getExpandedFigureMinimumHeightRatio(figureKind: PresentationFigureKind, isTableCaption: boolean): number {
+  if (isTableCaption || figureKind === 'result') {
+    return 0.29;
+  }
+  if (figureKind === 'method') {
+    return 0.34;
+  }
+  if (figureKind === 'setup' || figureKind === 'case') {
+    return 0.28;
+  }
+  return 0.26;
 }
 
 function shouldUseWideFigureCrop(block: ExtractedPdfBlock, figureKind: PresentationFigureKind): boolean {
@@ -788,15 +853,15 @@ function shouldUseWideFigureCrop(block: ExtractedPdfBlock, figureKind: Presentat
 
 function getFigureCropHeightRatio(figureKind: PresentationFigureKind, isTableCaption: boolean): number {
   if (isTableCaption || figureKind === 'result') {
-    return 0.38;
+    return 0.28;
   }
   if (figureKind === 'method') {
-    return 0.42;
+    return 0.34;
   }
   if (figureKind === 'formula') {
-    return 0.26;
+    return 0.22;
   }
-  return 0.32;
+  return 0.28;
 }
 
 function buildCoverSlide(title: string, paper: PaperRecord | undefined, speakerName?: string): PresentationSlide {

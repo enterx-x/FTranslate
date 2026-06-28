@@ -1,12 +1,5 @@
 import type { PaperRecord } from './papers';
-import {
-  BooleanNumber,
-  CellValueType,
-  LocaleType,
-  type ICellData,
-  type IStyleData,
-  type IWorkbookData
-} from '@univerjs/presets';
+import type { ICellData, IStyleData, IWorkbookData } from '@univerjs/presets';
 
 export const RESEARCH_WORKBOOK_KEY = 'pdfTranslationReader:researchWorkbook';
 export const RESEARCH_SHEET_LINKS_KEY = 'pdfTranslationReader:researchSheetLinks';
@@ -16,6 +9,10 @@ const LONG_TEXT_WRAP_THRESHOLD = 24;
 const MIN_WRAPPED_ROW_HEIGHT = 56;
 const MAX_AUTO_WRAPPED_ROW_HEIGHT = 132;
 const WRAPPED_LINE_HEIGHT = 20;
+const BOOLEAN_TRUE = 1;
+const BOOLEAN_FALSE = 0;
+const CELL_VALUE_TYPE_STRING = 1;
+const LOCALE_ZH_CN = 'zhCN' as IWorkbookData['locale'];
 
 export type ResearchColumnKey =
   | 'paper'
@@ -355,14 +352,14 @@ export function isResearchCellStyleEnabled(
   styleKey: 'bl' | 'it'
 ): boolean {
   const style = getResearchCellUniverStyle(workbook, rowIndex, columnIndex);
-  return style[styleKey] === BooleanNumber.TRUE;
+  return style[styleKey] === BOOLEAN_TRUE;
 }
 
 export function getResearchRowValues(
   workbook: ResearchWorkbook,
   rowIndex: number
 ): Record<string, string> {
-  return RESEARCH_SHEET_COLUMNS.reduce<Record<string, string>>((values, column, columnIndex) => {
+  return workbook.columns.reduce<Record<string, string>>((values, column, columnIndex) => {
     values[column.label] = getResearchCellText(workbook, rowIndex, columnIndex);
     return values;
   }, {});
@@ -383,7 +380,7 @@ export function toUniverWorkbookData(workbook: ResearchWorkbook): IWorkbookData 
     header: {
       bg: { rgb: '#111111' },
       cl: { rgb: '#ffffff' },
-      bl: BooleanNumber.TRUE,
+      bl: BOOLEAN_TRUE,
       ht: 2,
       vt: 2,
       fs: 13,
@@ -405,7 +402,7 @@ export function toUniverWorkbookData(workbook: ResearchWorkbook): IWorkbookData 
       cellData[rowIndex][columnIndex] =
         value.trim().startsWith('=')
           ? { f: value, s: style }
-          : { v: value, t: CellValueType.STRING, s: style };
+          : { v: value, t: CELL_VALUE_TYPE_STRING, s: style };
     });
   });
 
@@ -413,7 +410,7 @@ export function toUniverWorkbookData(workbook: ResearchWorkbook): IWorkbookData 
     id: workbook.id,
     name: workbook.sheetName,
     appVersion: '0.24.0',
-    locale: LocaleType.ZH_CN,
+    locale: LOCALE_ZH_CN,
     styles,
     sheetOrder: [sheetId],
     sheets: {
@@ -421,7 +418,7 @@ export function toUniverWorkbookData(workbook: ResearchWorkbook): IWorkbookData 
         id: sheetId,
         name: workbook.sheetName,
         tabColor: '#111111',
-        hidden: BooleanNumber.FALSE,
+        hidden: BOOLEAN_FALSE,
         freeze: {
           xSplit: workbook.freeze.xSplit,
           ySplit: workbook.freeze.ySplit,
@@ -456,8 +453,8 @@ export function toUniverWorkbookData(workbook: ResearchWorkbook): IWorkbookData 
         }, {}),
         rowHeader: { width: 46 },
         columnHeader: { height: 26 },
-        showGridlines: BooleanNumber.TRUE,
-        rightToLeft: BooleanNumber.FALSE
+        showGridlines: BOOLEAN_TRUE,
+        rightToLeft: BOOLEAN_FALSE
       }
     }
   };
@@ -571,7 +568,7 @@ function normalizeUniverSnapshotForResearch(snapshot: IWorkbookData): IWorkbookD
       ...((next.styles ?? {}).header ?? {}),
       bg: { rgb: '#111111' },
       cl: { rgb: '#ffffff' },
-      bl: BooleanNumber.TRUE,
+      bl: BOOLEAN_TRUE,
       ht: 2,
       vt: 2,
       fs: 13,
@@ -845,8 +842,8 @@ function toUniverStyle(style: ResearchCellStyle | undefined): IStyleData | null 
 
   return {
     fs: style.fontSize,
-    bl: style.bold === undefined ? undefined : style.bold ? BooleanNumber.TRUE : BooleanNumber.FALSE,
-    it: style.italic === undefined ? undefined : style.italic ? BooleanNumber.TRUE : BooleanNumber.FALSE,
+    bl: style.bold === undefined ? undefined : style.bold ? BOOLEAN_TRUE : BOOLEAN_FALSE,
+    it: style.italic === undefined ? undefined : style.italic ? BOOLEAN_TRUE : BOOLEAN_FALSE,
     cl: style.color ? { rgb: style.color } : undefined,
     bg: style.backgroundColor ? { rgb: style.backgroundColor } : undefined,
     ht: style.align === 'left' ? 1 : style.align === 'center' ? 2 : style.align === 'right' ? 3 : undefined,

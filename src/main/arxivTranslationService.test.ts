@@ -163,6 +163,166 @@ describe('ArxivTranslationService', () => {
     }
   });
 
+  it('deduplicates repeated texts before sending a batch to the local translator', async () => {
+    const batches: string[][] = [];
+    const sharedSummary = 'This shared abstract studies safe robot navigation and obstacle avoidance.';
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) => {
+        batches.push(texts);
+        return texts.map((text) => `ZH:${text.slice(0, 18)}`);
+      },
+      now: () => 1_764_000_000_000
+    });
+
+    try {
+      const requests = [
+        {
+          stableId: '2606.13679',
+          title: 'Safe Robot Navigation',
+          summary: sharedSummary
+        },
+        {
+          stableId: '2606.13680',
+          title: 'Obstacle Avoidance for Mobile Robots',
+          summary: sharedSummary
+        }
+      ];
+
+      const results = await service.translatePapers(requests);
+
+      expect(results.every((item) => item.status === 'completed')).toBe(true);
+      expect(batches).toEqual([
+        [
+          requests[0].title,
+          sharedSummary,
+          requests[1].title
+        ]
+      ]);
+      expect(results[0].abstractZh).toBe(results[1].abstractZh);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('rejects untranslated English echo output instead of caching it', async () => {
+    const calls: string[][] = [];
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) => {
+        calls.push(texts);
+        return texts;
+      }
+    });
+
+    try {
+      const request = {
+        stableId: 'echo-output',
+        title: 'Tactile Sensing for Robot Manipulation',
+        summary: 'This paper studies tactile sensing and robot manipulation.'
+      };
+      const first = await service.translatePaper(request);
+      const second = await service.translatePaper(request);
+
+      expect(first.status).toBe('failed');
+      expect(first.cacheHit).toBe(false);
+      expect(second.status).toBe('failed');
+      expect(second.cacheHit).toBe(false);
+      expect(calls).toHaveLength(2);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('keeps a translated abstract when the local translator only echoes the title', async () => {
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) =>
+        texts.map((text, index) => (index === 0 ? text : '本文研究机器人操作中的触觉感知方法。'))
+    });
+
+    try {
+      const result = await service.translatePaper({
+        stableId: 'partial-title-echo',
+        title: 'TACTO: A Benchmark for Tactile Robot Manipulation',
+        summary: 'This paper studies tactile perception for robot manipulation.'
+      });
+      const cached = await service.translatePaper({
+        stableId: 'partial-title-echo',
+        title: 'TACTO: A Benchmark for Tactile Robot Manipulation',
+        summary: 'This paper studies tactile perception for robot manipulation.'
+      });
+
+      expect(result.status).toBe('completed');
+      expect(result.titleZh).toBe('');
+      expect(result.abstractZh).toBe('本文研究机器人操作中的触觉感知方法。');
+      expect(cached.status).toBe('cached');
+      expect(cached.abstractZh).toBe(result.abstractZh);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('drops cached English echo rows and retranslates them on manual retry', async () => {
+    const dbPath = path.join(tempDir, 'arxiv-translation.sqlite');
+    const request = {
+      stableId: 'old-echo-cache',
+      title: 'Robot Navigation with Learned Dynamics',
+      summary: 'This paper studies robot navigation with learned dynamics.'
+    };
+    const bootstrap = new ArxivTranslationService({
+      dbPath,
+      translateTexts: async () => ['机器人导航与学习动力学旧译文', '旧摘要译文。']
+    });
+    const seeded = await bootstrap.translatePaper(request);
+    expect(seeded.status).toBe('completed');
+    bootstrap.close();
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare(
+        `UPDATE arxiv_translation_cache
+         SET stable_id = ?,
+             source_title = ?,
+             source_summary = ?,
+             title_zh = ?,
+             abstract_zh = ?,
+             translated_at = ?,
+             engine = ?`
+      ).run(
+        request.stableId,
+        request.title,
+        request.summary,
+        request.title,
+        request.summary,
+        '2026-06-18T00:00:00.000Z',
+        'nllb-ct2-int8'
+      );
+    } finally {
+      db.close();
+    }
+
+    const calls: string[][] = [];
+    const service = new ArxivTranslationService({
+      dbPath,
+      translateTexts: async (texts) => {
+        calls.push(texts);
+        return ['机器人导航与学习动力学', '本文研究学习动力学下的机器人导航。'];
+      }
+    });
+
+    try {
+      const result = await service.translatePaper(request);
+
+      expect(result.status).toBe('completed');
+      expect(result.cacheHit).toBe(false);
+      expect(result.titleZh).toBe('机器人导航与学习动力学');
+      expect(calls).toHaveLength(1);
+    } finally {
+      service.close();
+    }
+  });
+
   it('stores the concrete NLLB engine name when the NLLB translator succeeds', async () => {
     const batches: string[][] = [];
     const service = new ArxivTranslationService({
@@ -226,6 +386,51 @@ describe('ArxivTranslationService', () => {
       expect(result.status).toBe('completed');
       expect(result.engine).toBe('argos');
       expect(result.message).toContain('Argos');
+    } finally {
+      service.close();
+    }
+  });
+
+  it('falls back to Argos before caching when NLLB returns a repeated abstract tail', async () => {
+    const primaryCalls: string[][] = [];
+    const fallbackCalls: string[][] = [];
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTextsWithEngine: async (texts) => {
+        primaryCalls.push(texts);
+        return {
+          texts: [
+            '触觉机器人控制',
+            '我们提出一种触觉机器人控制方法。该系统显著提高了闭环控制稳定性，该系统显著提高了闭环控制稳定性。'
+          ],
+          engine: 'nllb-ct2-int8'
+        };
+      },
+      fallbackTranslateTextsWithEngine: async (texts) => {
+        fallbackCalls.push(texts);
+        return {
+          texts: ['触觉机器人控制', '我们提出一种触觉机器人控制方法，并显著提高了闭环控制稳定性。'],
+          engine: 'argos'
+        };
+      }
+    });
+
+    try {
+      const request = {
+        stableId: 'repeated-nllb-tail',
+        title: 'Tactile Robot Control',
+        summary: 'We propose a tactile robot control method that improves control stability.'
+      };
+      const result = await service.translatePaper(request);
+      const cached = await service.translatePaper(request);
+
+      expect(result.status).toBe('completed');
+      expect(result.engine).toBe('argos');
+      expect(result.abstractZh).toBe('我们提出一种触觉机器人控制方法，并显著提高了闭环控制稳定性。');
+      expect(cached.status).toBe('cached');
+      expect(cached.abstractZh).toBe(result.abstractZh);
+      expect(primaryCalls).toHaveLength(1);
+      expect(fallbackCalls).toHaveLength(1);
     } finally {
       service.close();
     }
@@ -303,6 +508,37 @@ describe('ArxivTranslationService', () => {
       expect(result.cacheHit).toBe(false);
       expect(result.titleZh).toBe('');
       expect(result.abstractZh).toBe('');
+    } finally {
+      service.close();
+    }
+  });
+
+  it('repairs protected academic terms and repeated tails before caching arXiv translations', async () => {
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async () => [
+        '奥姆尼代理：用于全模态理解的主动感知',
+        '我们提出一种用于机器人主动感知的代理。代理代理代理代理'
+      ]
+    });
+
+    try {
+      const request = {
+        stableId: 'protected-term-repair',
+        title: 'OmniAgent: Native Active Perception as Reasoning for Omni-Modal Understanding',
+        summary: 'We introduce OmniAgent for robot active perception and Sim-to-Real transfer.'
+      };
+      const first = await service.translatePaper(request);
+      const cached = await service.translatePaper(request);
+
+      expect(first.status).toBe('completed');
+      expect(first.titleZh).toBe('OmniAgent：用于全模态理解的主动感知');
+      expect(first.abstractZh).toContain('OmniAgent');
+      expect(first.abstractZh).toContain('Sim-to-Real');
+      expect(first.abstractZh.endsWith('代理代理代理代理')).toBe(false);
+      expect(cached.status).toBe('cached');
+      expect(cached.titleZh).toBe(first.titleZh);
+      expect(cached.abstractZh).toBe(first.abstractZh);
     } finally {
       service.close();
     }

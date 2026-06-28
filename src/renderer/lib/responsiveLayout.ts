@@ -29,3 +29,16 @@ export function getPanelRatioFromPointer(
 
   return clampPanelRatio((input.clientX - input.left) / input.width, min, max, fallback);
 }
+
+export function getRightPanelRatioFromPointer(
+  input: PointerRatioInput,
+  min = 0.24,
+  max = 0.46,
+  fallback = 0.34
+): number {
+  if (!Number.isFinite(input.width) || input.width <= 0) {
+    return fallback;
+  }
+
+  return clampPanelRatio((input.left + input.width - input.clientX) / input.width, min, max, fallback);
+}

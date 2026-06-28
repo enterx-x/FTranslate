@@ -17,6 +17,11 @@ export interface TextFilePayload {
   content: string;
 }
 
+export interface DirectoryPayload {
+  directoryPath: string;
+  directoryName: string;
+}
+
 export interface SaveTextResult {
   filePath: string;
   fileName: string;
@@ -92,6 +97,12 @@ export interface LocalTranslationStatus {
     tokenizerDir: string;
     device: 'auto' | 'cuda' | 'cpu';
     runtimeDevice: 'cuda' | 'cpu' | 'unknown';
+    runtimeState: 'not_checked' | 'warming' | 'ready' | 'cpu_fallback' | 'failed';
+    cudaDllDirs: string[];
+    lastRuntimeError: string;
+    lastFallbackReason: string;
+    lastCheckedAt: string;
+    warmupMs: number;
     message: string;
   };
   fallback: {
@@ -109,6 +120,8 @@ export interface LocalTranslateBatchResult {
   engine: 'nllb-ct2-int8' | 'argos';
   device?: 'cuda' | 'cpu' | 'unknown';
   model?: string;
+  warning?: string;
+  fallbackReason?: string;
 }
 
 export interface AiFillSheetCellResult {
@@ -164,6 +177,7 @@ export interface ElectronApi {
   openPdf: () => Promise<PdfFilePayload | null>;
   openTranslation: () => Promise<TextFilePayload | null>;
   openTranslatedPdf: () => Promise<PdfFilePayload | null>;
+  selectDirectory: (request?: { title?: string; defaultPath?: string }) => Promise<DirectoryPayload | null>;
   loadProject: (request: {
     pdfPath?: string;
     translationPath?: string;
@@ -240,8 +254,11 @@ export interface ElectronApi {
   translateLocalBatch: (request: {
     texts: string[];
     forceEngine?: 'nllb-ct2' | 'argos';
+    sourceLanguage?: 'en' | 'zh';
+    targetLanguage?: 'en' | 'zh';
     timeoutMs?: number;
   }) => Promise<LocalTranslateBatchResult>;
+  openExternalUrl: (url: string) => Promise<boolean>;
   saveTextFile: (request: {
     filePath?: string;
     content: string;

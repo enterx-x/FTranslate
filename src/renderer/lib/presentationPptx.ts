@@ -1542,8 +1542,7 @@ function drawFigureImage(
     line: { color: 'CBD5E1', width: 0.8, transparency: 10 }
   });
 
-  const cropBox = plan.visual.figure?.cropBox;
-  const aspectRatio = cropBox && cropBox.height > 0 ? cropBox.width / cropBox.height : 1.4;
+  const aspectRatio = getFigureImageAspectRatio(plan.visual.figure);
   const imageFrame = fitRectIntoBox(aspectRatio, x + 0.12, y + 0.12, w - 0.24, h - 0.24);
   slide.addImage({
     data: imageData,
@@ -1559,6 +1558,15 @@ function getFigureImageData(figure?: PresentationFigureCandidate): string | null
     return null;
   }
   return figure.imageDataUrl;
+}
+
+function getFigureImageAspectRatio(figure?: PresentationFigureCandidate): number {
+  if (figure?.imagePixelWidth && figure.imagePixelHeight && figure.imagePixelHeight > 0) {
+    return figure.imagePixelWidth / figure.imagePixelHeight;
+  }
+
+  const cropBox = figure?.cropBox;
+  return cropBox && cropBox.height > 0 ? cropBox.width / cropBox.height : 1.4;
 }
 
 function fitRectIntoBox(
@@ -2388,7 +2396,7 @@ function hasTemplateClaimPrefix(text: string | undefined): boolean {
   if (!cleaned) {
     return false;
   }
-  return /^(本页|鏈〉)[^：:锛?]{0,36}[：:锛?]/u.test(cleaned);
+  return /^(?:本页|鏈〉)[^：:]{0,36}[：:]/u.test(cleaned);
 }
 
 function stripTemplateClaimPrefix(text: string | undefined): string | undefined {
@@ -2396,7 +2404,7 @@ function stripTemplateClaimPrefix(text: string | undefined): string | undefined 
   if (!cleaned) {
     return undefined;
   }
-  return cleaned.replace(/^(本页|鏈〉)[^：:锛?]{0,36}[：:锛?]\s*/u, '').trim();
+  return cleaned.replace(/^(?:本页|鏈〉)[^：:]{0,36}[：:]\s*/u, '').trim();
 }
 
 function hasMethodEvidence(slide: PptxSlidePlan): boolean {

@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import {
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useMemo,
+  useState
+} from 'react';
 import {
   type ArxivPaper,
   type ArxivSearchRequest,
@@ -11,8 +17,12 @@ import {
   type ArxivPaperMeta,
   buildArxivBibTeX,
   buildArxivExportMarkdown,
+  buildArxivMatchReasons,
   buildArxivPaperInsight,
-  formatArxivResultRange
+  buildArxivTopicCards,
+  formatArxivApiDate,
+  formatArxivResultRange,
+  getArxivApiDateTooltip
 } from '../lib/arxivUi';
 import searchIcon from '../assets/icons/duotone/search.svg';
 import downloadIcon from '../assets/icons/duotone/download.svg';
@@ -20,6 +30,9 @@ import translateIcon from '../assets/icons/duotone/translate.svg';
 import analysisIcon from '../assets/icons/duotone/analysis.svg';
 import saveIcon from '../assets/icons/duotone/save.svg';
 import type { LocalTranslationStatus, PdfFilePayload } from '../types/electron';
+import { repairAcademicTranslation } from '../../shared/academicTranslationQuality';
+import { clampPanelRatio, getRightPanelRatioFromPointer } from '../lib/responsiveLayout';
+import { MathText } from './MathText';
 
 interface ArxivSearchPageProps {
   onBackHome: () => void;
@@ -27,7 +40,7 @@ interface ArxivSearchPageProps {
 }
 
 type SearchStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
-export type LayoutMode = 'compact' | 'standard' | 'wide';
+export type ResultColumnMode = 'one' | 'two' | 'three';
 export type AbstractMode = 'en' | 'zh';
 
 export interface ArxivResultDisplay {
@@ -58,12 +71,23 @@ export interface ArxivQueuedPaper {
   addedAt: string;
 }
 
+type ArxivCardTag = {
+  key: string;
+  label: string;
+  kind: 'match' | 'tag';
+};
+
 const ARXIV_META_STORAGE_KEY = 'pdfTranslationReader:arxivPaperMeta';
 const ARXIV_HISTORY_STORAGE_KEY = 'pdfTranslationReader:arxivSearchHistory';
-const ARXIV_LAYOUT_STORAGE_KEY = 'pdfTranslationReader:arxivLayoutMode';
+const ARXIV_LAYOUT_STORAGE_KEY = 'pdfTranslationReader:arxivResultColumnMode';
+const ARXIV_OLD_LAYOUT_STORAGE_KEY = 'pdfTranslationReader:arxivLayoutMode';
 const ARXIV_PPT_QUEUE_STORAGE_KEY = 'pdfTranslationReader:arxivPptQueue';
 const ARXIV_READING_QUEUE_STORAGE_KEY = 'pdfTranslationReader:arxivReadingQueue';
+const ARXIV_DETAIL_PANEL_RATIO_KEY = 'pdfTranslationReader:arxivDetailPanelRatio';
+const ARXIV_DETAIL_PANEL_COLLAPSED_KEY = 'pdfTranslationReader:arxivDetailPanelCollapsed';
+const DEFAULT_ARXIV_DETAIL_PANEL_RATIO = 0.28;
 const OFFLINE_TRANSLATION_NOTICE_TITLE = '离线翻译未配置';
+export const DEFAULT_ARXIV_SEARCH_QUERY = '';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
 const OFFLINE_TRANSLATION_PRIORITY_COUNT = 12;
@@ -91,10 +115,10 @@ const SORT_ORDER_OPTIONS: Array<{ value: ArxivSortOrder; label: string }> = [
   { value: 'ascending', label: '升序' }
 ];
 
-const LAYOUT_OPTIONS: Array<{ value: LayoutMode; label: string }> = [
-  { value: 'compact', label: '紧凑' },
-  { value: 'standard', label: '标准' },
-  { value: 'wide', label: '宽屏' }
+const RESULT_COLUMN_OPTIONS: Array<{ value: ResultColumnMode; label: string; title: string }> = [
+  { value: 'one', label: '单列', title: '单列：适合认真阅读摘要和长标题' },
+  { value: 'two', label: '双列', title: '双列：阅读效率和信息密度折中' },
+  { value: 'three', label: '三列', title: '三列：快速筛选大量论文' }
 ];
 
 export function getArxivResultDisplay(
@@ -102,23 +126,123 @@ export function getArxivResultDisplay(
   meta: ArxivPaperMeta,
   requestedMode?: AbstractMode
 ): ArxivResultDisplay {
-  const abstractMode: AbstractMode = requestedMode ?? (meta.abstractZh ? 'zh' : 'en');
+  const titleZh =
+    meta.titleZh && !hasDisplayMojibakeText(meta.titleZh)
+      ? repairAcademicTranslation(paper.title, meta.titleZh, { mode: 'title' })
+      : undefined;
+  const abstractZh =
+    meta.abstractZh && !hasDisplayMojibakeText(meta.abstractZh)
+      ? repairAcademicTranslation(paper.summary, meta.abstractZh, { mode: 'abstract' })
+      : undefined;
+  const abstractMode: AbstractMode = requestedMode ?? (abstractZh ? 'zh' : 'en');
   return {
-    title: meta.titleZh || paper.title,
-    secondaryTitle: meta.titleZh ? paper.title : '',
-    abstractText: abstractMode === 'zh' && meta.abstractZh ? meta.abstractZh : paper.summary,
+    title: titleZh || paper.title,
+    secondaryTitle: titleZh ? paper.title : '',
+    abstractText: abstractMode === 'zh' && abstractZh ? abstractZh : paper.summary,
     abstractMode
   };
 }
 
-export function getArxivResultDensityConfig(layoutMode: LayoutMode): ArxivResultDensityConfig {
-  if (layoutMode === 'compact') {
+export function getArxivCardPreviewText(value: string): string {
+  return value
+    .replace(/\$\$([^$]+)\$\$/gu, '$1')
+    .replace(/\$([^$]+)\$/gu, '$1')
+    .replace(/\\\((.*?)\\\)/gu, '$1')
+    .replace(/\\\[(.*?)\\\]/gu, '$1')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+export function buildLatestArxivSearchRequest(
+  baseRequest: ArxivSearchRequest,
+  searchQuery: string,
+  nextStart = 0
+): ArxivSearchRequest {
+  return {
+    ...baseRequest,
+    searchQuery: searchQuery.trim(),
+    start: nextStart,
+    sortBy: 'submittedDate',
+    sortOrder: 'descending',
+    forceRefresh: false
+  };
+}
+
+export function buildArxivSearchRequestForUi(
+  baseRequest: ArxivSearchRequest,
+  searchQuery: string,
+  nextStart = 0,
+  options: { forceRefresh?: boolean; latest?: boolean; maxResults?: number } = {}
+): ArxivSearchRequest {
+  const request = {
+    ...baseRequest,
+    maxResults: options.maxResults ?? baseRequest.maxResults
+  };
+  if (options.latest) {
+    return buildLatestArxivSearchRequest(request, searchQuery, nextStart);
+  }
+  return {
+    ...request,
+    searchQuery: searchQuery.trim(),
+    start: nextStart,
+    forceRefresh: Boolean(options.forceRefresh)
+  };
+}
+
+export function getArxivResultDensityConfig(columnMode: ResultColumnMode): ArxivResultDensityConfig {
+  if (columnMode === 'three') {
     return { className: 'arxiv-density-compact', summaryLines: 2 };
   }
-  if (layoutMode === 'wide') {
+  if (columnMode === 'one') {
     return { className: 'arxiv-density-wide', summaryLines: 4 };
   }
   return { className: 'arxiv-density-standard', summaryLines: 3 };
+}
+
+export function normalizeArxivResultColumnMode(value: string | null): ResultColumnMode {
+  if (value === 'one' || value === 'two' || value === 'three') {
+    return value;
+  }
+  if (value === 'compact') {
+    return 'three';
+  }
+  if (value === 'standard') {
+    return 'two';
+  }
+  if (value === 'wide') {
+    return 'one';
+  }
+  return 'three';
+}
+
+function buildVisibleArxivCardTags(
+  matchReasons: string[],
+  tags: string[],
+  limit = 4
+): { visible: ArxivCardTag[]; hiddenCount: number } {
+  const allTags: ArxivCardTag[] = [];
+  const seen = new Set<string>();
+
+  for (const reason of matchReasons) {
+    const normalized = reason.trim();
+    const key = `match:${normalized.toLowerCase()}`;
+    if (normalized && !seen.has(key)) {
+      seen.add(key);
+      allTags.push({ key, label: normalized, kind: 'match' });
+    }
+  }
+
+  for (const tag of tags) {
+    const normalized = tag.trim();
+    const key = `tag:${normalized.toLowerCase()}`;
+    if (normalized && !seen.has(key)) {
+      seen.add(key);
+      allTags.push({ key, label: normalized, kind: 'tag' });
+    }
+  }
+
+  const visible = allTags.slice(0, limit);
+  return { visible, hiddenCount: Math.max(0, allTags.length - visible.length) };
 }
 
 export function buildArxivTranslationBatches<T>(items: T[], batchSize = OFFLINE_TRANSLATION_BATCH_SIZE): T[][] {
@@ -161,8 +285,55 @@ export async function runArxivTranslationBatches<T>(
   await Promise.all(workers);
 }
 
+export function resolveSelectedArxivPaper(
+  papers: ArxivPaper[],
+  selectedPaperId: string | null
+): ArxivPaper | null {
+  if (selectedPaperId === null) {
+    return null;
+  }
+  return papers.find((paper) => paper.id === selectedPaperId) ?? papers[0] ?? null;
+}
+
+export function buildArxivReadingQueuePreview(queue: ArxivQueuedPaper[], limit: number) {
+  const visibleCount = Math.max(0, Math.floor(limit));
+  const visible = queue.slice(0, visibleCount);
+  const hidden = queue.slice(visibleCount);
+  return {
+    visible,
+    hidden,
+    hiddenCount: hidden.length
+  };
+}
+
+export function buildAvailableArxivTags(
+  papers: ArxivPaper[],
+  metaById: Record<string, ArxivPaperMeta>
+): string[] {
+  const tags = new Set<string>();
+  papers.forEach((paper) => {
+    const meta = getPaperMeta(paper, metaById);
+    const insight = meta.insight ?? buildArxivPaperInsight(paper, '');
+    insight.tags.forEach((tag) => tags.add(tag));
+  });
+  return Array.from(tags);
+}
+
+export function hasUsableArxivChineseMetadata(meta: ArxivPaperMeta): boolean {
+  return Boolean(
+    meta.titleZh &&
+      meta.abstractZh &&
+      !hasDisplayMojibakeText(meta.titleZh) &&
+      !hasDisplayMojibakeText(meta.abstractZh)
+  );
+}
+
+export function shouldQueueArxivMetadataTranslation(meta: ArxivPaperMeta): boolean {
+  return !hasUsableArxivChineseMetadata(meta);
+}
+
 export function ArxivSearchPage(props: ArxivSearchPageProps) {
-  const [query, setQuery] = useState('reinforcement learning robot navigation');
+  const [query, setQuery] = useState(DEFAULT_ARXIV_SEARCH_QUERY);
   const [category, setCategory] = useState('');
   const [sortBy, setSortBy] = useState<ArxivSortBy>('comprehensive');
   const [sortOrder, setSortOrder] = useState<ArxivSortOrder>('descending');
@@ -176,8 +347,22 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [history, setHistory] = useState<string[]>(() => loadStringList(ARXIV_HISTORY_STORAGE_KEY));
   const [pptQueue, setPptQueue] = useState<string[]>(() => loadStringList(ARXIV_PPT_QUEUE_STORAGE_KEY));
   const [readingQueue, setReadingQueue] = useState<ArxivQueuedPaper[]>(() => loadArxivReadingQueue());
-  const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => loadLayoutMode());
+  const [isReadingQueueOpen, setIsReadingQueueOpen] = useState(true);
+  const [columnMode, setColumnMode] = useState<ResultColumnMode>(() => loadResultColumnMode());
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [pageJump, setPageJump] = useState('1');
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
+  const [isDetailPanelCollapsed, setIsDetailPanelCollapsed] = useState(
+    () => window.localStorage.getItem(ARXIV_DETAIL_PANEL_COLLAPSED_KEY) === '1'
+  );
+  const [detailPanelRatio, setDetailPanelRatio] = useState(() =>
+    clampPanelRatio(
+      Number(window.localStorage.getItem(ARXIV_DETAIL_PANEL_RATIO_KEY)),
+      0.22,
+      0.42,
+      DEFAULT_ARXIV_DETAIL_PANEL_RATIO
+    )
+  );
   const [abstractModes, setAbstractModes] = useState<Record<string, AbstractMode>>({});
   const [yearFilter, setYearFilter] = useState('all');
   const [tagFilter, setTagFilter] = useState('all');
@@ -198,14 +383,33 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [localTranslationStatus, setLocalTranslationStatus] = useState<LocalTranslationStatus | null>(null);
 
   useEffect(() => {
+    setPageJump(String(Math.floor(start / Math.max(1, pageSize)) + 1));
+  }, [pageSize, start]);
+
+  useEffect(() => {
     let disposed = false;
     window.electronAPI
       .getLocalTranslationStatus()
       .then((result) => {
         if (!disposed) {
           setLocalTranslationStatus(result);
-          if (result.nllb.available) {
-            void window.electronAPI.warmUpLocalTranslation().catch(() => undefined);
+          if (result.preferredEngine !== 'argos-only' && result.nllb.configured && !result.nllb.available) {
+            setLocalTranslationStatus({
+              ...result,
+              nllb: {
+                ...result.nllb,
+                runtimeState: 'warming',
+                message: '正在预热 NLLB worker。'
+              }
+            });
+            void window.electronAPI
+              .warmUpLocalTranslation()
+              .then((status) => {
+                if (!disposed) {
+                  setLocalTranslationStatus(status);
+                }
+              })
+              .catch(() => undefined);
           }
         }
       })
@@ -240,15 +444,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     return years.sort((a, b) => Number(b) - Number(a));
   }, [papers]);
 
-  const availableTags = useMemo(() => {
-    const tags = new Set<string>();
-    papers.forEach((paper) => {
-      const meta = getPaperMeta(paper, metaById);
-      const insight = meta.insight ?? buildArxivPaperInsight(paper, query);
-      insight.tags.forEach((tag) => tags.add(tag));
-    });
-    return Array.from(tags);
-  }, [metaById, papers, query]);
+  const availableTags = useMemo(() => buildAvailableArxivTags(papers, metaById), [metaById, papers]);
 
   const filteredPapers = useMemo(
     () =>
@@ -281,27 +477,23 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   );
 
   const selectedPaper = useMemo(
-    () => filteredPapers.find((paper) => paper.id === selectedPaperId) ?? filteredPapers[0] ?? null,
+    () => resolveSelectedArxivPaper(filteredPapers, selectedPaperId),
     [filteredPapers, selectedPaperId]
   );
 
   async function handleSearch(
     nextStart = 0,
-    options: { forceRefresh?: boolean; resetFilters?: boolean } = {}
+    options: { forceRefresh?: boolean; resetFilters?: boolean; latest?: boolean; maxResults?: number } = {}
   ): Promise<void> {
     const searchQuery = query.trim();
-    if (!searchQuery) {
+    if (!searchQuery && !options.latest) {
       setMessage('请输入关键词后再搜索。');
       setStatus('error');
       return;
     }
+    const effectiveSearchQuery = searchQuery || '*';
 
-    const nextRequest: ArxivSearchRequest = {
-      ...request,
-      searchQuery,
-      start: nextStart,
-      forceRefresh: Boolean(options.forceRefresh)
-    };
+    const nextRequest = buildArxivSearchRequestForUi(request, effectiveSearchQuery, nextStart, options);
 
     try {
       setIsSearching(true);
@@ -322,16 +514,20 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         setSelectedPaperId(null);
       }
       setMessage(
-        options.forceRefresh
-          ? '正在实时刷新 arXiv 官方 Atom API；关键词会同时匹配标题和摘要。'
-          : '正在通过 ArxivService 查询；翻页会优先复用本地 SQLite 缓存。'
+        options.latest
+          ? '正在按提交时间降序刷新最新论文。'
+          : options.forceRefresh
+          ? '正在刷新 arXiv 官方结果，关键词会同时匹配标题和摘要。'
+          : '正在检索论文，关键词会同时匹配标题和摘要。'
       );
       const result = await window.electronAPI.searchArxiv(nextRequest);
       setStart(nextStart);
       setPapers(result.papers);
       setTotalResults(result.totalResults ?? result.papers.length);
       setSelectedPaperId(result.papers[0]?.id ?? null);
-      setHistory((previous) => saveStringList(ARXIV_HISTORY_STORAGE_KEY, [searchQuery, ...previous]));
+      if (searchQuery) {
+        setHistory((previous) => saveStringList(ARXIV_HISTORY_STORAGE_KEY, [searchQuery, ...previous]));
+      }
       if (result.papers.length === 0) {
         setStatus('empty');
         setMessage(result.warning ?? '没有找到匹配论文。可以换一个关键词，或放宽分类条件。');
@@ -339,17 +535,26 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       }
       setStatus('success');
       const rangeText = formatArxivResultRange(nextStart, result.papers.length, result.totalResults ?? result.papers.length);
+      const queryNotice = result.queryNotice ? `${result.queryNotice}。` : '';
       void queueOfflineTranslations(result.papers);
       if (result.warning) {
-        setMessage(`${result.warning} 当前显示：${rangeText}。`);
+        setMessage(`${queryNotice}${result.warning} 当前显示：${rangeText}。`);
       } else if (result.cacheHit) {
-        setMessage(result.cacheStale ? `已显示过期 SQLite 缓存：${rangeText}。未访问 arXiv。` : `已命中 SQLite 缓存：${rangeText}。未访问 arXiv。`);
-      } else {
         setMessage(
-          `检索完成：${rangeText}。已按标题/摘要和日期做综合候选排序，队列长度 ${result.queueSize}，距上次真实请求 ${formatGap(
-            result.lastRequestGapMs
-          )}。`
+          result.cacheStale
+            ? `${queryNotice}已显示本地过期缓存：${rangeText}。为避免触发限流，最新论文会优先复用缓存。`
+            : `${queryNotice}已显示本地缓存：${rangeText}。为避免触发限流，最新论文会优先复用缓存。`
         );
+      } else {
+        const sortText =
+          nextRequest.sortBy === 'submittedDate'
+            ? '提交时间降序'
+            : nextRequest.sortBy === 'lastUpdatedDate'
+              ? '更新时间'
+              : nextRequest.sortBy === 'relevance'
+              ? '相关性'
+                : '综合排序';
+        setMessage(`${queryNotice}共找到 ${formatInteger(result.totalResults ?? result.papers.length)} 篇，当前显示 ${rangeText}，已按${sortText}展示。`);
       }
     } catch (error) {
       setStatus('error');
@@ -357,6 +562,70 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     } finally {
       setIsSearching(false);
     }
+  }
+
+  function handleJumpToPage(): void {
+    const page = Number(pageJump);
+    if (!Number.isFinite(page)) {
+      setPageJump(String(currentPage));
+      return;
+    }
+    const nextPage = Math.min(Math.max(1, Math.floor(page)), totalPages);
+    setPageJump(String(nextPage));
+    void handleSearch((nextPage - 1) * pageSize);
+  }
+
+  function handlePageSizeChange(nextPageSize: number): void {
+    const safePageSize = PAGE_SIZE_OPTIONS.includes(nextPageSize) ? nextPageSize : 50;
+    setPageSize(safePageSize);
+    setStart(0);
+    setPageJump('1');
+    if (papers.length > 0 && query.trim()) {
+      setMessage(`每页数量已改为 ${safePageSize}。点击“搜索”“最新论文”或分页后应用，避免仅调整控件就请求 arXiv。`);
+    }
+  }
+
+  function toggleDetailPanelCollapsed(): void {
+    setIsDetailPanelCollapsed((value) => {
+      const nextValue = !value;
+      window.localStorage.setItem(ARXIV_DETAIL_PANEL_COLLAPSED_KEY, nextValue ? '1' : '0');
+      return nextValue;
+    });
+  }
+
+  function handleDetailPanelResizeStart(event: ReactPointerEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    const container = event.currentTarget.closest('.arxiv-workbench');
+    if (!(container instanceof HTMLElement)) {
+      return;
+    }
+
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    document.body.classList.add('is-resizing-layout');
+    const rect = container.getBoundingClientRect();
+    const move = (moveEvent: PointerEvent) => {
+      const nextRatio = getRightPanelRatioFromPointer(
+        {
+          clientX: moveEvent.clientX,
+          left: rect.left,
+          width: rect.width
+        },
+        0.22,
+        0.42,
+        DEFAULT_ARXIV_DETAIL_PANEL_RATIO
+      );
+      setDetailPanelRatio(nextRatio);
+      window.localStorage.setItem(ARXIV_DETAIL_PANEL_RATIO_KEY, String(nextRatio));
+    };
+    const stop = () => {
+      document.body.classList.remove('is-resizing-layout');
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
   }
 
   async function handleDownload(paper: ArxivPaper): Promise<void> {
@@ -380,9 +649,17 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     }
   }
 
+  async function handleOpenExternalUrl(url: string): Promise<void> {
+    try {
+      await window.electronAPI.openExternalUrl(url);
+    } catch (error) {
+      setMessage(`打开外部链接失败：${formatError(error)}`);
+    }
+  }
+
   async function handleTranslateAbstract(paper: ArxivPaper): Promise<void> {
     const currentMeta = getPaperMeta(paper, metaById);
-    if (currentMeta.abstractZh && currentMeta.titleZh) {
+    if (hasUsableArxivChineseMetadata(currentMeta)) {
       setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
       setMessage('当前论文标题和摘要已有中文缓存，已切换到中文摘要。');
       return;
@@ -409,7 +686,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   async function queueOfflineTranslations(nextPapers: ArxivPaper[]): Promise<void> {
     const missing = nextPapers.filter((paper) => {
       const meta = getPaperMeta(paper, metaById);
-      return !meta.titleZh || !meta.abstractZh;
+      return shouldQueueArxivMetadataTranslation(meta);
     });
     if (missing.length === 0) {
       return;
@@ -603,14 +880,35 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const selectedInsight = selectedPaper
     ? selectedMeta.insight ?? buildArxivPaperInsight(selectedPaper, query)
     : null;
+  const selectedTopicCards = selectedInsight ? buildArxivTopicCards(selectedInsight, query) : [];
   const selectedAbstractMode = selectedPaper
-    ? abstractModes[selectedPaper.id] ?? (selectedMeta.abstractZh ? 'zh' : 'en')
+    ? abstractModes[selectedPaper.id] ?? (hasUsableArxivChineseMetadata(selectedMeta) ? 'zh' : 'en')
     : 'en';
-  const resultDensity = getArxivResultDensityConfig(layoutMode);
+  const selectedDisplay = selectedPaper ? getArxivResultDisplay(selectedPaper, selectedMeta, selectedAbstractMode) : null;
+  const resultDensity = getArxivResultDensityConfig(columnMode);
+  const resultPanelStyle = { '--arxiv-summary-lines': resultDensity.summaryLines } as CSSProperties;
+  const workbenchStyle = { '--arxiv-detail-panel-ratio': `${detailPanelRatio * 100}%` } as CSSProperties;
+  const readingQueueStyle =
+    papers.length === 0 && isReadingQueueOpen
+      ? ({ minHeight: 58 + Math.min(readingQueue.length, 4) * 56 } as CSSProperties)
+      : undefined;
   const selectedIsTranslating = selectedPaper
     ? translatingId === selectedPaper.id || Boolean(backgroundTranslatingIds[selectedPaper.id])
     : false;
+  const selectedIsInPpt = selectedPaper ? pptQueue.includes(selectedPaper.stableId) : false;
+  const selectedIsQueuedForReading = selectedPaper
+    ? Boolean(selectedMeta.queuedAt) || readingQueue.some((item) => item.stableId === selectedPaper.stableId)
+    : false;
+  const selectedTagItems =
+    selectedPaper && selectedInsight
+      ? buildVisibleArxivCardTags(buildArxivMatchReasons(selectedPaper, query), selectedInsight.tags, 8)
+      : { visible: [], hiddenCount: 0 };
+  const readingQueuePreview = buildArxivReadingQueuePreview(readingQueue, papers.length === 0 ? 3 : 4);
   const isOfflineTranslationNotice = message.includes(OFFLINE_TRANSLATION_NOTICE_TITLE);
+  const currentPage = Math.floor(start / Math.max(1, pageSize)) + 1;
+  const totalPages = Math.max(1, Math.ceil(totalResults / Math.max(1, pageSize)));
+  const resultRangeText =
+    papers.length > 0 ? formatArxivResultRange(start, papers.length, totalResults || papers.length) : '暂无结果';
 
   return (
     <main className="arxiv-page page-workspace">
@@ -618,15 +916,21 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         <div>
           <span className="eyebrow">Official arXiv API</span>
           <h1>arXiv 检索</h1>
-          <p>检索、筛选、翻译摘要、评分和加入 PPT 候选队列。PPT 生成仍只读取本地 PDF。</p>
+          <p>检索、筛选、翻译摘要、评分并加入 PPT 候选列表。</p>
         </div>
-        <button type="button" className="secondary-button" onClick={props.onBackHome}>
-          返回工作台
-        </button>
+        <div className="arxiv-header-actions">
+          <span className="arxiv-api-status">
+            <span aria-hidden="true" />
+            API 状态
+          </span>
+          <button type="button" className="secondary-button" onClick={props.onBackHome}>
+            返回工作台
+          </button>
+        </div>
       </header>
 
       <section className="content-card arxiv-search-card">
-        <div className="arxiv-query-row">
+        <div className="arxiv-search-primary-row">
           <label className="arxiv-query-input">
             <span>关键词</span>
             <input
@@ -635,6 +939,31 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               placeholder="标题/摘要关键词，例如 reinforcement learning robot navigation"
             />
           </label>
+          <button
+            type="button"
+            className="primary-button button-with-icon"
+            disabled={isSearching}
+            onClick={() => void handleSearch(0, { resetFilters: true })}
+          >
+            <img className="button-icon" src={searchIcon} alt="" />
+            <span>{isSearching ? '搜索中' : '搜索'}</span>
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={isSearching}
+            title="跳过本地 SQLite 缓存，真实访问 arXiv 官方 API。arXiv 仍可能因发布批次和时区延迟暂时没有当天论文。"
+            onClick={() => {
+              setSortBy('submittedDate');
+              setSortOrder('descending');
+              void handleSearch(0, { forceRefresh: true, resetFilters: true, latest: true });
+            }}
+          >
+            最新论文
+          </button>
+        </div>
+
+        <div className="arxiv-query-row">
           <label>
             <span>分类</span>
             <select value={category} onChange={(event) => setCategory(event.target.value)}>
@@ -667,25 +996,34 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           </label>
           <button
             type="button"
-            className="primary-button button-with-icon"
-            disabled={isSearching}
-            onClick={() => void handleSearch(0, { resetFilters: true })}
+            className="secondary-button arxiv-advanced-toggle"
+            onClick={() => setShowAdvancedFilters((value) => !value)}
           >
-            <img className="button-icon" src={searchIcon} alt="" />
-            <span>{isSearching ? '搜索中' : '搜索'}</span>
+            高级筛选
           </button>
           <button
             type="button"
-            className="secondary-button"
-            disabled={isSearching}
-            title="跳过本地 SQLite 缓存，真实访问 arXiv 官方 API。arXiv 仍可能因发布批次和时区延迟暂时没有当天论文。"
-            onClick={() => void handleSearch(0, { forceRefresh: true, resetFilters: true })}
+            className="ghost-button arxiv-clear-filters"
+            onClick={() => {
+              setYearFrom('');
+              setYearTo('');
+              setCategory('');
+              setSortBy('comprehensive');
+              setSortOrder('descending');
+              setPageSize(50);
+              setYearFilter('all');
+              setTagFilter('all');
+              setFavoriteOnly(false);
+              setQueuedOnly(false);
+              setTranslatedOnly(false);
+              setScoredOnly(false);
+            }}
           >
-            查最新
+            清空筛选
           </button>
         </div>
 
-        <div className="arxiv-query-options">
+        <div className={`arxiv-query-options ${showAdvancedFilters ? 'is-open' : ''}`}>
           <label>
             <span>起始年份</span>
             <input
@@ -708,7 +1046,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           </label>
           <label>
             <span>每页返回</span>
-            <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+            <select value={pageSize} onChange={(event) => handlePageSizeChange(Number(event.target.value))}>
               {PAGE_SIZE_OPTIONS.map((size) => (
                 <option key={size} value={size}>
                   {size}
@@ -716,15 +1054,63 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               ))}
             </select>
           </label>
+          <label>
+            <span>页内年份</span>
+            <select value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}>
+              <option value="all">全部年份</option>
+              {availableYears.map((year) => (
+                <option key={year} value={year}>
+                  {year}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>标签</span>
+            <select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
+              <option value="all">全部标签</option>
+              {availableTags.map((tag) => (
+                <option key={tag} value={tag}>
+                  {tag}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="arxiv-top-checkbox-filters" aria-label="页内筛选">
+            <label>
+              <input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />
+              <span>只看收藏</span>
+            </label>
+            <label>
+              <input type="checkbox" checked={queuedOnly} onChange={(event) => setQueuedOnly(event.target.checked)} />
+              <span>只看备选论文</span>
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={translatedOnly}
+                onChange={(event) => setTranslatedOnly(event.target.checked)}
+              />
+              <span>只看已翻译摘要</span>
+            </label>
+            <label>
+              <input type="checkbox" checked={scoredOnly} onChange={(event) => setScoredOnly(event.target.checked)} />
+              <span>只看已评分</span>
+            </label>
+          </div>
           <p className="arxiv-query-hints">
             搜索会同时匹配 title 和 abstract；年份范围会写入 arXiv API 的 submittedDate。为避免再次触发限流，
-            不做自动无限抓取，可把每页设为 200 后用“下一页”继续浏览全部结果。
+            不做自动无限抓取，可把每页设为 200 后用“下一页”继续浏览全部结果。列表日期显示官方 API 的 UTC 提交/更新日期，
+            arXiv 网站 new/recent 公告日可能晚一天。
           </p>
         </div>
 
         <div className={`arxiv-message is-${status}`}>
           <span>{message}</span>
-          <span className="badge">{describeLocalTranslationStatus(localTranslationStatus)}</span>
+          <div className="arxiv-status-badges">
+            <span className="badge">{describeLocalTranslationStatus(localTranslationStatus)}</span>
+            <span className="badge">title / abstract</span>
+          </div>
           {isOfflineTranslationNotice ? (
             <div className="arxiv-history">
               <button
@@ -771,155 +1157,99 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         </div>
       </section>
 
-      <section className={`arxiv-workbench arxiv-layout-${layoutMode}`}>
-        <aside className="content-card arxiv-filter-panel">
-          <div className="panel-title-row">
-            <div>
-              <span className="eyebrow">Filters</span>
-              <h2>筛选与视图</h2>
-            </div>
-            <span className="badge">{filteredPapers.length}/{papers.length}</span>
-          </div>
-
-          <label>
-            <span>页内年份</span>
-            <select value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}>
-              <option value="all">全部年份</option>
-              {availableYears.map((year) => (
-                <option key={year} value={year}>
-                  {year}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            <span>标签</span>
-            <select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
-              <option value="all">全部标签</option>
-              {availableTags.map((tag) => (
-                <option key={tag} value={tag}>
-                  {tag}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div className="arxiv-checkbox-stack">
-            <label>
-              <input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />
-              <span>只看收藏</span>
-            </label>
-            <label>
-              <input type="checkbox" checked={queuedOnly} onChange={(event) => setQueuedOnly(event.target.checked)} />
-              <span>只看备选论文</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={translatedOnly}
-                onChange={(event) => setTranslatedOnly(event.target.checked)}
-              />
-              <span>只看已翻译摘要</span>
-            </label>
-            <label>
-              <input type="checkbox" checked={scoredOnly} onChange={(event) => setScoredOnly(event.target.checked)} />
-              <span>只看已评分</span>
-            </label>
-          </div>
-
-          <div className="arxiv-layout-switch">
-            {LAYOUT_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={layoutMode === option.value ? 'segmented-active' : ''}
-                onClick={() => {
-                  setLayoutMode(option.value);
-                  window.localStorage.setItem(ARXIV_LAYOUT_STORAGE_KEY, option.value);
-                }}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="arxiv-pagination-card">
-            <span className="eyebrow">Pagination</span>
-            <label>
-              <span>每页</span>
-              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-                {PAGE_SIZE_OPTIONS.map((size) => (
-                  <option key={size} value={size}>
-                    {size}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="arxiv-pagination-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={isSearching || start <= 0}
-                onClick={() => void handleSearch(Math.max(0, start - pageSize))}
-              >
-                上一页
-              </button>
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={isSearching || start + papers.length >= totalResults}
-                onClick={() => void handleSearch(start + pageSize)}
-              >
-                下一页
-              </button>
-            </div>
-            <p className="inline-hint">
-              {papers.length > 0
-                ? `当前显示 ${formatArxivResultRange(
-                    start,
-                    papers.length,
-                    totalResults
-                  )}。可继续翻页查看全部结果；翻页同样走 ArxivService 队列和 SQLite 缓存。`
-                : '可把每页设为 200 后继续翻页查看更多结果；翻页同样走 ArxivService 队列和 SQLite 缓存。'}
-            </p>
-          </div>
-        </aside>
-
-        <section className={`content-card arxiv-results-panel ${resultDensity.className}`}>
-          <div className="panel-title-row">
+      <section
+        className={`arxiv-workbench arxiv-columns-${columnMode}${
+          isDetailPanelCollapsed ? ' is-detail-collapsed' : ''
+        }`}
+        style={workbenchStyle}
+      >
+        <section className={`content-card arxiv-results-panel ${resultDensity.className}`} style={resultPanelStyle}>
+          <div className="panel-title-row arxiv-results-toolbar">
             <div>
               <span className="eyebrow">Results</span>
               <h2>论文列表</h2>
+              <p className="arxiv-result-summary">
+                {papers.length > 0
+                  ? `共找到 ${formatInteger(totalResults || papers.length)} 篇，当前显示 ${resultRangeText}。`
+                  : '搜索后会在这里显示论文卡片。'}
+              </p>
             </div>
-            <div className="arxiv-count-badges">
-              <span className="badge accent-badge">PPT 候选 {pptQueue.length}</span>
-              <span className="badge success-badge">备选论文 {readingQueue.length}</span>
+            <div className="arxiv-results-controls">
+              <div className="arxiv-view-switch" aria-label="论文卡片列数">
+                {RESULT_COLUMN_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    title={option.title}
+                    className={columnMode === option.value ? 'segmented-active' : ''}
+                    onClick={() => {
+                      setColumnMode(option.value);
+                      window.localStorage.setItem(ARXIV_LAYOUT_STORAGE_KEY, option.value);
+                      window.localStorage.removeItem(ARXIV_OLD_LAYOUT_STORAGE_KEY);
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <label className="arxiv-page-size-control">
+                <span>每页</span>
+                <select value={pageSize} onChange={(event) => handlePageSizeChange(Number(event.target.value))}>
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="arxiv-count-badges">
+                <span className="badge accent-badge">PPT 候选 {pptQueue.length}</span>
+                <span className="badge success-badge">备选 {readingQueue.length}</span>
+              </div>
             </div>
           </div>
 
           {readingQueue.length > 0 ? (
-            <div className="arxiv-reading-queue-mini">
-              <div>
-                <strong>备选论文库</strong>
-                <span>{readingQueue.length} 篇待下载或复核</span>
-              </div>
-              <div className="arxiv-reading-queue-items">
-                {readingQueue.slice(0, 4).map((item) => (
-                  <button
-                    key={item.stableId}
-                    type="button"
-                    className="pill-button"
-                    title={item.title}
-                    onClick={() => {
-                      setQuery(item.title);
-                      setMessage(`已填入备选论文标题：${item.title}。点击搜索可重新定位该论文。`);
-                    }}
-                  >
-                    {item.titleZh || item.title}
-                  </button>
-                ))}
-              </div>
+            <div
+              className={`arxiv-reading-queue-mini${papers.length === 0 ? ' is-empty-results' : ''}${
+                isReadingQueueOpen ? ' is-open' : ''
+              }`}
+              style={readingQueueStyle}
+            >
+              <button
+                type="button"
+                className="arxiv-reading-queue-head"
+                aria-expanded={isReadingQueueOpen}
+                onClick={() => setIsReadingQueueOpen((value) => !value)}
+              >
+                <span>
+                  <strong>备选论文库</strong>
+                  <em>{readingQueue.length} 篇</em>
+                </span>
+                <span className="arxiv-reading-queue-toggle">
+                  <span className="when-closed">展开列表</span>
+                  <span className="when-open">收起列表</span>
+                </span>
+              </button>
+              {isReadingQueueOpen ? (
+                <div className="arxiv-reading-queue-list" aria-label="备选论文快捷定位">
+                  {[...readingQueuePreview.visible, ...readingQueuePreview.hidden].map((item) => (
+                    <button
+                      key={item.stableId}
+                      type="button"
+                      className="arxiv-reading-queue-paper"
+                      title={item.title}
+                      onClick={() => {
+                        setQuery(item.title);
+                        setMessage(`已填入备选论文标题：${item.title}。点击搜索可重新定位该论文。`);
+                      }}
+                    >
+                      <span>{item.titleZh || item.title}</span>
+                      {item.titleZh && item.titleZh !== item.title ? <small>{item.title}</small> : null}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -942,9 +1272,11 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               const isQueued = pptQueue.includes(paper.stableId);
               const isQueuedForReading =
                 Boolean(meta.queuedAt) || readingQueue.some((item) => item.stableId === paper.stableId);
-              const abstractMode = abstractModes[paper.id] ?? (meta.abstractZh ? 'zh' : 'en');
+              const abstractMode = abstractModes[paper.id] ?? (hasUsableArxivChineseMetadata(meta) ? 'zh' : 'en');
               const display = getArxivResultDisplay(paper, meta, abstractMode);
+              const matchReasons = buildArxivMatchReasons(paper, query);
               const isTranslatingMetadata = translatingId === paper.id || backgroundTranslatingIds[paper.id];
+              const tagItems = buildVisibleArxivCardTags(matchReasons, insight.tags);
               return (
                 <article
                   key={paper.id}
@@ -952,65 +1284,53 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   onClick={() => setSelectedPaperId(paper.id)}
                 >
                   <div className="arxiv-paper-card-top">
-                    <div className="arxiv-paper-meta">
+                    <div className="arxiv-card-priority-row">
                       <span className={`priority-pill priority-${insight.readingPriority}`}>
                         {translatePriority(insight.readingPriority)}
                       </span>
                       <span className="badge accent-badge">{insight.totalScore}/100</span>
-                      <span className="badge">{paper.stableId}</span>
-                      <span className="badge">{paper.primaryCategory || paper.categories[0] || 'arXiv'}</span>
-                      {meta.abstractZh ? <span className="badge success-badge">中文摘要</span> : null}
-                      {isTranslatingMetadata ? <span className="badge accent-badge">本地翻译中</span> : null}
-                      {meta.favorite ? <span className="badge success-badge">已收藏</span> : null}
-                      {isQueuedForReading ? <span className="badge success-badge">备选库</span> : null}
                     </div>
-                    <button
-                      type="button"
-                      className="icon-button arxiv-favorite-button"
-                      title={meta.favorite ? '取消收藏' : '收藏'}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleToggleFavorite(paper);
-                      }}
-                    >
-                      {meta.favorite ? '★' : '☆'}
-                    </button>
+                    <div className="arxiv-card-icon-actions">
+                      {isTranslatingMetadata ? <span className="badge accent-badge">翻译中</span> : null}
+                      {hasUsableArxivChineseMetadata(meta) ? <span className="badge success-badge">中文摘要</span> : null}
+                      {isQueuedForReading ? <span className="badge success-badge">备选</span> : null}
+                      <button
+                        type="button"
+                        className="icon-button arxiv-favorite-button"
+                        title={meta.favorite ? '取消收藏' : '收藏'}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleToggleFavorite(paper);
+                        }}
+                      >
+                        {meta.favorite ? '★' : '☆'}
+                      </button>
+                    </div>
                   </div>
 
                   <h3>{display.title}</h3>
                   {display.secondaryTitle ? <p className="arxiv-title-en">{display.secondaryTitle}</p> : null}
                   <p className="arxiv-authors">{paper.authors.slice(0, 6).join(', ') || 'arXiv 未返回作者'}</p>
                   <div className="arxiv-date-row">
-                    <span>发布 {formatDate(paper.publishedAt || paper.published)}</span>
-                    <span>更新 {formatDate(paper.updated)}</span>
+                    <span title={getArxivApiDateTooltip('submitted', paper.publishedAt || paper.published)}>
+                      提交 {formatArxivApiDate(paper.publishedAt || paper.published)}
+                    </span>
+                    <span title={getArxivApiDateTooltip('updated', paper.updated)}>
+                      最新版本 {formatArxivApiDate(paper.updated)}
+                    </span>
+                    <span>{paper.primaryCategory || paper.categories[0] || 'arXiv'}</span>
                   </div>
 
-                  <div className="arxiv-score-strip">
-                    <div>
-                      <span>相关性</span>
-                      <strong>{insight.relevance}</strong>
-                    </div>
-                    <div>
-                      <span>新颖性</span>
-                      <strong>{insight.novelty}</strong>
-                    </div>
-                    <div>
-                      <span>实验</span>
-                      <strong>{insight.experimentQuality}</strong>
-                    </div>
-                  </div>
+                  <p className="arxiv-summary">{getArxivCardPreviewText(display.abstractText)}</p>
 
                   <div className="arxiv-tag-row">
-                    {insight.tags.slice(0, 5).map((tag) => (
-                      <span key={tag} className="pill-tag">
-                        {tag}
+                    {tagItems.visible.map((tag) => (
+                      <span key={tag.key} className={tag.kind === 'match' ? 'pill-tag accent-pill-tag' : 'pill-tag'}>
+                        {tag.label}
                       </span>
                     ))}
+                    {tagItems.hiddenCount > 0 ? <span className="pill-tag">+{tagItems.hiddenCount}</span> : null}
                   </div>
-
-                  <p className="arxiv-summary">
-                    {display.abstractText}
-                  </p>
 
                   <footer className="arxiv-card-actions">
                     <button
@@ -1023,9 +1343,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                           [paper.id]: abstractMode === 'zh' ? 'en' : 'zh'
                         }));
                       }}
-                      disabled={!meta.abstractZh}
+                      disabled={!hasUsableArxivChineseMetadata(meta)}
                     >
-                      {abstractMode === 'zh' ? '看英文' : '看中文'}
+                      {abstractMode === 'zh' ? '查看英文' : '查看中文'}
                     </button>
                     <button
                       type="button"
@@ -1037,7 +1357,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       }}
                     >
                       <img className="button-icon" src={translateIcon} alt="" />
-                      {isTranslatingMetadata ? '本地翻译中' : '本地翻译标题/摘要'}
+                      {isTranslatingMetadata ? '翻译中' : '本地翻译'}
                     </button>
                     <button
                       type="button"
@@ -1060,55 +1380,150 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                     >
                       {isQueued ? '已入 PPT' : '加入 PPT'}
                     </button>
-                    <button
-                      type="button"
-                      className={isQueuedForReading ? 'primary-button' : 'secondary-button'}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleToggleReadingQueue(paper);
-                      }}
-                    >
-                      {isQueuedForReading ? '已备选' : '加入备选'}
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={downloadingId === paper.id}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void handleDownload(paper);
-                      }}
-                    >
-                      {downloadingId === paper.id ? '下载中' : '下载入库'}
-                    </button>
+                    <details className="arxiv-more-actions" onClick={(event) => event.stopPropagation()}>
+                      <summary>更多</summary>
+                      <div className="arxiv-more-menu">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleReadingQueue(paper)}
+                        >
+                          {isQueuedForReading ? '移出备选' : '加入备选'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={downloadingId === paper.id}
+                          onClick={() => void handleDownload(paper)}
+                        >
+                          {downloadingId === paper.id ? '下载中' : '下载 PDF 入库'}
+                        </button>
+                        <button type="button" onClick={() => void handleCopy(buildArxivBibTeX(paper), 'BibTeX')}>
+                          复制 BibTeX
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleOpenExternalUrl(paper.abstractUrl);
+                          }}
+                        >
+                          打开 arXiv
+                        </button>
+                      </div>
+                    </details>
                   </footer>
                 </article>
               );
             })}
             </div>
           )}
+          {papers.length > 0 ? (
+            <footer className="arxiv-results-pagination">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={isSearching || start === 0}
+                onClick={() => void handleSearch(Math.max(0, start - pageSize))}
+              >
+                上一页
+              </button>
+              <div className="arxiv-page-indicator">
+                <span className="arxiv-page-chip">{currentPage}</span>
+                <span>/ {formatInteger(totalPages)} 页</span>
+              </div>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={isSearching || start + pageSize >= totalResults}
+                onClick={() => void handleSearch(start + pageSize)}
+              >
+                下一页
+              </button>
+              <label className="arxiv-page-jump">
+                <span>跳至</span>
+                <input
+                  value={pageJump}
+                  inputMode="numeric"
+                  onChange={(event) => setPageJump(event.target.value.replace(/\D/gu, '').slice(0, 5))}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      handleJumpToPage();
+                    }
+                  }}
+                />
+                <span>页</span>
+              </label>
+              <button type="button" className="secondary-button" disabled={isSearching} onClick={handleJumpToPage}>
+                跳转
+              </button>
+            </footer>
+          ) : null}
         </section>
 
-        <aside className="content-card arxiv-detail-panel">
-          {selectedPaper && selectedInsight ? (
+        <aside
+          id="arxiv-detail-panel"
+          className={`content-card arxiv-detail-panel${isDetailPanelCollapsed ? ' is-collapsed' : ''}`}
+        >
+          <button
+            type="button"
+            className="arxiv-detail-panel-toggle"
+            aria-expanded={!isDetailPanelCollapsed}
+            aria-controls="arxiv-detail-panel-body"
+            title={isDetailPanelCollapsed ? '展开论文详情' : '收起论文详情，扩大结果区'}
+            onClick={toggleDetailPanelCollapsed}
+          >
+            <span>{isDetailPanelCollapsed ? '展开详情' : '收起详情'}</span>
+          </button>
+          {!isDetailPanelCollapsed ? (
             <>
-              <div className="panel-title-row">
-                <div>
-                  <span className="eyebrow">Paper Detail</span>
-                  <h2>论文详情</h2>
-                </div>
-                <span className={`priority-pill priority-${selectedInsight.readingPriority}`}>
-                  {translatePriority(selectedInsight.readingPriority)}
-                </span>
+              <div
+                className="arxiv-detail-resize-handle"
+                role="separator"
+                aria-orientation="vertical"
+                title="拖拽调整论文详情宽度，双击恢复默认"
+                onPointerDown={handleDetailPanelResizeStart}
+                onDoubleClick={() => {
+                  setDetailPanelRatio(DEFAULT_ARXIV_DETAIL_PANEL_RATIO);
+                  window.localStorage.setItem(ARXIV_DETAIL_PANEL_RATIO_KEY, String(DEFAULT_ARXIV_DETAIL_PANEL_RATIO));
+                }}
+              />
+              <div id="arxiv-detail-panel-body" className="arxiv-detail-panel-body">
+                {selectedPaper && selectedInsight ? (
+                  <>
+                    <div className="panel-title-row">
+                      <div>
+                        <span className="eyebrow">Paper Detail</span>
+                        <h2>论文详情</h2>
+                      </div>
+                <button
+                  type="button"
+                  className="icon-button arxiv-detail-close"
+                  title="取消当前选择"
+                  onClick={() => setSelectedPaperId(null)}
+                >
+                  ×
+                </button>
               </div>
 
               <section className="arxiv-detail-section">
-                <h3>{selectedMeta.titleZh || selectedPaper.title}</h3>
-                {selectedMeta.titleZh ? <p className="arxiv-title-en">{selectedPaper.title}</p> : null}
-                <p>{selectedPaper.authors.join(', ') || 'arXiv 未返回作者'}</p>
+                <div className="arxiv-detail-score-row">
+                  <span className={`priority-pill priority-${selectedInsight.readingPriority}`}>
+                    {translatePriority(selectedInsight.readingPriority)}
+                  </span>
+                  <span className="badge accent-badge">{selectedInsight.totalScore}/100</span>
+                </div>
+                <h3>{selectedDisplay?.title || selectedPaper.title}</h3>
+                {selectedDisplay?.secondaryTitle ? <p className="arxiv-title-en">{selectedDisplay.secondaryTitle}</p> : null}
+                <p className="arxiv-authors">{selectedPaper.authors.join(', ') || 'arXiv 未返回作者'}</p>
                 <div className="arxiv-paper-meta">
-                  <span className="badge">发布 {formatDate(selectedPaper.publishedAt || selectedPaper.published)}</span>
-                  <span className="badge">更新 {formatDate(selectedPaper.updated)}</span>
+                  <span
+                    className="badge"
+                    title={getArxivApiDateTooltip('submitted', selectedPaper.publishedAt || selectedPaper.published)}
+                  >
+                    提交 {formatArxivApiDate(selectedPaper.publishedAt || selectedPaper.published)}
+                  </span>
+                  <span className="badge" title={getArxivApiDateTooltip('updated', selectedPaper.updated)}>
+                    最新版本 {formatArxivApiDate(selectedPaper.updated)}
+                  </span>
                   {selectedPaper.categories.slice(0, 4).map((item) => (
                     <span key={item} className="badge">
                       {item}
@@ -1119,7 +1534,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
 
               <section className="arxiv-detail-section">
                 <div className="arxiv-detail-header">
-                  <h3>摘要</h3>
+                  <h3>{selectedDisplay?.abstractMode === 'zh' ? '摘要（本地翻译）' : '摘要'}</h3>
                   <div className="arxiv-layout-switch mini">
                     <button
                       type="button"
@@ -1139,9 +1554,27 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   </div>
                 </div>
                 <div className="arxiv-detail-abstract">
-                  {selectedAbstractMode === 'zh' && selectedMeta.abstractZh
-                    ? selectedMeta.abstractZh
-                    : selectedPaper.summary}
+                  <MathText
+                    text={
+                      selectedDisplay?.abstractMode === 'zh'
+                        ? selectedDisplay.abstractText
+                        : selectedPaper.summary
+                    }
+                  />
+                </div>
+              </section>
+
+              <section className="arxiv-detail-section">
+                <h3>标签</h3>
+                <div className="arxiv-tag-row">
+                  {selectedTagItems.visible.map((tag) => (
+                    <span key={tag.key} className={tag.kind === 'match' ? 'pill-tag accent-pill-tag' : 'pill-tag'}>
+                      {tag.label}
+                    </span>
+                  ))}
+                  {selectedTagItems.hiddenCount > 0 ? (
+                    <span className="pill-tag">+{selectedTagItems.hiddenCount}</span>
+                  ) : null}
                 </div>
               </section>
 
@@ -1152,12 +1585,19 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                 </div>
                 <p>{selectedInsight.reasonZh}</p>
                 <div className="arxiv-topic-grid">
-                  {Object.entries(selectedInsight.topicMatch).map(([key, value]) => (
-                    <div key={key}>
-                      <span>{translateTopicKey(key)}</span>
-                      <strong>{value}/10</strong>
+                  {selectedTopicCards.length > 0 ? (
+                    selectedTopicCards.map((card) => (
+                      <div key={card.key}>
+                        <span>{card.label}</span>
+                        <strong>{card.value}/10</strong>
+                      </div>
+                    ))
+                  ) : (
+                    <div>
+                      <span>主题命中</span>
+                      <strong>暂无强主题命中</strong>
                     </div>
-                  ))}
+                  )}
                 </div>
               </section>
 
@@ -1166,19 +1606,57 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                 <div className="arxiv-detail-actions">
                   <button
                     type="button"
-                    className="primary-button button-with-icon"
+                    className="primary-button"
+                    onClick={() => handleTogglePptQueue(selectedPaper)}
+                  >
+                    {selectedIsInPpt ? '移出 PPT 候选' : '加入 PPT 候选'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => handleToggleReadingQueue(selectedPaper)}
+                  >
+                    {selectedIsQueuedForReading ? '移出备选列表' : '加入备选列表'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button button-with-icon"
                     disabled={downloadingId === selectedPaper.id}
                     onClick={() => void handleDownload(selectedPaper)}
                   >
                     <img className="button-icon" src={downloadIcon} alt="" />
                     {downloadingId === selectedPaper.id ? '下载中' : '下载 PDF 入库'}
                   </button>
-                  <a className="secondary-button" href={selectedPaper.abstractUrl} target="_blank" rel="noreferrer">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void handleOpenExternalUrl(selectedPaper.abstractUrl)}
+                  >
                     打开 arXiv
-                  </a>
-                  <a className="secondary-button" href={selectedPaper.pdfUrl} target="_blank" rel="noreferrer">
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void handleCopy(buildArxivBibTeX(selectedPaper), 'BibTeX')}
+                  >
+                    复制 BibTeX
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => handleToggleFavorite(selectedPaper)}
+                  >
+                    {selectedMeta.favorite ? '取消收藏' : '收藏论文'}
+                  </button>
+                </div>
+                <div className="arxiv-detail-secondary-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void handleOpenExternalUrl(selectedPaper.pdfUrl)}
+                  >
                     打开 PDF
-                  </a>
+                  </button>
                   <button
                     type="button"
                     className="secondary-button button-with-icon"
@@ -1200,42 +1678,24 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   <button
                     type="button"
                     className="secondary-button"
-                    onClick={() => void handleCopy(buildArxivBibTeX(selectedPaper), 'BibTeX')}
-                  >
-                    复制 BibTeX
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
                     onClick={() =>
                       void handleCopy(buildArxivExportMarkdown(selectedPaper, selectedMeta), 'Markdown 摘要')
                     }
                   >
                     复制 Markdown
                   </button>
-                  <button
-                    type="button"
-                    className={pptQueue.includes(selectedPaper.stableId) ? 'primary-button' : 'secondary-button'}
-                    onClick={() => handleTogglePptQueue(selectedPaper)}
-                  >
-                    {pptQueue.includes(selectedPaper.stableId) ? '移出 PPT 候选' : '加入 PPT 候选'}
-                  </button>
-                  <button
-                    type="button"
-                    className={selectedMeta.queuedAt ? 'primary-button' : 'secondary-button'}
-                    onClick={() => handleToggleReadingQueue(selectedPaper)}
-                  >
-                    {selectedMeta.queuedAt ? '移出备选论文库' : '加入备选论文库'}
-                  </button>
                 </div>
               </section>
+                  </>
+                ) : (
+                  <article className="empty-state">
+                    <h2>选择一篇论文</h2>
+                    <p>右侧会显示摘要、中文缓存、评分、BibTeX 和导出入口。</p>
+                  </article>
+                )}
+              </div>
             </>
-          ) : (
-            <article className="empty-state">
-              <h2>选择一篇论文</h2>
-              <p>右侧会显示摘要、中文缓存、评分、BibTeX 和导出入口。</p>
-            </article>
-          )}
+          ) : null}
         </aside>
       </section>
     </main>
@@ -1325,9 +1785,10 @@ function saveRawStringList(key: string, values: string[]): void {
   window.localStorage.setItem(key, JSON.stringify(Array.from(new Set(values))));
 }
 
-function loadLayoutMode(): LayoutMode {
-  const value = window.localStorage.getItem(ARXIV_LAYOUT_STORAGE_KEY);
-  return value === 'compact' || value === 'wide' ? value : 'standard';
+function loadResultColumnMode(): ResultColumnMode {
+  return normalizeArxivResultColumnMode(
+    window.localStorage.getItem(ARXIV_LAYOUT_STORAGE_KEY) ?? window.localStorage.getItem(ARXIV_OLD_LAYOUT_STORAGE_KEY)
+  );
 }
 
 function getPaperMeta(paper: ArxivPaper, metaById: Record<string, ArxivPaperMeta>): ArxivPaperMeta {
@@ -1343,25 +1804,40 @@ function hasDisplayMojibakeText(value?: string): boolean {
   return isMojibakeTranslationText(value);
 }
 
-function describeLocalTranslationStatus(status: LocalTranslationStatus | null): string {
+export function describeLocalTranslationStatus(status: LocalTranslationStatus | null): string {
   if (!status) {
     return '本地翻译状态未知';
   }
-  if (status.nllb.available) {
-    const device = status.worker.running && status.nllb.runtimeDevice !== 'unknown'
-      ? status.nllb.runtimeDevice.toUpperCase()
-      : status.nllb.device.toUpperCase();
-    return `NLLB 可用 · ${device}`;
+  if (status.preferredEngine === 'argos-only') {
+    return 'Argos only';
   }
-  return 'NLLB 未配置 · Argos fallback';
+  if (!status.nllb.configured) {
+    return 'NLLB 未配置 · Argos fallback';
+  }
+  if (status.nllb.runtimeState === 'warming') {
+    return 'NLLB 预热中';
+  }
+  if (status.nllb.runtimeState === 'cpu_fallback') {
+    return 'NLLB CPU 回退';
+  }
+  if (status.nllb.runtimeState === 'ready' && status.nllb.available) {
+    return `NLLB 可用 · ${formatLocalTranslationDevice(status)}`;
+  }
+  if (status.nllb.runtimeState === 'failed') {
+    return 'NLLB 不可用 · Argos fallback';
+  }
+  return 'NLLB 已配置 · 未检查';
+}
+
+function formatLocalTranslationDevice(status: LocalTranslationStatus): string {
+  if (status.nllb.runtimeDevice !== 'unknown') {
+    return status.nllb.runtimeDevice.toUpperCase();
+  }
+  return status.nllb.device === 'auto' ? '设备未确认' : status.nllb.device.toUpperCase();
 }
 
 function sanitizeFileStem(value: string): string {
   return value.replace(/[<>:"/\\|?*\u0000-\u001f]+/gu, '_').replace(/\s+/gu, '-').slice(0, 72) || 'arxiv-paper';
-}
-
-function formatGap(value: number): string {
-  return value < 0 ? '首次请求' : `${Math.round(value)} ms`;
 }
 
 function normalizeYearInput(value: string): string {
@@ -1372,8 +1848,8 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function formatDate(value: string): string {
-  return value ? value.slice(0, 10) : 'N/A';
+function formatInteger(value: number): string {
+  return Math.max(0, Math.floor(value)).toLocaleString('zh-CN');
 }
 
 function getYear(value: string): string {

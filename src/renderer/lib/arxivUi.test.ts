@@ -3,8 +3,12 @@ import type { ArxivPaper } from './arxivClient';
 import {
   buildArxivBibTeX,
   buildArxivExportMarkdown,
+  buildArxivMatchReasons,
   buildArxivPaperInsight,
+  buildArxivTopicCards,
+  formatArxivApiDate,
   formatArxivResultRange,
+  getArxivApiDateTooltip,
   parseArxivTitleAbstractTranslation
 } from './arxivUi';
 
@@ -35,6 +39,65 @@ describe('arxivUi helpers', () => {
     expect(insight.topicMatch.path_planning).toBeGreaterThanOrEqual(5);
     expect(insight.tags).toEqual(expect.arrayContaining(['RL', '机器人', '路径规划']));
     expect(insight.reasonZh).toContain('RL');
+  });
+
+  it('does not mark broad dynamics or incidental rl substrings as PINN or RL evidence', () => {
+    const clinicalPaper: ArxivPaper = {
+      id: 'http://arxiv.org/abs/2606.19292v1',
+      stableId: '2606.19292',
+      title: 'Risk Stratification for ICU Delirium using Pervasive Ambient Sensing Information',
+      authors: ['Jiaqing Zhang'],
+      summary:
+        'Early longitudinal clinical monitoring studies physiological dynamics and ambient sensing information for risk prediction.',
+      published: '2026-06-17T00:00:00Z',
+      publishedAt: '2026-06-17T00:00:00Z',
+      updated: '2026-06-17T00:00:00Z',
+      categories: ['cs.LG'],
+      primaryCategory: 'cs.LG',
+      abstractUrl: 'http://arxiv.org/abs/2606.19292v1',
+      pdfUrl: 'https://arxiv.org/pdf/2606.19292v1.pdf'
+    };
+
+    const insight = buildArxivPaperInsight(clinicalPaper, '触觉');
+
+    expect(insight.topicMatch.rl).toBe(0);
+    expect(insight.topicMatch.pinn).toBe(0);
+    expect(insight.tags).not.toContain('RL');
+    expect(insight.tags).not.toContain('PINN');
+    expect(buildArxivTopicCards(insight, '触觉')).toEqual([]);
+  });
+
+  it('scores Chinese queries through the same normalized English expansion used for arXiv search', () => {
+    const navigationPaper: ArxivPaper = {
+      ...robotPaper,
+      title: 'Robot Navigation with Reinforcement Learning and Motion Planning',
+      summary:
+        'A mobile robot navigation system combines reinforcement learning, trajectory planning, collision avoidance, and real-world experiments.'
+    };
+
+    const chineseInsight = buildArxivPaperInsight(navigationPaper, '机器人导航');
+    const englishInsight = buildArxivPaperInsight(navigationPaper, 'robot navigation');
+
+    expect(chineseInsight.relevance).toBeGreaterThanOrEqual(80);
+    expect(chineseInsight.relevance).toBeGreaterThanOrEqual(englishInsight.relevance - 20);
+    expect(chineseInsight.tags).toEqual(expect.arrayContaining(['机器人', '路径规划']));
+  });
+
+  it('builds query-specific match reasons instead of relying on fixed research dimensions', () => {
+    expect(buildArxivMatchReasons(robotPaper, 'path planning')).toEqual(
+      expect.arrayContaining(['path planning', 'path', 'planning'])
+    );
+
+    const unrelated = buildArxivMatchReasons(
+      {
+        ...robotPaper,
+        title: 'Native Active Perception as Reasoning for Omni-Modal Understanding',
+        summary: 'We study active visual perception and watch-it-all style reasoning.'
+      },
+      '触觉'
+    );
+
+    expect(unrelated).toEqual([]);
   });
 
   it('exports a selected arXiv paper as readable Markdown with optional Chinese abstract', () => {
@@ -106,5 +169,12 @@ describe('arxivUi helpers', () => {
     expect(formatArxivResultRange(0, 50, 3456)).toBe('1-50 / 3456 篇');
     expect(formatArxivResultRange(50, 50, 3456)).toBe('51-100 / 3456 篇');
     expect(formatArxivResultRange(0, 0, 3456)).toBe('0 / 3456 篇');
+  });
+
+  it('formats arXiv API dates as UTC dates with explicit tooltip wording', () => {
+    expect(formatArxivApiDate('2026-06-18T23:59:00Z')).toBe('2026-06-18');
+    expect(getArxivApiDateTooltip('submitted', '2026-06-18T23:59:00Z')).toContain('UTC');
+    expect(getArxivApiDateTooltip('submitted', '2026-06-18T23:59:00Z')).toContain('new/recent announcement');
+    expect(getArxivApiDateTooltip('updated', '2026-06-19T01:00:00Z')).toContain('latest version');
   });
 });

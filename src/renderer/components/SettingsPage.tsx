@@ -28,6 +28,8 @@ type SettingsCategory =
   | 'export'
   | 'data';
 
+export const DEFAULT_SETTINGS_CATEGORY: SettingsCategory = 'general';
+
 interface SettingsPageProps {
   onBackHome: () => void;
   onOpenAiAssistant: () => void;
@@ -60,7 +62,7 @@ const exportPathFields: Array<{ key: keyof ExportPathSettings; label: string; hi
 ];
 
 export function SettingsPage(props: SettingsPageProps) {
-  const [activeCategory, setActiveCategory] = useState<SettingsCategory>('export');
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>(DEFAULT_SETTINGS_CATEGORY);
   const [settings, setSettings] = useState<AppSettings>(() =>
     parseAppSettings(localStorage.getItem(APP_SETTINGS_KEY))
   );
@@ -103,9 +105,31 @@ export function SettingsPage(props: SettingsPageProps) {
   }
 
   function resetSettings(): void {
+    if (!window.confirm('确认重置 UI 设置？这会恢复界面、导出路径和显示偏好，但不会删除论文库或研究表格。')) {
+      return;
+    }
+
     const defaults = buildDefaultAppSettings();
     setSettings(defaults);
     saveSettings(defaults);
+  }
+
+  async function handleSelectExportPath(field: { key: keyof ExportPathSettings; label: string }): Promise<void> {
+    try {
+      const currentPath = String(settings.exportPaths[field.key] ?? '');
+      const result = await window.electronAPI.selectDirectory({
+        title: `选择${field.label}`,
+        defaultPath: currentPath || undefined
+      });
+      if (!result) {
+        setSavedMessage('已取消目录选择');
+        return;
+      }
+      updateSettings((current) => updateExportPath(current, field.key, result.directoryPath));
+      setSavedMessage(`已选择${field.label}：${result.directoryPath}`);
+    } catch (error) {
+      setSavedMessage(`选择目录失败：${String(error)}`);
+    }
   }
 
   async function refreshLocalTranslationStatus(): Promise<void> {
@@ -113,7 +137,7 @@ export function SettingsPage(props: SettingsPageProps) {
       setLocalTranslationMessage('正在检查本地翻译环境...');
       const status = await window.electronAPI.checkLocalTranslationInstall();
       setLocalTranslationStatus(status);
-      setLocalTranslationMessage(status.nllb.available ? 'NLLB 环境可用。' : status.nllb.message);
+      setLocalTranslationMessage(status.nllb.message);
     } catch (error) {
       setLocalTranslationMessage(`本地翻译环境检查失败：${String(error)}`);
     }
@@ -124,7 +148,7 @@ export function SettingsPage(props: SettingsPageProps) {
       setLocalTranslationMessage('正在预热 NLLB worker...');
       const status = await window.electronAPI.warmUpLocalTranslation();
       setLocalTranslationStatus(status);
-      setLocalTranslationMessage(status.nllb.available ? 'NLLB worker 已预热。' : status.nllb.message);
+      setLocalTranslationMessage(status.nllb.message);
     } catch (error) {
       setLocalTranslationMessage(`NLLB 预热失败：${String(error)}`);
     }
@@ -195,9 +219,9 @@ export function SettingsPage(props: SettingsPageProps) {
                       <button
                         type="button"
                         className="icon-button"
-                        title="TODO：接入 Electron 目录选择器"
+                        title={`选择${field.label}`}
                         aria-label="选择目录"
-                        disabled
+                        onClick={() => void handleSelectExportPath(field)}
                       >
                         <img className="button-icon" src={folderIcon} alt="" />
                       </button>
@@ -698,7 +722,127 @@ export function SettingsPage(props: SettingsPageProps) {
             </SettingsCard>
           ) : null}
 
-          {activeCategory === 'general' || activeCategory === 'ai' || activeCategory === 'web' || activeCategory === 'data' ? (
+          {activeCategory === 'general' ? (
+            <SettingsCard
+              title="通用设置"
+              badge="自动保存"
+              description="这些设置会立即保存到本机 localStorage，只影响界面偏好，不会改动论文库、研究表格或已生成文件。"
+            >
+              <div className="settings-form-grid">
+                <label>
+                  主题模式
+                  <select
+                    value={settings.general.themeMode}
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        general: {
+                          ...current.general,
+                          themeMode: event.target.value as AppSettings['general']['themeMode']
+                        }
+                      }))
+                    }
+                  >
+                    <option value="system">跟随系统</option>
+                    <option value="light">浅色</option>
+                    <option value="dark">深色</option>
+                  </select>
+                </label>
+                <label>
+                  界面缩放
+                  <input
+                    type="number"
+                    min="0.85"
+                    max="1.3"
+                    step="0.05"
+                    value={settings.general.uiScale}
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        general: { ...current.general, uiScale: Number(event.target.value) || 1 }
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  默认首页
+                  <select
+                    value={settings.general.defaultHome}
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        general: {
+                          ...current.general,
+                          defaultHome: event.target.value as AppSettings['general']['defaultHome']
+                        }
+                      }))
+                    }
+                  >
+                    <option value="workspace">工作台</option>
+                    <option value="library">论文库</option>
+                    <option value="researchSheet">研究表格</option>
+                    <option value="reader">PDF 阅读</option>
+                  </select>
+                </label>
+                <label>
+                  界面语言
+                  <select
+                    value={settings.general.language}
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        general: {
+                          ...current.general,
+                          language: event.target.value as AppSettings['general']['language']
+                        }
+                      }))
+                    }
+                  >
+                    <option value="zh-CN">中文</option>
+                    <option value="en-US">English</option>
+                  </select>
+                </label>
+                <label>
+                  自动保存间隔（秒）
+                  <input
+                    type="number"
+                    min="5"
+                    max="120"
+                    value={settings.general.autoSaveIntervalSeconds}
+                    onChange={(event) =>
+                      updateSettings((current) => ({
+                        ...current,
+                        general: {
+                          ...current.general,
+                          autoSaveIntervalSeconds: Number(event.target.value) || 20
+                        }
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+              <div className="settings-toggle-grid">
+                <CheckboxSetting
+                  label="开启自动保存"
+                  checked={settings.general.autoSave}
+                  onChange={(checked) =>
+                    updateSettings((current) => ({
+                      ...current,
+                      general: { ...current.general, autoSave: checked }
+                    }))
+                  }
+                />
+              </div>
+              <div className="settings-actions">
+                <button type="button" className="danger-button button-with-icon" onClick={resetSettings}>
+                  <img className="button-icon" src={refreshIcon} alt="" />
+                  <span>重置 UI 设置</span>
+                </button>
+              </div>
+            </SettingsCard>
+          ) : null}
+
+          {activeCategory === 'ai' || activeCategory === 'web' || activeCategory === 'data' ? (
             <SettingsCard
               title={categories.find((category) => category.id === activeCategory)?.title ?? '设置'}
               badge={activeCategory === 'data' ? `${localStorageUsage} KB` : '兼容旧数据'}
@@ -771,13 +915,32 @@ function describeLocalTranslationBadge(status: LocalTranslationStatus | null): s
   if (!status) {
     return '状态未知';
   }
-  if (status.nllb.available) {
-    const device = status.worker.running && status.nllb.runtimeDevice !== 'unknown'
-      ? status.nllb.runtimeDevice.toUpperCase()
-      : status.nllb.device.toUpperCase();
-    return `NLLB 可用 · ${device}`;
+  if (status.preferredEngine === 'argos-only') {
+    return 'Argos only';
+  }
+  if (!status.nllb.configured) {
+    return 'Argos fallback';
+  }
+  if (status.nllb.runtimeState === 'warming') {
+    return 'NLLB 预热中';
+  }
+  if (status.nllb.runtimeState === 'cpu_fallback') {
+    return 'NLLB CPU 回退';
+  }
+  if (status.nllb.runtimeState === 'ready' && status.nllb.available) {
+    return `NLLB 可用 · ${formatLocalTranslationDevice(status)}`;
+  }
+  if (status.nllb.runtimeState === 'failed') {
+    return 'NLLB 不可用';
   }
   return 'Argos fallback';
+}
+
+function formatLocalTranslationDevice(status: LocalTranslationStatus): string {
+  if (status.nllb.runtimeDevice !== 'unknown') {
+    return status.nllb.runtimeDevice.toUpperCase();
+  }
+  return status.nllb.device === 'auto' ? '设备未确认' : status.nllb.device.toUpperCase();
 }
 
 function calculateLocalStorageUsage(): number {

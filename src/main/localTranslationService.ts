@@ -6,12 +6,21 @@ export type LocalTranslationCacheEngine = 'nllb-ct2-int8' | 'argos';
 export type LocalTranslationRuntimeEngine = 'nllb-ct2' | 'argos';
 export type LocalTranslationPreference = 'nllb-first' | 'argos-first' | 'nllb-only' | 'argos-only';
 export type LocalTranslationDevicePreference = 'auto' | 'cuda' | 'cpu';
+export type LocalTranslationRuntimeState = 'not_checked' | 'warming' | 'ready' | 'cpu_fallback' | 'failed';
+export type LocalTranslationLanguage = 'en' | 'zh';
 
 export interface LocalTranslateBatchResult {
   texts: string[];
   engine: LocalTranslationCacheEngine;
   device?: 'cuda' | 'cpu' | 'unknown';
   model?: string;
+  warning?: string;
+  fallbackReason?: string;
+}
+
+export interface LocalTranslateDirectionOptions {
+  sourceLanguage?: LocalTranslationLanguage;
+  targetLanguage?: LocalTranslationLanguage;
 }
 
 export interface LocalTranslationStatus {
@@ -24,6 +33,12 @@ export interface LocalTranslationStatus {
     tokenizerDir: string;
     device: LocalTranslationDevicePreference;
     runtimeDevice: 'cuda' | 'cpu' | 'unknown';
+    runtimeState: LocalTranslationRuntimeState;
+    cudaDllDirs: string[];
+    lastRuntimeError: string;
+    lastFallbackReason: string;
+    lastCheckedAt: string;
+    warmupMs: number;
     message: string;
   };
   fallback: {
@@ -54,8 +69,26 @@ const DEFAULT_NLLB_CUDA_DLL_DIR_CANDIDATES = [
 ];
 const DEFAULT_NLLB_TIMEOUT_MS = 120_000;
 const DEFAULT_NLLB_MODEL_NAME = 'nllb-200-distilled-600M-ct2-int8';
+const DEFAULT_NLLB_BEAM_SIZE = 1;
+const DEFAULT_NLLB_MAX_DECODING_LENGTH = 512;
 
 let nllbRuntime: NllbCTranslate2Runtime | null = null;
+let nllbWarmupPromise: Promise<LocalTranslationStatus> | null = null;
+let nllbRuntimeStatus: {
+  runtimeState: LocalTranslationRuntimeState;
+  runtimeDevice: 'cuda' | 'cpu' | 'unknown';
+  lastRuntimeError: string;
+  lastFallbackReason: string;
+  lastCheckedAt: string;
+  warmupMs: number;
+} = {
+  runtimeState: 'not_checked',
+  runtimeDevice: 'unknown',
+  lastRuntimeError: '',
+  lastFallbackReason: '',
+  lastCheckedAt: '',
+  warmupMs: 0
+};
 
 export function resolveNllbPythonCommand(): string {
   const configured = process.env.FTRANSLATE_NLLB_PYTHON?.trim();
@@ -76,6 +109,19 @@ export function resolveNllbTokenizerDir(): string {
 export function resolveNllbDevice(): LocalTranslationDevicePreference {
   const configured = process.env.FTRANSLATE_NLLB_DEVICE?.trim().toLowerCase();
   return configured === 'cuda' || configured === 'cpu' ? configured : 'auto';
+}
+
+export function resolveNllbBeamSize(): number {
+  return clampIntegerEnv('FTRANSLATE_NLLB_BEAM_SIZE', DEFAULT_NLLB_BEAM_SIZE, 1, 8);
+}
+
+export function resolveNllbMaxDecodingLength(): number {
+  return clampIntegerEnv(
+    'FTRANSLATE_NLLB_MAX_DECODING_LENGTH',
+    DEFAULT_NLLB_MAX_DECODING_LENGTH,
+    128,
+    1024
+  );
 }
 
 export function resolveNllbCudaDllDirs(): string[] {
@@ -113,6 +159,8 @@ export function resolveNllbChildEnv(): NodeJS.ProcessEnv {
     FTRANSLATE_NLLB_TOKENIZER_DIR: resolveNllbTokenizerDir(),
     FTRANSLATE_NLLB_CUDA_DLL_DIRS: cudaDllDirs.join(path.delimiter),
     FTRANSLATE_NLLB_DEVICE: resolveNllbDevice(),
+    FTRANSLATE_NLLB_BEAM_SIZE: String(resolveNllbBeamSize()),
+    FTRANSLATE_NLLB_MAX_DECODING_LENGTH: String(resolveNllbMaxDecodingLength()),
     HF_HOME: process.env.HF_HOME?.trim() || DEFAULT_NLLB_HF_HOME,
     TRANSFORMERS_OFFLINE: '1',
     HF_HUB_OFFLINE: '1',
@@ -127,21 +175,38 @@ export function getLocalTranslationStatus(): LocalTranslationStatus {
   const pythonPath = resolveNllbPythonCommand();
   const modelDir = resolveNllbModelDir();
   const tokenizerDir = resolveNllbTokenizerDir();
-  const configured = Boolean(modelDir) && fs.existsSync(modelDir) && fs.existsSync(tokenizerDir);
+  const configured = hasConfiguredNllb();
   const runtime = nllbRuntime && !nllbRuntime.isClosed() ? nllbRuntime : null;
+  const runtimeDevice = runtime?.runtimeDevice ?? nllbRuntimeStatus.runtimeDevice;
+  const runtimeState = configured ? nllbRuntimeStatus.runtimeState : 'failed';
+  const available = configured && Boolean(runtime) && (runtimeState === 'ready' || runtimeState === 'cpu_fallback');
+  const cudaDllDirs = resolveNllbCudaDllDirs();
   return {
     preferredEngine: resolveLocalTranslationPreference(),
     nllb: {
       configured,
-      available: configured,
+      available,
       pythonPath,
       modelDir,
       tokenizerDir,
       device: resolveNllbDevice(),
-      runtimeDevice: runtime?.runtimeDevice ?? 'unknown',
-      message: configured
-        ? 'NLLB CTranslate2 int8 模型与 tokenizer 已配置。'
-        : `未找到 NLLB 模型或 tokenizer：${modelDir} / ${tokenizerDir}`
+      runtimeDevice,
+      runtimeState,
+      cudaDllDirs,
+      lastRuntimeError: nllbRuntimeStatus.lastRuntimeError,
+      lastFallbackReason: nllbRuntimeStatus.lastFallbackReason,
+      lastCheckedAt: nllbRuntimeStatus.lastCheckedAt,
+      warmupMs: nllbRuntimeStatus.warmupMs,
+      message: buildNllbStatusMessage({
+        configured,
+        runtimeState,
+        runtimeDevice,
+        modelDir,
+        tokenizerDir,
+        lastRuntimeError: nllbRuntimeStatus.lastRuntimeError,
+        lastFallbackReason: nllbRuntimeStatus.lastFallbackReason,
+        warmupMs: nllbRuntimeStatus.warmupMs
+      })
     },
     fallback: {
       engine: 'argos',
@@ -155,24 +220,75 @@ export function getLocalTranslationStatus(): LocalTranslationStatus {
 }
 
 export async function checkLocalTranslationInstall(): Promise<LocalTranslationStatus> {
-  return getLocalTranslationStatus();
+  return warmUpNllbTranslator();
 }
 
 export async function warmUpNllbTranslator(timeoutMs = 45_000): Promise<LocalTranslationStatus> {
-  if (!fs.existsSync(resolveNllbModelDir()) || !fs.existsSync(resolveNllbTokenizerDir())) {
+  if (resolveLocalTranslationPreference() === 'argos-only') {
+    updateNllbRuntimeStatus({
+      runtimeState: 'not_checked',
+      runtimeDevice: 'unknown',
+      lastRuntimeError: '',
+      lastFallbackReason: '',
+      warmupMs: 0
+    });
     return getLocalTranslationStatus();
   }
-  try {
-    await translateTextsWithNllbCTranslate2(['warm up'], timeoutMs);
-  } catch {
-    resetNllbRuntime();
+  if (!hasConfiguredNllb()) {
+    updateNllbRuntimeStatus({
+      runtimeState: 'failed',
+      runtimeDevice: 'unknown',
+      lastRuntimeError: `未找到 NLLB 模型或 tokenizer：${resolveNllbModelDir()} / ${resolveNllbTokenizerDir()}`,
+      lastFallbackReason: '',
+      warmupMs: 0
+    });
+    return getLocalTranslationStatus();
   }
-  return getLocalTranslationStatus();
+  if (nllbWarmupPromise) {
+    return nllbWarmupPromise;
+  }
+  updateNllbRuntimeStatus({
+    runtimeState: 'warming',
+    runtimeDevice: nllbRuntimeStatus.runtimeDevice,
+    lastRuntimeError: '',
+    lastFallbackReason: '',
+    warmupMs: 0
+  });
+  const startedAt = Date.now();
+  nllbWarmupPromise = (async () => {
+    try {
+      const result = await translateTextsWithNllbCTranslate2(['warm up'], timeoutMs);
+      const warmupMs = Date.now() - startedAt;
+      updateNllbRuntimeStatus({
+        runtimeState: result.device === 'cpu' && result.fallbackReason ? 'cpu_fallback' : 'ready',
+        runtimeDevice: result.device ?? 'unknown',
+        lastRuntimeError: '',
+        lastFallbackReason: result.fallbackReason ?? '',
+        warmupMs
+      });
+      return getLocalTranslationStatus();
+    } catch (error) {
+      const warmupMs = Date.now() - startedAt;
+      resetNllbRuntime();
+      updateNllbRuntimeStatus({
+        runtimeState: 'failed',
+        runtimeDevice: 'unknown',
+        lastRuntimeError: formatErrorMessage(error),
+        lastFallbackReason: '',
+        warmupMs
+      });
+      return getLocalTranslationStatus();
+    } finally {
+      nllbWarmupPromise = null;
+    }
+  })();
+  return nllbWarmupPromise;
 }
 
 export async function translateTextsWithNllbCTranslate2(
   texts: string[],
-  timeoutMs = DEFAULT_NLLB_TIMEOUT_MS
+  timeoutMs = DEFAULT_NLLB_TIMEOUT_MS,
+  options: LocalTranslateDirectionOptions = {}
 ): Promise<LocalTranslateBatchResult> {
   const cleanTexts = texts.map((text) => (typeof text === 'string' ? text : ''));
   if (cleanTexts.length === 0) {
@@ -184,8 +300,17 @@ export async function translateTextsWithNllbCTranslate2(
   if (!fs.existsSync(resolveNllbTokenizerDir())) {
     throw new Error(`NLLB tokenizer 未配置：${resolveNllbTokenizerDir()}`);
   }
+  const startedAt = Date.now();
+  const hadReadyRuntime = nllbRuntimeStatus.runtimeState === 'ready' || nllbRuntimeStatus.runtimeState === 'cpu_fallback';
   const runtime = getNllbRuntime();
-  const result = await runtime.translate(cleanTexts, Math.max(timeoutMs, cleanTexts.length * 8_000));
+  const result = await runtime.translate(cleanTexts, Math.max(timeoutMs, cleanTexts.length * 8_000), options);
+  updateNllbRuntimeStatus({
+    runtimeState: result.device === 'cpu' && result.fallbackReason ? 'cpu_fallback' : 'ready',
+    runtimeDevice: result.device ?? 'unknown',
+    lastRuntimeError: '',
+    lastFallbackReason: result.fallbackReason ?? '',
+    warmupMs: hadReadyRuntime ? nllbRuntimeStatus.warmupMs : Date.now() - startedAt
+  });
   return {
     ...result,
     engine: 'nllb-ct2-int8',
@@ -198,6 +323,69 @@ export function resetNllbRuntime(): void {
     nllbRuntime.close();
     nllbRuntime = null;
   }
+  updateNllbRuntimeStatus({
+    runtimeState: 'not_checked',
+    runtimeDevice: 'unknown',
+    lastRuntimeError: '',
+    lastFallbackReason: '',
+    warmupMs: 0
+  });
+}
+
+function hasConfiguredNllb(): boolean {
+  const modelDir = resolveNllbModelDir();
+  const tokenizerDir = resolveNllbTokenizerDir();
+  return Boolean(modelDir) && fs.existsSync(modelDir) && fs.existsSync(tokenizerDir);
+}
+
+function updateNllbRuntimeStatus(
+  patch: Partial<typeof nllbRuntimeStatus> & Pick<typeof nllbRuntimeStatus, 'runtimeState'>
+): void {
+  nllbRuntimeStatus = {
+    ...nllbRuntimeStatus,
+    ...patch,
+    lastCheckedAt: new Date().toISOString()
+  };
+}
+
+function buildNllbStatusMessage(input: {
+  configured: boolean;
+  runtimeState: LocalTranslationRuntimeState;
+  runtimeDevice: 'cuda' | 'cpu' | 'unknown';
+  modelDir: string;
+  tokenizerDir: string;
+  lastRuntimeError: string;
+  lastFallbackReason: string;
+  warmupMs: number;
+}): string {
+  if (!input.configured) {
+    return `未找到 NLLB 模型或 tokenizer：${input.modelDir} / ${input.tokenizerDir}`;
+  }
+  if (input.runtimeState === 'not_checked') {
+    return 'NLLB CTranslate2 int8 模型与 tokenizer 已配置，但尚未完成运行检查。';
+  }
+  if (input.runtimeState === 'warming') {
+    return '正在预热 NLLB worker。';
+  }
+  if (input.runtimeState === 'cpu_fallback') {
+    return `NLLB 已回退 CPU 运行：${input.lastFallbackReason || 'CUDA 不可用'}。`;
+  }
+  if (input.runtimeState === 'ready') {
+    return `NLLB worker 已就绪，运行设备：${input.runtimeDevice.toUpperCase()}，预热 ${input.warmupMs} ms。`;
+  }
+  return `NLLB 运行检查失败：${input.lastRuntimeError || '未知错误'}`;
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function clampIntegerEnv(name: string, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(process.env[name]?.trim() ?? '', 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, parsed));
 }
 
 function getNllbRuntime(): NllbCTranslate2Runtime {
@@ -252,7 +440,11 @@ class NllbCTranslate2Runtime {
     return this.pending.size;
   }
 
-  translate(texts: string[], timeoutMs: number): Promise<LocalTranslateBatchResult> {
+  translate(
+    texts: string[],
+    timeoutMs: number,
+    options: LocalTranslateDirectionOptions = {}
+  ): Promise<LocalTranslateBatchResult> {
     if (this.isClosed()) {
       return Promise.reject(new Error('NLLB worker 不可用。'));
     }
@@ -263,14 +455,23 @@ class NllbCTranslate2Runtime {
         reject(new Error(`NLLB 批量翻译超时：${Math.round(timeoutMs / 1000)} 秒`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.child.stdin.write(`${JSON.stringify({ id, texts })}\n`, 'utf8', (error) => {
-        if (!error) {
-          return;
+      this.child.stdin.write(
+        `${JSON.stringify({
+          id,
+          texts,
+          sourceLanguage: options.sourceLanguage ?? 'en',
+          targetLanguage: options.targetLanguage ?? 'zh'
+        })}\n`,
+        'utf8',
+        (error) => {
+          if (!error) {
+            return;
+          }
+          clearTimeout(timer);
+          this.pending.delete(id);
+          reject(error);
         }
-        clearTimeout(timer);
-        this.pending.delete(id);
-        reject(error);
-      });
+      );
     });
   }
 
@@ -300,9 +501,23 @@ class NllbCTranslate2Runtime {
   }
 
   private handleLine(line: string): void {
-    let message: { id?: unknown; texts?: unknown; error?: unknown; device?: unknown };
+    let message: {
+      id?: unknown;
+      texts?: unknown;
+      error?: unknown;
+      device?: unknown;
+      warning?: unknown;
+      fallbackReason?: unknown;
+    };
     try {
-      message = JSON.parse(line) as { id?: unknown; texts?: unknown; error?: unknown; device?: unknown };
+      message = JSON.parse(line) as {
+        id?: unknown;
+        texts?: unknown;
+        error?: unknown;
+        device?: unknown;
+        warning?: unknown;
+        fallbackReason?: unknown;
+      };
     } catch {
       return;
     }
@@ -328,7 +543,9 @@ class NllbCTranslate2Runtime {
       texts: message.texts.map((item) => item.replace(/\s+/gu, ' ').trim()),
       engine: 'nllb-ct2-int8',
       device: this.runtimeDevice,
-      model: DEFAULT_NLLB_MODEL_NAME
+      model: DEFAULT_NLLB_MODEL_NAME,
+      warning: typeof message.warning === 'string' ? message.warning : undefined,
+      fallbackReason: typeof message.fallbackReason === 'string' ? message.fallbackReason : undefined
     });
   }
 
@@ -345,8 +562,7 @@ function buildNllbWorkerScript(): string {
   return [
     'import json, os, sys, traceback',
     'MODEL_NAME = "facebook/nllb-200-distilled-600M"',
-    'SRC_LANG = "eng_Latn"',
-    'TGT_LANG = "zho_Hans"',
+    'LANGUAGE_CODES = {"en": "eng_Latn", "zh": "zho_Hans"}',
     'model_dir = os.environ.get("FTRANSLATE_NLLB_MODEL_DIR")',
     'tokenizer_dir = os.environ.get("FTRANSLATE_NLLB_TOKENIZER_DIR") or MODEL_NAME',
     'cuda_dll_dirs = [p for p in os.environ.get("FTRANSLATE_NLLB_CUDA_DLL_DIRS", "").split(os.pathsep) if p]',
@@ -356,17 +572,20 @@ function buildNllbWorkerScript(): string {
     '            os.add_dll_directory(dll_dir)',
     'import ctranslate2',
     'device_pref = os.environ.get("FTRANSLATE_NLLB_DEVICE", "auto").lower()',
+    'beam_size = max(1, min(8, int(os.environ.get("FTRANSLATE_NLLB_BEAM_SIZE", "1"))))',
+    'max_decoding_length = max(128, min(1024, int(os.environ.get("FTRANSLATE_NLLB_MAX_DECODING_LENGTH", "512"))))',
     'hf_home = os.environ.get("HF_HOME")',
     'translator = None',
     'tokenizer = None',
     'runtime_device = "unknown"',
+    'fallback_reason = ""',
     '',
     'def load_runtime():',
-    '    global translator, tokenizer, runtime_device',
+    '    global translator, tokenizer, runtime_device, fallback_reason',
     '    if translator is not None and tokenizer is not None:',
     '        return',
     '    from transformers import AutoTokenizer',
-    '    tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir, src_lang=SRC_LANG, cache_dir=hf_home, local_files_only=True)',
+    '    tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir, src_lang=LANGUAGE_CODES["en"], cache_dir=hf_home, local_files_only=True)',
     '    devices = [device_pref] if device_pref in ("cuda", "cpu") else ["cuda", "cpu"]',
     '    last_error = None',
     '    for device in devices:',
@@ -376,28 +595,34 @@ function buildNllbWorkerScript(): string {
     '            return',
     '        except Exception as exc:',
     '            last_error = exc',
+    '            if device == "cuda":',
+    '                fallback_reason = str(exc)',
     '    raise last_error or RuntimeError("No CTranslate2 device available")',
     '',
-    'def translate_texts(texts):',
-    '    global translator, runtime_device',
+    'def translate_texts(texts, source_language="en", target_language="zh"):',
+    '    global translator, runtime_device, fallback_reason',
     '    load_runtime()',
     '    if not texts:',
     '        return []',
+    '    source_lang = LANGUAGE_CODES.get(source_language, LANGUAGE_CODES["en"])',
+    '    target_lang = LANGUAGE_CODES.get(target_language, LANGUAGE_CODES["zh"])',
+    '    tokenizer.src_lang = source_lang',
     '    source_batches = []',
     '    target_prefixes = []',
-    '    tgt_id = tokenizer.convert_tokens_to_ids(TGT_LANG)',
-    '    tgt_token = tokenizer.convert_ids_to_tokens(tgt_id) if isinstance(tgt_id, int) and tgt_id >= 0 else TGT_LANG',
+    '    tgt_id = tokenizer.convert_tokens_to_ids(target_lang)',
+    '    tgt_token = tokenizer.convert_ids_to_tokens(tgt_id) if isinstance(tgt_id, int) and tgt_id >= 0 else target_lang',
     '    for text in texts:',
-    '        encoded = tokenizer(text or "", return_attention_mask=False, truncation=True, max_length=768)',
+    '        encoded = tokenizer(text or "", return_attention_mask=False, truncation=True, max_length=max_decoding_length)',
     '        source_batches.append(tokenizer.convert_ids_to_tokens(encoded["input_ids"]))',
     '        target_prefixes.append([tgt_token])',
     '    try:',
-    '        results = translator.translate_batch(source_batches, target_prefix=target_prefixes, beam_size=4, max_decoding_length=768)',
+    '        results = translator.translate_batch(source_batches, target_prefix=target_prefixes, beam_size=beam_size, max_decoding_length=max_decoding_length)',
     '    except Exception:',
     '        if runtime_device == "cuda" and device_pref == "auto":',
+    '            fallback_reason = traceback.format_exc().strip()',
     '            translator = ctranslate2.Translator(model_dir, device="cpu", compute_type="int8")',
     '            runtime_device = "cpu"',
-    '            results = translator.translate_batch(source_batches, target_prefix=target_prefixes, beam_size=4, max_decoding_length=768)',
+    '            results = translator.translate_batch(source_batches, target_prefix=target_prefixes, beam_size=beam_size, max_decoding_length=max_decoding_length)',
     '        else:',
     '            raise',
     '    outputs = []',
@@ -416,11 +641,14 @@ function buildNllbWorkerScript(): string {
     '        payload = json.loads(line)',
     '        req_id = payload.get("id")',
     '        texts = payload.get("texts", [])',
-    '        out = translate_texts(texts)',
-    '        sys.stdout.write(json.dumps({"id": req_id, "texts": out, "device": runtime_device}, ensure_ascii=False) + "\\n")',
+    '        source_language = payload.get("sourceLanguage", "en")',
+    '        target_language = payload.get("targetLanguage", "zh")',
+    '        out = translate_texts(texts, source_language, target_language)',
+    '        warning = ("CUDA unavailable; using CPU fallback" if runtime_device == "cpu" and fallback_reason else "")',
+    '        sys.stdout.write(json.dumps({"id": req_id, "texts": out, "device": runtime_device, "warning": warning, "fallbackReason": fallback_reason}, ensure_ascii=False) + "\\n")',
     '        sys.stdout.flush()',
     '    except Exception as exc:',
-    '        sys.stdout.write(json.dumps({"id": req_id, "error": str(exc), "device": runtime_device}, ensure_ascii=False) + "\\n")',
+    '        sys.stdout.write(json.dumps({"id": req_id, "error": str(exc), "device": runtime_device, "fallbackReason": fallback_reason}, ensure_ascii=False) + "\\n")',
     '        sys.stdout.flush()'
   ].join('\n');
 }

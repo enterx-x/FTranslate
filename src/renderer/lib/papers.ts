@@ -58,6 +58,7 @@ export interface PaperRecord extends PdfTranslationRecordFields {
   authors: string;
   year: string;
   notes: string;
+  sheetCells?: PaperSheetCells;
   lastOpenedAt: string;
   lastPage: number;
 }
@@ -107,8 +108,7 @@ export function buildPaperRecord(input: BuildPaperRecordInput): PaperRecord {
 
 export function upsertPaperRecord(library: PaperRecord[], incoming: PaperRecord): PaperRecord[] {
   const existingIndex = library.findIndex(
-    (record) =>
-      record.pdfPath === incoming.pdfPath && record.translationPath === incoming.translationPath
+    (record) => normalizeFilePathForCompare(record.pdfPath) === normalizeFilePathForCompare(incoming.pdfPath)
   );
 
   if (existingIndex < 0) {
@@ -118,28 +118,37 @@ export function upsertPaperRecord(library: PaperRecord[], incoming: PaperRecord)
   const existing = library[existingIndex];
   const merged: PaperRecord = {
     ...incoming,
-    chineseTitle: existing.chineseTitle || incoming.chineseTitle,
-    englishTitle: existing.englishTitle || incoming.englishTitle,
-    journal: existing.journal || incoming.journal,
-    authors: existing.authors || incoming.authors,
-    year: existing.year || incoming.year,
-    aiCachePath: existing.aiCachePath || incoming.aiCachePath,
-    aiCacheName: existing.aiCacheName || incoming.aiCacheName,
-    translatedPdfPath: existing.translatedPdfPath || incoming.translatedPdfPath,
-    translatedPdfName: existing.translatedPdfName || incoming.translatedPdfName,
-    translatedMonoPdfPath: existing.translatedMonoPdfPath || incoming.translatedMonoPdfPath,
-    translatedMonoPdfName: existing.translatedMonoPdfName || incoming.translatedMonoPdfName,
-    translatedPdfMode: existing.translatedPdfMode || incoming.translatedPdfMode,
-    translationEngine: existing.translationEngine || incoming.translationEngine,
-    translationSourceHash: existing.translationSourceHash || incoming.translationSourceHash,
-    translatedAt: existing.translatedAt || incoming.translatedAt,
-    translatedProvider: existing.translatedProvider || incoming.translatedProvider,
-    translatedModel: existing.translatedModel || incoming.translatedModel,
-    notes: existing.notes || incoming.notes,
-    lastPage: existing.lastPage || incoming.lastPage
+    id: existing.id ?? incoming.id,
+    pdfName: existing.pdfName ?? incoming.pdfName,
+    translationPath: existing.translationPath.trim() ? existing.translationPath : incoming.translationPath,
+    translationName: existing.translationName.trim() ? existing.translationName : incoming.translationName,
+    chineseTitle: existing.chineseTitle ?? incoming.chineseTitle,
+    englishTitle: existing.englishTitle ?? incoming.englishTitle,
+    journal: existing.journal ?? incoming.journal,
+    authors: existing.authors ?? incoming.authors,
+    year: existing.year ?? incoming.year,
+    aiCachePath: existing.aiCachePath ?? incoming.aiCachePath,
+    aiCacheName: existing.aiCacheName ?? incoming.aiCacheName,
+    translatedPdfPath: existing.translatedPdfPath ?? incoming.translatedPdfPath,
+    translatedPdfName: existing.translatedPdfName ?? incoming.translatedPdfName,
+    translatedMonoPdfPath: existing.translatedMonoPdfPath ?? incoming.translatedMonoPdfPath,
+    translatedMonoPdfName: existing.translatedMonoPdfName ?? incoming.translatedMonoPdfName,
+    translatedPdfMode: existing.translatedPdfMode ?? incoming.translatedPdfMode,
+    translationEngine: existing.translationEngine ?? incoming.translationEngine,
+    translationSourceHash: existing.translationSourceHash ?? incoming.translationSourceHash,
+    translatedAt: existing.translatedAt ?? incoming.translatedAt,
+    translatedProvider: existing.translatedProvider ?? incoming.translatedProvider,
+    translatedModel: existing.translatedModel ?? incoming.translatedModel,
+    notes: existing.notes ?? incoming.notes,
+    sheetCells: existing.sheetCells ?? incoming.sheetCells,
+    lastPage: existing.lastPage ?? incoming.lastPage
   };
 
   return [merged, ...library.filter((_, index) => index !== existingIndex)];
+}
+
+function normalizeFilePathForCompare(value: string): string {
+  return value.trim().replace(/\\/gu, '/').toLowerCase();
 }
 
 export function updatePaperRecord(
@@ -231,6 +240,7 @@ function normalizePaperRecord(value: unknown): PaperRecord | null {
   const record = value as Record<string, unknown>;
   const pdfPath = toText(record.pdfPath);
   const translationPath = toText(record.translationPath);
+  const sheetCells = parseSheetCells(record.sheetCells);
 
   if (!pdfPath) {
     return null;
@@ -261,6 +271,7 @@ function normalizePaperRecord(value: unknown): PaperRecord | null {
     authors: toText(record.authors),
     year: toText(record.year),
     notes: toText(record.notes),
+    ...(Object.keys(sheetCells).length > 0 ? { sheetCells } : {}),
     lastOpenedAt: toText(record.lastOpenedAt) || new Date().toISOString(),
     lastPage: Math.max(1, Number(record.lastPage) || 1)
   };

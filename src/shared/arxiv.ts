@@ -39,6 +39,11 @@ export interface ArxivSearchServiceResult {
   lastRequestGapMs: number;
   cooldownRemainingMs?: number;
   warning?: string;
+  originalSearchQuery?: string;
+  effectiveSearchQuery?: string;
+  translatedQuery?: string;
+  expandedQueryTerms?: string[];
+  queryNotice?: string;
 }
 
 export interface ArxivTitleAbstractTranslationRequest {
@@ -133,12 +138,43 @@ const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
   [/安全强化学习/gu, 'safe reinforcement learning'],
   [/深度强化学习/gu, 'deep reinforcement learning'],
   [/强化学习/gu, 'reinforcement learning'],
+  [/深度学习/gu, 'deep learning'],
+  [/机器学习/gu, 'machine learning'],
+  [/人工智能/gu, 'artificial intelligence AI'],
+  [/自监督学习/gu, 'self-supervised learning'],
+  [/无监督学习/gu, 'unsupervised learning'],
+  [/监督学习/gu, 'supervised learning'],
+  [/迁移学习/gu, 'transfer learning'],
+  [/元学习/gu, 'meta learning'],
+  [/图神经网络|图网络/gu, 'graph neural network GNN'],
+  [/扩散模型|扩散生成/gu, 'diffusion model generative model'],
+  [/生成模型/gu, 'generative model'],
+  [/大语言模型|语言模型/gu, 'large language model LLM'],
+  [/基础模型|基座模型/gu, 'foundation model'],
   [/机器人导航|导航机器人/gu, 'robot navigation robotic navigation mobile robot navigation'],
+  [/软体机器人/gu, 'soft robot soft robotics'],
+  [/人形机器人|仿人机器人/gu, 'humanoid robot humanoid robotics'],
+  [/移动机器人/gu, 'mobile robot mobile robotics'],
+  [/足式机器人|腿式机器人/gu, 'legged robot legged locomotion'],
+  [/轮式机器人/gu, 'wheeled robot mobile robot'],
   [/机器人|机械臂/gu, 'robot robotics manipulator'],
+  [/机器(?!人|学习)|机械(?!臂)/gu, 'machine robot robotics mechanical'],
+  [/柔顺操作|柔顺操控/gu, 'compliant manipulation compliant control'],
+  [/多指抓取|灵巧抓取|抓取/gu, 'dexterous grasping robotic grasping'],
+  [/灵巧手/gu, 'dexterous hand robotic hand'],
+  [/可变形物体|柔性物体/gu, 'deformable object manipulation'],
+  [/操作任务|机器人操作|操纵|操控/gu, 'robot manipulation manipulation'],
   [/触觉感知|触觉传感|触觉|力觉|接触感知|接触丰富/gu, 'haptic tactile haptics tactile sensing tactile perception force feedback touch sensing contact sensing visuotactile'],
+  [/视觉感知|计算机视觉|视觉/gu, 'computer vision visual perception vision'],
+  [/点云|三维点云/gu, 'point cloud 3D point cloud'],
+  [/姿态估计|位姿估计/gu, 'pose estimation state estimation'],
+  [/状态估计/gu, 'state estimation'],
   [/无人机|飞行器/gu, 'uav drone aerial robot'],
   [/避障|障碍物规避|动态障碍/gu, 'obstacle avoidance collision avoidance dynamic obstacle'],
   [/路径规划|运动规划|轨迹规划/gu, 'path planning motion planning trajectory planning navigation'],
+  [/轨迹优化/gu, 'trajectory optimization'],
+  [/最优控制/gu, 'optimal control'],
+  [/控制系统|控制器|控制/gu, 'control system controller control'],
   [/具身智能|具身/gu, 'embodied intelligence embodied AI'],
   [/物理信息|物理约束|物理先验/gu, 'physics-informed physical constraint physics prior'],
   [/神经网络/gu, 'neural network'],
@@ -147,30 +183,133 @@ const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
   [/控制屏障函数|安全屏障|屏障函数/gu, 'control barrier function CBF safety constraint'],
   [/模型预测控制/gu, 'model predictive control MPC'],
   [/物理信息神经网络|PINN/giu, 'physics-informed neural network PINN'],
-  [/移动操作|运动操作|locomanipulation|loco-manipulation/giu, 'loco-manipulation mobile manipulation']
+  [/移动操作|运动操作|locomanipulation|loco-manipulation/giu, 'loco-manipulation mobile manipulation'],
+  [/优化算法|优化/gu, 'optimization algorithm optimization'],
+  [/材料科学|材料/gu, 'materials science materials'],
+  [/量子计算|量子/gu, 'quantum computing quantum'],
+  [/生物信息|生物医学/gu, 'bioinformatics biomedical'],
+  [/医学影像|医疗影像/gu, 'medical imaging biomedical imaging'],
+  [/自然语言处理/gu, 'natural language processing NLP'],
+  [/信息检索|检索系统/gu, 'information retrieval search engine'],
+  [/数据挖掘/gu, 'data mining'],
+  [/数据库/gu, 'database data management'],
+  [/网络安全|信息安全/gu, 'cybersecurity information security'],
+  [/密码学|加密/gu, 'cryptography encryption'],
+  [/形式化验证|程序验证/gu, 'formal verification program verification'],
+  [/编译器|程序语言/gu, 'compiler programming language'],
+  [/操作系统|分布式系统|系统/gu, 'computer systems distributed systems operating systems'],
+  [/计算机图形学|图形学/gu, 'computer graphics rendering'],
+  [/图像处理/gu, 'image processing'],
+  [/信号处理/gu, 'signal processing'],
+  [/统计学习|统计/gu, 'statistical learning statistics'],
+  [/概率模型|概率/gu, 'probabilistic model probability'],
+  [/运筹优化|运筹学/gu, 'operations research optimization'],
+  [/博弈论/gu, 'game theory'],
+  [/金融|经济学/gu, 'finance economics'],
+  [/天体物理|天文/gu, 'astrophysics astronomy'],
+  [/计算物理/gu, 'computational physics'],
+  [/推荐系统/gu, 'recommender system recommendation'],
+  [/联邦学习/gu, 'federated learning'],
+  [/因果推断|因果学习/gu, 'causal inference causal learning']
 ];
 
 const KNOWN_ARXIV_QUERY_PHRASES = [
   'reinforcement learning',
   'safe reinforcement learning',
+  'deep learning',
+  'machine learning',
+  'artificial intelligence',
+  'self-supervised learning',
+  'unsupervised learning',
+  'supervised learning',
+  'transfer learning',
+  'meta learning',
+  'graph neural network',
+  'diffusion model',
+  'generative model',
+  'large language model',
   'robot navigation',
   'robotic navigation',
   'mobile robot',
+  'soft robot',
+  'soft robotics',
+  'humanoid robot',
+  'legged robot',
+  'wheeled robot',
+  'compliant manipulation',
+  'compliant control',
+  'dexterous grasping',
+  'robotic grasping',
+  'dexterous hand',
+  'robotic hand',
+  'deformable object manipulation',
   'tactile sensing',
   'tactile perception',
   'visuotactile',
   'force feedback',
   'touch sensing',
   'contact sensing',
+  'computer vision',
+  'visual perception',
+  'point cloud',
+  '3d point cloud',
+  'pose estimation',
+  'state estimation',
   'path planning',
   'motion planning',
   'trajectory planning',
+  'trajectory optimization',
+  'obstacle avoidance',
+  'collision avoidance',
+  'optimal control',
+  'control system',
   'model predictive control',
   'control barrier function',
   'physics-informed',
   'world model',
+  'embodied ai',
+  'embodied intelligence',
+  'embodied agent',
   'vision language action',
-  'foundation model'
+  'mobile manipulation',
+  'loco-manipulation',
+  'foundation model',
+  'materials science',
+  'quantum computing',
+  'medical imaging',
+  'natural language processing',
+  'information retrieval',
+  'search engine',
+  'data mining',
+  'database',
+  'data management',
+  'cybersecurity',
+  'information security',
+  'cryptography',
+  'formal verification',
+  'program verification',
+  'compiler',
+  'programming language',
+  'computer systems',
+  'distributed systems',
+  'operating systems',
+  'computer graphics',
+  'image processing',
+  'signal processing',
+  'statistical learning',
+  'statistics',
+  'probabilistic model',
+  'operations research',
+  'game theory',
+  'finance',
+  'economics',
+  'astrophysics',
+  'astronomy',
+  'computational physics',
+  'recommender system',
+  'federated learning',
+  'causal inference',
+  'causal learning'
 ];
 
 const ARXIV_QUERY_STOP_WORDS = new Set([
@@ -226,7 +365,7 @@ export function buildArxivApiUrl(request: ArxivSearchRequest): string {
 
 export function buildArxivCacheKey(request: ArxivSearchRequest): string {
   return JSON.stringify({
-    query_version: 'title-abstract-v3',
+    query_version: 'title-abstract-v4',
     search_query: `${request.category || 'all'}:${normalizeArxivSearchQuery(request.searchQuery).toLowerCase()}`,
     yearFrom: normalizeArxivYear(request.yearFrom),
     yearTo: normalizeArxivYear(request.yearTo),
@@ -305,7 +444,17 @@ function buildSemanticTitleAbstractGroups(normalized: string): string[] {
         buildFieldPairClause('touch sensing', true),
         buildFieldPairClause('contact sensing', true)
       ]),
-      ['tactile', 'haptic', 'haptics', 'visuotactile', 'force feedback', 'touch sensing', 'contact sensing']
+      [
+        'tactile',
+        'haptic',
+        'haptics',
+        'visuotactile',
+        'tactile sensing',
+        'tactile perception',
+        'force feedback',
+        'touch sensing',
+        'contact sensing'
+      ]
     );
   }
 
@@ -356,6 +505,47 @@ function buildSemanticTitleAbstractGroups(normalized: string): string[] {
         ])
       ]),
       ['path planning', 'motion planning', 'trajectory planning', 'path', 'motion', 'trajectory', 'planning']
+    );
+  }
+
+  if (containsAny(normalized, ['mpc', 'model predictive control'])) {
+    addGroup(
+      orClauses([
+        buildFieldPairClause('model predictive control', true),
+        buildFieldPairClause('mpc', false)
+      ]),
+      ['model predictive control', 'mpc']
+    );
+  }
+
+  if (containsAny(normalized, ['cbf', 'control barrier function', 'control barrier functions'])) {
+    addGroup(
+      orClauses([
+        buildFieldPairClause('control barrier function', true),
+        buildFieldPairClause('control barrier functions', true),
+        buildFieldPairClause('cbf', false)
+      ]),
+      ['control barrier function', 'control barrier functions', 'cbf']
+    );
+  }
+
+  if (containsAny(normalized, ['embodied ai', 'embodied intelligence', 'embodied agent', 'embodied'])) {
+    addGroup(
+      orClauses([
+        buildFieldPairClause('embodied ai', true),
+        buildFieldPairClause('embodied intelligence', true),
+        buildFieldPairClause('embodied agent', true),
+        andClauses([
+          buildFieldPairClause('embodied', false),
+          orClauses([
+            buildFieldPairClause('ai', false),
+            buildFieldPairClause('intelligence', false),
+            buildFieldPairClause('agent', false),
+            buildFieldPairClause('robot', false)
+          ])
+        ])
+      ]),
+      ['embodied ai', 'embodied intelligence', 'embodied agent', 'embodied', 'ai', 'intelligence', 'agent']
     );
   }
 

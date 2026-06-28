@@ -1,6 +1,6 @@
 {
   "name": "pdf-translation-reader",
-  "version": "0.1.0",
+  "version": "0.1.12",
   "description": "Local offline PDF original text and Chinese translation reader for Windows desktop.",
   "main": "dist-electron/main/main.js",
   "private": true,
@@ -40,6 +40,12 @@
     "vite": "^7.2.4",
     "vitest": "^4.0.14",
     "wait-on": "^9.0.3"
+  },
+  "overrides": {
+    "protobufjs": "^7.6.3",
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
   },
   "build": {
     "appId": "com.local.pdf.translation.reader",

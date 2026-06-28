@@ -43,6 +43,74 @@ describe('arXiv query builder', () => {
     expect(normalized.toLowerCase()).not.toContain('contact-rich manipulation');
   });
 
+  it('expands short Chinese machine and robot terms instead of sending them to arXiv as Chinese text', () => {
+    const machineExpression = getSearchExpression('机器');
+    const mlExpression = getSearchExpression('机器学习');
+
+    expect(normalizeArxivSearchQuery('机器').toLowerCase()).toContain('machine');
+    expect(machineExpression).not.toContain('机器');
+    expect(machineExpression).toContain('ti:machine');
+    expect(machineExpression).toContain('abs:robot');
+    expect(mlExpression).not.toContain('机器学习');
+    expect(mlExpression).toContain('machine learning');
+  });
+
+  it('covers common Chinese academic search terms across robotics, AI, control, and science', () => {
+    const expression = getSearchExpression('柔顺操作 多指抓取 轨迹优化 深度学习 图神经网络 扩散模型 材料 量子');
+
+    expect(expression).not.toContain('柔顺操作');
+    expect(expression).toContain('compliant manipulation');
+    expect(expression).toContain('dexterous grasping');
+    expect(expression).toContain('trajectory optimization');
+    expect(expression).toContain('deep learning');
+    expect(expression).toContain('graph neural network');
+    expect(expression).toContain('diffusion model');
+    expect(expression).toContain('materials');
+    expect(expression).toContain('quantum');
+  });
+
+  it('expands broad non-robotics Chinese terms for a general arXiv search tool', () => {
+    const expression = getSearchExpression('统计学习 数据库 网络安全 医学影像 信息检索 计算机图形学');
+
+    expect(expression).not.toContain('统计学习');
+    expect(expression).not.toContain('医学影像');
+    expect(expression).toContain('statistical learning');
+    expect(expression).toContain('database');
+    expect(expression).toContain('cybersecurity');
+    expect(expression).toContain('medical imaging');
+    expect(expression).toContain('information retrieval');
+    expect(expression).toContain('computer graphics');
+  });
+
+  it('does not add standalone sensing or perception clauses for tactile searches', () => {
+    const expression = getSearchExpression('触觉');
+
+    expect(expression).toContain('ti:"tactile sensing"');
+    expect(expression).toContain('ti:"tactile perception"');
+    expect(expression).not.toContain('ti:sensing');
+    expect(expression).not.toContain('abs:sensing');
+    expect(expression).not.toContain('ti:perception');
+    expect(expression).not.toContain('abs:perception');
+  });
+
+  it('expands broad embodied and planning searches without locking to one domain', () => {
+    const expression = getSearchExpression('具身智能 路径规划 MPC CBF');
+
+    expect(expression).toContain('embodied');
+    expect(expression).toContain('path planning');
+    expect(expression).toContain('model predictive control');
+    expect(expression).toContain('control barrier function');
+    expect(expression).not.toContain('tactile');
+  });
+
+  it('supports latest-all searches without turning the wildcard into a literal word', () => {
+    const expression = getSearchExpression('*');
+
+    expect(expression).toBe('all:*');
+    expect(expression).not.toContain('ti:*');
+    expect(expression).not.toContain('abs:*');
+  });
+
   it('treats repeated local translation artifacts as unusable text', () => {
     expect(isMojibakeTranslationText('互出强化代理互出')).toBe(true);
     expect(isMojibakeTranslationText('分析分析分析分析分析')).toBe(true);

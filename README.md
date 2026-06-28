@@ -8,7 +8,7 @@ FTranslate 是一个 Windows 桌面端科研论文工作台，面向论文阅读
 2. 使用本地 PDF.js 阅读；
 3. 可用 PDFMathTranslate / pdf2zh 生成双语 PDF；
 4. 在论文库、研究表格、AI 助手、知识图谱和阅读笔记中整理研究信息；
-5. 可基于当前 PDF 提取文本，生成组会 PPT 草稿，并导出 Markdown / JSON / 可编辑 PPTX。
+5. 可基于当前 PDF 提取文本与图表候选，生成组会 PPT 草稿，并导出 Markdown / JSON / 可编辑 PPTX。
 
 ## 技术栈
 
@@ -42,10 +42,15 @@ npm run dist
 安装包输出在 `dist/`，例如：
 
 ```text
-dist/PDF Translation Reader Setup 0.1.0.exe
+dist/PDF Translation Reader Setup 0.1.7.exe
 ```
 
 安装完成后会创建桌面快捷方式和开始菜单快捷方式。
+如果需要确认安装包内的界面就是当前构建，可以先运行 `npm run dist`，再运行：
+
+```powershell
+$env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
+```
 
 ## 主要模块
 
@@ -58,6 +63,7 @@ dist/PDF Translation Reader Setup 0.1.0.exe
 - 组会 PPT 生成
 - 论文库
 - PDF 阅读
+- AI 问答
 - AI 助手
 - 设置
 
@@ -69,6 +75,7 @@ dist/PDF Translation Reader Setup 0.1.0.exe
 - 原文 PDF / 左右双语 / 双语 PDF 文件切换；
 - 导入已有中文或双语 PDF；
 - 导出已绑定双语 PDF；
+- 从当前 PDF 的 Figure / Table caption 推断图表区域，提取文献图片缩略图，并把图片/caption 提供给 AI 辅助理解；
 - 基于当前 PDF 生成组会 PPT 草稿。
 
 PDFMathTranslate sidecar 会优先查找系统中的 `pdf2zh` / `pdf2zh_next`。如果找不到，会尝试在 Electron 用户数据目录中创建私有 Python 翻译环境。
@@ -87,18 +94,19 @@ arXiv 检索是一个独立模块，不会自动改写论文库或 PPT 草稿。
 
 已支持：
 
-- 关键词、分类、排序、起止年份和数量设置；
-- 中文关键词会在本地扩展为英文检索词，例如“强化学习”“机器人导航”“无人机避障”会转换为 reinforcement learning / robot navigation / UAV obstacle avoidance 等英文检索词，避免 arXiv API 直接按中文词过滤导致结果过少；
+- 关键词、分类、排序、顺序、起止年份、页内年份、标签和每页数量设置；
+- 中文关键词会在本地扩展为英文检索词，例如“强化学习”“机器人导航”“无人机避障”“医学影像”“信息检索”“数据库”“网络安全”“计算机图形学”会转换为对应英文检索词，避免 arXiv API 直接按中文词过滤导致结果过少；
 - 检索同时匹配 title 和 abstract；年份范围会写入 arXiv submittedDate 查询条件；
 - 每页数量支持 20 / 50 / 100 / 200，并显示 arXiv 返回的总结果数与当前结果范围；
-- 三栏检索工作台：左侧筛选 / 中间论文卡片 / 右侧论文详情；
+- 桌面端采用左侧全局导航、顶部紧凑搜索筛选、中间论文卡片和右侧论文详情的科研检索布局；
+- 论文结果支持单列 / 双列 / 三列切换，默认三列，选择会通过 `pdfTranslationReader:arxivResultColumnMode` 写入 localStorage，刷新后保留；
 - 点击搜索、上一页或下一页时才会请求 arXiv，输入关键词不会自动触发请求；
-- 按年份、标签、收藏、已翻译、已评分筛选当前结果页；
-- 显示标题、中文标题、作者、发布日期、更新时间、分类、英文摘要、中文摘要、arXiv 链接和 PDF 链接；
+- 按年份、标签、收藏、备选、已翻译、已评分筛选当前结果页；
+- 显示标题、中文标题、作者、发布日期、更新时间、分类、英文摘要、中文摘要、arXiv 链接和 PDF 链接；摘要中的 `$...$` / `$$...$$` 会走公式渲染；
 - 使用本地启发式评分生成相关性、新颖性、实验线索、阅读优先级和研究标签；
-- 可自动排队翻译当前结果页的标题和摘要；默认走本地离线 Argos Translate + SQLite 缓存，不消耗 AI API token；
-- 离线翻译使用批量队列和持久 Python worker：首次翻译需要加载模型，后续同一运行期间会复用 worker，批量标题 / 摘要翻译会明显更快；
-- 翻译缓存会自动拒绝常见乱码结果；旧缓存中如果出现 `���`、`æœºå™¨`、`鏈哄櫒` 等编码损坏文本，界面会退回英文并允许重新翻译；
+- 可自动排队翻译当前结果页的标题和摘要；优先使用本地 NLLB + CTranslate2，失败后回退 Argos Translate + SQLite 缓存，不消耗 AI API token；
+- 离线翻译使用批量队列和持久 Python worker：首次翻译需要加载模型，后续同一运行期间会复用 worker，批量标题 / 摘要翻译会明显更快；NLLB 可用时界面会显示 CUDA / CPU 回退等运行状态；
+- 翻译缓存会自动拒绝常见乱码结果，并对专有方法名、模型名、缩写和重复尾巴做质量修复；旧缓存中如果出现 `���`、`æœºå™¨`、`鏈哄櫒` 等编码损坏文本，界面会退回英文并允许重新翻译；
 - 如果未安装 Argos Translate 或未安装 en -> zh 模型，界面会保留英文标题/摘要并提示本地翻译不可用；AI 翻译仍只在 AI 助手或明确 AI 操作中使用；
 - 可复制 BibTeX、复制 / 导出 Markdown 摘要；
 - 可收藏论文，或加入组会 PPT 候选队列；PPT 生成仍只读取用户已下载或手动选择的本地 PDF；
@@ -108,7 +116,7 @@ arXiv 检索是一个独立模块，不会自动改写论文库或 PPT 草稿。
 
 #### arXiv 离线翻译配置
 
-arXiv 标题和摘要翻译只调用本机 `argos-translate`，不会自动切到 AI API。如果界面提示“离线翻译未配置”，可以在 Windows PowerShell 中按下面步骤安装：
+arXiv 标题和摘要翻译优先调用本机 NLLB worker；如果 NLLB 不可用，会回退到本机 `argos-translate`，不会自动切到 AI API。如果界面提示“离线翻译未配置”或需要配置 Argos fallback，可以在 Windows PowerShell 中按下面步骤安装：
 
 ```powershell
 $venv = "$env:LOCALAPPDATA\FTranslate\argos-translate"
@@ -189,6 +197,18 @@ FTRANSLATE_NLLB_DEVICE
 `FTRANSLATE_NLLB_DEVICE` 默认是 `auto`：应用会优先尝试 CUDA，失败后自动回退 CPU。安装后请重启 FTranslate，让 Electron 读取新的用户环境变量。
 
 如果 NLLB 环境不可用，应用会自动回退到 Argos。SQLite 缓存会记录实际使用的 engine，避免同一标题/摘要重复翻译。
+
+### AI 问答
+
+AI 问答是独立页面，不是 AI 助手里的子模块。入口位于左侧导航栏“AI 问答”，界面采用主流 ChatGPT 式布局：
+
+- 左侧选择一篇或多篇论文作为上下文，并支持多个“问答窗口”，每个窗口可新建、命名、删除，并保留独立论文选择和消息历史；
+- 中间是导师式聊天区，支持“开始提问”“我不会”和自由追问；每次发送都会把当前窗口选中论文的标题、笔记、PDF 文本片段和图表 caption 作为证据包发给模型；
+- 右侧展示当前窗口论文对应的图表缩略图、caption 和 PDF 文本片段，图表缩略图可点击放大；
+- AI 会像组会老师一样追问论文方法输入、输出、模型变换、损失或训练目标、实验指标和多论文差异；
+- 用户回答不出来时，AI 会先给出解答，再继续拆成更小的问题。
+
+AI 问答复用同一套 AI Provider / API Key 设置，但页面和状态与 AI 助手分离。若没有提取图片，可以先在 PDF 阅读页点击“提取文献图片”。
 
 ### AI 助手
 
@@ -381,7 +401,13 @@ npm run visual:check
 .tmp-visual-check/
 ```
 
-当前视觉检查会覆盖首页、论文库、研究表格、PDF 阅读、组会 PPT、AI 助手和设置页；失败时会保留对应截图，便于继续定位布局或渲染问题。
+当前视觉检查会覆盖首页、论文库、研究表格、PDF 阅读、组会 PPT、AI 问答、AI 助手、arXiv 检索和设置页。arXiv 检索会检查三列 / 双列 / 单列布局、列数持久化、顶部高级筛选密度、空结果备选论文库紧凑状态、右侧详情面板、分页和横向溢出；AI 问答会检查独立页面、会话窗口入口和 ChatGPT 式布局。失败时会保留对应截图，便于继续定位布局或渲染问题。
+
+检查打包后的实际应用：
+
+```powershell
+$env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
+```
 
 可指定论文：
 

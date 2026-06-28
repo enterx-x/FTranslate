@@ -2,12 +2,23 @@ import { describe, expect, it } from 'vitest';
 import type { ArxivPaper } from '../lib/arxivClient';
 import type { ArxivPaperMeta } from '../lib/arxivUi';
 import {
+  DEFAULT_ARXIV_SEARCH_QUERY,
   buildArxivQueuedPaper,
+  buildAvailableArxivTags,
+  buildArxivReadingQueuePreview,
+  buildArxivSearchRequestForUi,
   buildArxivPriorityTranslationBatches,
+  buildLatestArxivSearchRequest,
   buildArxivTranslationBatches,
+  describeLocalTranslationStatus,
+  getArxivCardPreviewText,
   getArxivResultDensityConfig,
   getArxivResultDisplay,
+  hasUsableArxivChineseMetadata,
+  normalizeArxivResultColumnMode,
+  resolveSelectedArxivPaper,
   runArxivTranslationBatches,
+  shouldQueueArxivMetadataTranslation,
   upsertArxivQueuedPaper
 } from './ArxivSearchPage';
 
@@ -50,19 +61,87 @@ describe('ArxivSearchPage result display', () => {
     expect(display.abstractMode).toBe('en');
   });
 
-  it('maps layout modes to different result-list density settings', () => {
-    expect(getArxivResultDensityConfig('compact')).toMatchObject({
+  it('falls back to English title and abstract when cached Chinese metadata is mojibake', () => {
+    const display = getArxivResultDisplay(paper, {
+      titleZh: '闈㈠悜鏈哄櫒浜哄鑸殑瀹夊叏寮哄寲瀛︿範',
+      abstractZh: '鏈枃鐮旂┒鏈哄櫒浜哄鑸腑鐨勫畨鍏ㄥ己鍖栧涔犮€?'
+    });
+
+    expect(display.title).toBe(paper.title);
+    expect(display.secondaryTitle).toBe('');
+    expect(display.abstractText).toBe(paper.summary);
+    expect(display.abstractMode).toBe('en');
+  });
+
+  it('renders card abstracts as plain preview text without inline math scroll containers', () => {
+    expect(getArxivCardPreviewText('We optimize $J(\\theta)$ with $$R_{task} + R_{safe}$$.')).toBe(
+      'We optimize J(\\theta) with R_{task} + R_{safe}.'
+    );
+  });
+
+  it('repairs stale local arXiv translation cache before rendering cards and detail panels', () => {
+    const tactilePaper: ArxivPaper = {
+      ...paper,
+      title: 'TaCauchy: An Extensible FEM Framework for Vision-Based Tactile Simulation',
+      summary: 'We introduce TaCauchy for vision-based tactile simulation with FEM.'
+    };
+    const display = getArxivResultDisplay(tactilePaper, {
+      titleZh: '塔科奇: 基于视觉的触觉模拟的可扩展FEM框架',
+      abstractZh: '我们介绍了塔科奇用于基于视觉的触觉模拟。'
+    });
+
+    expect(display.title).toContain('TaCauchy');
+    expect(display.title).toContain('FEM');
+    expect(display.title).toContain('Vision-Based');
+    expect(display.abstractText).toContain('TaCauchy');
+    expect(display.abstractMode).toBe('zh');
+  });
+
+  it('does not treat stale mojibake Chinese metadata as usable translation cache', () => {
+    const staleBadCache: ArxivPaperMeta = {
+      titleZh: '闈㈠悜鏈哄櫒浜哄鑸殑瀹夊叏寮哄寲瀛︿範',
+      abstractZh: '鏈枃鐮旂┒鏈哄櫒浜哄鑸腑鐨勫畨鍏ㄥ己鍖栧涔犮€?',
+      translatedAt: '2026-06-18T00:00:00.000Z'
+    };
+
+    expect(hasUsableArxivChineseMetadata(staleBadCache)).toBe(false);
+    expect(shouldQueueArxivMetadataTranslation(staleBadCache)).toBe(true);
+  });
+
+  it('starts as a generic search tool instead of pre-filling a research-direction query', () => {
+    expect(DEFAULT_ARXIV_SEARCH_QUERY).toBe('');
+  });
+
+  it('lets the detail panel stay closed when the current selection is cleared', () => {
+    expect(resolveSelectedArxivPaper([paper], null)).toBeNull();
+    expect(resolveSelectedArxivPaper([paper], 'missing-id')).toBe(paper);
+    expect(resolveSelectedArxivPaper([paper], paper.id)).toBe(paper);
+  });
+
+  it('maps result column modes to different result-list density settings', () => {
+    expect(getArxivResultDensityConfig('three')).toMatchObject({
       className: 'arxiv-density-compact',
       summaryLines: 2
     });
-    expect(getArxivResultDensityConfig('standard')).toMatchObject({
+    expect(getArxivResultDensityConfig('two')).toMatchObject({
       className: 'arxiv-density-standard',
       summaryLines: 3
     });
-    expect(getArxivResultDensityConfig('wide')).toMatchObject({
+    expect(getArxivResultDensityConfig('one')).toMatchObject({
       className: 'arxiv-density-wide',
       summaryLines: 4
     });
+  });
+
+  it('defaults to a three-column result grid while migrating previous layout values', () => {
+    expect(normalizeArxivResultColumnMode(null)).toBe('three');
+    expect(normalizeArxivResultColumnMode('three')).toBe('three');
+    expect(normalizeArxivResultColumnMode('two')).toBe('two');
+    expect(normalizeArxivResultColumnMode('one')).toBe('one');
+    expect(normalizeArxivResultColumnMode('compact')).toBe('three');
+    expect(normalizeArxivResultColumnMode('standard')).toBe('two');
+    expect(normalizeArxivResultColumnMode('wide')).toBe('one');
+    expect(normalizeArxivResultColumnMode('unexpected')).toBe('three');
   });
 
   it('stores arXiv candidate papers without requiring a local PDF path', () => {
@@ -85,6 +164,139 @@ describe('ArxivSearchPage result display', () => {
     expect(queued).not.toHaveProperty('pdfPath');
   });
 
+  it('builds latest-search requests as live submitted-date descending refreshes', () => {
+    const latest = buildLatestArxivSearchRequest(
+      {
+        searchQuery: 'robot',
+        category: '',
+        start: 50,
+        maxResults: 50,
+        sortBy: 'comprehensive',
+        sortOrder: 'ascending',
+        yearFrom: '',
+        yearTo: ''
+      },
+      '机器人'
+    );
+
+    expect(latest).toMatchObject({
+      searchQuery: '机器人',
+      start: 0,
+      sortBy: 'submittedDate',
+      sortOrder: 'descending',
+      forceRefresh: false
+    });
+  });
+
+  it('builds UI search requests with an immediate page-size override', () => {
+    const request = buildArxivSearchRequestForUi(
+      {
+        searchQuery: 'robot',
+        category: '',
+        start: 50,
+        maxResults: 50,
+        sortBy: 'relevance',
+        sortOrder: 'descending'
+      },
+      '机器人',
+      0,
+      { maxResults: 200, forceRefresh: true }
+    );
+
+    expect(request).toMatchObject({
+      searchQuery: '机器人',
+      start: 0,
+      maxResults: 200,
+      forceRefresh: true
+    });
+  });
+
+  it('builds available tags from papers and cached metadata without requiring the active query', () => {
+    const tags = buildAvailableArxivTags(
+      [
+        {
+          ...paper,
+          title: 'Safe RL for Robot Navigation',
+          summary: 'We study control barrier functions and model predictive control.'
+        }
+      ],
+      {
+        [paper.stableId]: {
+          insight: {
+            totalScore: 90,
+            relevance: 90,
+            novelty: 80,
+            methodClarity: 80,
+            experimentQuality: 70,
+            codeAvailability: 0,
+            topicMatch: {
+              rl: 0,
+              pinn: 0,
+              path_planning: 0,
+              robotics: 80,
+              embodied_ai: 0,
+              world_model: 0
+            },
+            readingPriority: 'high',
+            reasonZh: 'cached',
+            tags: ['CBF', 'MPC'],
+          }
+        }
+      }
+    );
+
+    expect(tags).toEqual(['CBF', 'MPC']);
+  });
+
+  it('describes warmed CUDA, CPU fallback, warming, and failed local translation states', () => {
+    const baseStatus = {
+      preferredEngine: 'nllb-first' as const,
+      nllb: {
+        configured: true,
+        available: false,
+        pythonPath: 'python',
+        modelDir: 'model',
+        tokenizerDir: 'tokenizer',
+        device: 'auto' as const,
+        runtimeDevice: 'unknown' as const,
+        runtimeState: 'not_checked' as const,
+        cudaDllDirs: [],
+        lastRuntimeError: '',
+        lastFallbackReason: '',
+        lastCheckedAt: '',
+        warmupMs: 0,
+        message: '尚未完成 NLLB 运行检查。'
+      },
+      fallback: { engine: 'argos' as const, message: 'Argos fallback' },
+      worker: { running: false, pending: 0 }
+    };
+
+    expect(describeLocalTranslationStatus({ ...baseStatus, nllb: { ...baseStatus.nllb, runtimeState: 'warming' } }))
+      .toBe('NLLB 预热中');
+    expect(describeLocalTranslationStatus({
+      ...baseStatus,
+      nllb: { ...baseStatus.nllb, available: true, runtimeState: 'ready', runtimeDevice: 'cuda' }
+    })).toBe('NLLB 可用 · CUDA');
+    expect(describeLocalTranslationStatus({
+      ...baseStatus,
+      nllb: { ...baseStatus.nllb, available: true, runtimeState: 'ready', runtimeDevice: 'unknown', device: 'auto' }
+    })).toBe('NLLB 可用 · 设备未确认');
+    expect(describeLocalTranslationStatus({
+      ...baseStatus,
+      nllb: {
+        ...baseStatus.nllb,
+        available: true,
+        runtimeState: 'cpu_fallback',
+        runtimeDevice: 'cpu',
+        lastFallbackReason: 'CUDA DLL 缺失'
+      }
+    })).toBe('NLLB CPU 回退');
+    expect(describeLocalTranslationStatus({
+      ...baseStatus,
+      nllb: { ...baseStatus.nllb, runtimeState: 'failed', lastRuntimeError: 'No CTranslate2 device available' }
+    })).toBe('NLLB 不可用 · Argos fallback');
+  });
+
   it('upserts queued arXiv papers by stable id', () => {
     const first = buildArxivQueuedPaper(paper, {}, '2026-06-13T00:00:00.000Z');
     const updated = buildArxivQueuedPaper(
@@ -100,6 +312,31 @@ describe('ArxivSearchPage result display', () => {
 
     expect(queue).toHaveLength(1);
     expect(queue[0].title).toBe('Updated title');
+  });
+
+  it('builds a compact queued-paper preview with an expandable remainder', () => {
+    const queue = Array.from({ length: 5 }, (_, index) =>
+      buildArxivQueuedPaper(
+        {
+          ...paper,
+          id: `${paper.id}-${index}`,
+          stableId: `2601.${String(index).padStart(5, '0')}`,
+          title: `Long queued paper title ${index + 1}`
+        },
+        {},
+        `2026-06-13T00:0${index}:00.000Z`
+      )
+    );
+
+    const preview = buildArxivReadingQueuePreview(queue, 3);
+
+    expect(preview.visible.map((item) => item.title)).toEqual([
+      'Long queued paper title 1',
+      'Long queued paper title 2',
+      'Long queued paper title 3'
+    ]);
+    expect(preview.hidden).toHaveLength(2);
+    expect(preview.hiddenCount).toBe(2);
   });
 
   it('prioritizes the first visible arXiv papers before translating the rest in the background', () => {

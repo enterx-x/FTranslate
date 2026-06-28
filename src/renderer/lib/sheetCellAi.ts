@@ -82,12 +82,12 @@ export function parseSheetCellsAiResponse(responseText: string, cells: SheetCell
       return [
         {
           cellAddress: cells[0].cellAddress,
-          value: parsed[0].value
+          value: cleanSheetCellAiValue(parsed[0].value)
         }
       ];
     }
 
-    return [{ cellAddress: cells[0].cellAddress, value: trimmed }];
+    return [{ cellAddress: cells[0].cellAddress, value: cleanSheetCellAiValue(trimmed) }];
   }
 
   const parsed = tryParseJsonCells(trimmed);
@@ -184,7 +184,7 @@ function normalizeParsedCells(
       return;
     }
 
-    parsedByAddress.set(item.cellAddress, item.value);
+    parsedByAddress.set(item.cellAddress, cleanSheetCellAiValue(item.value));
   });
 
   return cells.map((cell) => ({
@@ -201,6 +201,42 @@ function buildEmptyCellResults(cells: SheetCellTarget[]): Array<{ cellAddress: s
 }
 
 function stripCodeFence(value: string): string {
-  const match = value.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/u);
+  const match = value.match(/^```(?:json|markdown|md|text)?\s*([\s\S]*?)\s*```$/iu);
   return match ? match[1].trim() : value;
+}
+
+export function cleanSheetCellAiValue(value: string): string {
+  const withoutFence = stripCodeFence(value.trim());
+  const rawLines = withoutFence
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const promptEchoCount = rawLines.filter(isSheetPromptEchoLine).length;
+  const cleanedLines = rawLines.flatMap((line) => {
+    if (!isSheetPromptEchoLine(line)) {
+      return [line];
+    }
+    if (promptEchoCount > 1) {
+      return [];
+    }
+    const stripped = stripSheetPromptPrefix(line);
+    return stripped ? [stripped] : [];
+  });
+  const cleaned = cleanedLines.join('\n').trim();
+  return cleaned
+    .replace(/^(?:答案|单元格内容|填写内容|输出)\s*[:：]\s*/u, '')
+    .replace(/\n{3,}/gu, '\n\n')
+    .trim();
+}
+
+function isSheetPromptEchoLine(line: string): boolean {
+  return /^(?:system|user|assistant)\s*prompt\s*[:：]/iu.test(line) ||
+    /^(?:目标单元格|当前单元格已有内容|当前内容|当前已有内容|同一行已有信息|同行信息|论文信息|中文标题|英文标题|期刊\/来源|作者|年份|阅读笔记|只输出该单元格内容|输出格式必须|目标单元格列表)\s*[:：]/u.test(line);
+}
+
+function stripSheetPromptPrefix(line: string): string {
+  return line.replace(
+    /^(?:目标单元格|当前单元格已有内容|当前内容|当前已有内容|同一行已有信息|同行信息|论文信息|中文标题|英文标题|期刊\/来源|作者|年份|阅读笔记|目标单元格列表)\s*[:：]\s*/u,
+    ''
+  ).trim();
 }

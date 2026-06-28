@@ -21,6 +21,7 @@ import { extractPdfBlocksFromDocument } from '../lib/pdfOutlineExtraction';
 import { buildHighlightOverlayLines, type HighlightRectLike } from '../lib/pdfHighlightOverlay';
 import { buildOfficialFindFragments } from '../lib/pdfFindQuery';
 import {
+  buildCenteredHorizontalScroll,
   buildPdfScrollPosition,
   buildPdfViewportState,
   type PdfViewportState
@@ -79,6 +80,8 @@ export function PdfViewer(props: PdfViewerProps) {
   const highlightRectStoreRef = useRef<Map<number, HighlightRectLike[]>>(new Map());
   const isHighlightSequenceRunningRef = useRef(false);
   const pendingZoomAnchorRef = useRef<PdfZoomAnchor | null>(null);
+  const hasAppliedInitialHorizontalCenterRef = useRef(false);
+  const pendingInitialCenterFrameRef = useRef<number | null>(null);
   const isSpacePressedRef = useRef(false);
   const panStateRef = useRef<{
     startX: number;
@@ -139,6 +142,7 @@ export function PdfViewer(props: PdfViewerProps) {
       window.requestAnimationFrame(() => {
         setFindReadyToken((value) => (value === 0 ? 1 : value));
       });
+      scheduleInitialHorizontalCenter(8);
       schedulePendingZoomAnchor();
     }
 
@@ -275,6 +279,7 @@ export function PdfViewer(props: PdfViewerProps) {
         void viewer.onePageRendered?.then(() => {
           if (!cancelled) {
             setFindReadyToken((value) => value + 1);
+            scheduleInitialHorizontalCenter(8);
           }
         });
         void extractPdfBlocksFromDocument(pdfDocument, () => cancelled).then((outline) => {
@@ -292,6 +297,11 @@ export function PdfViewer(props: PdfViewerProps) {
 
     return () => {
       cancelled = true;
+      hasAppliedInitialHorizontalCenterRef.current = false;
+      if (pendingInitialCenterFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingInitialCenterFrameRef.current);
+        pendingInitialCenterFrameRef.current = null;
+      }
       currentFindQueryRef.current = '';
       activeHighlightRunIdRef.current += 1;
       isHighlightSequenceRunningRef.current = false;
@@ -319,6 +329,7 @@ export function PdfViewer(props: PdfViewerProps) {
     }
 
     schedulePendingZoomAnchor();
+    scheduleInitialHorizontalCenter(4);
   }, [documentProxy, props.scale]);
 
   useEffect(() => {
@@ -558,6 +569,49 @@ export function PdfViewer(props: PdfViewerProps) {
         applyPendingZoomAnchor();
       });
     });
+  }
+
+  function scheduleInitialHorizontalCenter(remainingAttempts = 1): void {
+    if (hasAppliedInitialHorizontalCenterRef.current || pendingInitialCenterFrameRef.current !== null) {
+      return;
+    }
+
+    pendingInitialCenterFrameRef.current = window.requestAnimationFrame(() => {
+      pendingInitialCenterFrameRef.current = window.requestAnimationFrame(() => {
+        pendingInitialCenterFrameRef.current = null;
+        if (!applyInitialHorizontalCenter() && remainingAttempts > 1) {
+          scheduleInitialHorizontalCenter(remainingAttempts - 1);
+        }
+      });
+    });
+  }
+
+  function applyInitialHorizontalCenter(): boolean {
+    const container = containerRef.current;
+    const firstPage = viewerElementRef.current?.querySelector<HTMLElement>('.page') ?? null;
+    if (!container || !firstPage || hasAppliedInitialHorizontalCenterRef.current) {
+      return false;
+    }
+
+    const pageRect = firstPage.getBoundingClientRect();
+    if (pageRect.width <= 0 || container.clientWidth <= 0) {
+      return false;
+    }
+
+    const scrollLeft = buildCenteredHorizontalScroll({
+      scrollWidth: container.scrollWidth,
+      clientWidth: container.clientWidth
+    });
+    if (scrollLeft > 0) {
+      container.scrollLeft = scrollLeft;
+    }
+    const pageOverflowsContainer = pageRect.width > container.clientWidth + 2;
+    if (!pageOverflowsContainer || scrollLeft > 0) {
+      hasAppliedInitialHorizontalCenterRef.current = true;
+      return true;
+    }
+
+    return false;
   }
 
   function applyPendingZoomAnchor(): void {

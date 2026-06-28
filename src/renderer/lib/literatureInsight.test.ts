@@ -8,6 +8,7 @@ import {
   failLiteratureInsightRun,
   normalizeLiteratureInsightHistory,
   normalizeLiteratureInsightRunState,
+  restoreLiteratureInsightRunStateForUi,
   updateLiteratureInsightRunProgress,
   parseLiteratureGapResponse
 } from './literatureInsight';
@@ -117,6 +118,20 @@ describe('literature gap insight prompt', () => {
       status: 'interrupted',
       paperCount: 2,
       progress: expect.stringContaining('中断')
+    });
+  });
+
+  it('restores any persisted running UI state as interrupted because no request survives reload', () => {
+    const running = updateLiteratureInsightRunProgress(
+      createLiteratureInsightRunState(3, 1000),
+      'running 2s',
+      2000
+    );
+
+    expect(restoreLiteratureInsightRunStateForUi(running, 3000)).toMatchObject({
+      status: 'interrupted',
+      paperCount: 3,
+      progress: expect.stringContaining('页面关闭')
     });
   });
 

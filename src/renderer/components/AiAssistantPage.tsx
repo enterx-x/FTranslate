@@ -18,7 +18,7 @@ import {
   createLiteratureInsightRunState,
   failLiteratureInsightRun,
   normalizeLiteratureInsightHistory,
-  normalizeLiteratureInsightRunState,
+  restoreLiteratureInsightRunStateForUi,
   updateLiteratureInsightRunProgress,
   type LiteratureGapPaperInput,
   type LiteratureInsightHistoryEntry,
@@ -166,7 +166,9 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
     () => buildLinkedLiteratureInputs(props.workbook, props.links, props.papers),
     [props.links, props.papers, props.workbook]
   );
-  const activePaper = props.papers.find((paper) => paper.id === props.activePaperId) ?? props.papers[0] ?? null;
+  const activePaper = props.activePaperId
+    ? props.papers.find((paper) => paper.id === props.activePaperId) ?? null
+    : null;
   const targetInputs = useMemo(
     () => resolveAnalysisInputs(analysisTarget, props.papers, linkedInputs, activePaper),
     [activePaper, analysisTarget, linkedInputs, props.papers]
@@ -174,13 +176,16 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
   const selectedTemplate = promptTemplates.find((template) => template.key === selectedTemplateKey) ?? promptTemplates[0];
 
   useEffect(() => {
-    const restoredState = normalizeLiteratureInsightRunState(
+    const restoredState = restoreLiteratureInsightRunStateForUi(
       readJsonFromLocalStorage(LITERATURE_INSIGHT_STATE_KEY)
     );
     if (restoredState) {
       setAnalysisResult(restoredState.result ?? '');
       setAnalysisProgress(restoredState.progress || restoredState.error || '');
-      setIsRunning(restoredState.status === 'running');
+      setIsRunning(false);
+      if (restoredState.status === 'interrupted') {
+        persistRunState(restoredState);
+      }
     }
 
     const restoredHistory = normalizeLiteratureInsightHistory(
@@ -271,6 +276,12 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
   }
 
   function handleDeleteHistory(entryId: string): void {
+    const entry = analysisHistory.find((item) => item.id === entryId);
+    const title = entry?.title || '这条分析历史';
+    if (!window.confirm(`确认删除“${title}”？此操作只会删除本机历史记录。`)) {
+      return;
+    }
+
     persistHistory(analysisHistory.filter((entry) => entry.id !== entryId));
     if (selectedHistoryId === entryId) {
       setAnalysisResult('');
@@ -445,9 +456,6 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
               >
                 <img className="button-icon" src={analysisIcon} alt="" />
                 <span>{isRunning ? '分析中...' : '开始分析'}</span>
-              </button>
-              <button type="button" className="secondary-button" disabled title="当前 API 请求暂不支持前端中断">
-                停止生成
               </button>
               <button
                 type="button"
@@ -877,6 +885,10 @@ function resolveAnalysisInputs(
 
   if (target === 'allPapers') {
     return papers.map((paper) => ({ paper, rowValues: {} }));
+  }
+
+  if (target === 'linkedPapers') {
+    return linkedInputs;
   }
 
   return linkedInputs.length > 0 ? linkedInputs : papers.map((paper) => ({ paper, rowValues: {} }));

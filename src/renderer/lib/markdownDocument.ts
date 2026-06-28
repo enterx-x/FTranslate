@@ -44,10 +44,25 @@ export function renderMarkdownDocumentToHtml(markdown: string): string {
     flushQuote();
   }
 
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
     const trimmed = line.trim();
     if (!trimmed) {
       flushAll();
+      continue;
+    }
+
+    if (isMarkdownTableHeader(lines, lineIndex)) {
+      flushAll();
+      const headerLine = trimmed;
+      lineIndex += 2;
+      const bodyRows: string[] = [];
+      while (lineIndex < lines.length && isMarkdownTableRow(lines[lineIndex])) {
+        bodyRows.push(lines[lineIndex].trim());
+        lineIndex += 1;
+      }
+      lineIndex -= 1;
+      html.push(renderMarkdownTable(headerLine, bodyRows));
       continue;
     }
 
@@ -101,6 +116,41 @@ export function renderInlineMarkdown(value: string): string {
     .replace(/`([^`]+)`/gu, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/gu, '<strong>$1</strong>')
     .replace(/__([^_]+)__/gu, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/gu, '<em>$1</em>')
-    .replace(/_([^_]+)_/gu, '<em>$1</em>');
+    .replace(/(^|[\s([{])\*([^*\s][^*]*?)\*(?=$|[\s)\]}.,;:!?，。；：！？、])/gu, '$1<em>$2</em>')
+    .replace(/(^|[\s([{])_([^_\s][^_]*?)_(?=$|[\s)\]}.,;:!?，。；：！？、])/gu, '$1<em>$2</em>');
+}
+
+function isMarkdownTableHeader(lines: string[], index: number): boolean {
+  return isMarkdownTableRow(lines[index]) && isMarkdownTableSeparator(lines[index + 1] ?? '');
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.includes('|') && splitMarkdownTableRow(trimmed).length >= 2;
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const cells = splitMarkdownTableRow(line.trim());
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/u.test(cell.trim()));
+}
+
+function splitMarkdownTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/u, '').replace(/\|$/u, '');
+  return trimmed.split('|').map((cell) => cell.trim());
+}
+
+function renderMarkdownTable(headerLine: string, bodyRows: string[]): string {
+  const headers = splitMarkdownTableRow(headerLine);
+  const rows = bodyRows.map(splitMarkdownTableRow);
+  return [
+    '<table>',
+    `<thead><tr>${headers.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join('')}</tr></thead>`,
+    `<tbody>${rows
+      .map(
+        (row) =>
+          `<tr>${headers.map((_, index) => `<td>${renderInlineMarkdown(row[index] ?? '')}</td>`).join('')}</tr>`
+      )
+      .join('')}</tbody>`,
+    '</table>'
+  ].join('');
 }

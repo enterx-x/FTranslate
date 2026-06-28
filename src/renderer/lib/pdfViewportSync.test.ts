@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPdfScrollPosition, buildPdfViewportState } from './pdfViewportSync';
+import { buildCenteredHorizontalScroll, buildPdfScrollPosition, buildPdfViewportState } from './pdfViewportSync';
 
 describe('pdf viewport synchronization', () => {
   it('converts scroll offsets to stable ratios and back to another viewer size', () => {
@@ -52,5 +52,17 @@ describe('pdf viewport synchronization', () => {
       scrollTop: 400,
       scrollLeft: 0
     });
+  });
+
+  it('centers an oversized PDF page horizontally on initial render', () => {
+    expect(buildCenteredHorizontalScroll({
+      scrollWidth: 1200,
+      clientWidth: 800
+    })).toBe(200);
+
+    expect(buildCenteredHorizontalScroll({
+      scrollWidth: 760,
+      clientWidth: 800
+    })).toBe(0);
   });
 });

@@ -7,6 +7,8 @@ import {
   type ArxivSearchServiceResult,
   buildArxivApiUrl,
   buildArxivCacheKey,
+  isMojibakeTranslationText,
+  normalizeArxivWhitespace,
   normalizeArxivSearchQuery,
   parseArxivSearchResult
 } from '../shared/arxiv';
@@ -21,6 +23,7 @@ interface ArxivServiceOptions {
   requestTimeoutMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  translateSearchQueryToEnglish?: (query: string) => Promise<string>;
 }
 
 interface ArxivLogEntry {
@@ -30,6 +33,19 @@ interface ArxivLogEntry {
   queueSize: number;
   lastRequestGapMs: number;
   status: string;
+}
+
+interface ResolvedSearchRequest {
+  request: ArxivSearchRequest;
+  metadata: ArxivSearchMetadata;
+}
+
+interface ArxivSearchMetadata {
+  originalSearchQuery?: string;
+  effectiveSearchQuery?: string;
+  translatedQuery?: string;
+  expandedQueryTerms?: string[];
+  queryNotice?: string;
 }
 
 const DEFAULT_MIN_REQUEST_GAP_MS = 3200;
@@ -48,6 +64,9 @@ export class ArxivService {
   private readonly requestTimeoutMs: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly translateSearchQueryToEnglish?: (query: string) => Promise<string>;
+  private readonly translatedQueryCache = new Map<string, ArxivSearchMetadata & { searchQuery: string }>();
+  private readonly inFlightSearches = new Map<string, Promise<ArxivSearchServiceResult>>();
   private requestTail: Promise<unknown> = Promise.resolve();
   private queuedRequests = 0;
 
@@ -61,6 +80,7 @@ export class ArxivService {
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.translateSearchQueryToEnglish = options.translateSearchQueryToEnglish;
     this.initDatabase();
   }
 
@@ -69,9 +89,13 @@ export class ArxivService {
   }
 
   async search(request: ArxivSearchRequest, source = 'renderer:arxiv-search'): Promise<ArxivSearchServiceResult> {
-    const cacheKey = buildArxivCacheKey(request);
-    const cached = request.forceRefresh ? null : this.readCacheEntry(cacheKey, false);
+    const resolved = await this.resolveSearchRequest(request);
+    const effectiveRequest = resolved.request;
+    const metadata = resolved.metadata;
+    const cacheKey = buildArxivCacheKey(effectiveRequest);
+    const cached = effectiveRequest.forceRefresh ? null : this.readCacheEntry(cacheKey, false);
     if (cached) {
+      const result = applyLocalArxivSort(cached.result, effectiveRequest);
       this.writeLog({
         source,
         query: cacheKey,
@@ -81,18 +105,26 @@ export class ArxivService {
         status: 'cache-hit'
       });
       return {
-        ...cached.result,
+        ...result,
         cacheHit: true,
         cacheStale: false,
         queueSize: 0,
-        lastRequestGapMs: this.getLastRequestGapMs()
+        lastRequestGapMs: this.getLastRequestGapMs(),
+        ...metadata
       };
+    }
+
+    const inFlightKey = `search:${cacheKey}`;
+    const inFlight = this.inFlightSearches.get(inFlightKey);
+    if (inFlight) {
+      return inFlight.then((result) => ({ ...result, ...metadata }));
     }
 
     const cooldown = this.getCooldownStatus();
     if (cooldown.remainingMs > 0) {
       const staleCache = this.readCacheEntry(cacheKey, true);
       if (staleCache) {
+        const result = applyLocalArxivSort(staleCache.result, effectiveRequest);
         const warning = `arXiv 正在保护冷却，已显示本地缓存结果；约 ${formatRemainingCooldown(
           cooldown.remainingMs
         )} 后可再次实时刷新。`;
@@ -105,13 +137,14 @@ export class ArxivService {
           status: staleCache.stale ? 'stale-cache-cooldown' : 'cache-hit-cooldown'
         });
         return {
-          ...staleCache.result,
+          ...result,
           cacheHit: true,
           cacheStale: staleCache.stale,
           queueSize: 0,
           lastRequestGapMs: this.getLastRequestGapMs(),
           cooldownRemainingMs: cooldown.remainingMs,
-          warning
+          warning,
+          ...metadata
         };
       }
       const warning = `arXiv 正在保护冷却，约 ${formatRemainingCooldown(
@@ -125,26 +158,28 @@ export class ArxivService {
         lastRequestGapMs: this.getLastRequestGapMs(),
         status: 'cooldown-empty'
       });
-      return this.buildEmptySearchResult(request, warning, 0, this.getLastRequestGapMs(), cooldown.remainingMs);
+      return this.buildEmptySearchResult(effectiveRequest, warning, 0, this.getLastRequestGapMs(), cooldown.remainingMs, metadata);
     }
 
     const queueSize = this.queuedRequests;
-    return this.enqueue(async () => {
+    const searchPromise = this.enqueue(async () => {
       try {
-        const url = buildArxivApiUrl(request);
+        const url = buildArxivApiUrl(effectiveRequest);
         const { text, lastRequestGapMs } = await this.fetchText(url, source, cacheKey, queueSize);
-        const result = applyLocalArxivSort(parseArxivSearchResult(text, XmldomParser as any), request);
+        const result = applyLocalArxivSort(parseArxivSearchResult(text, XmldomParser as any), effectiveRequest);
         this.writeCache(cacheKey, result);
         return {
           ...result,
           cacheHit: false,
           queueSize,
-          lastRequestGapMs
+          lastRequestGapMs,
+          ...metadata
         };
       } catch (error) {
         const staleCache = this.readCacheEntry(cacheKey, true);
         const cooldownAfterFailure = this.getCooldownStatus();
         if (staleCache) {
+          const result = applyLocalArxivSort(staleCache.result, effectiveRequest);
           const warning = `arXiv 暂时不可用，已回退到本地缓存结果。原因：${formatSearchError(error)}`;
           this.writeLog({
             source,
@@ -155,14 +190,15 @@ export class ArxivService {
             status: staleCache.stale ? 'stale-cache-failure' : 'cache-hit-failure'
           });
           return {
-            ...staleCache.result,
+            ...result,
             cacheHit: true,
             cacheStale: staleCache.stale,
             queueSize,
             lastRequestGapMs: this.getLastRequestGapMs(),
             cooldownRemainingMs:
               cooldownAfterFailure.remainingMs > 0 ? cooldownAfterFailure.remainingMs : undefined,
-            warning
+            warning,
+            ...metadata
           };
         }
 
@@ -176,14 +212,65 @@ export class ArxivService {
           status: 'failure-empty'
         });
         return this.buildEmptySearchResult(
-          request,
+          effectiveRequest,
           warning,
           queueSize,
           this.getLastRequestGapMs(),
-          cooldownAfterFailure.remainingMs > 0 ? cooldownAfterFailure.remainingMs : undefined
+          cooldownAfterFailure.remainingMs > 0 ? cooldownAfterFailure.remainingMs : undefined,
+          metadata
         );
       }
     });
+    this.inFlightSearches.set(inFlightKey, searchPromise);
+    try {
+      return await searchPromise;
+    } finally {
+      this.inFlightSearches.delete(inFlightKey);
+    }
+  }
+
+  private async resolveSearchRequest(request: ArxivSearchRequest): Promise<ResolvedSearchRequest> {
+    const searchQuery = request.searchQuery.trim();
+    if (!hasCjkText(searchQuery)) {
+      return {
+        request,
+        metadata: searchQuery
+          ? {
+              effectiveSearchQuery: normalizeArxivSearchQuery(searchQuery)
+            }
+          : {}
+      };
+    }
+
+    const cacheKey = searchQuery;
+    const cached = this.translatedQueryCache.get(cacheKey);
+    if (cached !== undefined) {
+      const { searchQuery: cachedSearchQuery, ...metadata } = cached;
+      return { request: { ...request, searchQuery: cachedSearchQuery }, metadata };
+    }
+
+    const deterministicQuery = normalizeArxivSearchQuery(searchQuery);
+    let translatedQuery = '';
+    if (this.translateSearchQueryToEnglish) {
+      try {
+        translatedQuery = sanitizeTranslatedSearchQuery(await this.translateSearchQueryToEnglish(searchQuery));
+      } catch {
+        translatedQuery = '';
+      }
+    }
+
+    const expandedQuery = mergeSearchQuerySegments([searchQuery, deterministicQuery, translatedQuery]);
+    const expandedQueryTerms = buildExpandedQueryTerms(deterministicQuery, translatedQuery);
+    const metadata: ArxivSearchMetadata & { searchQuery: string } = {
+      searchQuery: expandedQuery,
+      originalSearchQuery: searchQuery,
+      effectiveSearchQuery: expandedQuery,
+      translatedQuery: translatedQuery || undefined,
+      expandedQueryTerms,
+      queryNotice: buildChineseSearchQueryNotice(searchQuery, expandedQueryTerms)
+    };
+    this.translatedQueryCache.set(cacheKey, metadata);
+    return { request: { ...request, searchQuery: expandedQuery }, metadata };
   }
 
   async downloadPdf(pdfUrl: string, source = 'renderer:arxiv-download'): Promise<Buffer> {
@@ -249,7 +336,8 @@ export class ArxivService {
     warning: string,
     queueSize: number,
     lastRequestGapMs: number,
-    cooldownRemainingMs?: number
+    cooldownRemainingMs?: number,
+    metadata: ArxivSearchMetadata = {}
   ): ArxivSearchServiceResult {
     return {
       papers: [],
@@ -261,7 +349,8 @@ export class ArxivService {
       queueSize,
       lastRequestGapMs,
       cooldownRemainingMs,
-      warning
+      warning,
+      ...metadata
     };
   }
 
@@ -525,6 +614,71 @@ export class ArxivService {
   }
 }
 
+function hasCjkText(value: string): boolean {
+  return /[\u3400-\u9fff]/u.test(value);
+}
+
+function sanitizeTranslatedSearchQuery(value: string): string {
+  if (isMojibakeTranslationText(value) || hasCjkText(value)) {
+    return '';
+  }
+  const sanitized = normalizeArxivWhitespace(
+    value
+      .replace(/[“”"']/gu, ' ')
+      .replace(/[^a-z0-9.+\-\s]/giu, ' ')
+      .replace(/\s+/gu, ' ')
+  );
+  if (!/[a-z]/iu.test(sanitized)) {
+    return '';
+  }
+  return sanitized.split(/\s+/u).slice(0, 24).join(' ');
+}
+
+function mergeSearchQuerySegments(values: string[]): string {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const value of values) {
+    const normalized = normalizeArxivWhitespace(value);
+    if (!normalized) {
+      continue;
+    }
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(normalized);
+  }
+  return normalizeArxivWhitespace(merged.join(' '));
+}
+
+function buildExpandedQueryTerms(deterministicQuery: string, translatedQuery: string): string[] {
+  const terms: string[] = [];
+  const add = (value: string): void => {
+    const normalized = normalizeArxivWhitespace(value);
+    const key = normalized.toLowerCase();
+    if (!normalized || terms.some((term) => term.toLowerCase() === key)) {
+      return;
+    }
+    terms.push(normalized);
+  };
+
+  add(translatedQuery);
+  const deterministicWords = deterministicQuery
+    .split(/\s+/u)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 3);
+  deterministicWords.forEach(add);
+  return terms.slice(0, 12);
+}
+
+function buildChineseSearchQueryNotice(originalQuery: string, expandedQueryTerms: string[]): string | undefined {
+  if (expandedQueryTerms.length === 0) {
+    return undefined;
+  }
+  return `中文查询“${originalQuery}”已按 ${expandedQueryTerms.slice(0, 6).join(' / ')} 检索`;
+}
+
 function applyLocalArxivSort(result: ArxivParsedSearchResult, request: ArxivSearchRequest): ArxivParsedSearchResult {
   if (request.sortBy !== 'comprehensive' || result.papers.length <= 1) {
     return result;
@@ -550,7 +704,26 @@ function applyLocalArxivSort(result: ArxivParsedSearchResult, request: ArxivSear
 }
 
 function buildRequiredLocalTermGroups(searchQuery: string): string[][] {
-  if (/触觉感知|触觉传感|触觉|力觉|接触感知|接触丰富/u.test(searchQuery)) {
+  const normalized = normalizeArxivSearchQuery(searchQuery).toLowerCase();
+  const normalizedTokens = tokenizeLocalRankingQuery(normalized);
+  const tactileFocusedTokens = new Set([
+    'tactile',
+    'haptic',
+    'haptics',
+    'visuotactile',
+    'touch',
+    'sensing',
+    'contact',
+    'perception',
+    'force',
+    'feedback'
+  ]);
+  const isEnglishTactileOnly =
+    normalizedTokens.length > 0 && normalizedTokens.every((token) => tactileFocusedTokens.has(token));
+  if (
+    /触觉感知|触觉传感|触觉|力觉|接触感知|接触丰富/u.test(searchQuery) ||
+    isEnglishTactileOnly
+  ) {
     return [
       [
         'tactile',

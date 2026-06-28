@@ -145,6 +145,12 @@ function isLooseFormulaBody(body: string): boolean {
     return false;
   }
 
+  const hasCjkText = /[\u3400-\u9fff]/u.test(body);
+  const hasStrongFormulaMarker = /(?:\\[A-Za-z]+|[=^{}≈∼~πθτΔ∑∏≤≥<>|])/u.test(body);
+  if (hasCjkText && !hasStrongFormulaMarker) {
+    return false;
+  }
+
   const mathMarkerCount = (body.match(/[\\_{}^=≈∼~πθτΔ∑∏≤≥<>|]/gu) ?? []).length;
   const longWords = body.match(/[A-Za-z]{4,}/gu) ?? [];
   const punctuationRatio = (body.match(/[^A-Za-z0-9\s]/gu) ?? []).length / Math.max(1, body.length);

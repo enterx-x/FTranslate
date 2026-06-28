@@ -4,7 +4,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ArxivService } from './arxivService';
-import { buildArxivCacheKey, type ArxivSearchRequest } from '../shared/arxiv';
+import { buildArxivCacheKey, normalizeArxivSearchQuery, type ArxivSearchRequest } from '../shared/arxiv';
 
 const sampleFeed = `<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
@@ -134,6 +134,64 @@ describe('ArxivService', () => {
     }
   });
 
+  it('deduplicates identical in-flight searches before they hit arXiv', async () => {
+    let fetchCount = 0;
+    let releaseFetch!: () => void;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const service = new ArxivService({
+      dbPath: path.join(tempDir, 'arxiv.sqlite'),
+      minRequestGapMs: 0,
+      fetchImpl: async () => {
+        fetchCount += 1;
+        await fetchGate;
+        return new Response(sampleFeed, { status: 200 });
+      }
+    });
+
+    try {
+      const first = service.search(request, 'inflight-a');
+      const second = service.search(request, 'inflight-b');
+      releaseFetch();
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+
+      expect(fetchCount).toBe(1);
+      expect(firstResult.papers).toHaveLength(1);
+      expect(secondResult.papers).toHaveLength(1);
+      expect(secondResult.cacheHit).toBe(false);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('returns transparent English query metadata for Chinese searches translated locally', async () => {
+    let requestedExpression = '';
+    const service = new ArxivService({
+      dbPath: path.join(tempDir, 'arxiv.sqlite'),
+      minRequestGapMs: 0,
+      translateSearchQueryToEnglish: async () => 'tactile perception',
+      fetchImpl: async (url) => {
+        requestedExpression = new URL(String(url)).searchParams.get('search_query') ?? '';
+        return new Response(sampleFeed, { status: 200 });
+      }
+    });
+
+    try {
+      const result = await service.search({ ...request, searchQuery: '触觉' }, 'translated-query');
+
+      expect(requestedExpression).toContain('tactile perception');
+      expect(requestedExpression).toContain('haptic');
+      expect(requestedExpression).not.toContain('触觉');
+      expect(result.translatedQuery).toBe('tactile perception');
+      expect(result.expandedQueryTerms).toEqual(expect.arrayContaining(['tactile perception', 'tactile', 'haptic']));
+      expect(result.queryNotice).toContain('触觉');
+      expect(result.queryNotice).toContain('tactile perception');
+    } finally {
+      service.close();
+    }
+  });
+
   it('bypasses SQLite cache when an explicit force refresh is requested', async () => {
     let fetchCount = 0;
     const service = new ArxivService({
@@ -152,6 +210,83 @@ describe('ArxivService', () => {
       expect(first.cacheHit).toBe(false);
       expect(refreshed.cacheHit).toBe(false);
       expect(fetchCount).toBe(2);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('merges local Chinese-to-English query translation into the arXiv API query before caching', async () => {
+    const fetchedUrls: string[] = [];
+    const translatedQueries: string[] = [];
+    const service = new ArxivService({
+      dbPath: path.join(tempDir, 'arxiv.sqlite'),
+      minRequestGapMs: 0,
+      translateSearchQueryToEnglish: async (query) => {
+        translatedQueries.push(query);
+        return 'soft robot tactile sensing';
+      },
+      fetchImpl: async (url) => {
+        fetchedUrls.push(String(url));
+        return new Response(sampleFeed, { status: 200 });
+      }
+    });
+
+    try {
+      const chineseRequest: ArxivSearchRequest = {
+        searchQuery: '软体机器人触觉',
+        category: '',
+        start: 0,
+        maxResults: 10,
+        sortBy: 'submittedDate',
+        sortOrder: 'descending'
+      };
+      const first = await service.search(chineseRequest, 'translated-query');
+      const second = await service.search(chineseRequest, 'translated-query');
+      const searchQuery = new URL(fetchedUrls[0]).searchParams.get('search_query') ?? '';
+
+      expect(translatedQueries).toEqual(['软体机器人触觉']);
+      expect(searchQuery).toContain('soft');
+      expect(searchQuery).toContain('robot');
+      expect(searchQuery).toContain('tactile');
+      expect(searchQuery).not.toContain('软体机器人触觉');
+      expect(first.cacheHit).toBe(false);
+      expect(second.cacheHit).toBe(true);
+      expect(fetchedUrls).toHaveLength(1);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('falls back to deterministic Chinese query expansion when local query translation fails', async () => {
+    const fetchedUrls: string[] = [];
+    const service = new ArxivService({
+      dbPath: path.join(tempDir, 'arxiv.sqlite'),
+      minRequestGapMs: 0,
+      translateSearchQueryToEnglish: async () => {
+        throw new Error('query translator unavailable');
+      },
+      fetchImpl: async (url) => {
+        fetchedUrls.push(String(url));
+        return new Response(sampleFeed, { status: 200 });
+      }
+    });
+
+    try {
+      await service.search(
+        {
+          searchQuery: '机器人',
+          category: '',
+          start: 0,
+          maxResults: 10,
+          sortBy: 'submittedDate',
+          sortOrder: 'descending'
+        },
+        'translated-query-fallback'
+      );
+      const searchQuery = new URL(fetchedUrls[0]).searchParams.get('search_query') ?? '';
+
+      expect(searchQuery).toContain('robot');
+      expect(searchQuery).not.toContain('机器人');
     } finally {
       service.close();
     }
@@ -204,6 +339,110 @@ describe('ArxivService', () => {
       );
 
       expect(result.papers.map((paper) => paper.stableId)).toEqual(['2301.00003']);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('re-applies comprehensive tactile filtering to cached search results', async () => {
+    const dbPath = path.join(tempDir, 'arxiv.sqlite');
+    const tactileRequest: ArxivSearchRequest = {
+      searchQuery: '触觉',
+      category: 'cs.RO',
+      start: 0,
+      maxResults: 3,
+      sortBy: 'comprehensive',
+      sortOrder: 'descending'
+    };
+    const bootstrap = new ArxivService({
+      dbPath,
+      minRequestGapMs: 0,
+      fetchImpl: async () => new Response(sampleFeed, { status: 200 })
+    });
+    bootstrap.close();
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare(
+        `INSERT INTO arxiv_cache(cache_key, created_at, response_json)
+         VALUES (?, ?, ?)`
+      ).run(
+        buildArxivCacheKey({
+          ...tactileRequest,
+          searchQuery: `${tactileRequest.searchQuery} ${normalizeArxivSearchQuery(tactileRequest.searchQuery)}`
+        }),
+        Date.now(),
+        JSON.stringify({
+          papers: [
+            {
+              id: 'http://arxiv.org/abs/2606.99999v1',
+              stableId: '2606.99999',
+              title: 'General Robot Policy Optimization',
+              authors: ['Author Noise'],
+              summary: 'This paper studies locomotion control and policy optimization for mobile robots.',
+              published: '2026-06-16T00:00:00Z',
+              publishedAt: '2026-06-16T00:00:00Z',
+              updated: '2026-06-16T00:00:00Z',
+              categories: ['cs.RO'],
+              primaryCategory: 'cs.RO',
+              abstractUrl: 'http://arxiv.org/abs/2606.99999v1',
+              pdfUrl: 'https://arxiv.org/pdf/2606.99999v1.pdf'
+            },
+            {
+              id: 'http://arxiv.org/abs/2606.99998v1',
+              stableId: '2606.99998',
+              title: 'Native Active Perception as Reasoning',
+              authors: ['Author Vision'],
+              summary: 'This paper studies active visual perception and omni-modal understanding.',
+              published: '2026-06-15T00:00:00Z',
+              publishedAt: '2026-06-15T00:00:00Z',
+              updated: '2026-06-15T00:00:00Z',
+              categories: ['cs.CV'],
+              primaryCategory: 'cs.CV',
+              abstractUrl: 'http://arxiv.org/abs/2606.99998v1',
+              pdfUrl: 'https://arxiv.org/pdf/2606.99998v1.pdf'
+            },
+            {
+              id: 'http://arxiv.org/abs/2301.00003v1',
+              stableId: '2301.00003',
+              title: 'Tactile Sensing for Contact-Rich Robot Manipulation',
+              authors: ['Author Tactile'],
+              summary: 'We study tactile perception and haptic feedback for contact-rich manipulation.',
+              published: '2023-01-01T00:00:00Z',
+              publishedAt: '2023-01-01T00:00:00Z',
+              updated: '2023-01-01T00:00:00Z',
+              categories: ['cs.RO'],
+              primaryCategory: 'cs.RO',
+              abstractUrl: 'http://arxiv.org/abs/2301.00003v1',
+              pdfUrl: 'https://arxiv.org/pdf/2301.00003v1.pdf'
+            }
+          ],
+          totalResults: 3,
+          startIndex: 0,
+          itemsPerPage: 3
+        })
+      );
+    } finally {
+      db.close();
+    }
+
+    let fetchCount = 0;
+    const service = new ArxivService({
+      dbPath,
+      minRequestGapMs: 0,
+      fetchImpl: async () => {
+        fetchCount += 1;
+        return new Response(sampleFeed, { status: 200 });
+      }
+    });
+
+    try {
+      const result = await service.search(tactileRequest, 'cached-tactile-filter');
+
+      expect(fetchCount).toBe(0);
+      expect(result.cacheHit).toBe(true);
+      expect(result.papers.map((paper) => paper.stableId)).toEqual(['2301.00003']);
+      expect(result.itemsPerPage).toBe(1);
     } finally {
       service.close();
     }

@@ -1,3 +1,5 @@
+import { repairAcademicTranslation } from './academicTranslationQuality';
+
 export type AiProviderId = 'openai' | 'deepseek' | 'kimi' | 'custom';
 export type AiTranslatableBlockType = 'heading' | 'paragraph' | 'formula' | 'caption';
 export type AiThinkingMode = 'auto' | 'enabled' | 'disabled';
@@ -676,7 +678,7 @@ export function applyAiTranslationResult<T extends AiTranslationItem>(
 ): T & Pick<AiTranslationItem, 'translation' | 'translatedAt' | 'provider' | 'model'> {
   return {
     ...item,
-    translation,
+    translation: repairAcademicTranslation(item.original, translation, { mode: 'paragraph' }),
     translatedAt,
     provider: settings.provider,
     model: settings.model

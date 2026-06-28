@@ -31,6 +31,9 @@ interface PresentationPageProps {
 
 type PreviewMode = 'slide' | 'markdown';
 
+const PRESENTATION_THUMBS_COLLAPSED_KEY = 'pdfTranslationReader:presentationThumbsCollapsed';
+const PRESENTATION_EDITOR_COLLAPSED_KEY = 'pdfTranslationReader:presentationEditorCollapsed';
+
 export function PresentationPage(props: PresentationPageProps) {
   const [draft, setDraft] = useState<PresentationDraft | null>(props.draft);
   const [selectedSlideId, setSelectedSlideId] = useState(getDefaultSlideId(props.draft));
@@ -38,6 +41,12 @@ export function PresentationPage(props: PresentationPageProps) {
   const [isEnhancingOutline, setIsEnhancingOutline] = useState(false);
   const [enhanceError, setEnhanceError] = useState('');
   const [showRawSources, setShowRawSources] = useState(false);
+  const [isThumbsCollapsed, setIsThumbsCollapsed] = useState(
+    () => localStorage.getItem(PRESENTATION_THUMBS_COLLAPSED_KEY) === '1'
+  );
+  const [isEditorCollapsed, setIsEditorCollapsed] = useState(
+    () => localStorage.getItem(PRESENTATION_EDITOR_COLLAPSED_KEY) === '1'
+  );
 
   useEffect(() => {
     setDraft(props.draft);
@@ -109,6 +118,22 @@ export function PresentationPage(props: PresentationPageProps) {
     } finally {
       setIsEnhancingOutline(false);
     }
+  }
+
+  function toggleThumbsCollapsed(): void {
+    setIsThumbsCollapsed((value) => {
+      const nextValue = !value;
+      localStorage.setItem(PRESENTATION_THUMBS_COLLAPSED_KEY, nextValue ? '1' : '0');
+      return nextValue;
+    });
+  }
+
+  function toggleEditorCollapsed(): void {
+    setIsEditorCollapsed((value) => {
+      const nextValue = !value;
+      localStorage.setItem(PRESENTATION_EDITOR_COLLAPSED_KEY, nextValue ? '1' : '0');
+      return nextValue;
+    });
   }
 
   if (!draft) {
@@ -208,27 +233,42 @@ export function PresentationPage(props: PresentationPageProps) {
         </section>
       ) : null}
 
-      <section className="presentation-workbench">
-        <aside className="presentation-thumbs" aria-label="幻灯片缩略图">
-          {draft.slides.map((slide, index) => {
-            const thumbPlan = slidePlanById.get(slide.id);
-            const thumbTitle = getSlideDisplayTitle(slide.type, thumbPlan?.title ?? slide.title);
-            const thumbSummary = buildThumbnailSummary(slide, thumbPlan);
+      <section
+        className={`presentation-workbench${isThumbsCollapsed ? ' is-thumbs-collapsed' : ''}${
+          isEditorCollapsed ? ' is-editor-collapsed' : ''
+        }`}
+      >
+        <aside className={`presentation-thumbs${isThumbsCollapsed ? ' is-collapsed' : ''}`} aria-label="幻灯片缩略图">
+          <button
+            type="button"
+            className="presentation-panel-toggle"
+            aria-expanded={!isThumbsCollapsed}
+            title={isThumbsCollapsed ? '展开缩略图' : '收起缩略图'}
+            onClick={toggleThumbsCollapsed}
+          >
+            {isThumbsCollapsed ? '展开缩略图' : '收起缩略图'}
+          </button>
+          {!isThumbsCollapsed
+            ? draft.slides.map((slide, index) => {
+                const thumbPlan = slidePlanById.get(slide.id);
+                const thumbTitle = getSlideDisplayTitle(slide.type, thumbPlan?.title ?? slide.title);
+                const thumbSummary = buildThumbnailSummary(slide, thumbPlan);
 
-            return (
-              <button
-                key={slide.id}
-                type="button"
-                className={slide.id === selectedSlide?.id ? 'active' : ''}
-                onClick={() => setSelectedSlideId(slide.id)}
-              >
-                <span>{index + 1}</span>
-                <strong>{thumbTitle}</strong>
-                <small>{slide.section ?? slide.type}</small>
-                <em>{thumbSummary}</em>
-              </button>
-            );
-          })}
+                return (
+                  <button
+                    key={slide.id}
+                    type="button"
+                    className={slide.id === selectedSlide?.id ? 'active' : ''}
+                    onClick={() => setSelectedSlideId(slide.id)}
+                  >
+                    <span>{index + 1}</span>
+                    <strong>{thumbTitle}</strong>
+                    <small>{slide.section ?? slide.type}</small>
+                    <em>{thumbSummary}</em>
+                  </button>
+                );
+              })
+            : null}
         </aside>
 
         <section className="presentation-stage">
@@ -328,8 +368,17 @@ export function PresentationPage(props: PresentationPageProps) {
           )}
         </section>
 
-        <aside className="presentation-editor" aria-label="当前页编辑">
-          {selectedSlide ? (
+        <aside className={`presentation-editor${isEditorCollapsed ? ' is-collapsed' : ''}`} aria-label="当前页编辑">
+          <button
+            type="button"
+            className="presentation-panel-toggle"
+            aria-expanded={!isEditorCollapsed}
+            title={isEditorCollapsed ? '展开编辑栏' : '收起编辑栏'}
+            onClick={toggleEditorCollapsed}
+          >
+            {isEditorCollapsed ? '展开编辑' : '收起编辑'}
+          </button>
+          {!isEditorCollapsed && selectedSlide ? (
             <>
               <section className="presentation-card">
                 <div className="presentation-card-title-row">
@@ -553,7 +602,7 @@ function buildPreviewEvidenceCards(plan: PptxSlidePlan, bullets: string[]): Pptx
 }
 
 function looksLikeTemplateClaimPrefix(text: string): boolean {
-  return /^(本页|鏈〉)[^：:锛?]{0,36}[：:锛?]/u.test(text.trim());
+  return /^(?:本页|鏈〉)[^：:]{0,36}[：:]/u.test(text.trim());
 }
 
 function shouldShowPreviewVisual(visual: PptxSlidePlan['visual']): boolean {

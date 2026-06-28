@@ -27,4 +27,40 @@ describe('markdown document rendering', () => {
     expect(html).toContain('<blockquote>');
     expect(html).not.toContain('<script>');
   });
+
+  it('renders markdown tables as real tables instead of a paragraph of pipes', () => {
+    const html = renderMarkdownDocumentToHtml([
+      '| 项目 | 依据 | 结论 |',
+      '| --- | --- | --- |',
+      '| 输入 | Figure 2 caption | 力信号和目标位姿 |'
+    ].join('\n'));
+
+    expect(html).toContain('<table>');
+    expect(html).toContain('<thead>');
+    expect(html).toContain('<tbody>');
+    expect(html).toContain('<th>项目</th>');
+    expect(html).toContain('<td>力信号和目标位姿</td>');
+    expect(html).not.toContain('<p>| 项目');
+  });
+
+  it('renders markdown tables even when rows omit outer pipes', () => {
+    const html = renderMarkdownDocumentToHtml([
+      '项目 | 依据 | 结论',
+      '--- | --- | ---',
+      '输入 | Figure 2 caption | 力信号和目标位姿'
+    ].join('\n'));
+
+    expect(html).toContain('<table>');
+    expect(html).toContain('<th>项目</th>');
+    expect(html).toContain('<td>力信号和目标位姿</td>');
+  });
+
+  it('does not corrupt KaTeX html classes while applying markdown emphasis', () => {
+    const html = renderMarkdownDocumentToHtml('公式 $x_t = f(x, u)$ 和 _重点_。');
+
+    expect(html).toContain('katex');
+    expect(html).toContain('<em>重点</em>');
+    expect(html).not.toContain('cjk<em>');
+    expect(html).not.toContain('mathnormal<em>');
+  });
 });

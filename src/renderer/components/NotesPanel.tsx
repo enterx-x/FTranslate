@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import noteIcon from '../assets/icons/duotone/note.svg';
 import type { PaperRecord } from '../lib/papers';
 import { MarkdownDocument } from './MarkdownDocument';
@@ -53,6 +53,21 @@ export function NotesPanel(props: NotesPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const wordCount = props.notes.trim() ? props.notes.trim().length : 0;
 
+  useEffect(() => {
+    if (!isExpanded) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setIsExpanded(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isExpanded]);
+
   function insertTemplate(content: string): void {
     const prefix = props.notes.trim() ? `${props.notes.trimEnd()}\n\n` : '';
     props.onChange(`${prefix}${content}`);
@@ -89,6 +104,11 @@ export function NotesPanel(props: NotesPanelProps) {
         </span>
         <small>{wordCount > 0 ? `${wordCount} 字 · 已自动保存` : '记录想法、公式推导或复现计划'}</small>
       </summary>
+      {isExpanded ? (
+        <button type="button" className="notes-expanded-exit" onClick={() => setIsExpanded(false)}>
+          退出放大
+        </button>
+      ) : null}
 
       <div className="notes-editor-meta">
         <span className="badge">Markdown</span>

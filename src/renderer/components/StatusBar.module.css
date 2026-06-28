@@ -1,0 +1,25 @@
+.statusBar {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.messageStack {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+}
+
+.message {
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message:not(:last-child) {
+  opacity: 0.68;
+}

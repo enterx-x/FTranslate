@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildSheetCellPrompt,
   buildSheetCellsPrompt,
+  cleanSheetCellAiValue,
   parseSheetCellsAiResponse
 } from './sheetCellAi';
 import type { PaperRecord } from './papers';
@@ -94,6 +95,9 @@ describe('sheet cell AI prompt', () => {
     expect(parseSheetCellsAiResponse('plain cell text', cells)).toEqual([
       { cellAddress: 'D2', value: 'plain cell text' }
     ]);
+    expect(parseSheetCellsAiResponse('```markdown\n答案：提出可复现实验协议。\n```', cells)).toEqual([
+      { cellAddress: 'D2', value: '提出可复现实验协议。' }
+    ]);
   });
 
   it('maps single-cell JSON replies back to the requested address', () => {
@@ -111,6 +115,25 @@ describe('sheet cell AI prompt', () => {
     expect(
       parseSheetCellsAiResponse('{"cellAddress":"Z9","value":"Use the only selected cell"}', cells)
     ).toEqual([{ cellAddress: 'D2', value: 'Use the only selected cell' }]);
+  });
+
+  it('removes prompt echo lines from sheet cell values', () => {
+    expect(
+      cleanSheetCellAiValue(
+        [
+          'SYSTEM PROMPT: 你是严谨的科研论文研究表格助手。',
+          '目标单元格：D2 / Innovation',
+          '当前单元格已有内容：空',
+          '论文信息：',
+          '中文标题：旧上下文',
+          '答案：提出可复现的安全约束实验协议。'
+        ].join('\n')
+      )
+    ).toBe('提出可复现的安全约束实验协议。');
+  });
+
+  it('keeps useful content when a single returned line has a field-style prefix', () => {
+    expect(cleanSheetCellAiValue('中文标题：可复现安全强化学习综述')).toBe('可复现安全强化学习综述');
   });
 
   it('normalizes multi-cell JSON replies to the requested selection', () => {

@@ -3,7 +3,8 @@ import {
   buildPaperRecord,
   parsePaperLibrary,
   updatePaperRecord,
-  upsertPaperRecord
+  upsertPaperRecord,
+  type PaperRecord
 } from './papers';
 import { parseTranslationFile } from './translation';
 
@@ -144,6 +145,46 @@ describe('paper library metadata', () => {
     expect(nextLibrary[0].lastOpenedAt).toBe('2026-05-26T11:00:00.000Z');
   });
 
+  it('upgrades a PDF-only paper record instead of duplicating it when a translation is later attached', () => {
+    const pdfOnly = parsePaperLibrary(
+      JSON.stringify([
+        {
+          id: 'paper-existing',
+          pdfPath: 'D:/papers/robot.pdf',
+          pdfName: 'robot.pdf',
+          translationPath: '',
+          translationName: '',
+          chineseTitle: '手动标题',
+          englishTitle: 'Robot Paper',
+          journal: 'arXiv',
+          authors: 'Author A',
+          year: '2026',
+          notes: '保留用户笔记',
+          lastOpenedAt: '2026-05-26T10:00:00.000Z',
+          lastPage: 8
+        }
+      ])
+    );
+    const document = parseTranslationFile('中文译文。', 'robot.zh.md', 'D:/translations/robot.zh.md');
+    const incoming = buildPaperRecord({
+      pdfPath: 'D:\\papers\\robot.pdf',
+      pdfName: 'robot.pdf',
+      translationPath: 'D:/translations/robot.zh.md',
+      translationName: 'robot.zh.md',
+      document,
+      now: '2026-05-26T11:00:00.000Z'
+    });
+
+    const nextLibrary = upsertPaperRecord(pdfOnly, incoming);
+
+    expect(nextLibrary).toHaveLength(1);
+    expect(nextLibrary[0].id).toBe('paper-existing');
+    expect(nextLibrary[0].translationPath).toBe('D:/translations/robot.zh.md');
+    expect(nextLibrary[0].chineseTitle).toBe('手动标题');
+    expect(nextLibrary[0].notes).toBe('保留用户笔记');
+    expect(nextLibrary[0].lastPage).toBe(8);
+  });
+
   it('persists AI cache paths and paper notes in the paper library', () => {
     const parsed = parsePaperLibrary(
       JSON.stringify([
@@ -265,7 +306,7 @@ describe('paper library metadata', () => {
     expect(parsed[0].translatedMonoPdfName).toBe('paper.mono.version.pdf');
   });
 
-  it('keeps paper records focused on metadata and ignores legacy spreadsheet cells', () => {
+  it('restores legacy spreadsheet cells when parsing paper records', () => {
     const parsed = parsePaperLibrary(
       JSON.stringify([
         {
@@ -290,7 +331,60 @@ describe('paper library metadata', () => {
       ])
     );
 
-    expect(parsed[0]).not.toHaveProperty('sheetCells');
+    expect(parsed[0]).toHaveProperty('sheetCells');
+    expect(parsed[0].sheetCells).toMatchObject({
+      innovation: '提出 $L=\\sum_i x_i^2$ 约束。',
+      limitations: '需要更多真实机器人实验。'
+    });
     expect(parsed[0].chineseTitle).toBe('中文标题');
+  });
+
+  it('preserves intentionally cleared existing paper fields when upserting records', () => {
+    const existing: PaperRecord[] = [
+      {
+        id: 'paper-existing',
+        pdfPath: 'D:/paper.pdf',
+        pdfName: 'paper.pdf',
+        translationPath: 'D:/old.md',
+        translationName: 'old.md',
+        chineseTitle: '',
+        englishTitle: '',
+        journal: '',
+        authors: '',
+        year: '',
+        notes: '',
+        lastOpenedAt: '2026-05-26T10:00:00.000Z',
+        lastPage: 1
+      }
+    ];
+    const incoming = {
+      ...existing[0],
+      id: 'paper-incoming',
+      translationPath: 'D:/new.md',
+      translationName: 'new.md',
+      chineseTitle: '新标题',
+      englishTitle: 'New Title',
+      journal: 'New Journal',
+      authors: 'New Author',
+      year: '2026',
+      notes: '新笔记',
+      lastOpenedAt: '2026-05-26T11:00:00.000Z',
+      lastPage: 9
+    };
+
+    const nextLibrary = upsertPaperRecord(existing, incoming);
+
+    expect(nextLibrary[0]).toMatchObject({
+      id: 'paper-existing',
+      translationPath: 'D:/old.md',
+      translationName: 'old.md',
+      chineseTitle: '',
+      englishTitle: '',
+      journal: '',
+      authors: '',
+      year: '',
+      notes: '',
+      lastPage: 1
+    });
   });
 });

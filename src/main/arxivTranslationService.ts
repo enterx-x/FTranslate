@@ -8,8 +8,10 @@ import type {
   ArxivTitleAbstractTranslationResult
 } from '../shared/arxiv';
 import { isMojibakeTranslationText } from '../shared/arxiv';
+import { collapseRepeatedTranslationTail, repairAcademicTranslation } from '../shared/academicTranslationQuality';
 import {
   type LocalTranslateBatchResult,
+  type LocalTranslateDirectionOptions,
   resetNllbRuntime,
   translateTextsWithNllbCTranslate2
 } from './localTranslationService';
@@ -25,6 +27,8 @@ interface ArxivTranslationServiceOptions {
 }
 
 interface CachedTranslationRow {
+  source_title: string;
+  source_summary: string;
   title_zh: string;
   abstract_zh: string;
   translated_at: string;
@@ -140,14 +144,47 @@ export class ArxivTranslationService {
 
       try {
         const texts = remaining.flatMap((item) => [item.title, item.summary]);
-        const translationResult = await this.translateTextsWithFallback(texts);
-        const translatedTexts = translationResult.texts;
+        const uniqueBatch = buildUniqueTranslationBatch(texts);
+        let translationResult = await this.translateTextsWithFallback(uniqueBatch.texts);
+        let translatedTexts = uniqueBatch.indexes.map((index) => translationResult.texts[index] ?? '');
+        const suspiciousPrimaryAbstracts = countSuspiciousRepeatedAbstractTails(
+          remaining,
+          translatedTexts,
+          translationResult.engine
+        );
+        if (suspiciousPrimaryAbstracts > 0 && this.fallbackTranslateTextsWithEngine) {
+          try {
+            const fallbackResult = await this.fallbackTranslateTextsWithEngine(uniqueBatch.texts);
+            const fallbackTranslatedTexts = uniqueBatch.indexes.map((index) => fallbackResult.texts[index] ?? '');
+            const suspiciousFallbackAbstracts = countSuspiciousRepeatedAbstractTails(
+              remaining,
+              fallbackTranslatedTexts,
+              fallbackResult.engine
+            );
+            if (suspiciousFallbackAbstracts < suspiciousPrimaryAbstracts) {
+              translationResult = fallbackResult;
+              translatedTexts = fallbackTranslatedTexts;
+            }
+          } catch {
+            // Keep the primary result; the repair layer below still prevents repeated tails from being cached.
+          }
+        }
         const translatedAt = new Date(this.now()).toISOString();
 
         remaining.forEach((item, itemIndex) => {
-          const titleZh = normalizeTranslatedText(translatedTexts[itemIndex * 2] ?? '');
-          const abstractZh = normalizeTranslatedText(translatedTexts[itemIndex * 2 + 1] ?? '');
-          if (!isUsableTranslatedText(titleZh) || !isUsableTranslatedText(abstractZh)) {
+          const rawTitleZh = repairAcademicTranslation(
+            item.title,
+            normalizeTranslatedText(translatedTexts[itemIndex * 2] ?? ''),
+            { mode: 'title' }
+          );
+          const rawAbstractZh = repairAcademicTranslation(
+            item.summary,
+            normalizeTranslatedText(translatedTexts[itemIndex * 2 + 1] ?? ''),
+            { mode: 'abstract' }
+          );
+          const titleZh = isUsableTranslatedText(rawTitleZh, item.title) ? rawTitleZh : '';
+          const abstractZh = isUsableTranslatedText(rawAbstractZh, item.summary) ? rawAbstractZh : '';
+          if (!titleZh && !abstractZh) {
             results[item.index] = buildFailedTranslationResult(
               item.stableId,
               '本地翻译返回了乱码或空结果，已丢弃该缓存并保留英文。'
@@ -218,19 +255,35 @@ export class ArxivTranslationService {
   private readCache(cacheKey: string): CachedTranslationRow | null {
     const row = this.db
       .prepare(
-        `SELECT title_zh, abstract_zh, translated_at, engine
+        `SELECT source_title, source_summary, title_zh, abstract_zh, translated_at, engine
          FROM arxiv_translation_cache
          WHERE cache_key = ?`
       )
       .get(cacheKey) as CachedTranslationRow | undefined;
-    if (!row?.title_zh || !row.abstract_zh) {
+    if (!row) {
       return null;
     }
-    if (isMojibakeTranslationText(row.title_zh) || isMojibakeTranslationText(row.abstract_zh)) {
+    const titleZh = repairAcademicTranslation(row.source_title, normalizeTranslatedText(row.title_zh), {
+      mode: 'title'
+    });
+    const abstractZh = repairAcademicTranslation(row.source_summary, normalizeTranslatedText(row.abstract_zh), {
+      mode: 'abstract'
+    });
+    if (!titleZh && !abstractZh) {
       this.db.prepare(`DELETE FROM arxiv_translation_cache WHERE cache_key = ?`).run(cacheKey);
       return null;
     }
-    return row;
+    const hasBadTitle = Boolean(titleZh) && !isUsableTranslatedText(titleZh, row.source_title);
+    const hasBadAbstract = Boolean(abstractZh) && !isUsableTranslatedText(abstractZh, row.source_summary);
+    if (hasBadTitle || hasBadAbstract) {
+      this.db.prepare(`DELETE FROM arxiv_translation_cache WHERE cache_key = ?`).run(cacheKey);
+      return null;
+    }
+    return {
+      ...row,
+      title_zh: titleZh,
+      abstract_zh: abstractZh
+    };
   }
 
   private writeCache(
@@ -288,6 +341,25 @@ export class ArxivTranslationService {
   }
 }
 
+function buildUniqueTranslationBatch(texts: string[]): { texts: string[]; indexes: number[] } {
+  const indexes: number[] = [];
+  const uniqueTexts: string[] = [];
+  const seen = new Map<string, number>();
+  texts.forEach((text) => {
+    const key = normalizeTranslatedText(text);
+    const existingIndex = seen.get(key);
+    if (existingIndex !== undefined) {
+      indexes.push(existingIndex);
+      return;
+    }
+    const nextIndex = uniqueTexts.length;
+    seen.set(key, nextIndex);
+    uniqueTexts.push(text);
+    indexes.push(nextIndex);
+  });
+  return { texts: uniqueTexts, indexes };
+}
+
 function buildTranslationCacheKey(input: { stableId: string; title: string; summary: string }): string {
   return crypto
     .createHash('sha256')
@@ -307,8 +379,99 @@ function normalizeTranslatedText(value: string): string {
   return value.replace(/\s+/gu, ' ').trim();
 }
 
-function isUsableTranslatedText(value: string): boolean {
-  return Boolean(value.trim()) && !isMojibakeTranslationText(value);
+function isUsableTranslatedText(value: string, source = ''): boolean {
+  return (
+    Boolean(value.trim()) &&
+    !isMojibakeTranslationText(value) &&
+    !isDegenerateTranslationText(value) &&
+    !isProbablyUntranslatedText(value, source)
+  );
+}
+
+function countSuspiciousRepeatedAbstractTails(
+  items: Array<{ summary: string }>,
+  translatedTexts: string[],
+  engine: string
+): number {
+  if (!engine.toLowerCase().includes('nllb')) {
+    return 0;
+  }
+
+  return items.reduce((count, _item, itemIndex) => {
+    const abstractText = translatedTexts[itemIndex * 2 + 1] ?? '';
+    return count + (hasSuspiciousRepeatedTranslationTail(abstractText) ? 1 : 0);
+  }, 0);
+}
+
+function hasSuspiciousRepeatedTranslationTail(value: string): boolean {
+  const normalized = normalizeTranslatedText(value);
+  if (normalized.length < 36) {
+    return false;
+  }
+
+  const cjkCount = normalized.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
+  if (cjkCount < 12) {
+    return false;
+  }
+
+  const collapsed = collapseRepeatedTranslationTail(normalized);
+  const removedLength = normalized.length - collapsed.length;
+  return removedLength >= 8 && removedLength / normalized.length >= 0.12;
+}
+
+function isDegenerateTranslationText(value: string): boolean {
+  const normalized = value.replace(/\s+/gu, '').trim();
+  if (!normalized) {
+    return true;
+  }
+
+  const cjkCount = normalized.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
+  const latinCount = normalized.match(/[A-Za-z]/gu)?.length ?? 0;
+  if (cjkCount > 0 && cjkCount < 4 && latinCount === 0) {
+    return true;
+  }
+
+  for (let unitLength = 1; unitLength <= Math.min(8, Math.floor(normalized.length / 3)); unitLength += 1) {
+    if (normalized.length % unitLength !== 0) {
+      continue;
+    }
+    const unit = normalized.slice(0, unitLength);
+    if (unit.repeat(normalized.length / unitLength) === normalized) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isProbablyUntranslatedText(value: string, source: string): boolean {
+  const translated = normalizeComparableText(value);
+  const original = normalizeComparableText(source);
+  if (!translated || !original) {
+    return false;
+  }
+  if (translated === original) {
+    return true;
+  }
+  const cjkCount = value.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
+  if (cjkCount >= 4) {
+    return false;
+  }
+  const translatedTokens = new Set(translated.split(/\s+/u).filter((token) => token.length >= 4));
+  const originalTokens = original.split(/\s+/u).filter((token) => token.length >= 4);
+  if (translatedTokens.size === 0 || originalTokens.length === 0) {
+    return false;
+  }
+  const overlap = originalTokens.filter((token) => translatedTokens.has(token)).length / originalTokens.length;
+  return overlap >= 0.75;
+}
+
+function normalizeComparableText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\u3400-\u9fff]+/giu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
 }
 
 function buildCompletedTranslationMessage(engine: LocalTranslateBatchResult['engine']): string {
@@ -351,48 +514,79 @@ function coerceTranslationInput(value: unknown): string {
 
 export async function translateTextsWithArgosEngine(
   texts: string[],
-  timeoutMs: number
+  timeoutMs: number,
+  options: LocalTranslateDirectionOptions = {}
 ): Promise<LocalTranslateBatchResult> {
   return {
-    texts: await translateTextsWithArgos(texts, timeoutMs),
+    texts: await translateTextsWithArgos(texts, timeoutMs, options),
     engine: 'argos'
   };
 }
 
-async function translateTextsWithArgos(texts: string[], timeoutMs: number): Promise<string[]> {
+async function translateTextsWithArgos(
+  texts: string[],
+  timeoutMs: number,
+  options: LocalTranslateDirectionOptions = {}
+): Promise<string[]> {
   if (texts.length === 0) {
     return [];
   }
   try {
-    return await translateTextsWithArgosPython(texts, Math.max(timeoutMs, texts.length * 3_000));
+    return await translateTextsWithArgosPython(texts, Math.max(timeoutMs, texts.length * 3_000), options);
   } catch (error) {
+    if (texts.length > 1) {
+      const payload = buildArgosCombinedPayload(texts);
+      try {
+        const combinedOutput = await translateWithArgosCli(
+          payload.text,
+          Math.max(timeoutMs, texts.length * 3_000),
+          options
+        );
+        const splitOutput = splitArgosCombinedOutput(combinedOutput, payload.markers, texts.length);
+        if (splitOutput) {
+          return splitOutput;
+        }
+      } catch {
+        // Fall through to per-text CLI calls below.
+      }
+    }
     const results: string[] = [];
     for (const text of texts) {
-      results.push(await translateWithArgosCli(text, timeoutMs));
+      results.push(await translateWithArgosCli(text, timeoutMs, options));
     }
     return results;
   }
 }
 
-function translateTextsWithArgosPython(texts: string[], timeoutMs: number): Promise<string[]> {
+function translateTextsWithArgosPython(
+  texts: string[],
+  timeoutMs: number,
+  options: LocalTranslateDirectionOptions = {}
+): Promise<string[]> {
   const runtime = getArgosPythonRuntime();
-  return runtime.translate(texts, timeoutMs).catch(async (error) => {
+  return runtime.translate(texts, timeoutMs, options).catch(async (error) => {
     resetArgosPythonRuntime();
     try {
-      return await translateTextsWithArgosPythonOnce(texts, timeoutMs);
+      return await translateTextsWithArgosPythonOnce(texts, timeoutMs, options);
     } catch {
       throw error;
     }
   });
 }
 
-function translateTextsWithArgosPythonOnce(texts: string[], timeoutMs: number): Promise<string[]> {
+function translateTextsWithArgosPythonOnce(
+  texts: string[],
+  timeoutMs: number,
+  options: LocalTranslateDirectionOptions = {}
+): Promise<string[]> {
   const script = [
     'import json, sys',
     'from argostranslate import translate',
     'payload = json.load(sys.stdin)',
     'texts = payload.get("texts", [])',
-    'out = [translate.translate(item, "en", "zh") if item else "" for item in texts]',
+    'source_language = payload.get("sourceLanguage", "en")',
+    'target_language = payload.get("targetLanguage", "zh")',
+    'out = [translate.translate(item, source_language, target_language) if item else "" for item in texts]',
     'sys.stdout.write(json.dumps({"texts": out}, ensure_ascii=False))'
   ].join('\n');
 
@@ -439,7 +633,11 @@ function translateTextsWithArgosPythonOnce(texts: string[], timeoutMs: number): 
       const stderr = decodeArgosCliOutput(Buffer.concat(stderrChunks));
       reject(new Error(`Argos 批量翻译失败：${stderr.trim() || stdout.trim() || `exit ${code}`}`));
     });
-    child.stdin.end(JSON.stringify({ texts }));
+    child.stdin.end(JSON.stringify({
+      texts,
+      sourceLanguage: options.sourceLanguage ?? 'en',
+      targetLanguage: options.targetLanguage ?? 'zh'
+    }));
   });
 }
 
@@ -505,7 +703,11 @@ class ArgosPythonRuntime {
     return this.closed || this.child.killed;
   }
 
-  translate(texts: string[], timeoutMs: number): Promise<string[]> {
+  translate(
+    texts: string[],
+    timeoutMs: number,
+    options: LocalTranslateDirectionOptions = {}
+  ): Promise<string[]> {
     if (this.isClosed()) {
       return Promise.reject(new Error('Argos worker 不可用。'));
     }
@@ -516,14 +718,23 @@ class ArgosPythonRuntime {
         reject(new Error(`Argos 批量翻译超时：${Math.round(timeoutMs / 1000)} 秒`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.child.stdin.write(`${JSON.stringify({ id, texts })}\n`, 'utf8', (error) => {
-        if (!error) {
-          return;
+      this.child.stdin.write(
+        `${JSON.stringify({
+          id,
+          texts,
+          sourceLanguage: options.sourceLanguage ?? 'en',
+          targetLanguage: options.targetLanguage ?? 'zh'
+        })}\n`,
+        'utf8',
+        (error) => {
+          if (!error) {
+            return;
+          }
+          clearTimeout(timer);
+          this.pending.delete(id);
+          reject(error);
         }
-        clearTimeout(timer);
-        this.pending.delete(id);
-        reject(error);
-      });
+      );
     });
   }
 
@@ -598,7 +809,9 @@ function buildArgosWorkerScript(): string {
     '        payload = json.loads(line)',
     '        req_id = payload.get("id")',
     '        texts = payload.get("texts", [])',
-    '        out = [translate.translate(item, "en", "zh") if item else "" for item in texts]',
+    '        source_language = payload.get("sourceLanguage", "en")',
+    '        target_language = payload.get("targetLanguage", "zh")',
+    '        out = [translate.translate(item, source_language, target_language) if item else "" for item in texts]',
     '        sys.stdout.write(json.dumps({"id": req_id, "texts": out}, ensure_ascii=False) + "\\n")',
     '        sys.stdout.flush()',
     '    except Exception as exc:',
@@ -645,9 +858,18 @@ export function splitArgosCombinedOutput(
   return segments.length === expectedCount && segments.every(Boolean) ? segments : null;
 }
 
-function translateWithArgosCli(text: string, timeoutMs: number): Promise<string> {
+function translateWithArgosCli(
+  text: string,
+  timeoutMs: number,
+  options: LocalTranslateDirectionOptions = {}
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(resolveArgosCliCommand(), ['--from-lang', 'en', '--to-lang', 'zh'], {
+    const child = spawn(resolveArgosCliCommand(), [
+      '--from-lang',
+      options.sourceLanguage ?? 'en',
+      '--to-lang',
+      options.targetLanguage ?? 'zh'
+    ], {
       env: resolveArgosChildEnv(),
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']

@@ -726,6 +726,31 @@ describe('presentationOutline', () => {
 
     expect(figures[0].cropBox?.y).toBeGreaterThan(118);
     expect(figures[0].cropBox?.height).toBeGreaterThan(120);
+    expect(figures[0].cropBox?.height).toBeLessThan(260);
+  });
+
+  it('expands table and result crops so extracted evidence is not a half-width fragment', () => {
+    const crop = inferFigureCropBoxFromCaptionBlock(
+      block({
+        type: 'caption',
+        section: 'Results',
+        page: 8,
+        original: 'Table 3. Admittance ablation across policy backbones over tasks T1, T2, and T3.',
+        bounds: {
+          x: 210,
+          y: 128,
+          width: 190,
+          height: 18,
+          pageWidth: 612,
+          pageHeight: 792
+        }
+      })
+    );
+
+    expect(crop).toBeDefined();
+    expect(crop!.x).toBeLessThanOrEqual(24);
+    expect(crop!.width).toBeGreaterThanOrEqual(560);
+    expect(crop!.height).toBeGreaterThan(250);
   });
 
   it('applies AI-enhanced slide bullets without dropping sources or figures', () => {

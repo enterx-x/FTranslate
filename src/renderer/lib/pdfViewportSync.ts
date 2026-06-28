@@ -43,6 +43,13 @@ export function buildPdfScrollPosition(
   };
 }
 
+export function buildCenteredHorizontalScroll(
+  metrics: Pick<PdfScrollMetrics, 'scrollWidth' | 'clientWidth'>
+): number {
+  const maxLeft = Math.max(0, metrics.scrollWidth - metrics.clientWidth);
+  return Math.round(maxLeft / 2);
+}
+
 function safeRatio(value: number, max: number): number {
   if (!Number.isFinite(value) || !Number.isFinite(max) || max <= 0) {
     return 0;

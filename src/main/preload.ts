@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openPdf: () => ipcRenderer.invoke('dialog:open-pdf'),
   openTranslation: () => ipcRenderer.invoke('dialog:open-translation'),
   openTranslatedPdf: () => ipcRenderer.invoke('dialog:open-translated-pdf'),
+  selectDirectory: (request?: { title?: string; defaultPath?: string }) =>
+    ipcRenderer.invoke('dialog:select-directory', request),
   loadProject: (request: {
     pdfPath?: string;
     translationPath?: string;
@@ -82,8 +84,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   translateLocalBatch: (request: {
     texts: string[];
     forceEngine?: 'nllb-ct2' | 'argos';
+    sourceLanguage?: 'en' | 'zh';
+    targetLanguage?: 'en' | 'zh';
     timeoutMs?: number;
   }) => ipcRenderer.invoke('local-translation:translate-batch', request),
+  openExternalUrl: (url: string) => ipcRenderer.invoke('shell:open-external-url', url),
   saveTextFile: (request: {
     filePath?: string;
     content: string;

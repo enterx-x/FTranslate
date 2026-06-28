@@ -139,21 +139,46 @@ if ($cudaDllDirs.Count -gt 0) {
 }
 
 Write-Host "Running smoke test..."
+if ($cudaDllDirs.Count -gt 0) {
+  $env:FTRANSLATE_NLLB_CUDA_DLL_DIRS = ($cudaDllDirs -join [IO.Path]::PathSeparator)
+  $env:PATH = (($cudaDllDirs -join [IO.Path]::PathSeparator) + [IO.Path]::PathSeparator + $env:PATH)
+}
 $smoke = @'
+import os
+import time
 import ctranslate2
 from transformers import AutoTokenizer
 
 model_dir = r"{MODEL_DIR}"
 tokenizer_dir = r"{TOKENIZER_DIR}"
+cuda_dll_dirs = [p for p in os.environ.get("FTRANSLATE_NLLB_CUDA_DLL_DIRS", "").split(os.pathsep) if p]
+if hasattr(os, "add_dll_directory"):
+    for dll_dir in cuda_dll_dirs:
+        if os.path.isdir(dll_dir):
+            os.add_dll_directory(dll_dir)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir, src_lang="eng_Latn", local_files_only=True)
-translator = ctranslate2.Translator(model_dir, device="cpu", compute_type="int8")
 tokens = tokenizer.convert_ids_to_tokens(tokenizer.encode("Robot navigation requires robust perception.", add_special_tokens=True))
 target_lang_id = tokenizer.convert_tokens_to_ids("zho_Hans")
 target_prefix = [[tokenizer.convert_ids_to_tokens(target_lang_id)]]
+last_error = None
+translator = None
+runtime_device = "unknown"
+start = time.time()
+for device in ["cuda", "cpu"]:
+    try:
+        translator = ctranslate2.Translator(model_dir, device=device, compute_type="int8")
+        runtime_device = device
+        break
+    except Exception as exc:
+        last_error = exc
+        print(f"{device.upper()} smoke failed: {exc}")
+if translator is None:
+    raise last_error or RuntimeError("No CTranslate2 runtime available")
 result = translator.translate_batch([tokens], target_prefix=target_prefix, beam_size=4, max_decoding_length=128)
 out_tokens = result[0].hypotheses[0]
 if out_tokens and out_tokens[0] == target_prefix[0][0]:
     out_tokens = out_tokens[1:]
+print(f"NLLB smoke runtime: {runtime_device.upper()} ({time.time() - start:.2f}s)")
 print(tokenizer.decode(tokenizer.convert_tokens_to_ids(out_tokens), skip_special_tokens=True))
 '@
 $smoke = $smoke.Replace("{MODEL_DIR}", $modelDir.Replace("\", "\\")).Replace("{TOKENIZER_DIR}", $hfSnapshotDir.Replace("\", "\\"))

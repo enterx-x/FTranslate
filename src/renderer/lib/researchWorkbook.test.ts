@@ -9,6 +9,7 @@ import {
   fromUniverWorkbookData,
   isResearchCellStyleEnabled,
   getResearchCellText,
+  getResearchRowValues,
   migrateLegacyPaperSheetCells,
   parseResearchWorkbook,
   parseResearchSheetLinks,
@@ -111,6 +112,34 @@ describe('research workbook model', () => {
     expect(parseResearchSheetLinks(serializeResearchSheetLinks(second.links))[0]).toEqual({
       rowId: 'row-1',
       paperId: 'paper-1'
+    });
+  });
+
+  it('reads row detail values from the active workbook columns', () => {
+    const workbook = buildDefaultResearchWorkbook();
+    const customWorkbook = {
+      ...workbook,
+      columns: [
+        { key: 'paper', label: '论文', width: 180 },
+        { key: 'year', label: '年份', width: 100 },
+        { key: 'category', label: '分类', width: 120 }
+      ],
+      rows: [
+        {
+          id: 'header',
+          cells: [{ value: '论文' }, { value: '年份' }, { value: '分类' }]
+        },
+        {
+          id: 'row-1',
+          cells: [{ value: 'paper.pdf' }, { value: '2026' }, { value: 'arXiv cs.RO' }]
+        }
+      ]
+    };
+
+    expect(getResearchRowValues(customWorkbook, 1)).toEqual({
+      论文: 'paper.pdf',
+      年份: '2026',
+      分类: 'arXiv cs.RO'
     });
   });
 

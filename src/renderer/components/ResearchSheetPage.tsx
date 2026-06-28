@@ -57,7 +57,7 @@ import {
   describeLiteratureInsightAction,
   failLiteratureInsightRun,
   normalizeLiteratureInsightHistory,
-  normalizeLiteratureInsightRunState,
+  restoreLiteratureInsightRunStateForUi,
   updateLiteratureInsightRunProgress,
   type LiteratureInsightHistoryEntry,
   type LiteratureInsightRunState,
@@ -598,6 +598,11 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
 
   function handleUnbindSelectedRow(): void {
     if (selectedCell.rowIndex === 0) {
+      return;
+    }
+
+    const currentTitle = linkedPaper?.chineseTitle || linkedPaper?.englishTitle || linkedPaper?.pdfName || '当前行论文';
+    if (!window.confirm(`确认解除“${currentTitle}”与当前表格行的绑定？表格内容会保留。`)) {
       return;
     }
 
@@ -1364,7 +1369,7 @@ function normalizeUniverRange(
 function readStoredLiteratureInsightState(): LiteratureInsightRunState | null {
   try {
     const raw = localStorage.getItem(LITERATURE_INSIGHT_STATE_KEY);
-    return raw ? normalizeLiteratureInsightRunState(JSON.parse(raw)) : null;
+    return raw ? restoreLiteratureInsightRunStateForUi(JSON.parse(raw)) : null;
   } catch {
     return null;
   }

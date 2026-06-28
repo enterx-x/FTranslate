@@ -89,6 +89,8 @@ const NODE_STYLE: Record<KnowledgeGraphNodeType, { color: string; soft: string }
 };
 
 const DEFAULT_TRANSFORM: GraphTransform = { scale: 1, x: 0, y: 0 };
+const KNOWLEDGE_FILTER_PANEL_COLLAPSED_KEY = 'pdfTranslationReader:knowledgeFilterPanelCollapsed';
+const KNOWLEDGE_DETAIL_PANEL_COLLAPSED_KEY = 'pdfTranslationReader:knowledgeDetailPanelCollapsed';
 
 export function KnowledgeGraphPage(props: KnowledgeGraphPageProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -105,6 +107,12 @@ export function KnowledgeGraphPage(props: KnowledgeGraphPageProps) {
   const [transform, setTransform] = useState<GraphTransform>(DEFAULT_TRANSFORM);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [isCanvasFull, setIsCanvasFull] = useState(false);
+  const [isFilterPanelCollapsed, setIsFilterPanelCollapsed] = useState(
+    () => localStorage.getItem(KNOWLEDGE_FILTER_PANEL_COLLAPSED_KEY) === '1'
+  );
+  const [isDetailPanelCollapsed, setIsDetailPanelCollapsed] = useState(
+    () => localStorage.getItem(KNOWLEDGE_DETAIL_PANEL_COLLAPSED_KEY) === '1'
+  );
 
   const graph = useMemo(
     () => buildKnowledgeGraph({ papers: props.papers, workbook: props.workbook, links: props.links, source, maxNodes: 180 }),
@@ -172,6 +180,22 @@ export function KnowledgeGraphPage(props: KnowledgeGraphPageProps) {
 
   function fitCanvas(): void {
     setTransform(DEFAULT_TRANSFORM);
+  }
+
+  function toggleFilterPanel(): void {
+    setIsFilterPanelCollapsed((value) => {
+      const nextValue = !value;
+      localStorage.setItem(KNOWLEDGE_FILTER_PANEL_COLLAPSED_KEY, nextValue ? '1' : '0');
+      return nextValue;
+    });
+  }
+
+  function toggleDetailPanel(): void {
+    setIsDetailPanelCollapsed((value) => {
+      const nextValue = !value;
+      localStorage.setItem(KNOWLEDGE_DETAIL_PANEL_COLLAPSED_KEY, nextValue ? '1' : '0');
+      return nextValue;
+    });
   }
 
   function handleWheel(event: ReactWheelEvent<SVGSVGElement>): void {
@@ -244,12 +268,27 @@ export function KnowledgeGraphPage(props: KnowledgeGraphPageProps) {
         </div>
       </header>
 
-      <section className={`knowledge-graph-layout${isCanvasFull ? ' canvas-fullscreen' : ''}`}>
-        <aside className="knowledge-filter-panel">
-          <strong className="panel-title-with-icon">
-            <img className="panel-title-icon" src={graphIcon} alt="" />
-            图谱控制
-          </strong>
+      <section
+        className={`knowledge-graph-layout${isCanvasFull ? ' canvas-fullscreen' : ''}${
+          isFilterPanelCollapsed ? ' is-filter-collapsed' : ''
+        }${isDetailPanelCollapsed ? ' is-detail-collapsed' : ''}`}
+      >
+        <aside className={`knowledge-filter-panel${isFilterPanelCollapsed ? ' is-collapsed' : ''}`}>
+          <button
+            type="button"
+            className="knowledge-panel-toggle"
+            aria-expanded={!isFilterPanelCollapsed}
+            title={isFilterPanelCollapsed ? '展开图谱控制' : '收起图谱控制'}
+            onClick={toggleFilterPanel}
+          >
+            {isFilterPanelCollapsed ? '展开控制' : '收起控制'}
+          </button>
+          {!isFilterPanelCollapsed ? (
+            <>
+              <strong className="panel-title-with-icon">
+                <img className="panel-title-icon" src={graphIcon} alt="" />
+                图谱控制
+              </strong>
           <label>
             数据来源
             <select value={source} onChange={(event) => setSource(event.target.value as GraphSource)}>
@@ -321,6 +360,8 @@ export function KnowledgeGraphPage(props: KnowledgeGraphPageProps) {
           </div>
           {filteredGraph.nodes.length >= maxNodes ? (
             <p className="inline-message">当前图谱节点较多，建议使用筛选器缩小范围。</p>
+          ) : null}
+            </>
           ) : null}
         </aside>
 
@@ -453,7 +494,11 @@ export function KnowledgeGraphPage(props: KnowledgeGraphPageProps) {
               onClose={() => setContextMenu(null)}
               onOpenPaper={props.onOpenPaper}
               onOpenResearchSheet={props.onOpenResearchSheet}
-              onHideNode={(nodeId) => setHiddenNodeIds((ids) => [...ids, nodeId])}
+              onHideNode={(nodeId) => {
+                setHiddenNodeIds((ids) => (ids.includes(nodeId) ? ids : [...ids, nodeId]));
+                setSelectedNodeId((current) => (current === nodeId ? '' : current));
+                setContextMenu(null);
+              }}
               onFocusNode={(nodeId) => {
                 const node = nodeMap.get(nodeId);
                 if (node) setTransform({ scale: 1.25, x: 490 - node.x * 1.25, y: 310 - node.y * 1.25 });
@@ -462,16 +507,27 @@ export function KnowledgeGraphPage(props: KnowledgeGraphPageProps) {
           ) : null}
         </section>
 
-        <aside className="knowledge-detail-panel">
-          <GraphNodeDetails
-            node={selectedNode}
-            graph={filteredGraph}
-            papers={props.papers}
-            workbook={props.workbook}
-            links={props.links}
-            onOpenPaper={props.onOpenPaper}
-            onOpenResearchSheet={props.onOpenResearchSheet}
-          />
+        <aside className={`knowledge-detail-panel${isDetailPanelCollapsed ? ' is-collapsed' : ''}`}>
+          <button
+            type="button"
+            className="knowledge-panel-toggle"
+            aria-expanded={!isDetailPanelCollapsed}
+            title={isDetailPanelCollapsed ? '展开节点详情' : '收起节点详情'}
+            onClick={toggleDetailPanel}
+          >
+            {isDetailPanelCollapsed ? '展开详情' : '收起详情'}
+          </button>
+          {!isDetailPanelCollapsed ? (
+            <GraphNodeDetails
+              node={selectedNode}
+              graph={filteredGraph}
+              papers={props.papers}
+              workbook={props.workbook}
+              links={props.links}
+              onOpenPaper={props.onOpenPaper}
+              onOpenResearchSheet={props.onOpenResearchSheet}
+            />
+          ) : null}
         </aside>
       </section>
     </main>

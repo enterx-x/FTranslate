@@ -1,12 +1,19 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(scriptDir, '..');
-const exe = path.join(root, 'dist', 'win-unpacked', 'PDF Translation Reader.exe');
+const packageVersion = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+const packagedExe = path.join(root, 'dist', 'win-unpacked', 'PDF Translation Reader.exe');
+const packagedInstaller = path.join(root, 'dist', `PDF Translation Reader Setup ${packageVersion}.exe`);
+const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe');
+const electronMainEntry = path.join(root, 'dist-electron', 'main', 'main.js');
+const rendererIndex = path.join(root, 'dist-renderer', 'index.html');
+const usePackagedApp = process.env.VISUAL_CHECK_PACKAGED === '1';
+const visualArxivMockMode = process.env.PDF_TRANSLATION_READER_VISUAL_MOCK_ARXIV ?? '1';
 const pdfPath =
   process.env.VISUAL_CHECK_PDF ??
   path.join('D:\\', 'GPT浏览器下载', '2604.15483v2.pdf');
@@ -168,7 +175,8 @@ async function createCdpClient(webSocketUrl) {
 
 async function evaluateJson(client, expression) {
   const result = await client.send('Runtime.evaluate', {
-    expression: `JSON.stringify((${expression})())`,
+    expression: `(async () => { const value = await (${expression})(); return JSON.stringify(value === undefined ? null : value); })()`,
+    awaitPromise: true,
     returnByValue: true
   });
   return JSON.parse(result.result.value);
@@ -177,7 +185,7 @@ async function evaluateJson(client, expression) {
 async function waitForAppReady(client) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => ({
-      ready: Boolean(document.querySelector('.home-page, .split-layout, .research-sheet-page, .ai-assistant-page, .knowledge-graph-page, .presentation-page, .arxiv-page, .settings-page')),
+      ready: Boolean(document.querySelector('.home-page, .split-layout, .research-sheet-page, .ai-assistant-page, .paper-tutor-page, .knowledge-graph-page, .presentation-page, .arxiv-page, .settings-page')),
       text: document.body.textContent ?? ''
     })`);
     if (snapshot.ready) {
@@ -287,18 +295,33 @@ async function waitForPdfCanvas(client) {
       const canvases = roots.flatMap((root) => [...root.querySelectorAll('canvas')]);
       const pages = roots.flatMap((root) => [...root.querySelectorAll('.page')]);
       const textSpans = roots.flatMap((root) => [...root.querySelectorAll('.textLayer span')]);
+      const svgLayers = roots.flatMap((root) => [...root.querySelectorAll('.page svg')]);
+      const imageLayers = roots.flatMap((root) => [...root.querySelectorAll('.page img')]);
       const hasCanvas = canvases.some((canvas) => canvas.width > 0 && canvas.height > 0);
       const hasVisiblePage = pages.some((page) => {
         const rect = page.getBoundingClientRect();
         return rect.width > 120 && rect.height > 120;
       });
       const hasVisibleTextLayer = textSpans.some((span) => (span.textContent ?? '').trim().length > 0);
+      const hasVisibleSvgLayer = svgLayers.some((svg) => {
+        const rect = svg.getBoundingClientRect();
+        return rect.width > 120 && rect.height > 120;
+      });
+      const hasVisibleImageLayer = imageLayers.some((image) => {
+        const rect = image.getBoundingClientRect();
+        return rect.width > 120 && rect.height > 120;
+      });
       return {
         hasCanvas,
-        hasRenderablePdf: hasCanvas || hasVisiblePage,
+        hasRenderablePdf: hasCanvas || hasVisibleTextLayer || hasVisibleSvgLayer || hasVisibleImageLayer || hasVisiblePage,
         canvasCount: canvases.length,
         pageCount: pages.length,
         hasVisiblePage,
+        svgLayerCount: svgLayers.length,
+        imageLayerCount: imageLayers.length,
+        hasVisibleSvgLayer,
+        hasVisibleImageLayer,
+        hasVisibleTextLayer,
         textSpanCount: textSpans.length,
         text: document.querySelector('.whole-pdf-panel')?.textContent ?? ''
       };
@@ -322,11 +345,15 @@ async function waitForPdfCanvas(client) {
     const canvases = roots.flatMap((root) => [...root.querySelectorAll('canvas')]);
     const pages = roots.flatMap((root) => [...root.querySelectorAll('.page')]);
     const textSpans = roots.flatMap((root) => [...root.querySelectorAll('.textLayer span')]);
+    const svgLayers = roots.flatMap((root) => [...root.querySelectorAll('.page svg')]);
+    const imageLayers = roots.flatMap((root) => [...root.querySelectorAll('.page img')]);
     return {
       rootCount: roots.length,
       hasCanvas: canvases.length > 0,
       canvasCount: canvases.length,
       pageCount: pages.length,
+      svgLayerCount: svgLayers.length,
+      imageLayerCount: imageLayers.length,
       textSpanCount: textSpans.length,
       pdfText: document.querySelector('.pdf-pane')?.textContent?.slice(0, 500) ?? '',
       panelText: document.querySelector('.whole-pdf-panel')?.textContent ?? ''
@@ -336,6 +363,26 @@ async function waitForPdfCanvas(client) {
     writeFile(path.join(outputDir, 'whole-pdf-canvas-timeout.png'), Buffer.from(shot.data, 'base64'))
   );
   throw new Error(`wholePdf: PDF canvas did not render: ${JSON.stringify(snapshot)}`);
+}
+
+async function waitForExtractedPdfBlocks(client) {
+  let snapshot = null;
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    snapshot = await evaluateJson(client, `() => {
+      const layout = document.querySelector('.split-layout');
+      const blockCount = Number(layout?.getAttribute('data-extracted-pdf-block-count') ?? '0');
+      return {
+        blockCount,
+        statusText: document.querySelector('.status-bar')?.textContent ?? '',
+        pdfText: document.querySelector('.pdf-pane')?.textContent?.slice(0, 500) ?? ''
+      };
+    }`);
+    if (snapshot.blockCount > 0) {
+      return snapshot;
+    }
+    await wait(500);
+  }
+  return snapshot ?? { blockCount: 0, statusText: '', pdfText: '' };
 }
 
 async function clickButtonByText(client, text) {
@@ -383,6 +430,182 @@ async function clickSidebarSection(client, section) {
   await wait(700);
 }
 
+async function clickArxivLayoutButton(client, label) {
+  const clicked = await evaluateJson(client, `() => {
+    const label = ${JSON.stringify(label)};
+    const button = [...document.querySelectorAll('.arxiv-layout-switch button, .arxiv-view-switch button')]
+      .find((item) => (item.textContent ?? '').trim() === label);
+    button?.click();
+    return Boolean(button);
+  }`);
+  if (!clicked) {
+    throw new Error(`arxiv: layout button not found: ${label}`);
+  }
+  await wait(500);
+}
+
+async function readArxivResultLayout(client) {
+  return evaluateJson(client, `() => {
+    const cards = [...document.querySelectorAll('.arxiv-results-list > .arxiv-paper-card')];
+    const cardRects = cards.map((card) => {
+      const rect = card.getBoundingClientRect();
+      return {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        text: card.textContent?.slice(0, 500) ?? ''
+      };
+    });
+    const firstTop = Math.min(...cardRects.map((rect) => rect.top));
+    const firstRowCount = Number.isFinite(firstTop)
+      ? cardRects.filter((rect) => Math.abs(rect.top - firstTop) <= 8).length
+      : 0;
+    const detail = document.querySelector('.arxiv-detail-panel');
+    const detailRect = detail?.getBoundingClientRect();
+    const detailStyle = detail ? getComputedStyle(detail) : null;
+    const searchCard = document.querySelector('.arxiv-search-card');
+    const searchRect = searchCard?.getBoundingClientRect();
+    const pageHeader = document.querySelector('.arxiv-page-header');
+    const pageHeaderRect = pageHeader?.getBoundingClientRect();
+    const resultsPanel = document.querySelector('.arxiv-results-panel');
+    const resultsPanelRect = resultsPanel?.getBoundingClientRect();
+    const resultsToolbar = document.querySelector('.arxiv-results-toolbar');
+    const resultsToolbarRect = resultsToolbar?.getBoundingClientRect();
+    const pagination = document.querySelector('.arxiv-results-pagination');
+    const paginationRect = pagination?.getBoundingClientRect();
+    const pageFilterPanel = document.querySelector('.arxiv-filter-panel');
+    const advancedFilters = document.querySelector('.arxiv-query-options');
+    const searchButton = [...document.querySelectorAll('.arxiv-search-primary-row button')]
+      .find((button) => /搜索/.test(button.textContent ?? ''));
+    const searchButtonStyle = searchButton ? getComputedStyle(searchButton) : null;
+    const resultsListStyle = getComputedStyle(document.querySelector('.arxiv-results-list') ?? document.body);
+    const rectHeight = (item) => item ? Math.round(item.getBoundingClientRect().height) : 0;
+    const maxHeight = (items) => items.reduce((max, item) => Math.max(max, rectHeight(item)), 0);
+    const primaryControls = [...document.querySelectorAll('.arxiv-search-primary-row input, .arxiv-search-primary-row button')];
+    const filterControls = [...document.querySelectorAll('.arxiv-query-row select, .arxiv-query-row button')];
+    const detailActionControls = [...document.querySelectorAll('.arxiv-detail-actions button, .arxiv-detail-actions a, .arxiv-detail-secondary-actions button, .arxiv-detail-secondary-actions a')];
+    const topicTiles = [...document.querySelectorAll('.arxiv-topic-grid > div')];
+    return {
+      cardCount: cards.length,
+      firstRowCount,
+      cardRects,
+      minCardWidth: cardRects.reduce((min, rect) => Math.min(min, rect.width), Number.POSITIVE_INFINITY),
+      minCardHeight: cardRects.reduce((min, rect) => Math.min(min, rect.height), Number.POSITIVE_INFINITY),
+      zhCount: cards.filter((card) => /强化学习|中文摘要/.test(card.textContent ?? '')).length,
+      gridTemplateColumns: resultsListStyle.gridTemplateColumns,
+      detailVisible: Boolean(
+        detail &&
+          detailRect &&
+          detailRect.width > 160 &&
+          detailRect.height > 180 &&
+          detailStyle?.display !== 'none' &&
+          detailStyle?.visibility !== 'hidden'
+      ),
+      detailRect: detailRect
+        ? {
+            left: Math.round(detailRect.left),
+            top: Math.round(detailRect.top),
+            width: Math.round(detailRect.width),
+            height: Math.round(detailRect.height)
+          }
+        : null,
+      searchRect: searchRect
+        ? {
+            left: Math.round(searchRect.left),
+            top: Math.round(searchRect.top),
+            right: Math.round(searchRect.right),
+            width: Math.round(searchRect.width),
+            height: Math.round(searchRect.height)
+          }
+        : null,
+      pageHeaderHeight: pageHeaderRect ? Math.round(pageHeaderRect.height) : null,
+      resultsPanelRect: resultsPanelRect
+        ? {
+            left: Math.round(resultsPanelRect.left),
+            top: Math.round(resultsPanelRect.top),
+            right: Math.round(resultsPanelRect.right),
+            width: Math.round(resultsPanelRect.width),
+            height: Math.round(resultsPanelRect.height)
+          }
+        : null,
+      resultsToolbarHeight: resultsToolbarRect ? Math.round(resultsToolbarRect.height) : null,
+      paginationHeight: paginationRect ? Math.round(paginationRect.height) : null,
+      maxSearchPrimaryControlHeight: maxHeight(primaryControls),
+      maxFilterControlHeight: maxHeight(filterControls),
+      maxDetailActionHeight: maxHeight(detailActionControls),
+      maxTopicTileHeight: maxHeight(topicTiles),
+      searchResultsRightDelta:
+        searchRect && resultsPanelRect ? Math.abs(Math.round(searchRect.right - resultsPanelRect.right)) : null,
+      detailSearchTopDelta:
+        detailRect && searchRect ? Math.round(detailRect.top - searchRect.top) : null,
+      hasPageFilterPanel: Boolean(pageFilterPanel),
+      hasLegacyFilterPanel: Boolean(document.querySelector('.arxiv-filter-panel-legacy')),
+      hasTopPageFilters:
+        Boolean(advancedFilters) &&
+        advancedFilters.querySelectorAll('select').length >= 3 &&
+        advancedFilters.querySelectorAll('input[type="checkbox"]').length >= 4,
+      searchButtonBackground: searchButtonStyle?.backgroundColor ?? '',
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+    };
+  }`);
+}
+
+async function waitForArxivResultLayout(client, expectedFirstRowCount, label) {
+  let snapshot = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    snapshot = await readArxivResultLayout(client);
+    if (
+      snapshot.cardCount >= 6 &&
+      snapshot.zhCount >= 1 &&
+      snapshot.detailVisible &&
+      snapshot.firstRowCount === expectedFirstRowCount &&
+      !snapshot.hasHorizontalOverflow
+    ) {
+      return snapshot;
+    }
+    await wait(250);
+  }
+  throw new Error(`arxiv: ${label} layout did not match expected first row count ${expectedFirstRowCount}: ${JSON.stringify(snapshot)}`);
+}
+
+async function readArxivAdvancedFilterDensity(client) {
+  return evaluateJson(client, `() => {
+    const toggle = document.querySelector('.arxiv-advanced-toggle');
+    const searchCard = document.querySelector('.arxiv-search-card');
+    const advancedFilters = document.querySelector('.arxiv-query-options');
+    const resultsPanel = document.querySelector('.arxiv-results-panel');
+    const detailPanel = document.querySelector('.arxiv-detail-panel');
+    const rect = (item) => {
+      const box = item?.getBoundingClientRect();
+      return box
+        ? {
+            top: Math.round(box.top),
+            width: Math.round(box.width),
+            height: Math.round(box.height)
+          }
+        : null;
+    };
+    toggle?.click();
+    return new Promise((resolve) => {
+      window.setTimeout(() => {
+        const snapshot = {
+          searchRect: rect(searchCard),
+          advancedRect: rect(advancedFilters),
+          resultsRect: rect(resultsPanel),
+          detailRect: rect(detailPanel),
+          advancedVisible:
+            Boolean(advancedFilters) &&
+            getComputedStyle(advancedFilters).display !== 'none' &&
+            (advancedFilters?.getBoundingClientRect().height ?? 0) > 20,
+          hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+        };
+        resolve(snapshot);
+      }, 250);
+    });
+  }`);
+}
+
 async function rightClickResearchSheetCanvas(client) {
   const rect = await evaluateJson(client, `() => {
     const canvas = [...document.querySelectorAll('.univer-container canvas')]
@@ -418,6 +641,202 @@ async function rightClickResearchSheetCanvas(client) {
     clickCount: 1
   });
   await wait(500);
+}
+
+async function readWholePdfSidebarLayout(client, label) {
+  return evaluateJson(client, `() => {
+    const rect = (item) => {
+      const box = item?.getBoundingClientRect();
+      return box
+        ? {
+            left: Math.round(box.left),
+            right: Math.round(box.right),
+            top: Math.round(box.top),
+            width: Math.round(box.width),
+            height: Math.round(box.height)
+          }
+        : null;
+    };
+    const splitLayout = document.querySelector('.split-layout');
+    const translationPane = document.querySelector('.translation-pane');
+    const sidePanel = document.querySelector('.translation-pane .side-panel');
+    const panel = document.querySelector('.whole-pdf-panel');
+    const actions = document.querySelector('.whole-pdf-actions');
+    const figureGrid = document.querySelector('.pdf-figure-grid');
+    const toggle = document.querySelector('.reader-side-panel-toggle');
+    const panelRect = panel?.getBoundingClientRect();
+    const buttons = [...document.querySelectorAll('.whole-pdf-actions button, .pdf-view-toggle button')];
+    const overflowButtons = buttons
+      .map((button) => {
+        const box = button.getBoundingClientRect();
+        const text = (button.textContent ?? button.getAttribute('aria-label') ?? '').trim();
+        const visible = box.width > 0 && box.height > 0;
+        const overflows =
+          visible &&
+          (button.scrollWidth > button.clientWidth + 3 ||
+            (panelRect && box.left < panelRect.left - 2) ||
+            (panelRect && box.right > panelRect.right + 2));
+        return {
+          text,
+          width: Math.round(box.width),
+          height: Math.round(box.height),
+          scrollWidth: button.scrollWidth,
+          clientWidth: button.clientWidth,
+          overflows
+        };
+      })
+      .filter((item) => item.overflows);
+    return {
+      label: ${JSON.stringify(label)},
+      isCollapsed: Boolean(splitLayout?.classList.contains('is-reader-side-collapsed')),
+      activeToggle: [...document.querySelectorAll('.pdf-view-toggle button')]
+        .find((button) => button.classList.contains('active'))?.textContent?.trim() ?? '',
+      paneRect: rect(translationPane),
+      sidePanelRect: rect(sidePanel),
+      panelRect: rect(panel),
+      actionsRect: rect(actions),
+      figureGridRect: rect(figureGrid),
+      toggleRect: rect(toggle),
+      visibleButtonCount: buttons.filter((button) => {
+        const box = button.getBoundingClientRect();
+        return box.width > 0 && box.height > 0;
+      }).length,
+      actionOverflowCount: overflowButtons.length,
+      overflowButtons,
+      panelOverflow: panel ? panel.scrollWidth > panel.clientWidth + 3 : false,
+      actionsOverflow: actions ? actions.scrollWidth > actions.clientWidth + 3 : false,
+      figureGridOverflow: figureGrid ? figureGrid.scrollWidth > figureGrid.clientWidth + 3 : false,
+      sidePanelOverflow: sidePanel ? sidePanel.scrollWidth > sidePanel.clientWidth + 3 : false,
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+    };
+  }`);
+}
+
+async function readPdfInitialCenterLayout(client, label) {
+  return evaluateJson(client, `() => {
+    const container = document.querySelector('.pdf-js-viewer-container');
+    const page = container?.querySelector('.page');
+    const containerBox = container?.getBoundingClientRect();
+    const pageBox = page?.getBoundingClientRect();
+    if (!container || !page || !containerBox || !pageBox) {
+      return { label: ${JSON.stringify(label)}, hasPage: false };
+    }
+    const leftHidden = Math.max(0, containerBox.left - pageBox.left);
+    const rightHidden = Math.max(0, pageBox.right - containerBox.right);
+    const visibleWidth = Math.max(0, Math.min(pageBox.right, containerBox.right) - Math.max(pageBox.left, containerBox.left));
+    return {
+      label: ${JSON.stringify(label)},
+      hasPage: true,
+      scrollLeft: Math.round(container.scrollLeft),
+      scrollWidth: Math.round(container.scrollWidth),
+      clientWidth: Math.round(container.clientWidth),
+      pageWidth: Math.round(pageBox.width),
+      containerWidth: Math.round(containerBox.width),
+      leftHidden: Math.round(leftHidden),
+      rightHidden: Math.round(rightHidden),
+      hiddenDelta: Math.round(Math.abs(leftHidden - rightHidden)),
+      visibleWidth: Math.round(visibleWidth),
+      hasWidePage: pageBox.width > containerBox.width + 8
+    };
+  }`);
+}
+
+async function dragReaderSidebarToRatio(client, ratio) {
+  const handle = await evaluateJson(client, `() => {
+    const split = document.querySelector('.split-layout');
+    const item = document.querySelector('.reader-layout-resize-handle');
+    const splitBox = split?.getBoundingClientRect();
+    const handleBox = item?.getBoundingClientRect();
+    if (!splitBox || !handleBox) {
+      return null;
+    }
+    return {
+      startX: handleBox.left + handleBox.width / 2,
+      y: handleBox.top + handleBox.height / 2,
+      targetX: splitBox.right - splitBox.width * ${JSON.stringify(ratio)}
+    };
+  }`);
+  if (!handle) {
+    return false;
+  }
+
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: handle.startX,
+    y: handle.y,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1
+  });
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: handle.targetX,
+    y: handle.y,
+    button: 'left',
+    buttons: 1
+  });
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: handle.targetX,
+    y: handle.y,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1
+  });
+  await wait(500);
+  const changed = await evaluateJson(client, `() => {
+    const pane = document.querySelector('.translation-pane');
+    const width = pane?.getBoundingClientRect().width ?? 0;
+    return width < 360;
+  }`);
+  if (changed) {
+    return true;
+  }
+
+  return evaluateJson(client, `() => {
+    const split = document.querySelector('.split-layout');
+    const item = document.querySelector('.reader-layout-resize-handle');
+    const splitBox = split?.getBoundingClientRect();
+    const handleBox = item?.getBoundingClientRect();
+    if (!splitBox || !handleBox || !(item instanceof HTMLElement)) {
+      return false;
+    }
+    const pointerId = 91;
+    const startX = handleBox.left + handleBox.width / 2;
+    const y = handleBox.top + handleBox.height / 2;
+    const targetX = splitBox.right - splitBox.width * ${JSON.stringify(ratio)};
+    item.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      cancelable: true,
+      pointerId,
+      pointerType: 'mouse',
+      clientX: startX,
+      clientY: y,
+      button: 0,
+      buttons: 1
+    }));
+    window.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true,
+      cancelable: true,
+      pointerId,
+      pointerType: 'mouse',
+      clientX: targetX,
+      clientY: y,
+      button: 0,
+      buttons: 1
+    }));
+    window.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true,
+      cancelable: true,
+      pointerId,
+      pointerType: 'mouse',
+      clientX: targetX,
+      clientY: y,
+      button: 0,
+      buttons: 0
+    }));
+    return true;
+  }`);
 }
 
 async function loadPaperRecord(client, translationPath, extraPaperFields = {}) {
@@ -495,8 +914,11 @@ async function runHomeScenario(client) {
     hasHome: Boolean(document.querySelector('.home-page')),
     hasAgGrid: Boolean(document.querySelector('.ag-root, .paper-grid')),
     hasPaperTable: Boolean(document.querySelector('.paper-table')),
-    visibleInputs: document.querySelectorAll('.paper-table tbody input').length,
-    headerText: document.querySelector('.paper-table thead')?.textContent ?? '',
+    hasPaperList: Boolean(document.querySelector('.paper-library-list')),
+    rowCount: document.querySelectorAll('.paper-library-row').length,
+    actionTexts: [...document.querySelectorAll('.paper-library-actions button')].map((button) => button.textContent?.trim()),
+    hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+    pageText: document.body.textContent ?? '',
     headerActions: [...document.querySelectorAll('.home-header-actions button')].map((button) => button.textContent?.trim()),
     markStyle: (() => {
       const mark = document.querySelector('.home-header-mark');
@@ -521,14 +943,18 @@ async function runHomeScenario(client) {
     })()
   })`);
 
-  if (!library.hasHome || !library.hasPaperTable) {
-    throw new Error(`home: expected lightweight paper table after entering paper library, got ${JSON.stringify(library)}`);
+  if (
+    !library.hasHome ||
+    library.hasPaperTable ||
+    !library.hasPaperList ||
+    library.rowCount < 1 ||
+    !library.actionTexts.some((text) => /打开阅读/.test(text ?? '')) ||
+    library.hasHorizontalOverflow
+  ) {
+    throw new Error(`home: expected responsive paper library list without horizontal overflow, got ${JSON.stringify(library)}`);
   }
-  if (library.visibleInputs !== 0) {
-    throw new Error(`home: expected read-only table outside edit mode, got ${library.visibleInputs} visible inputs`);
-  }
-  if (library.hasAgGrid || /创新点|局限点|复现计划|后续/.test(library.headerText)) {
-    throw new Error(`home: paper library should not contain research spreadsheet columns, got ${library.headerText}`);
+  if (library.hasAgGrid) {
+    throw new Error(`home: paper library should not mount the research spreadsheet grid, got ${library.pageText.slice(0, 500)}`);
   }
   if (!library.headerActions.includes('研究表格') || !library.headerActions.includes('返回主页')) {
     throw new Error(`home: expected research sheet and home entries, got ${JSON.stringify(library.headerActions)}`);
@@ -554,27 +980,65 @@ async function runResearchSheetScenario(client) {
   const canvasStatus = await waitForResearchSheetCanvas(client);
   await rightClickResearchSheetCanvas(client);
 
-  const snapshot = await evaluateJson(client, `() => ({
-    hasResearchSheet: Boolean(document.querySelector('.research-sheet-page')),
-    hasUniver: Boolean(document.querySelector('.univer-container')),
-    commandText: document.querySelector('.research-command-bar')?.textContent ?? '',
-    hasAiButton: [...document.querySelectorAll('button')].some((button) => /AI 填(此单元格|选区)/.test(button.textContent ?? '')),
-    hasBindingToggle: [...document.querySelectorAll('button')].some((button) => /绑定|解除绑定|更新绑定/.test(button.textContent ?? '')),
-    formatToolbarText: document.querySelector('.research-format-toolbar')?.textContent ?? '',
-    formatToolbarTitles: [...document.querySelectorAll('.research-format-toolbar button')]
-      .map((button) => button.getAttribute('title') || button.getAttribute('aria-label') || (button.textContent ?? '').trim()),
-    contextMenuText: document.body.textContent ?? '',
-    titleText: document.querySelector('.research-sheet-header')?.textContent ?? '',
-    headerActionTitles: [...document.querySelectorAll('.research-sheet-actions button')]
-      .map((button) => button.getAttribute('title') || button.getAttribute('aria-label') || (button.textContent ?? '').trim()),
-    markStyle: (() => {
-      const mark = document.querySelector('.research-sheet-title img');
-      if (!mark) return null;
-      const style = getComputedStyle(mark);
-      return { background: style.backgroundColor, border: style.borderTopWidth, boxShadow: style.boxShadow };
-    })(),
-    canvasStatus: ${JSON.stringify(canvasStatus)}
-  })`);
+  const snapshot = await evaluateJson(client, `() => {
+    const rect = (item) => {
+      const box = item?.getBoundingClientRect();
+      return box
+        ? {
+            left: Math.round(box.left),
+            top: Math.round(box.top),
+            right: Math.round(box.right),
+            width: Math.round(box.width),
+            height: Math.round(box.height)
+          }
+        : null;
+    };
+    const page = document.querySelector('.research-sheet-page');
+    const header = document.querySelector('.research-sheet-header');
+    const commandBar = document.querySelector('.research-command-bar');
+    const commandActions = document.querySelector('.research-command-actions');
+    const contextStrip = document.querySelector('.research-context-strip');
+    const formatToolbar = document.querySelector('.research-format-toolbar');
+    const sheetSurface = document.querySelector('.research-sheet-surface');
+    const univerContainer = document.querySelector('#ftranslate-research-univer-container');
+    const pageRect = page?.getBoundingClientRect();
+    const univerRect = univerContainer?.getBoundingClientRect();
+    return {
+      hasResearchSheet: Boolean(page),
+      hasUniver: Boolean(document.querySelector('.univer-container')),
+      commandText: commandBar?.textContent ?? '',
+      hasAiButton: [...document.querySelectorAll('button')].some((button) => /AI 填(此单元格|选区)/.test(button.textContent ?? '')),
+      hasBindingToggle: [...document.querySelectorAll('button')].some((button) => /绑定|解除绑定|更新绑定/.test(button.textContent ?? '')),
+      formatToolbarText: formatToolbar?.textContent ?? '',
+      formatToolbarTitles: [...document.querySelectorAll('.research-format-toolbar button')]
+        .map((button) => button.getAttribute('title') || button.getAttribute('aria-label') || (button.textContent ?? '').trim()),
+      contextMenuText: document.body.textContent ?? '',
+      titleText: header?.textContent ?? '',
+      headerActionTitles: [...document.querySelectorAll('.research-sheet-actions button')]
+        .map((button) => button.getAttribute('title') || button.getAttribute('aria-label') || (button.textContent ?? '').trim()),
+      layoutMetrics: {
+        pageRect: rect(page),
+        headerRect: rect(header),
+        commandRect: rect(commandBar),
+        commandActionsRect: rect(commandActions),
+        contextRect: rect(contextStrip),
+        formatRect: rect(formatToolbar),
+        sheetSurfaceRect: rect(sheetSurface),
+        univerRect: rect(univerContainer),
+        chromeHeight: pageRect && univerRect ? Math.round(univerRect.top - pageRect.top) : null,
+        commandActionsOverflow: commandActions ? commandActions.scrollWidth > commandActions.clientWidth + 3 : false,
+        formatToolbarOverflow: formatToolbar ? formatToolbar.scrollWidth > formatToolbar.clientWidth + 3 : false,
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+      },
+      markStyle: (() => {
+        const mark = document.querySelector('.research-sheet-title img');
+        if (!mark) return null;
+        const style = getComputedStyle(mark);
+        return { background: style.backgroundColor, border: style.borderTopWidth, boxShadow: style.boxShadow };
+      })(),
+      canvasStatus: ${JSON.stringify(canvasStatus)}
+    };
+  }`);
 
   if (!snapshot.hasResearchSheet || !snapshot.hasUniver || !snapshot.hasAiButton) {
     throw new Error(`researchSheet: expected Univer surface and cell AI action, got ${JSON.stringify(snapshot)}`);
@@ -613,6 +1077,17 @@ async function runResearchSheetScenario(client) {
   if (snapshot.markStyle?.background !== 'rgba(0, 0, 0, 0)' || snapshot.markStyle?.border !== '0px') {
     throw new Error(`researchSheet: expected transparent icon without wrapper, got ${JSON.stringify(snapshot.markStyle)}`);
   }
+  if (
+    (snapshot.layoutMetrics.chromeHeight ?? 999) > 205 ||
+    snapshot.layoutMetrics.commandActionsOverflow ||
+    snapshot.layoutMetrics.formatToolbarOverflow ||
+    snapshot.layoutMetrics.hasHorizontalOverflow
+  ) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'research-sheet-density-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`researchSheet: toolbar area is too dense or clipped, got ${JSON.stringify(snapshot.layoutMetrics)}`);
+  }
 
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'research-sheet.png'), Buffer.from(shot.data, 'base64'))
@@ -627,6 +1102,16 @@ async function runWholePdfReaderScenario(client) {
   await clickButtonByText(client, '打开阅读');
   await waitForAppReady(client);
   const pdfCanvasStatus = await waitForPdfCanvas(client);
+  const initialPdfCenter = await readPdfInitialCenterLayout(client, 'initial-reader');
+  if (
+    !initialPdfCenter.hasPage ||
+    (initialPdfCenter.hasWidePage && initialPdfCenter.hiddenDelta > 28)
+  ) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'whole-pdf-initial-center-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`wholePdf: initial PDF page should be horizontally centered, got ${JSON.stringify(initialPdfCenter)}`);
+  }
 
   const wholePdf = await evaluateJson(client, `() => ({
     hasPanel: Boolean(document.querySelector('.whole-pdf-panel')),
@@ -671,10 +1156,151 @@ async function runWholePdfReaderScenario(client) {
     throw new Error(`wholePdf: legacy segment translation UI should be hidden, got ${JSON.stringify(legacyPanels)}`);
   }
 
+  await clickButtonByText(client, '左右双语');
+  await waitForPdfCanvas(client);
+  const parallelSidebar = await readWholePdfSidebarLayout(client, 'parallel-expanded');
+  if (
+    parallelSidebar.activeToggle !== '左右双语' ||
+    parallelSidebar.actionOverflowCount > 0 ||
+    parallelSidebar.panelOverflow ||
+    parallelSidebar.actionsOverflow ||
+    parallelSidebar.figureGridOverflow ||
+    parallelSidebar.sidePanelOverflow ||
+    parallelSidebar.hasHorizontalOverflow ||
+    (parallelSidebar.paneRect?.width ?? 0) < 260
+  ) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'whole-pdf-parallel-sidebar-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`wholePdf: parallel sidebar is clipped or too narrow, got ${JSON.stringify(parallelSidebar)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'whole-pdf-parallel-reader.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  await dragReaderSidebarToRatio(client, 0.2);
+  const narrowSidebar = await readWholePdfSidebarLayout(client, 'parallel-narrow');
+  if (
+    narrowSidebar.activeToggle !== '左右双语' ||
+    narrowSidebar.actionOverflowCount > 0 ||
+    narrowSidebar.panelOverflow ||
+    narrowSidebar.actionsOverflow ||
+    narrowSidebar.figureGridOverflow ||
+    narrowSidebar.sidePanelOverflow ||
+    narrowSidebar.hasHorizontalOverflow ||
+    (narrowSidebar.paneRect?.width ?? 0) < 260 ||
+    (narrowSidebar.paneRect?.width ?? 999) > 360
+  ) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'whole-pdf-narrow-sidebar-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`wholePdf: resized narrow sidebar should reflow without clipping, got ${JSON.stringify(narrowSidebar)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'whole-pdf-narrow-sidebar.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  await dragReaderSidebarToRatio(client, 0.42);
+  const wideSidebar = await readWholePdfSidebarLayout(client, 'parallel-wide');
+  if (
+    wideSidebar.activeToggle !== '左右双语' ||
+    wideSidebar.actionOverflowCount > 0 ||
+    wideSidebar.panelOverflow ||
+    wideSidebar.actionsOverflow ||
+    wideSidebar.figureGridOverflow ||
+    wideSidebar.sidePanelOverflow ||
+    wideSidebar.hasHorizontalOverflow ||
+    (wideSidebar.paneRect?.width ?? 0) < 440
+  ) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'whole-pdf-wide-sidebar-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`wholePdf: resized wide sidebar should expand its contents without clipping, got ${JSON.stringify(wideSidebar)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'whole-pdf-wide-sidebar.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  await clickButtonByText(client, '收起侧栏');
+  await wait(350);
+  const collapsedSidebar = await readWholePdfSidebarLayout(client, 'parallel-collapsed');
+  if (
+    !collapsedSidebar.isCollapsed ||
+    (collapsedSidebar.paneRect?.width ?? 999) > 48 ||
+    (collapsedSidebar.toggleRect?.width ?? 999) > 38 ||
+    (collapsedSidebar.toggleRect?.height ?? 999) > 112 ||
+    collapsedSidebar.hasHorizontalOverflow
+  ) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'whole-pdf-collapsed-sidebar-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`wholePdf: collapsed sidebar rail is too large, got ${JSON.stringify(collapsedSidebar)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'whole-pdf-collapsed-sidebar.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  await clickButtonByText(client, '展开侧栏');
+  await wait(350);
+
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'whole-pdf-reader.png'), Buffer.from(shot.data, 'base64'))
   );
-  return { wholePdf, legacyPanels };
+
+  await waitForExtractedPdfBlocks(client);
+  await clickButtonByText(client, '提取 PDF 图表');
+  let figureExtraction = null;
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    figureExtraction = await evaluateJson(client, `() => {
+      const assets = [...document.querySelectorAll('.pdf-figure-grid article')];
+      const readyAssets = assets.filter((asset) => Boolean(asset.querySelector('img')));
+      const badges = [...document.querySelectorAll('.pdf-figure-source-badge')].map((badge) => badge.textContent?.trim() ?? '');
+      const panelText = document.querySelector('.pdf-figure-assets')?.textContent ?? '';
+      return {
+        hasPanel: Boolean(document.querySelector('.pdf-figure-assets')),
+        assetCount: assets.length,
+        readyCount: readyAssets.length,
+        nativeCount: badges.filter((text) => text === 'PDF 内嵌图像').length,
+        compositeCount: badges.filter((text) => text === 'PDF 内嵌图像组合').length,
+        cropCount: badges.filter((text) => text === '页面裁剪').length,
+        panelText,
+        statusText: document.body.textContent ?? '',
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+      };
+    }`);
+    if (
+      figureExtraction.hasPanel &&
+      figureExtraction.assetCount >= 1 &&
+      figureExtraction.readyCount >= 1 &&
+      figureExtraction.nativeCount + figureExtraction.compositeCount >= 1 &&
+      !figureExtraction.hasHorizontalOverflow
+    ) {
+      break;
+    }
+    await wait(500);
+  }
+
+  if (
+    !figureExtraction?.hasPanel ||
+    figureExtraction.assetCount < 1 ||
+    figureExtraction.readyCount < 1 ||
+    figureExtraction.nativeCount + figureExtraction.compositeCount < 1 ||
+    figureExtraction.hasHorizontalOverflow
+  ) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'whole-pdf-figures-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`wholePdf: expected native PDF figure extraction before page-crop fallback, got ${JSON.stringify(figureExtraction)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'whole-pdf-figures.png'), Buffer.from(shot.data, 'base64'))
+  );
+  return { wholePdf, initialPdfCenter, legacyPanels, parallelSidebar, narrowSidebar, wideSidebar, collapsedSidebar, figureExtraction };
 }
 
 async function runPresentationScenario(client) {
@@ -910,7 +1536,170 @@ async function runAiAssistantScenario(client) {
   return { before, after };
 }
 
+async function runPaperTutorScenario(client) {
+  await clickSidebarSection(client, 'paperTutor');
+  await waitForAppReady(client);
+  await wait(500);
+
+  const before = await evaluateJson(client, `() => {
+    const page = document.querySelector('.paper-tutor-page');
+    const layout = document.querySelector('.paper-tutor-layout');
+    const paperRail = document.querySelector('.paper-tutor-paper-rail');
+    const chatShell = document.querySelector('.paper-tutor-chat-shell');
+    const evidenceRail = document.querySelector('.paper-tutor-evidence-rail');
+    const composer = document.querySelector('.paper-tutor-composer textarea');
+    const selectedPapers = [...document.querySelectorAll('.paper-tutor-paper-item input:checked')].length;
+    const activeSidebar = document.querySelector('.app-sidebar-link.active')?.getAttribute('data-sidebar-section') ?? '';
+    const layoutRect = layout?.getBoundingClientRect();
+    const paperRect = paperRail?.getBoundingClientRect();
+    const chatRect = chatShell?.getBoundingClientRect();
+    const evidenceRect = evidenceRail?.getBoundingClientRect();
+    const figurePreviewRects = [...document.querySelectorAll('.paper-tutor-figure-preview')]
+      .map((item) => {
+        const rect = item.getBoundingClientRect();
+        const image = item.querySelector('img');
+        const imageRect = image?.getBoundingClientRect();
+        return {
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          imageWidth: imageRect ? Math.round(imageRect.width) : 0,
+          imageHeight: imageRect ? Math.round(imageRect.height) : 0
+        };
+      });
+    const figureCaptionRects = [...document.querySelectorAll('.paper-tutor-figure-strip article > small')]
+      .map((item) => {
+        const rect = item.getBoundingClientRect();
+        return {
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          text: item.textContent?.slice(0, 160) ?? ''
+        };
+      });
+    const evidenceScrollItems = [
+      ...document.querySelectorAll(
+        '.paper-tutor-evidence-scroll, .paper-tutor-figure-strip, .paper-tutor-text-snippets'
+      )
+    ].map((item) => {
+      const rect = item.getBoundingClientRect();
+      const style = getComputedStyle(item);
+      return {
+        className: item.className,
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        scrollHeight: Math.round(item.scrollHeight),
+        clientHeight: Math.round(item.clientHeight),
+        overflowY: style.overflowY,
+        isScrollable:
+          item.scrollHeight > item.clientHeight + 4 &&
+          style.overflowY !== 'visible' &&
+          style.overflowY !== 'clip'
+      };
+    });
+    const nestedEvidenceScrollCount = evidenceScrollItems.filter((item) =>
+      !String(item.className).includes('paper-tutor-evidence-scroll') && item.isScrollable
+    ).length;
+    const figureArticleRects = [...document.querySelectorAll('.paper-tutor-figure-strip article')].map((item) => {
+      const rect = item.getBoundingClientRect();
+      return {
+        top: Math.round(rect.top),
+        bottom: Math.round(rect.bottom)
+      };
+    });
+    const textSnippetsRect = document.querySelector('.paper-tutor-text-snippets')?.getBoundingClientRect();
+    const maxFigureArticleBottom = figureArticleRects.reduce(
+      (max, rect) => Math.max(max, rect.bottom),
+      Number.NEGATIVE_INFINITY
+    );
+    const evidenceSectionOverlap = Boolean(
+      textSnippetsRect &&
+        Number.isFinite(maxFigureArticleBottom) &&
+        Math.round(textSnippetsRect.top) < maxFigureArticleBottom - 4
+    );
+    return {
+      hasPage: Boolean(page),
+      activeSidebar,
+      isIndependentView: Boolean(page) && !document.querySelector('.ai-assistant-page'),
+      hasLayout: Boolean(layout && paperRail && chatShell && evidenceRail),
+      hasComposer: Boolean(composer),
+      hasSessionList: document.querySelectorAll('.paper-tutor-session-item').length >= 1,
+      hasNewWindowAction: [...document.querySelectorAll('.paper-tutor-session-list button')]
+        .some((button) => /新窗口/.test(button.textContent ?? '')),
+      hasSuggestions: document.querySelectorAll('.paper-tutor-suggestions button').length >= 3,
+      selectedPapers,
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+      layoutRect: layoutRect ? { width: Math.round(layoutRect.width), height: Math.round(layoutRect.height) } : null,
+      paperRect: paperRect ? { width: Math.round(paperRect.width), height: Math.round(paperRect.height) } : null,
+      chatRect: chatRect ? { width: Math.round(chatRect.width), height: Math.round(chatRect.height) } : null,
+      evidenceRect: evidenceRect ? { width: Math.round(evidenceRect.width), height: Math.round(evidenceRect.height) } : null,
+      figurePreviewRects,
+      minFigurePreviewHeight: figurePreviewRects.reduce((min, rect) => Math.min(min, rect.height), Number.POSITIVE_INFINITY),
+      minFigureImageHeight: figurePreviewRects.reduce((min, rect) => Math.min(min, rect.imageHeight), Number.POSITIVE_INFINITY),
+      figureCaptionRects,
+      evidenceScrollItems,
+      nestedEvidenceScrollCount,
+      evidenceSectionOverlap,
+      bodyText: (document.body.textContent ?? '').slice(0, 1200)
+    };
+  }`);
+
+  if (
+    !before.hasPage ||
+    before.activeSidebar !== 'paperTutor' ||
+    !before.isIndependentView ||
+    !before.hasLayout ||
+    !before.hasComposer ||
+    !before.hasSessionList ||
+    !before.hasNewWindowAction ||
+    !before.hasSuggestions ||
+    before.selectedPapers < 1 ||
+    before.hasHorizontalOverflow ||
+    (before.chatRect?.width ?? 0) < 420 ||
+    (before.paperRect?.width ?? 0) < 180 ||
+    before.figurePreviewRects.length < 1 ||
+    before.minFigurePreviewHeight < 168 ||
+    before.minFigureImageHeight < 132 ||
+    before.figurePreviewRects[0]?.height < 210 ||
+    before.figureCaptionRects.some((rect) => rect.height > 58) ||
+    before.nestedEvidenceScrollCount > 0 ||
+    before.evidenceSectionOverlap
+  ) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'paper-tutor-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`paperTutor: expected standalone ChatGPT-like tutor page, got ${JSON.stringify(before)}`);
+  }
+
+  await evaluateJson(client, `() => {
+    [...document.querySelectorAll('.paper-tutor-suggestions button')]
+      .find((button) => /方法主线/.test(button.textContent ?? ''))?.click();
+    return null;
+  }`);
+  const afterSuggestion = await evaluateJson(client, `() => ({
+    inputValue: document.querySelector('.paper-tutor-composer textarea')?.value ?? '',
+    hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+  })`);
+  if (!/方法输入|模型变换/u.test(afterSuggestion.inputValue) || afterSuggestion.hasHorizontalOverflow) {
+    throw new Error(`paperTutor: suggestion did not populate composer correctly, got ${JSON.stringify(afterSuggestion)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'paper-tutor-page.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  return { before, afterSuggestion };
+}
+
 async function runArxivSearchScenario(client) {
+  await client.send('Runtime.evaluate', {
+    expression: `
+      localStorage.setItem('pdfTranslationReader:arxivReadingQueue', JSON.stringify([
+        { stableId: 'queue-1', title: 'FTP-1: General Technical Fund Tactile Control', titleZh: 'FTP-1：通用技术基金会触觉控制', addedAt: '2026-06-20T00:00:00.000Z' },
+        { stableId: 'queue-2', title: 'WT-UMI: Tactile-based Whole-Body Manipulation', titleZh: 'WT-UMI：触觉全身操控', addedAt: '2026-06-20T00:00:01.000Z' },
+        { stableId: 'queue-3', title: 'HT-Bench: Egocentral Vision for Dexterous Full-arm Manipulation', titleZh: 'HT-Bench：灵巧操作基准', addedAt: '2026-06-20T00:00:02.000Z' },
+        { stableId: 'queue-4', title: 'Long queued paper title used to verify compact ellipsis behavior in empty arXiv state', titleZh: '用于检查空结果紧凑省略的超长备选论文标题', addedAt: '2026-06-20T00:00:03.000Z' }
+      ]));
+    `
+  });
   await clickSidebarSection(client, 'arxiv');
   await waitForAppReady(client);
   await wait(700);
@@ -927,6 +1716,25 @@ async function runArxivSearchScenario(client) {
       options: [...select.options].map((option) => option.value)
     }));
     const text = page?.textContent ?? '';
+    const queue = document.querySelector('.arxiv-reading-queue-mini');
+    const queueRect = queue?.getBoundingClientRect();
+    const queueButtons = [
+      ...document.querySelectorAll('.arxiv-reading-queue-list .arxiv-reading-queue-paper, .arxiv-reading-queue-items .arxiv-reading-queue-paper')
+    ];
+    const queueButtonRects = queueButtons.map((button) => {
+      const rect = button.getBoundingClientRect();
+      return {
+        top: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        text: button.textContent?.trim() ?? ''
+      };
+    });
+    const firstQueueTop = Math.min(...queueButtonRects.map((rect) => rect.top));
+    const queueFirstRowCount = Number.isFinite(firstQueueTop)
+      ? queueButtonRects.filter((rect) => Math.abs(rect.top - firstQueueTop) <= 4).length
+      : 0;
+    const activeSidebar = document.querySelector('.app-sidebar-link.active');
     return {
       hasPage: Boolean(page),
       hasSearchCard: Boolean(searchCard),
@@ -934,6 +1742,14 @@ async function runArxivSearchScenario(client) {
       hasTitleAbstractHint: /title 和 abstract|标题和摘要|标题\\/摘要/.test(text),
       hasPageSize200: selects.some((select) => select.options.includes('200')),
       hasEmptyState: Boolean(document.querySelector('.arxiv-empty-card')),
+      startsWithGenericEmptyQuery: (inputs[0]?.value ?? '') === '',
+      activeSidebar: activeSidebar?.getAttribute('data-sidebar-section') ?? '',
+      queueVisible: Boolean(queue),
+      queueHeight: queueRect ? Math.round(queueRect.height) : 0,
+      queueButtonCount: queueButtons.length,
+      queueFirstRowCount,
+      queueButtonRects,
+      queueUsesLegacyPills: document.querySelectorAll('.arxiv-reading-queue-items .pill-button').length > 0,
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
       inputs,
       searchText: text.slice(0, 1200)
@@ -946,13 +1762,24 @@ async function runArxivSearchScenario(client) {
     !snapshot.hasYearInputs ||
     !snapshot.hasTitleAbstractHint ||
     !snapshot.hasPageSize200 ||
+    !snapshot.startsWithGenericEmptyQuery ||
+    snapshot.activeSidebar !== 'arxiv' ||
+    !snapshot.queueVisible ||
+    snapshot.queueHeight < 120 ||
+    snapshot.queueButtonCount !== 4 ||
+    snapshot.queueFirstRowCount !== 1 ||
+    snapshot.queueUsesLegacyPills ||
     snapshot.hasHorizontalOverflow
   ) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'arxiv-search-failed.png'), Buffer.from(shot.data, 'base64'))
     );
-    throw new Error(`arxiv: expected title/abstract search UI with year range and page-size controls, got ${JSON.stringify(snapshot)}`);
+    throw new Error(`arxiv: expected generic title/abstract search UI with year range and page-size controls, got ${JSON.stringify(snapshot)}`);
   }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'arxiv-search-empty.png'), Buffer.from(shot.data, 'base64'))
+  );
 
   const mockInstalled = await evaluateJson(client, `() => {
     const papers = Array.from({ length: 6 }, (_, index) => ({
@@ -1041,7 +1868,12 @@ async function runArxivSearchScenario(client) {
     }
   }`);
 
-  if (mockInstalled) {
+  let resultsSnapshot = null;
+  let threeColumnLayout = null;
+  let twoColumnLayout = null;
+  let oneColumnLayout = null;
+
+  if (mockInstalled || visualArxivMockMode === '1') {
     await client.send('Runtime.evaluate', {
       expression: `
         (() => {
@@ -1055,7 +1887,6 @@ async function runArxivSearchScenario(client) {
       `
     });
 
-    let resultsSnapshot = null;
     for (let attempt = 0; attempt < 40; attempt += 1) {
       resultsSnapshot = await evaluateJson(client, `() => {
         const cards = [...document.querySelectorAll('.arxiv-results-list > .arxiv-paper-card')];
@@ -1068,6 +1899,13 @@ async function runArxivSearchScenario(client) {
           cardCount: cards.length,
           cardRects,
           zhCount: cards.filter((card) => /强化学习|中文摘要/.test(card.textContent ?? '')).length,
+          hasPageFilterPanel: Boolean(document.querySelector('.arxiv-filter-panel')),
+          hasTopPageFilters: (() => {
+            const advancedFilters = document.querySelector('.arxiv-query-options');
+            return Boolean(advancedFilters) &&
+              advancedFilters.querySelectorAll('select').length >= 3 &&
+              advancedFilters.querySelectorAll('input[type="checkbox"]').length >= 4;
+          })(),
           hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
         };
       }`);
@@ -1082,6 +1920,8 @@ async function runArxivSearchScenario(client) {
       !resultsSnapshot.hasResultsList ||
       resultsSnapshot.cardCount < 3 ||
       resultsSnapshot.zhCount < 1 ||
+      resultsSnapshot.hasPageFilterPanel ||
+      !resultsSnapshot.hasTopPageFilters ||
       compressedCard ||
       resultsSnapshot.hasHorizontalOverflow
     ) {
@@ -1094,13 +1934,101 @@ async function runArxivSearchScenario(client) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'arxiv-search-results.png'), Buffer.from(shot.data, 'base64'))
     );
+
+    threeColumnLayout = await waitForArxivResultLayout(client, 3, 'default three-column');
+    if (
+      threeColumnLayout.minCardWidth < 250 ||
+      threeColumnLayout.minCardHeight < 120 ||
+      threeColumnLayout.hasPageFilterPanel ||
+      threeColumnLayout.hasLegacyFilterPanel ||
+      !threeColumnLayout.hasTopPageFilters ||
+      threeColumnLayout.searchButtonBackground === 'rgb(0, 0, 0)' ||
+      threeColumnLayout.minCardWidth < 265 ||
+      !threeColumnLayout.searchRect ||
+      !threeColumnLayout.resultsPanelRect ||
+      !threeColumnLayout.detailRect ||
+      threeColumnLayout.searchResultsRightDelta > 8 ||
+      threeColumnLayout.resultsPanelRect.width < 850 ||
+      threeColumnLayout.detailRect.width < 260 ||
+      threeColumnLayout.detailRect.width > 300 ||
+      (threeColumnLayout.pageHeaderHeight ?? 0) > 78 ||
+      (threeColumnLayout.searchRect?.height ?? 0) > 102 ||
+      threeColumnLayout.maxSearchPrimaryControlHeight > 38 ||
+      threeColumnLayout.maxFilterControlHeight > 38 ||
+      (threeColumnLayout.resultsToolbarHeight ?? 0) > 42 ||
+      (threeColumnLayout.paginationHeight ?? 0) > 46 ||
+      threeColumnLayout.maxDetailActionHeight > 38 ||
+      threeColumnLayout.maxTopicTileHeight > 58 ||
+      Math.abs(threeColumnLayout.detailSearchTopDelta ?? Number.POSITIVE_INFINITY) > 16
+    ) {
+      await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+        writeFile(path.join(outputDir, 'arxiv-search-results-three-failed.png'), Buffer.from(shot.data, 'base64'))
+      );
+      throw new Error(`arxiv: three-column cards are too compressed, got ${JSON.stringify(threeColumnLayout)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'arxiv-search-results-three.png'), Buffer.from(shot.data, 'base64'))
+    );
+
+    const advancedFilterDensity = await readArxivAdvancedFilterDensity(client);
+    if (
+      !advancedFilterDensity.advancedVisible ||
+      advancedFilterDensity.hasHorizontalOverflow ||
+      (advancedFilterDensity.searchRect?.height ?? 0) > 104 ||
+      (advancedFilterDensity.advancedRect?.height ?? 0) > 116 ||
+      (advancedFilterDensity.resultsRect?.top ?? Number.POSITIVE_INFINITY) -
+        (advancedFilterDensity.searchRect?.top ?? 0) >
+        118 ||
+      Math.abs((advancedFilterDensity.detailRect?.top ?? 0) - (advancedFilterDensity.searchRect?.top ?? 0)) > 16
+    ) {
+      await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+        writeFile(path.join(outputDir, 'arxiv-search-advanced-failed.png'), Buffer.from(shot.data, 'base64'))
+      );
+      throw new Error(`arxiv: advanced filters are too tall or misaligned, got ${JSON.stringify(advancedFilterDensity)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'arxiv-search-advanced.png'), Buffer.from(shot.data, 'base64'))
+    );
+    await evaluateJson(client, `() => document.querySelector('.arxiv-advanced-toggle')?.click()`);
+    await wait(250);
+
+    await clickArxivLayoutButton(client, '双列');
+    twoColumnLayout = await waitForArxivResultLayout(client, 2, 'two-column');
+    if (twoColumnLayout.minCardWidth < 240 || twoColumnLayout.minCardHeight < 140) {
+      await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+        writeFile(path.join(outputDir, 'arxiv-search-results-two-failed.png'), Buffer.from(shot.data, 'base64'))
+      );
+      throw new Error(`arxiv: two-column cards are too compressed, got ${JSON.stringify(twoColumnLayout)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'arxiv-search-results-two.png'), Buffer.from(shot.data, 'base64'))
+    );
+
+    await clickArxivLayoutButton(client, '单列');
+    oneColumnLayout = await waitForArxivResultLayout(client, 1, 'one-column');
+    if (oneColumnLayout.minCardWidth < 360 || oneColumnLayout.minCardHeight < 150) {
+      await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+        writeFile(path.join(outputDir, 'arxiv-search-results-one-failed.png'), Buffer.from(shot.data, 'base64'))
+      );
+      throw new Error(`arxiv: one-column cards are too compressed, got ${JSON.stringify(oneColumnLayout)}`);
+    }
+    const storedColumnMode = await evaluateJson(
+      client,
+      `() => window.localStorage.getItem('pdfTranslationReader:arxivResultColumnMode')`
+    );
+    if (storedColumnMode !== 'one') {
+      throw new Error(`arxiv: expected persisted one-column mode, got ${storedColumnMode}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'arxiv-search-results-one.png'), Buffer.from(shot.data, 'base64'))
+    );
   }
 
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'arxiv-search-page.png'), Buffer.from(shot.data, 'base64'))
   );
 
-  return snapshot;
+  return { ...snapshot, resultsSnapshot, threeColumnLayout, twoColumnLayout, oneColumnLayout };
 }
 
 async function runSettingsScenario(client) {
@@ -1136,7 +2064,9 @@ async function runSettingsScenario(client) {
       activeText: document.querySelector('.settings-nav button.active')?.textContent?.trim() ?? '',
       navItems,
       formControlCount: document.querySelectorAll('.settings-content input, .settings-content select, .settings-content textarea').length,
-      pathRows: document.querySelectorAll('.path-input-row').length
+      pathRows: document.querySelectorAll('.path-input-row').length,
+      disabledTodoDirectoryButtons: [...document.querySelectorAll('.path-input-row button')]
+        .filter((button) => button.disabled || /TODO/.test(button.getAttribute('title') ?? '')).length
     };
   }`);
 
@@ -1150,6 +2080,15 @@ async function runSettingsScenario(client) {
   if (brokenNav) {
     throw new Error(`settings: navigation item wraps or is too tall, got ${JSON.stringify({ brokenNav, snapshot })}`);
   }
+  if (snapshot.disabledTodoDirectoryButtons > 0) {
+    throw new Error(`settings: directory picker buttons should be enabled and not TODO, got ${JSON.stringify(snapshot)}`);
+  }
+  if (!/通用设置/.test(snapshot.activeText) || snapshot.formControlCount < 3) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'settings-page-controls-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`settings: general settings should expose direct controls, got ${JSON.stringify(snapshot)}`);
+  }
 
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'settings-page.png'), Buffer.from(shot.data, 'base64'))
@@ -1159,8 +2098,22 @@ async function runSettingsScenario(client) {
 }
 
 async function main() {
-  if (!existsSync(exe)) {
-    throw new Error(`Packaged executable not found. Run npm run dist first: ${exe}`);
+  if (usePackagedApp) {
+    if (!existsSync(packagedExe)) {
+      throw new Error(`Packaged executable not found. Run npm run dist first: ${packagedExe}`);
+    }
+    if (!existsSync(packagedInstaller)) {
+      throw new Error(`Versioned installer not found. Run npm run dist first: ${packagedInstaller}`);
+    }
+  } else {
+    if (!existsSync(electronExe)) {
+      throw new Error(`Electron runtime not found. Run npm install first: ${electronExe}`);
+    }
+    if (!existsSync(electronMainEntry) || !existsSync(rendererIndex)) {
+      throw new Error(
+        `Built app files not found. Run npm run build first: ${electronMainEntry}, ${rendererIndex}`
+      );
+    }
   }
 
   await mkdir(outputDir, { recursive: true });
@@ -1186,10 +2139,17 @@ async function main() {
     'utf8'
   );
 
-  const appProcess = spawn(exe, [`--remote-debugging-port=${port}`], {
+  const appCommand = usePackagedApp ? packagedExe : electronExe;
+  const appArgs = usePackagedApp
+    ? [`--remote-debugging-port=${port}`]
+    : [`--remote-debugging-port=${port}`, electronMainEntry];
+
+  const appProcess = spawn(appCommand, appArgs, {
     env: {
       ...process.env,
-      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir
+      PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir,
+      PDF_TRANSLATION_READER_VISUAL_MOCK_ARXIV: visualArxivMockMode,
+      ...(!usePackagedApp ? { PDF_TRANSLATION_READER_LOAD_BUILT_RENDERER: '1' } : {})
     },
     windowsHide: true,
     stdio: 'ignore'
@@ -1216,12 +2176,13 @@ async function main() {
     const wholePdfReader = await runWholePdfReaderScenario(client);
     const presentation = await runPresentationScenario(client);
     const aiAssistant = await runAiAssistantScenario(client);
+    const paperTutor = await runPaperTutorScenario(client);
     const arxivSearch = await runArxivSearchScenario(client);
     const settings = await runSettingsScenario(client);
     client.close();
     console.log(
       JSON.stringify(
-        { pdfPath, home, researchSheet, wholePdfReader, presentation, aiAssistant, arxivSearch, settings, outputDir },
+        { pdfPath, home, researchSheet, wholePdfReader, presentation, aiAssistant, paperTutor, arxivSearch, settings, outputDir },
         null,
         2
       )

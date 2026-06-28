@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, safeStorage } from 'electron';
+﻿import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, safeStorage, shell } from 'electron';
 import { spawn, spawnSync } from 'node:child_process';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
@@ -43,14 +43,40 @@ import {
   type PdfTranslationInvocation,
   type PdfTranslationOutputMode
 } from '../shared/pdfTranslation';
-import { type ArxivSearchRequest, type ArxivTitleAbstractTranslationRequest } from '../shared/arxiv';
+import {
+  type ArxivPaper,
+  type ArxivSearchRequest,
+  type ArxivSearchServiceResult,
+  type ArxivTitleAbstractTranslationRequest,
+  type ArxivTitleAbstractTranslationResult
+} from '../shared/arxiv';
 import { ArxivService } from './arxivService';
 import { ArxivTranslationService, translateTextsWithArgosEngine } from './arxivTranslationService';
+import {
+  formatAiErrorBody,
+  parseChatCompletionContent,
+  parseKimiFileUploadId,
+  parseOpenAiFileUploadId,
+  parseOpenAiResponsesContent,
+  parseProviderTextPayload
+} from './aiResponseParsing';
+import { toExcelExportCellValue } from './excelExportSafety';
+import { registerAppIpcHandlers } from './ipc/handlers';
+import {
+  assertAllowedExtension,
+  assertMaxBytes,
+  assertBase64ContentSize,
+  assertReadableFilePath,
+  assertTextContentSize,
+  normalizeSafeFilePath,
+  parseSafeExternalUrl
+} from './ipcSafety';
 import {
   checkLocalTranslationInstall,
   getLocalTranslationStatus,
   resetNllbRuntime,
   type LocalTranslateBatchResult,
+  type LocalTranslationLanguage,
   translateTextsWithNllbCTranslate2,
   warmUpNllbTranslator
 } from './localTranslationService';
@@ -80,6 +106,11 @@ interface SaveBinaryRequest {
   defaultFileName: string;
 }
 
+interface SavedFileResult {
+  filePath: string;
+  fileName: string;
+}
+
 interface ArxivDownloadPdfRequest {
   pdfUrl: string;
   defaultFileName: string;
@@ -88,6 +119,8 @@ interface ArxivDownloadPdfRequest {
 interface LocalTranslateBatchRequest {
   texts: string[];
   forceEngine?: 'nllb-ct2' | 'argos';
+  sourceLanguage?: LocalTranslationLanguage;
+  targetLanguage?: LocalTranslationLanguage;
   timeoutMs?: number;
 }
 
@@ -259,6 +292,14 @@ interface PdfTranslationRuntime {
 }
 
 const PDF2ZH_PROMPT_FILE_NAME = 'ftranslate-pdf2zh-prompt.txt';
+const MAX_PDF_FILE_BYTES = 300 * 1024 * 1024;
+const MAX_TEXT_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_TEXT_EXPORT_BYTES = 25 * 1024 * 1024;
+const MAX_BINARY_EXPORT_BYTES = 200 * 1024 * 1024;
+const AI_METADATA_FETCH_TIMEOUT_MS = 15_000;
+const AI_FILE_FETCH_TIMEOUT_MS = 120_000;
+const ACADEMIC_WEB_FETCH_TIMEOUT_MS = 6_500;
+const ARXIV_SEARCH_TRANSLATION_TIMEOUT_MS = 8_000;
 
 interface PdfTranslationRequest {
   paperId: string;
@@ -301,6 +342,9 @@ if (userDataDirOverride) {
   app.setPath('userData', userDataDirOverride);
 }
 
+const shouldLoadBuiltRenderer =
+  app.isPackaged || process.env.PDF_TRANSLATION_READER_LOAD_BUILT_RENDERER === '1';
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!gotSingleInstanceLock) {
@@ -323,20 +367,56 @@ async function createMainWindow(): Promise<void> {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: true
     }
   });
+  installNavigationGuards(mainWindow);
 
-  if (!app.isPackaged) {
+  if (shouldLoadBuiltRenderer) {
+    await mainWindow.loadFile(path.join(__dirname, '../../dist-renderer/index.html'));
+  } else {
     await mainWindow.loadURL('http://127.0.0.1:5173');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
-  } else {
-    await mainWindow.loadFile(path.join(__dirname, '../../dist-renderer/index.html'));
   }
 
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+function installNavigationGuards(window: BrowserWindow): void {
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    openAllowedExternalUrl(url);
+    return { action: 'deny' };
+  });
+
+  window.webContents.on('will-navigate', (event, url) => {
+    if (isAllowedAppNavigation(url)) {
+      return;
+    }
+    event.preventDefault();
+    openAllowedExternalUrl(url);
+  });
+}
+
+function isAllowedAppNavigation(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (shouldLoadBuiltRenderer) {
+      return parsed.protocol === 'file:';
+    }
+    return parsed.protocol === 'http:' && parsed.hostname === '127.0.0.1' && parsed.port === '5173';
+  } catch {
+    return false;
+  }
+}
+
+function openAllowedExternalUrl(url: string): void {
+  try {
+    void shell.openExternal(parseSafeExternalUrl(url));
+  } catch {
+    // Unknown external navigation is blocked by default.
+  }
 }
 
 function showMainWindow(): void {
@@ -353,6 +433,16 @@ function showMainWindow(): void {
   mainWindow.focus();
 }
 
+function scheduleLocalTranslationWarmup(): void {
+  setTimeout(() => {
+    const status = getLocalTranslationStatus();
+    if (status.preferredEngine === 'argos-only' || !status.nllb.configured || status.nllb.available) {
+      return;
+    }
+    void warmUpNllbTranslator().catch(() => undefined);
+  }, 2_000);
+}
+
 function registerGlobalShortcut(): void {
   const registered = globalShortcut.register('CommandOrControl+Alt+P', () => {
     showMainWindow();
@@ -364,11 +454,12 @@ function registerGlobalShortcut(): void {
 }
 
 async function readPdfFile(filePath: string): Promise<PdfFilePayload> {
-  const buffer = await fs.readFile(filePath);
+  const safePath = await assertReadableFilePath(filePath, ['.pdf'], MAX_PDF_FILE_BYTES);
+  const buffer = await fs.readFile(safePath);
 
   return {
-    filePath,
-    fileName: path.basename(filePath),
+    filePath: safePath,
+    fileName: path.basename(safePath),
     // PDF.js 在渲染进程中读取 Uint8Array；主进程用 base64 传输，避免暴露 Node 文件系统能力。
     base64: buffer.toString('base64')
   };
@@ -1030,7 +1121,8 @@ let arxivTranslationService: ArxivTranslationService | null = null;
 function getArxivService(): ArxivService {
   if (!arxivService) {
     arxivService = new ArxivService({
-      dbPath: path.join(app.getPath('userData'), 'arxiv-cache.sqlite')
+      dbPath: path.join(app.getPath('userData'), 'arxiv-cache.sqlite'),
+      translateSearchQueryToEnglish: translateArxivSearchQueryToEnglish
     });
   }
   return arxivService;
@@ -1055,18 +1147,103 @@ async function translateWithLocalEngine(request: LocalTranslateBatchRequest): Pr
   }
 
   if (request.forceEngine === 'argos') {
-    return translateTextsWithArgosEngine(texts, timeoutMs);
+    return translateTextsWithArgosEngine(texts, timeoutMs, {
+      sourceLanguage: request.sourceLanguage,
+      targetLanguage: request.targetLanguage
+    });
   }
 
   if (request.forceEngine === 'nllb-ct2') {
-    return translateTextsWithNllbCTranslate2(texts, timeoutMs);
+    return translateTextsWithNllbCTranslate2(texts, timeoutMs, {
+      sourceLanguage: request.sourceLanguage,
+      targetLanguage: request.targetLanguage
+    });
   }
 
   try {
-    return await translateTextsWithNllbCTranslate2(texts, timeoutMs);
+    return await translateTextsWithNllbCTranslate2(texts, timeoutMs, {
+      sourceLanguage: request.sourceLanguage,
+      targetLanguage: request.targetLanguage
+    });
   } catch {
-    return translateTextsWithArgosEngine(texts, timeoutMs);
+    return translateTextsWithArgosEngine(texts, timeoutMs, {
+      sourceLanguage: request.sourceLanguage,
+      targetLanguage: request.targetLanguage
+    });
   }
+}
+
+async function translateArxivSearchQueryToEnglish(query: string): Promise<string> {
+  const result = await translateWithLocalEngine({
+    texts: [query],
+    sourceLanguage: 'zh',
+    targetLanguage: 'en',
+    timeoutMs: ARXIV_SEARCH_TRANSLATION_TIMEOUT_MS
+  });
+  return result.texts[0] ?? '';
+}
+
+function isVisualArxivMockEnabled(): boolean {
+  return process.env.PDF_TRANSLATION_READER_VISUAL_MOCK_ARXIV === '1';
+}
+
+function buildVisualArxivPaper(index: number): ArxivPaper {
+  const id = `2606.17${String(index).padStart(3, '0')}`;
+  const titles = [
+    'Reinforcement Learning for Active Perception in Autonomous Robot Navigation',
+    'Tactile Sensing and Contact-Rich Manipulation with Diffusion Policies',
+    'World Models for Embodied Agents in Long-Horizon Path Planning',
+    'Compliant Control for Dexterous Robot Grasping under Uncertain Contacts',
+    'Safe Model Predictive Control with Control Barrier Functions for Mobile Robots',
+    'Vision-Language-Action Models for Generalist Robotic Manipulation',
+    'Physics-Informed Neural Dynamics for Robot Trajectory Optimization',
+    'Graph Neural Motion Planning in Dynamic Multi-Agent Environments',
+    'Self-Supervised Point Cloud Perception for Mobile Manipulators'
+  ];
+  return {
+    id: `http://arxiv.org/abs/${id}v1`,
+    stableId: id,
+    title: titles[index % titles.length],
+    authors: ['Visual Check', 'FTranslate Layout', 'Arxiv Mock'],
+    summary:
+      'This paper studies robot learning, tactile perception, navigation, planning, and real-world evaluation. The abstract is intentionally long enough to verify wrapping, dense cards, action buttons, and the persistent detail panel in the arXiv search page.',
+    published: `2026-06-${String(18 - (index % 4)).padStart(2, '0')}T00:00:00Z`,
+    publishedAt: `2026-06-${String(18 - (index % 4)).padStart(2, '0')}T00:00:00Z`,
+    updated: `2026-06-${String(18 - (index % 4)).padStart(2, '0')}T00:00:00Z`,
+    categories: index % 2 === 0 ? ['cs.RO', 'cs.LG'] : ['cs.RO', 'cs.CV'],
+    primaryCategory: 'cs.RO',
+    abstractUrl: `https://arxiv.org/abs/${id}`,
+    pdfUrl: `https://arxiv.org/pdf/${id}.pdf`
+  };
+}
+
+function buildVisualArxivSearchResult(): ArxivSearchServiceResult {
+  const papers = Array.from({ length: 9 }, (_, index) => buildVisualArxivPaper(index));
+  return {
+    papers,
+    totalResults: 38019,
+    startIndex: 0,
+    itemsPerPage: papers.length,
+    cacheHit: true,
+    queueSize: 0,
+    lastRequestGapMs: -1
+  };
+}
+
+function buildVisualArxivTranslationResult(
+  request: ArxivTitleAbstractTranslationRequest
+): ArxivTitleAbstractTranslationResult {
+  return {
+    stableId: request.stableId,
+    titleZh: `强化学习机器人导航：${request.stableId}`,
+    abstractZh:
+      '本文研究强化学习、触觉感知、机器人导航、路径规划和真实机器人评估，用于检查中文摘要在检索卡片和详情面板中的排版效果。',
+    engine: 'cache',
+    status: 'cached',
+    cacheHit: true,
+    message: 'visual mock cached',
+    translatedAt: '2026-06-18T00:00:00.000Z'
+  };
 }
 
 async function exportResearchWorkbookToExcel(
@@ -1082,6 +1259,7 @@ async function exportResearchWorkbookToExcel(
   if (result.canceled || !result.filePath) {
     return null;
   }
+  assertAllowedExtension(result.filePath, ['.xlsx']);
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'PDF Translation Reader';
@@ -1117,9 +1295,7 @@ async function exportResearchWorkbookToExcel(
     sourceRow.cells.forEach((sourceCell, columnIndex) => {
       const cell = row.getCell(columnIndex + 1);
       const value = sourceCell.value ?? '';
-      cell.value = value.trim().startsWith('=')
-        ? { formula: value.trim().slice(1) }
-        : value;
+      cell.value = toExcelExportCellValue(value);
       applyExcelCellStyle(cell, sourceCell.style, rowIndex === 0);
     });
     row.commit();
@@ -1370,9 +1546,7 @@ function writeUniverSheetToExcelWorksheet(
       }
 
       const value = readUniverCellText(sourceCell);
-      excelCell.value = value.trim().startsWith('=')
-        ? { formula: value.trim().slice(1) }
-        : value;
+      excelCell.value = toExcelExportCellValue(value);
       applyExcelCellStyle(
         excelCell,
         {
@@ -1683,11 +1857,16 @@ function readHorizontalAlign(value: unknown): 'left' | 'center' | 'right' | unde
 }
 
 async function readTextFile(filePath: string): Promise<TextFilePayload> {
-  const content = await fs.readFile(filePath, 'utf8');
+  const safePath = await assertReadableFilePath(
+    filePath,
+    ['.json', '.md', '.markdown', '.txt'],
+    MAX_TEXT_FILE_BYTES
+  );
+  const content = await fs.readFile(safePath, 'utf8');
 
   return {
-    filePath,
-    fileName: path.basename(filePath),
+    filePath: safePath,
+    fileName: path.basename(safePath),
     content
   };
 }
@@ -2073,12 +2252,12 @@ async function getAiBalance(): Promise<AiBalanceView> {
     throw new Error('请先在 AI 设置中保存 API Key。');
   }
 
-  const response = await fetch(balanceRequest.url, {
+  const response = await fetchWithTimeout(balanceRequest.url, {
     method: 'GET',
     headers: {
       Authorization: `Bearer ${apiKey}`
     }
-  });
+  }, resolveBoundedAiFetchTimeout(settings, AI_METADATA_FETCH_TIMEOUT_MS, AI_METADATA_FETCH_TIMEOUT_MS));
   const responseText = await response.text();
 
   if (!response.ok) {
@@ -2091,6 +2270,36 @@ async function getAiBalance(): Promise<AiBalanceView> {
     message: parseAiBalanceResponse(settings.provider, responseText),
     checkedAt: new Date().toISOString()
   };
+}
+
+async function fetchWithTimeout(
+  url: string | URL,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function resolveBoundedAiFetchTimeout(
+  settings: AiProviderSettings,
+  fallbackMs: number,
+  maxMs: number
+): number {
+  const runtimeOptions = resolveAiRuntimeOptions(settings);
+  const configuredMs = runtimeOptions.timeoutSeconds * 1000;
+  if (!Number.isFinite(configuredMs) || configuredMs <= 0) {
+    return fallbackMs;
+  }
+  return Math.min(maxMs, Math.max(5_000, configuredMs));
 }
 
 async function getAiModels(): Promise<AiModelsView> {
@@ -2111,12 +2320,12 @@ async function getAiModels(): Promise<AiModelsView> {
     throw new Error('请先在 AI 设置中保存 API Key。');
   }
 
-  const response = await fetch(modelsRequest.url, {
+  const response = await fetchWithTimeout(modelsRequest.url, {
     method: 'GET',
     headers: {
       Authorization: `Bearer ${apiKey}`
     }
-  });
+  }, resolveBoundedAiFetchTimeout(settings, AI_METADATA_FETCH_TIMEOUT_MS, AI_METADATA_FETCH_TIMEOUT_MS));
   const responseText = await response.text();
 
   if (!response.ok) {
@@ -2169,16 +2378,7 @@ async function executeChatCompletion(
     throw new Error(`AI 请求失败：HTTP ${response.status} ${formatAiErrorBody(responseText)}`);
   }
 
-  const parsed = JSON.parse(responseText) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const content = parsed.choices?.[0]?.message?.content?.trim();
-
-  if (!content) {
-    throw new Error('AI 响应中没有可用文本。');
-  }
-
-  return content;
+  return parseChatCompletionContent(responseText);
 }
 
 async function executeOpenAiResponses(
@@ -2216,28 +2416,7 @@ async function executeOpenAiResponses(
     throw new Error(`AI 请求失败：HTTP ${response.status} ${formatAiErrorBody(responseText)}`);
   }
 
-  const parsed = JSON.parse(responseText) as {
-    output_text?: string;
-    output?: Array<{
-      content?: Array<{ type?: string; text?: string }>;
-    }>;
-  };
-  const directText = parsed.output_text?.trim();
-  if (directText) {
-    return directText;
-  }
-
-  const contentText = parsed.output
-    ?.flatMap((item) => item.content ?? [])
-    .map((content) => content.text ?? '')
-    .join('')
-    .trim();
-
-  if (!contentText) {
-    throw new Error('AI 响应中没有可用文本。');
-  }
-
-  return contentText;
+  return parseOpenAiResponsesContent(responseText);
 }
 
 function mergeSheetCellPrompt(request: AiFillSheetCellRequest, paperContext: string): string {
@@ -2276,13 +2455,9 @@ async function fetchAcademicWebContext(request: AiAnalyzeLiteratureRequest): Pro
       url.searchParams.set('query', query);
       url.searchParams.set('limit', '4');
       url.searchParams.set('fields', 'title,year,abstract,url,authors');
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 6500);
-      const response = await fetch(url, {
-        headers: { 'User-Agent': 'PDF Translation Reader literature insight' },
-        signal: controller.signal
-      });
-      clearTimeout(timer);
+      const response = await fetchWithTimeout(url, {
+        headers: { 'User-Agent': 'PDF Translation Reader literature insight' }
+      }, ACADEMIC_WEB_FETCH_TIMEOUT_MS);
 
       if (!response.ok) {
         continue;
@@ -2380,25 +2555,20 @@ async function uploadOpenAiPdf(
     path.basename(pdfPath)
   );
 
-  const response = await fetch(`${settings.baseURL.replace(/\/+$/u, '')}/files`, {
+  const response = await fetchWithTimeout(`${settings.baseURL.replace(/\/+$/u, '')}/files`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`
     },
     body: formData
-  });
+  }, resolveBoundedAiFetchTimeout(settings, AI_FILE_FETCH_TIMEOUT_MS, AI_FILE_FETCH_TIMEOUT_MS));
   const responseText = await response.text();
 
   if (!response.ok) {
     throw new Error(`OpenAI PDF 上传失败：HTTP ${response.status} ${formatAiErrorBody(responseText)}`);
   }
 
-  const parsed = JSON.parse(responseText) as { id?: string };
-  if (!parsed.id) {
-    throw new Error('OpenAI 文件上传响应中没有 file id。');
-  }
-
-  return parsed.id;
+  return parseOpenAiFileUploadId(responseText);
 }
 
 async function getKimiPaperContext(
@@ -2416,12 +2586,12 @@ async function getKimiPaperContext(
 
   const fileId = cached?.fileId ?? (await uploadKimiPdf(settings, apiKey, pdfPath));
   const extractRequest = buildKimiFileExtractRequest(settings, fileId);
-  const response = await fetch(extractRequest.url, {
+  const response = await fetchWithTimeout(extractRequest.url, {
     method: 'GET',
     headers: {
       Authorization: `Bearer ${apiKey}`
     }
-  });
+  }, resolveBoundedAiFetchTimeout(settings, AI_FILE_FETCH_TIMEOUT_MS, AI_FILE_FETCH_TIMEOUT_MS));
   const responseText = await response.text();
 
   if (!response.ok) {
@@ -2458,30 +2628,20 @@ async function uploadKimiPdf(
     path.basename(pdfPath)
   );
 
-  const response = await fetch(`${settings.baseURL.replace(/\/+$/u, '')}/files`, {
+  const response = await fetchWithTimeout(`${settings.baseURL.replace(/\/+$/u, '')}/files`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`
     },
     body: formData
-  });
+  }, resolveBoundedAiFetchTimeout(settings, AI_FILE_FETCH_TIMEOUT_MS, AI_FILE_FETCH_TIMEOUT_MS));
   const responseText = await response.text();
 
   if (!response.ok) {
     throw new Error(`Kimi 文件上传失败：HTTP ${response.status} ${formatAiErrorBody(responseText)}`);
   }
 
-  const parsed = JSON.parse(responseText) as {
-    id?: string;
-    data?: { id?: string };
-  };
-  const fileId = parsed.id ?? parsed.data?.id;
-
-  if (!fileId) {
-    throw new Error('Kimi 文件上传响应中没有 file id。');
-  }
-
-  return fileId;
+  return parseKimiFileUploadId(responseText);
 }
 
 async function getLocalPaperContext(pdfPath: string): Promise<{ text: string; cached: boolean }> {
@@ -2508,9 +2668,7 @@ async function getLocalPaperContext(pdfPath: string): Promise<{ text: string; ca
 }
 
 async function extractPdfTextLocally(pdfPath: string): Promise<string> {
-  const pdfjs = (await Function('specifier', 'return import(specifier)')(
-    'pdfjs-dist/legacy/build/pdf.mjs'
-  )) as {
+  const pdfjs = (await import('pdfjs-dist/legacy/build/pdf.mjs')) as {
     getDocument: (options: { data: Uint8Array; disableWorker: boolean }) => {
       promise: Promise<{
         numPages: number;
@@ -2584,388 +2742,384 @@ function buildPaperContextCacheKey(
   ].join('|');
 }
 
-function parseProviderTextPayload(responseText: string): string {
-  try {
-    const parsed = JSON.parse(responseText) as unknown;
-    if (!isRecord(parsed)) {
-      return responseText;
-    }
-
-    const directText = readString(parsed.content) ?? readString(parsed.text);
-    if (directText) {
-      return directText;
-    }
-
-    if (isRecord(parsed.data)) {
-      return readString(parsed.data.content) ?? readString(parsed.data.text) ?? responseText;
-    }
-  } catch {
-    return responseText;
-  }
-
-  return responseText;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function readString(value: unknown): string | null {
-  if (typeof value === 'string' && value.trim()) {
-    return value.trim();
-  }
-
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return String(value);
-  }
-
-  return null;
+async function loadAiSettingsForIpc(): Promise<AiSettingsView> {
+  return toAiSettingsView(await loadStoredAiSettings());
 }
 
-function formatAiErrorBody(responseText: string): string {
-  try {
-    const parsed = JSON.parse(responseText) as {
-      error?: {
-        message?: string;
-        type?: string;
-        code?: string | number;
-      };
-    };
-    const parts = [parsed.error?.message, parsed.error?.type, parsed.error?.code]
-      .filter(Boolean)
-      .map((part) => String(part));
-    if (parts.length > 0) {
-      return parts.join(' / ');
-    }
-  } catch {
-    // 响应不是 JSON 时保留原始短文本，方便排查 provider 返回的错误。
+async function saveAiSettingsForIpc(request: AiSettingsRequest): Promise<AiSettingsView> {
+  return toAiSettingsView(await saveStoredAiSettings(request));
+}
+
+function handlePdfTranslationIpcError(request: PdfTranslationRequest, error: unknown): void {
+  sendPdfTranslationProgress({
+    paperId: request.paperId,
+    status: 'failed',
+    message: formatPdfTranslationProgressMessage(
+      sanitizePdfTranslationLog(error instanceof Error ? error.message : String(error), '')
+    )
+  });
+}
+
+async function openPdfDialogForIpc(): Promise<PdfFilePayload | null> {
+  const result = await dialog.showOpenDialog({
+    title: '选择英文原文 PDF',
+    properties: ['openFile'],
+    filters: [{ name: 'PDF', extensions: ['pdf'] }]
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
   }
 
-  return responseText.slice(0, 800);
+  return readPdfFile(result.filePaths[0]);
+}
+
+async function openTranslationDialogForIpc(): Promise<TextFilePayload | null> {
+  const result = await dialog.showOpenDialog({
+    title: '选择翻译文件',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Translation Files', extensions: ['json', 'md', 'markdown', 'txt'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  return readTextFile(result.filePaths[0]);
+}
+
+async function openTranslatedPdfDialogForIpc(): Promise<PdfFilePayload | null> {
+  const result = await dialog.showOpenDialog({
+    title: '选择已生成的中文/双语 PDF',
+    properties: ['openFile'],
+    filters: [{ name: 'PDF', extensions: ['pdf'] }]
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  return readPdfFile(result.filePaths[0]);
+}
+
+async function selectDirectoryDialogForIpc(request?: { title?: string; defaultPath?: string }): Promise<{
+  directoryPath: string;
+  directoryName: string;
+} | null> {
+  const result = await dialog.showOpenDialog({
+    title: request?.title?.trim() || '选择目录',
+    defaultPath: request?.defaultPath?.trim() || undefined,
+    properties: ['openDirectory', 'createDirectory']
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  const directoryPath = result.filePaths[0];
+  return {
+    directoryPath,
+    directoryName: path.basename(directoryPath)
+  };
+}
+
+async function loadProjectForIpc(request: LoadProjectRequest): Promise<{
+  pdf: PdfFilePayload | null;
+  translation: TextFilePayload | null;
+  aiCache: TextFilePayload | null;
+  translatedPdf: PdfFilePayload | null;
+  translatedMonoPdf: PdfFilePayload | null;
+  errors: string[];
+}> {
+  request = (isRecord(request) ? request : {}) as LoadProjectRequest;
+  const errors: string[] = [];
+  let pdf: PdfFilePayload | null = null;
+  let translation: TextFilePayload | null = null;
+  let aiCache: TextFilePayload | null = null;
+  let translatedPdf: PdfFilePayload | null = null;
+  let translatedMonoPdf: PdfFilePayload | null = null;
+
+  if (request.pdfPath) {
+    try {
+      pdf = await readPdfFile(request.pdfPath);
+    } catch (error) {
+      errors.push(`无法读取 PDF：${request.pdfPath}，${String(error)}`);
+    }
+  }
+
+  if (request.translationPath) {
+    try {
+      translation = await readTextFile(request.translationPath);
+    } catch (error) {
+      errors.push(`无法读取翻译文件：${request.translationPath}，${String(error)}`);
+    }
+  }
+
+  if (request.aiCachePath) {
+    try {
+      aiCache = await readTextFile(request.aiCachePath);
+    } catch (error) {
+      errors.push(`无法读取 AI 缓存：${request.aiCachePath}，${String(error)}`);
+    }
+  }
+
+  if (request.translatedPdfPath) {
+    try {
+      translatedPdf = await readPdfFile(request.translatedPdfPath);
+    } catch (error) {
+      errors.push(`无法读取双语 PDF：${request.translatedPdfPath}，${String(error)}`);
+    }
+  }
+
+  if (request.translatedMonoPdfPath) {
+    try {
+      translatedMonoPdf = await readPdfFile(request.translatedMonoPdfPath);
+    } catch (error) {
+      errors.push(`无法读取中文 PDF：${request.translatedMonoPdfPath}，${String(error)}`);
+    }
+  }
+
+  return { pdf, translation, aiCache, translatedPdf, translatedMonoPdf, errors };
+}
+
+async function openExternalUrlForIpc(url: unknown): Promise<boolean> {
+  await shell.openExternal(parseSafeExternalUrl(url));
+  return true;
+}
+
+async function saveTextForIpc(request: SaveTextRequest): Promise<SavedFileResult | null> {
+  const allowedExtensions = request.extension === 'json' ? ['.json'] : ['.md', '.markdown'];
+  const content = assertTextContentSize(request.content, MAX_TEXT_EXPORT_BYTES, 'text export');
+  let targetPath = request.filePath;
+
+  if (!targetPath) {
+    const result = await dialog.showSaveDialog({
+      title: '保存翻译文件',
+      defaultPath: request.defaultFileName,
+      filters: getTextFilters(request.extension)
+    });
+
+    if (result.canceled || !result.filePath) {
+      return null;
+    }
+
+    targetPath = result.filePath;
+  }
+
+  targetPath = normalizeSafeFilePath(targetPath);
+  assertAllowedExtension(targetPath, allowedExtensions);
+  await fs.writeFile(targetPath, content, 'utf8');
+  return {
+    filePath: targetPath,
+    fileName: path.basename(targetPath)
+  };
+}
+
+async function saveTranslationCacheForIpc(
+  request: Omit<SaveTextRequest, 'extension'>
+): Promise<SavedFileResult | null> {
+  const content = assertTextContentSize(request.content, MAX_TEXT_EXPORT_BYTES, 'translation cache');
+  let targetPath = request.filePath;
+
+  if (!targetPath) {
+    const result = await dialog.showSaveDialog({
+      title: '保存 AI 翻译缓存',
+      defaultPath: request.defaultFileName,
+      filters: [{ name: 'JSON Translation', extensions: ['json'] }]
+    });
+
+    if (result.canceled || !result.filePath) {
+      return null;
+    }
+
+    targetPath = result.filePath;
+  }
+
+  targetPath = normalizeSafeFilePath(targetPath);
+  assertAllowedExtension(targetPath, ['.json']);
+  await fs.writeFile(targetPath, content, 'utf8');
+  return {
+    filePath: targetPath,
+    fileName: path.basename(targetPath)
+  };
+}
+
+async function exportMarkdownForIpc(request: Omit<SaveTextRequest, 'extension'>): Promise<SavedFileResult | null> {
+  const content = assertTextContentSize(request.content, MAX_TEXT_EXPORT_BYTES, 'markdown export');
+
+  const result = await dialog.showSaveDialog({
+    title: '导出双语 Markdown',
+    defaultPath: request.filePath ?? request.defaultFileName,
+    filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
+  });
+
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  const targetPath = normalizeSafeFilePath(result.filePath);
+  assertAllowedExtension(targetPath, ['.md', '.markdown']);
+  await fs.writeFile(targetPath, content, 'utf8');
+  return {
+    filePath: targetPath,
+    fileName: path.basename(targetPath)
+  };
+}
+
+async function exportPptxForIpc(request: SaveBinaryRequest): Promise<SavedFileResult | null> {
+  const contentBase64 = assertBase64ContentSize(request.contentBase64, MAX_BINARY_EXPORT_BYTES, 'PPTX export');
+  const result = await dialog.showSaveDialog({
+    title: '导出组会 PPT',
+    defaultPath: request.filePath ?? request.defaultFileName,
+    filters: [{ name: 'PowerPoint Presentation', extensions: ['pptx'] }]
+  });
+
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  const targetPath = normalizeSafeFilePath(result.filePath);
+  assertAllowedExtension(targetPath, ['.pptx']);
+  const buffer = Buffer.from(contentBase64, 'base64');
+  await fs.writeFile(targetPath, buffer);
+  return {
+    filePath: targetPath,
+    fileName: path.basename(targetPath)
+  };
+}
+
+async function searchArxivForIpc(request: ArxivSearchRequest): Promise<ArxivSearchServiceResult> {
+  if (isVisualArxivMockEnabled()) {
+    return buildVisualArxivSearchResult();
+  }
+  return getArxivService().search(request, 'renderer:arxiv-search');
+}
+
+async function translateArxivPaperForIpc(
+  request: ArxivTitleAbstractTranslationRequest
+): Promise<ArxivTitleAbstractTranslationResult> {
+  if (isVisualArxivMockEnabled()) {
+    return buildVisualArxivTranslationResult(request);
+  }
+  return getArxivTranslationService().translatePaper(request);
+}
+
+async function translateArxivPapersForIpc(
+  request: ArxivTitleAbstractTranslationRequest[]
+): Promise<ArxivTitleAbstractTranslationResult[]> {
+  const safeRequest = Array.isArray(request) ? request.slice(0, 100) : [];
+  if (isVisualArxivMockEnabled()) {
+    return safeRequest.map((item) => buildVisualArxivTranslationResult(item));
+  }
+  return getArxivTranslationService().translatePapers(safeRequest);
+}
+
+async function downloadArxivPdfForIpc(request: ArxivDownloadPdfRequest): Promise<PdfFilePayload | null> {
+  const result = await dialog.showSaveDialog({
+    title: '下载 arXiv PDF',
+    defaultPath: sanitizeFileName(request.defaultFileName || 'arxiv-paper.pdf'),
+    filters: [{ name: 'PDF', extensions: ['pdf'] }]
+  });
+
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  const targetPath = normalizeSafeFilePath(result.filePath);
+  assertAllowedExtension(targetPath, ['.pdf']);
+  const buffer = await getArxivService().downloadPdf(request.pdfUrl, 'renderer:arxiv-download');
+  assertMaxBytes(buffer.byteLength, MAX_PDF_FILE_BYTES, 'PDF download');
+  await fs.writeFile(targetPath, buffer);
+  return readPdfFile(targetPath);
+}
+
+async function exportPdfForIpc(request: { sourcePath: string; defaultFileName: string }): Promise<SavedFileResult | null> {
+  if (!request.sourcePath || !(await pathExists(request.sourcePath))) {
+    throw new Error('没有可导出的双语 PDF 文件。');
+  }
+
+  const sourcePath = await assertReadableFilePath(request.sourcePath, ['.pdf'], MAX_PDF_FILE_BYTES);
+
+  const result = await dialog.showSaveDialog({
+    title: '导出双语 PDF',
+    defaultPath: request.defaultFileName,
+    filters: [{ name: 'PDF', extensions: ['pdf'] }]
+  });
+
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  const targetPath = normalizeSafeFilePath(result.filePath);
+  assertAllowedExtension(targetPath, ['.pdf']);
+  await fs.copyFile(sourcePath, targetPath);
+  return {
+    filePath: targetPath,
+    fileName: path.basename(targetPath)
+  };
 }
 
 function registerIpcHandlers(): void {
-  ipcMain.handle('ai-settings:load', async () => {
-    return toAiSettingsView(await loadStoredAiSettings());
-  });
-
-  ipcMain.handle('ai-settings:save', async (_event, request: AiSettingsRequest) => {
-    return toAiSettingsView(await saveStoredAiSettings(request));
-  });
-
-  ipcMain.handle('ai:translate', async (_event, request: AiTranslationItem & { force?: boolean }) => {
-    return translateWithAi(request);
-  });
-
-  ipcMain.handle('ai:complete', async (_event, request: AiCompleteRequest) => {
-    return completeWithAi(request);
-  });
-
-  ipcMain.handle('ai:fill-sheet-cell', async (_event, request: AiFillSheetCellRequest) => {
-    return fillSheetCellWithAi(request);
-  });
-
-  ipcMain.handle('ai:fill-sheet-cells', async (_event, request: AiFillSheetCellsRequest) => {
-    return fillSheetCellsWithAi(request);
-  });
-
-  ipcMain.handle('ai:analyze-literature', async (_event, request: AiAnalyzeLiteratureRequest) => {
-    return analyzeLiteratureWithAi(request);
-  });
-
-  ipcMain.handle('ai:test-connection', async () => {
-    return testAiConnection();
-  });
-
-  ipcMain.handle('ai:balance', async () => {
-    return getAiBalance();
-  });
-
-  ipcMain.handle('ai:models', async () => {
-    return getAiModels();
-  });
-
-  ipcMain.handle('local-translation:status', async () => {
-    return getLocalTranslationStatus();
-  });
-
-  ipcMain.handle('local-translation:install-check', async () => {
-    return checkLocalTranslationInstall();
-  });
-
-  ipcMain.handle('local-translation:warmup', async () => {
-    return warmUpNllbTranslator();
-  });
-
-  ipcMain.handle('local-translation:translate-batch', async (_event, request: LocalTranslateBatchRequest) => {
-    return translateWithLocalEngine(request);
-  });
-
-  ipcMain.handle('pdf-translation:check-engine', async () => {
-    return checkPdfTranslationEngine();
-  });
-
-  ipcMain.handle('pdf-translation:translate', async (_event, request: PdfTranslationRequest) => {
-    try {
-      return await translatePdfWithSidecar(request);
-    } catch (error) {
-      sendPdfTranslationProgress({
-        paperId: request.paperId,
-        status: 'failed',
-        message: formatPdfTranslationProgressMessage(
-          sanitizePdfTranslationLog(error instanceof Error ? error.message : String(error), '')
-        )
-      });
-      throw error;
+  registerAppIpcHandlers(ipcMain, {
+    ai: {
+      loadAiSettings: loadAiSettingsForIpc,
+      saveAiSettings: saveAiSettingsForIpc,
+      translateWithAi,
+      completeWithAi,
+      fillSheetCellWithAi,
+      fillSheetCellsWithAi,
+      analyzeLiteratureWithAi,
+      testAiConnection,
+      getAiBalance,
+      getAiModels,
+      getLocalTranslationStatus,
+      checkLocalTranslationInstall,
+      warmUpNllbTranslator,
+      translateWithLocalEngine
+    },
+    pdf: {
+      checkPdfTranslationEngine,
+      translatePdfWithSidecar,
+      handlePdfTranslationError: handlePdfTranslationIpcError,
+      openPdfDialog: openPdfDialogForIpc,
+      openTranslationDialog: openTranslationDialogForIpc,
+      openTranslatedPdfDialog: openTranslatedPdfDialogForIpc,
+      selectDirectoryDialog: selectDirectoryDialogForIpc,
+      exportPdf: exportPdfForIpc
+    },
+    project: {
+      loadProject: loadProjectForIpc
+    },
+    file: {
+      openExternalUrl: openExternalUrlForIpc,
+      saveText: saveTextForIpc,
+      saveTranslationCache: saveTranslationCacheForIpc,
+      exportMarkdown: exportMarkdownForIpc,
+      exportPptx: exportPptxForIpc,
+      exportResearchWorkbookToExcel,
+      importResearchWorkbookFromExcel
+    },
+    arxiv: {
+      searchArxiv: searchArxivForIpc,
+      translateArxivPaper: translateArxivPaperForIpc,
+      translateArxivPapers: translateArxivPapersForIpc,
+      downloadArxivPdf: downloadArxivPdfForIpc
     }
-  });
-
-  ipcMain.handle('dialog:open-pdf', async () => {
-    const result = await dialog.showOpenDialog({
-      title: '选择英文原文 PDF',
-      properties: ['openFile'],
-      filters: [{ name: 'PDF', extensions: ['pdf'] }]
-    });
-
-    if (result.canceled || result.filePaths.length === 0) {
-      return null;
-    }
-
-    return readPdfFile(result.filePaths[0]);
-  });
-
-  ipcMain.handle('dialog:open-translation', async () => {
-    const result = await dialog.showOpenDialog({
-      title: '选择翻译文件',
-      properties: ['openFile'],
-      filters: [
-        { name: 'Translation Files', extensions: ['json', 'md', 'markdown', 'txt'] },
-        { name: 'All Files', extensions: ['*'] }
-      ]
-    });
-
-    if (result.canceled || result.filePaths.length === 0) {
-      return null;
-    }
-
-    return readTextFile(result.filePaths[0]);
-  });
-
-  ipcMain.handle('dialog:open-translated-pdf', async () => {
-    const result = await dialog.showOpenDialog({
-      title: '选择已生成的中文/双语 PDF',
-      properties: ['openFile'],
-      filters: [{ name: 'PDF', extensions: ['pdf'] }]
-    });
-
-    if (result.canceled || result.filePaths.length === 0) {
-      return null;
-    }
-
-    return readPdfFile(result.filePaths[0]);
-  });
-
-  ipcMain.handle('project:load', async (_event, request: LoadProjectRequest) => {
-    const errors: string[] = [];
-    let pdf: PdfFilePayload | null = null;
-    let translation: TextFilePayload | null = null;
-    let aiCache: TextFilePayload | null = null;
-    let translatedPdf: PdfFilePayload | null = null;
-    let translatedMonoPdf: PdfFilePayload | null = null;
-
-    if (request.pdfPath) {
-      try {
-        pdf = await readPdfFile(request.pdfPath);
-      } catch (error) {
-        errors.push(`无法读取 PDF：${request.pdfPath}，${String(error)}`);
-      }
-    }
-
-    if (request.translationPath) {
-      try {
-        translation = await readTextFile(request.translationPath);
-      } catch (error) {
-        errors.push(`无法读取翻译文件：${request.translationPath}，${String(error)}`);
-      }
-    }
-
-    if (request.aiCachePath) {
-      try {
-        aiCache = await readTextFile(request.aiCachePath);
-      } catch (error) {
-        errors.push(`无法读取 AI 缓存：${request.aiCachePath}，${String(error)}`);
-      }
-    }
-
-    if (request.translatedPdfPath) {
-      try {
-        translatedPdf = await readPdfFile(request.translatedPdfPath);
-      } catch (error) {
-        errors.push(`无法读取双语 PDF：${request.translatedPdfPath}，${String(error)}`);
-      }
-    }
-
-    if (request.translatedMonoPdfPath) {
-      try {
-        translatedMonoPdf = await readPdfFile(request.translatedMonoPdfPath);
-      } catch (error) {
-        errors.push(`无法读取中文 PDF：${request.translatedMonoPdfPath}，${String(error)}`);
-      }
-    }
-
-    return { pdf, translation, aiCache, translatedPdf, translatedMonoPdf, errors };
-  });
-
-  ipcMain.handle('file:save-text', async (_event, request: SaveTextRequest) => {
-    let targetPath = request.filePath;
-
-    if (!targetPath) {
-      const result = await dialog.showSaveDialog({
-        title: '保存翻译文件',
-        defaultPath: request.defaultFileName,
-        filters: getTextFilters(request.extension)
-      });
-
-      if (result.canceled || !result.filePath) {
-        return null;
-      }
-
-      targetPath = result.filePath;
-    }
-
-    await fs.writeFile(targetPath, request.content, 'utf8');
-    return {
-      filePath: targetPath,
-      fileName: path.basename(targetPath)
-    };
-  });
-
-  ipcMain.handle('file:save-translation-cache', async (_event, request: Omit<SaveTextRequest, 'extension'>) => {
-    let targetPath = request.filePath;
-
-    if (!targetPath) {
-      const result = await dialog.showSaveDialog({
-        title: '保存 AI 翻译缓存',
-        defaultPath: request.defaultFileName,
-        filters: [{ name: 'JSON Translation', extensions: ['json'] }]
-      });
-
-      if (result.canceled || !result.filePath) {
-        return null;
-      }
-
-      targetPath = result.filePath;
-    }
-
-    await fs.writeFile(targetPath, request.content, 'utf8');
-    return {
-      filePath: targetPath,
-      fileName: path.basename(targetPath)
-    };
-  });
-
-  ipcMain.handle('file:export-markdown', async (_event, request: Omit<SaveTextRequest, 'extension'>) => {
-    const result = await dialog.showSaveDialog({
-      title: '导出双语 Markdown',
-      defaultPath: request.filePath ?? request.defaultFileName,
-      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
-    });
-
-    if (result.canceled || !result.filePath) {
-      return null;
-    }
-
-    await fs.writeFile(result.filePath, request.content, 'utf8');
-    return {
-      filePath: result.filePath,
-      fileName: path.basename(result.filePath)
-    };
-  });
-
-  ipcMain.handle('file:export-pptx', async (_event, request: SaveBinaryRequest) => {
-    const result = await dialog.showSaveDialog({
-      title: '导出组会 PPT',
-      defaultPath: request.filePath ?? request.defaultFileName,
-      filters: [{ name: 'PowerPoint Presentation', extensions: ['pptx'] }]
-    });
-
-    if (result.canceled || !result.filePath) {
-      return null;
-    }
-
-    const buffer = Buffer.from(request.contentBase64, 'base64');
-    await fs.writeFile(result.filePath, buffer);
-    return {
-      filePath: result.filePath,
-      fileName: path.basename(result.filePath)
-    };
-  });
-
-  ipcMain.handle('arxiv:search', async (_event, request: ArxivSearchRequest) => {
-    return getArxivService().search(request, 'renderer:arxiv-search');
-  });
-
-  ipcMain.handle('arxiv:translate-title-abstract', async (_event, request: ArxivTitleAbstractTranslationRequest) => {
-    return getArxivTranslationService().translatePaper(request);
-  });
-
-  ipcMain.handle('arxiv:translate-title-abstract-batch', async (_event, request: ArxivTitleAbstractTranslationRequest[]) => {
-    const safeRequest = Array.isArray(request) ? request.slice(0, 100) : [];
-    return getArxivTranslationService().translatePapers(safeRequest);
-  });
-
-  ipcMain.handle('arxiv:download-pdf', async (_event, request: ArxivDownloadPdfRequest) => {
-    const result = await dialog.showSaveDialog({
-      title: '下载 arXiv PDF',
-      defaultPath: sanitizeFileName(request.defaultFileName || 'arxiv-paper.pdf'),
-      filters: [{ name: 'PDF', extensions: ['pdf'] }]
-    });
-
-    if (result.canceled || !result.filePath) {
-      return null;
-    }
-
-    const buffer = await getArxivService().downloadPdf(request.pdfUrl, 'renderer:arxiv-download');
-    await fs.writeFile(result.filePath, buffer);
-    return readPdfFile(result.filePath);
-  });
-
-  ipcMain.handle('file:export-pdf', async (_event, request: { sourcePath: string; defaultFileName: string }) => {
-    if (!request.sourcePath || !(await pathExists(request.sourcePath))) {
-      throw new Error('没有可导出的双语 PDF 文件。');
-    }
-
-    const result = await dialog.showSaveDialog({
-      title: '导出双语 PDF',
-      defaultPath: request.defaultFileName,
-      filters: [{ name: 'PDF', extensions: ['pdf'] }]
-    });
-
-    if (result.canceled || !result.filePath) {
-      return null;
-    }
-
-    await fs.copyFile(request.sourcePath, result.filePath);
-    return {
-      filePath: result.filePath,
-      fileName: path.basename(result.filePath)
-    };
-  });
-
-  ipcMain.handle('research-workbook:export-excel', async (_event, request: ResearchWorkbookExcelRequest) => {
-    return exportResearchWorkbookToExcel(request);
-  });
-
-  ipcMain.handle('research-workbook:import-excel', async () => {
-    return importResearchWorkbookFromExcel();
   });
 }
-
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   registerIpcHandlers();
   await createMainWindow();
   registerGlobalShortcut();
+  scheduleLocalTranslationWarmup();
 });
 
 app.on('activate', () => {
@@ -2987,3 +3141,4 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+

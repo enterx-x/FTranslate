@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import brandMark from '../assets/brand-mark.png';
 import translateIcon from '../assets/icons/duotone/translate.svg';
 import libraryLineIcon from '../assets/icons/duotone/library.svg';
@@ -46,16 +46,29 @@ const editableFields: Array<{
   { key: 'year', label: '年份', width: '7%' }
 ];
 
-export function HomePage(props: HomePageProps) {
+export function buildHomePageMetrics(papers: PaperRecord[]): {
+  latestPaper: PaperRecord | undefined;
+  notedPaperCount: number;
+  dualPdfCount: number;
+} {
+  return {
+    latestPaper: [...papers].sort((left, right) => {
+      const leftTime = left.lastOpenedAt ? new Date(left.lastOpenedAt).getTime() : 0;
+      const rightTime = right.lastOpenedAt ? new Date(right.lastOpenedAt).getTime() : 0;
+      return rightTime - leftTime;
+    })[0],
+    notedPaperCount: papers.filter((paper) => paper.notes?.trim()).length,
+    dualPdfCount: papers.filter((paper) => paper.translatedPdfPath).length
+  };
+}
+
+export const HomePage = memo(function HomePage(props: HomePageProps) {
   const [editingPaperId, setEditingPaperId] = useState<string | null>(null);
   const [draftPaper, setDraftPaper] = useState<PaperRecord | null>(null);
-  const latestPaper = [...props.papers].sort((left, right) => {
-    const leftTime = left.lastOpenedAt ? new Date(left.lastOpenedAt).getTime() : 0;
-    const rightTime = right.lastOpenedAt ? new Date(right.lastOpenedAt).getTime() : 0;
-    return rightTime - leftTime;
-  })[0];
-  const notedPaperCount = props.papers.filter((paper) => paper.notes?.trim()).length;
-  const dualPdfCount = props.papers.filter((paper) => paper.translatedPdfPath).length;
+  const { latestPaper, notedPaperCount, dualPdfCount } = useMemo(
+    () => buildHomePageMetrics(props.papers),
+    [props.papers]
+  );
 
   function startEdit(paper: PaperRecord): void {
     setEditingPaperId(paper.id);
@@ -78,6 +91,13 @@ export function HomePage(props: HomePageProps) {
 
   function updateDraft(field: EditablePaperField, value: string): void {
     setDraftPaper((paper) => (paper ? { ...paper, [field]: value } : paper));
+  }
+
+  function confirmRemovePaper(paper: PaperRecord): void {
+    const title = paper.chineseTitle || paper.englishTitle || paper.pdfName;
+    if (window.confirm(`确认从论文库移除“${title}”？本操作只移除本地记录，不会删除 PDF 文件。`)) {
+      props.onRemovePaper(paper);
+    }
   }
 
   if (props.activeSection === 'hub') {
@@ -278,110 +298,113 @@ export function HomePage(props: HomePageProps) {
           <p>点击“新建翻译项目”选择 PDF 即可加入论文库；手动段落翻译文件可以之后再导入。</p>
         </section>
       ) : (
-        <section className="paper-table-wrap">
+        <section className="paper-library-list-wrap">
           <div className="paper-grid-toolbar">
             <span>
               已收录 <strong>{props.papers.length}</strong> 篇论文
             </span>
             <span>PDF、翻译、双语 PDF、笔记和 AI 缓存状态会以标签形式展示。</span>
           </div>
-          <table className="paper-table">
-            <thead>
-              <tr>
-                {editableFields.map((field) => (
-                  <th key={field.key} style={{ width: field.width }}>
-                    {field.label}
-                  </th>
-                ))}
-                <th>文件状态</th>
-                <th>最近打开</th>
-                <th>页码</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {props.papers.map((paper) => {
-                const isEditing = editingPaperId === paper.id && draftPaper;
-                const visiblePaper = isEditing ? draftPaper : paper;
+          <div className="paper-library-list">
+            {props.papers.map((paper) => {
+              const isEditing = editingPaperId === paper.id && draftPaper;
+              const visiblePaper = isEditing ? draftPaper : paper;
+              const primaryTitle = visiblePaper.chineseTitle || visiblePaper.englishTitle || visiblePaper.pdfName;
+              const secondaryTitle =
+                visiblePaper.chineseTitle && visiblePaper.englishTitle ? visiblePaper.englishTitle : visiblePaper.pdfName;
 
-                return (
-                  <tr key={paper.id}>
-                    {editableFields.map((field) => (
-                      <td key={field.key}>
-                        {isEditing ? (
-                          <input
-                            value={visiblePaper[field.key]}
-                            onChange={(event) => updateDraft(field.key, event.target.value)}
-                          />
-                        ) : (
-                          <span className={`paper-cell-text ${field.key === 'chineseTitle' ? 'primary-title' : ''}`}>
-                            {visiblePaper[field.key] || '-'}
-                          </span>
-                        )}
-                      </td>
-                    ))}
-                    <td>
-                      <div className="paper-status-stack">
-                        <span className="badge">PDF</span>
-                        {paper.translationName ? <span className="badge">段落翻译</span> : null}
-                        {paper.aiCacheName ? <span className="badge">AI 缓存</span> : null}
-                        {paper.translatedPdfName ? <span className="badge">双语 PDF</span> : null}
-                        {paper.notes.trim() ? <span className="badge">笔记</span> : null}
+              return (
+                <article key={paper.id} className={`paper-library-row${isEditing ? ' is-editing' : ''}`}>
+                  <div className="paper-library-row-main">
+                    {isEditing ? (
+                      <div className="paper-library-edit-grid">
+                        {editableFields.map((field) => (
+                          <label key={field.key}>
+                            <span>{field.label}</span>
+                            <input
+                              value={visiblePaper[field.key]}
+                              onChange={(event) => updateDraft(field.key, event.target.value)}
+                            />
+                          </label>
+                        ))}
                       </div>
-                      <div className="path-hint">{paper.pdfName}</div>
-                    </td>
-                    <td>{formatDateTime(paper.lastOpenedAt)}</td>
-                    <td>第 {paper.lastPage || 1} 页</td>
-                    <td>
-                      <div className="table-actions">
-                        {isEditing ? (
-                          <>
-                            <button type="button" className="primary-button" onClick={saveEdit}>
-                              保存
+                    ) : (
+                      <>
+                        <div className="paper-library-title-block">
+                          <h2 title={primaryTitle}>{primaryTitle || '-'}</h2>
+                          <p title={secondaryTitle}>{secondaryTitle || '-'}</p>
+                        </div>
+                        <div className="paper-library-meta-row">
+                          <span>{visiblePaper.journal || '未知来源'}</span>
+                          <span>{visiblePaper.year || '年份未知'}</span>
+                          <span title={visiblePaper.authors}>{visiblePaper.authors || '作者未知'}</span>
+                        </div>
+                        <div className="paper-status-stack">
+                          <span className="badge">PDF</span>
+                          {paper.translationName ? <span className="badge">段落翻译</span> : null}
+                          {paper.aiCacheName ? <span className="badge">AI 缓存</span> : null}
+                          {paper.translatedPdfName ? <span className="badge">双语 PDF</span> : null}
+                          {paper.notes.trim() ? <span className="badge">笔记</span> : null}
+                        </div>
+                        <div className="path-hint" title={paper.pdfName}>{paper.pdfName}</div>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="paper-library-row-side">
+                    <div className="paper-library-open-state">
+                      <span>最近打开</span>
+                      <strong>{formatDateTime(paper.lastOpenedAt)}</strong>
+                      <small>第 {paper.lastPage || 1} 页</small>
+                    </div>
+                    <div className="paper-library-actions">
+                      {isEditing ? (
+                        <>
+                          <button type="button" className="primary-button" onClick={saveEdit}>
+                            保存
+                          </button>
+                          <button type="button" className="secondary-button" onClick={cancelEdit}>
+                            取消
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button type="button" className="button-with-icon" onClick={() => props.onOpenPaper(paper)}>
+                            <img className="button-icon" src={pdfReaderIcon} alt="" />
+                            <span>打开阅读</span>
+                          </button>
+                          <button type="button" className="secondary-button" onClick={() => props.onOpenResearchSheet(paper)}>
+                            表格定位
+                          </button>
+                          {paper.notes.trim() ? (
+                            <button type="button" className="secondary-button" onClick={() => props.onOpenPaper(paper)}>
+                              查看笔记
                             </button>
-                            <button type="button" className="secondary-button" onClick={cancelEdit}>
-                              取消
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button type="button" className="button-with-icon" onClick={() => props.onOpenPaper(paper)}>
-                              <img className="button-icon" src={pdfReaderIcon} alt="" />
-                              <span>打开阅读</span>
-                            </button>
-                            <button type="button" className="secondary-button" onClick={() => props.onOpenResearchSheet(paper)}>
-                              表格定位
-                            </button>
-                            {paper.notes.trim() ? (
-                              <button type="button" className="secondary-button" onClick={() => props.onOpenPaper(paper)}>
-                                查看笔记
-                              </button>
-                            ) : null}
-                            <button type="button" className="secondary-button" onClick={() => startEdit(paper)}>
-                              编辑信息
-                            </button>
-                            <button
-                              type="button"
-                              className="danger-button button-with-icon"
-                              onClick={() => props.onRemovePaper(paper)}
-                            >
-                              <img className="button-icon" src={deleteIcon} alt="" />
-                              <span>移除</span>
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                          ) : null}
+                          <button type="button" className="secondary-button" onClick={() => startEdit(paper)}>
+                            编辑信息
+                          </button>
+                          <button
+                            type="button"
+                            className="danger-button button-with-icon"
+                            onClick={() => confirmRemovePaper(paper)}
+                          >
+                            <img className="button-icon" src={deleteIcon} alt="" />
+                            <span>移除</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
         </section>
       )}
     </main>
   );
-}
+});
 
 function formatDateTime(value: string): string {
   const date = new Date(value);

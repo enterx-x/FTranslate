@@ -201,6 +201,24 @@ export function normalizeLiteratureInsightRunState(
   return state;
 }
 
+export function restoreLiteratureInsightRunStateForUi(
+  value: unknown,
+  now = Date.now()
+): LiteratureInsightRunState | null {
+  const state = normalizeLiteratureInsightRunState(value, now);
+  if (!state || state.status !== 'running') {
+    return state;
+  }
+
+  return {
+    ...state,
+    status: 'interrupted',
+    updatedAt: now,
+    completedAt: now,
+    progress: '上次 AI 大观分析因页面关闭或应用重启已中断，可以重新运行。'
+  };
+}
+
 export function normalizeLiteratureInsightHistory(value: unknown): LiteratureInsightHistoryEntry[] {
   if (!Array.isArray(value)) {
     return [];

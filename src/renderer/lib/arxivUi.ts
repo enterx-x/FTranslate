@@ -1,4 +1,4 @@
-import type { ArxivPaper } from './arxivClient';
+import { normalizeArxivSearchQuery, type ArxivPaper } from './arxivClient';
 
 export type ArxivReadingPriority = 'high' | 'medium' | 'low';
 
@@ -24,6 +24,12 @@ export interface ArxivPaperInsight {
   tags: string[];
 }
 
+export interface ArxivTopicCard {
+  key: keyof ArxivTopicMatch;
+  label: string;
+  value: number;
+}
+
 export interface ArxivPaperMeta {
   favorite?: boolean;
   read?: boolean;
@@ -42,7 +48,17 @@ const TOPIC_KEYWORDS: Record<keyof ArxivTopicMatch, { label: string; keywords: s
   },
   pinn: {
     label: 'PINN',
-    keywords: ['pinn', 'physics-informed', 'physics informed', 'physical constraint', 'dynamics', 'pde', 'ode']
+    keywords: [
+      'pinn',
+      'physics-informed',
+      'physics informed',
+      'physics-informed neural network',
+      'physical constraint',
+      'physics residual',
+      'pde residual',
+      'ode residual',
+      'neural ode'
+    ]
   },
   path_planning: {
     label: '路径规划',
@@ -50,7 +66,7 @@ const TOPIC_KEYWORDS: Record<keyof ArxivTopicMatch, { label: string; keywords: s
   },
   robotics: {
     label: '机器人',
-    keywords: ['robot', 'robotic', 'humanoid', 'manipulation', 'locomotion', 'uav', 'drone', 'mobile robot']
+    keywords: ['robot', 'robots', 'robotic', 'humanoid', 'manipulation', 'locomotion', 'uav', 'drone', 'mobile robot']
   },
   embodied_ai: {
     label: '具身智能',
@@ -66,10 +82,52 @@ const NOVELTY_KEYWORDS = ['novel', 'new', 'propose', 'present', 'foundation', 'z
 const METHOD_KEYWORDS = ['framework', 'architecture', 'module', 'controller', 'planner', 'algorithm', 'model'];
 const EXPERIMENT_KEYWORDS = ['experiment', 'benchmark', 'baseline', 'result', 'real-world', 'simulation', 'dataset'];
 const CODE_KEYWORDS = ['code', 'github', 'open-source', 'repository', 'implementation'];
+const MATCH_REASON_PHRASES = [
+  'tactile sensing',
+  'tactile perception',
+  'haptic feedback',
+  'force feedback',
+  'touch sensing',
+  'contact sensing',
+  'robot navigation',
+  'robotic navigation',
+  'mobile robot navigation',
+  'path planning',
+  'motion planning',
+  'trajectory planning',
+  'obstacle avoidance',
+  'collision avoidance',
+  'embodied ai',
+  'embodied intelligence',
+  'vision language action',
+  'vision-language-action',
+  'mobile manipulation',
+  'loco-manipulation',
+  'reinforcement learning',
+  'safe reinforcement learning',
+  'physics-informed',
+  'control barrier function',
+  'model predictive control',
+  'world model'
+];
+const MATCH_REASON_STOP_WORDS = new Set([
+  'and',
+  'the',
+  'for',
+  'with',
+  'using',
+  'based',
+  'sensing',
+  'perception',
+  'feedback',
+  'information',
+  'model',
+  'learning'
+]);
 
 export function buildArxivPaperInsight(paper: ArxivPaper, query: string): ArxivPaperInsight {
   const haystack = normalizeText([paper.title, paper.summary, paper.categories.join(' '), paper.primaryCategory].join(' '));
-  const queryTerms = normalizeText(query)
+  const queryTerms = normalizeText(normalizeArxivSearchQuery(query))
     .split(/\s+/u)
     .filter((term) => term.length >= 3);
   const queryHits = queryTerms.filter((term) => haystack.includes(term)).length;
@@ -118,6 +176,40 @@ export function buildArxivPaperInsight(paper: ArxivPaper, query: string): ArxivP
   };
 }
 
+export function buildArxivTopicCards(insight: ArxivPaperInsight, query = ''): ArxivTopicCard[] {
+  const queryTopics = new Set(detectQueryTopicKeys(query));
+  return (Object.entries(TOPIC_KEYWORDS) as Array<[keyof ArxivTopicMatch, { label: string; keywords: string[] }]>)
+    .map(([key, config]) => ({
+      key,
+      label: config.label,
+      value: insight.topicMatch[key]
+    }))
+    .filter((card) => card.value > 0 || queryTopics.has(card.key))
+    .sort((left, right) => {
+      const leftQuery = queryTopics.has(left.key) ? 1 : 0;
+      const rightQuery = queryTopics.has(right.key) ? 1 : 0;
+      return rightQuery - leftQuery || right.value - left.value;
+    })
+    .slice(0, 6);
+}
+
+export function buildArxivMatchReasons(paper: ArxivPaper, query: string, limit = 5): string[] {
+  const normalizedQuery = normalizeText(normalizeArxivSearchQuery(query));
+  const haystack = normalizeText([paper.title, paper.summary, paper.categories.join(' '), paper.primaryCategory].join(' '));
+  if (!normalizedQuery || !haystack) {
+    return [];
+  }
+  const phraseCandidates = MATCH_REASON_PHRASES.filter((phrase) => normalizedQuery.includes(normalizeText(phrase)));
+  const tokenCandidates = normalizedQuery
+    .split(/[^a-z0-9.+-]+/iu)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 3 && !MATCH_REASON_STOP_WORDS.has(term));
+  return Array.from(new Set([...phraseCandidates, ...tokenCandidates]))
+    .filter((term) => keywordMatches(haystack, term))
+    .sort((left, right) => right.length - left.length || left.localeCompare(right))
+    .slice(0, Math.max(1, Math.floor(limit)));
+}
+
 export function buildArxivExportMarkdown(paper: ArxivPaper, meta: ArxivPaperMeta = {}): string {
   const insight = meta.insight ?? buildArxivPaperInsight(paper, '');
   const authors = paper.authors.length > 0 ? paper.authors.join(', ') : 'arXiv 未返回作者';
@@ -128,7 +220,7 @@ export function buildArxivExportMarkdown(paper: ArxivPaper, meta: ArxivPaperMeta
     ...(meta.titleZh ? [`- English title: ${paper.title}`] : []),
     `- arXiv ID: ${paper.stableId}`,
     `- Authors: ${authors}`,
-    `- Published: ${formatDate(paper.publishedAt || paper.published)}`,
+    `- Submitted (arXiv API UTC): ${formatArxivApiDate(paper.publishedAt || paper.published)}`,
     `- Categories: ${paper.categories.join(', ') || paper.primaryCategory || 'N/A'}`,
     `- Reading priority: ${insight.readingPriority}`,
     `- Score: ${insight.totalScore}/100`,
@@ -216,6 +308,18 @@ export function formatArxivResultRange(start: number, count: number, total: numb
   return total > 0 ? `${from}-${to} / ${total} 篇` : `${count} 篇`;
 }
 
+export function formatArxivApiDate(value: string): string {
+  return value ? value.slice(0, 10) : 'N/A';
+}
+
+export function getArxivApiDateTooltip(kind: 'submitted' | 'updated', value: string): string {
+  const timestamp = value || 'N/A';
+  if (kind === 'submitted') {
+    return `arXiv API submitted/published timestamp: ${timestamp} (UTC). The arXiv website new/recent announcement date may be one day later than this API date.`;
+  }
+  return `arXiv API latest version updated timestamp: ${timestamp} (UTC). This is the latest version time, not the first announcement date.`;
+}
+
 function buildTags(topicMatch: ArxivTopicMatch, haystack: string): string[] {
   const tags = Object.entries(TOPIC_KEYWORDS)
     .filter(([key]) => topicMatch[key as keyof ArxivTopicMatch] >= 5)
@@ -237,23 +341,41 @@ function buildReasonZh(tags: string[], priority: ArxivReadingPriority, relevance
 }
 
 function scoreByKeywords(haystack: string, keywords: string[]): number {
-  const hits = keywords.filter((keyword) => haystack.includes(normalizeText(keyword))).length;
+  const hits = keywords.filter((keyword) => keywordMatches(haystack, keyword)).length;
   if (hits === 0) {
     return 0;
   }
   return clampScore(5 + hits * 2);
 }
 
+function detectQueryTopicKeys(query: string): Array<keyof ArxivTopicMatch> {
+  const normalizedQuery = normalizeText(normalizeArxivSearchQuery(query));
+  return (Object.entries(TOPIC_KEYWORDS) as Array<[keyof ArxivTopicMatch, { label: string; keywords: string[] }]>)
+    .filter(([, config]) => config.keywords.some((keyword) => keywordMatches(normalizedQuery, keyword)))
+    .map(([key]) => key);
+}
+
+function keywordMatches(haystack: string, keyword: string): boolean {
+  const normalizedKeyword = normalizeText(keyword);
+  if (!normalizedKeyword) {
+    return false;
+  }
+  if (/^[a-z0-9.+-]+$/iu.test(normalizedKeyword)) {
+    return new RegExp(`(^|[^a-z0-9])${escapeRegExp(normalizedKeyword)}($|[^a-z0-9])`, 'iu').test(haystack);
+  }
+  return haystack.includes(normalizedKeyword);
+}
+
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/\s+/gu, ' ').trim();
 }
 
-function clampScore(value: number): number {
-  return Math.max(0, Math.min(10, value));
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
-function formatDate(value: string): string {
-  return value ? value.slice(0, 10) : 'N/A';
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(10, value));
 }
 
 function getYear(value: string): string {
