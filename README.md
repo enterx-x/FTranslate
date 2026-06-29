@@ -20,6 +20,12 @@ FTranslate 是一个 Windows 桌面端科研论文工作台，面向论文阅读
 - PptxGenJS 生成可编辑 PowerPoint `.pptx`
 - electron-builder 生成 Windows NSIS 安装包
 
+## 产品与设计方向
+
+FTranslate 的长期方向是本地化 AI 科创研发工作台，而不是单纯的 PDF 翻译器。当前界面仍处于迁移阶段，不作为最终 UI 参考。
+
+未来 UI 以 [DESIGN.md](DESIGN.md) 为设计基准：主底座参考 IBM / Carbon 的高信息密度工作台风格，文档和证据阅读参考 Mintlify，产品面板参考 Supabase，AI 研发流程参考 Cursor，Linear 仅作为克制 App Shell 和状态组件的局部参考。
+
 ## 运行与打包
 
 ```bash
