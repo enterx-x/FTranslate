@@ -1,6 +1,6 @@
 # PLAN.md
 
-本文件用于记录 FTranslate 的长期计划、当前阶段目标、问题台账和防重复犯错事项。每次操作前必须先阅读本文件和 `README.md`。
+本文件用于记录 FTranslate 的长期计划、当前阶段目标、问题台账和防重复犯错事项。每次操作前必须先阅读本文件、`README.md` 和 `DESIGN.md`。
 
 ## 1. 产品定位
 
@@ -185,11 +185,13 @@ AI 科创团队的真实瓶颈：
 
 ### 阶段 1：定位重构 MVP
 
-- [ ] 首页和导航从“PDF 翻译器”升级为“AI 科创研发工作台”表达。
-- [ ] 按 `DESIGN.md` 重建首页、导航和核心工作台布局，不以当前界面作为最终视觉参考。
-- [ ] 增加项目空间的数据结构和入口。
+- [x] 首页和导航从“PDF 翻译器”升级为“AI 科创研发工作台”表达。
+- [x] 按 `DESIGN.md` 重建首页、导航和核心工作台布局，不以当前界面作为最终视觉参考。
+- [x] 增加项目空间的数据结构和入口。
 - [ ] 将论文库、研究表格、知识图谱、PDF 阅读、AI 问答关联到项目空间。
-- [ ] 保持旧数据兼容，不破坏当前 localStorage 数据。
+  - 2026-06-29 已完成入口级关联：项目空间首页可进入实验矩阵、证据图谱、论文库、PDF 阅读和组会输出，并从论文库生成项目快照。
+  - 待完成深度关联：AI 问答、方法卡、实验矩阵和证据图谱输出需要写回项目空间实体。
+- [x] 保持旧数据兼容，不破坏当前 localStorage 数据。
 
 ### 阶段 2：论文方法编译
 
@@ -240,12 +242,24 @@ AI 科创团队的真实瓶颈：
 
 | 日期 | 问题 | 根因 | 处理状态 | 后续动作 |
 | --- | --- | --- | --- | --- |
-| 2026-06-29 | 缺少项目级协作规则和长期计划文件 | 计划主要存在于聊天记录，后续容易脱离方向 | 已建立 `AGENTS.md` 和 `PLAN.md` | 后续每次改动前先读 README 和 PLAN，并更新本文件 |
+| 2026-06-29 | 缺少项目级协作规则和长期计划文件 | 计划主要存在于聊天记录，后续容易脱离方向 | 已建立 `AGENTS.md` 和 `PLAN.md`，并把 `DESIGN.md` 加入固定入口 | 后续每次改动前先读 README、PLAN 和 DESIGN，并更新本文件 |
 | 2026-06-29 | 当前 UI 质量不足，不能作为未来界面参考 | 早期界面围绕 PDF 翻译和功能入口堆叠，尚未形成 AI 科创研发闭环的统一设计系统 | 已建立 `DESIGN.md`，明确采用 IBM / Carbon + Mintlify + Supabase + Cursor 的组合参考 | 后续 UI 改造先按 `DESIGN.md` 设计项目空间、导航、实验矩阵、Runtime Center 和证据链页面 |
 
-## 8. 验证记录
+## 8. GitHub 开源复用扫描记录
+
+| 日期 | 项目 | License / 风险 | 可复用方向 | 本项目处理 |
+| --- | --- | --- | --- | --- |
+| 2026-06-29 | `WangQrkkk/PaperQuay` | AGPL-3.0，不能在未接受 AGPL 传染要求前直接复制代码 | local-first AI 研究论文工作台、Agent 化论文管理、Electron + React + SQLite 产品形态 | 只参考产品结构和本地优先思路，不复制代码 |
+| 2026-06-29 | `Future-House/paper-qa` | Apache-2.0，可作为后续 Python sidecar 候选 | 面向科学文献的 citation-grounded RAG / QA | 后续 Paper-to-Method 和证据问答阶段评估接入 |
+| 2026-06-29 | `docling-project/docling` | MIT，可作为后续文档解析候选 | PDF / Office 文档结构化转换、版面解析、表格抽取 | 后续替换或增强 PDF 结构化抽取时优先评估 |
+| 2026-06-29 | `renee-jia/scholar-loop` | MIT，偏研究工作流原型 | 文献阅读、实验、批判和写作循环的 autonomous research loop | 参考 workflow，不在第一阶段引入依赖 |
+
+结论：第一阶段只落地项目空间数据模型和 UI 迁移，不引入新依赖。后续若进入 Paper-to-Method、Paper-to-Code 或证据 RAG，再优先评估 `paper-qa` 和 `docling` 这类 permissive license 项目。
+
+## 9. 验证记录
 
 | 日期 | 改动 | 验证命令 | 结果 | 备注 |
 | --- | --- | --- | --- | --- |
 | 2026-06-29 | 新增 `AGENTS.md`、`PLAN.md` | 未运行代码测试 | 文档-only 修改 | 需通过 `git diff` 人工检查 |
 | 2026-06-29 | 新增 `DESIGN.md`，同步 README 和 PLAN 的 UI 设计方向 | `git diff -- README.md PLAN.md DESIGN.md`、`git status --short --branch` | 已检查 | 文档-only 修改，不触发代码构建 |
+| 2026-06-29 | 首页和导航迁移为 AI 科创项目空间；新增项目空间快照模型；视觉检查改为验证 research workbench | `npx vitest run src\renderer\components\HomePage.test.ts src\renderer\components\AppSidebar.test.ts src\renderer\lib\researchProjects.test.ts`、`npm run typecheck`、`npm run build:renderer`、`npm run visual:check` | 通过 | `visual:check` 输出在 `.tmp-visual-check`；未引入 GSAP，当前阶段不需要新增动效依赖 |

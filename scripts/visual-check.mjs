@@ -906,10 +906,18 @@ async function loadPaperRecord(client, translationPath, extraPaperFields = {}) {
 async function runHomeScenario(client) {
   const hub = await evaluateJson(client, `() => ({
     hasHome: Boolean(document.querySelector('.home-page')),
-    hasModuleGrid: Boolean(document.querySelector('.home-module-grid')),
+    hasResearchWorkbench: Boolean(document.querySelector('.research-workbench-page')),
+    hasWorkbenchShell: Boolean(document.querySelector('.research-workbench-shell')),
+    hasObjectPanel: Boolean(document.querySelector('.research-object-panel')),
+    hasPipelinePanel: Boolean(document.querySelector('.research-pipeline-panel')),
+    objectCards: [...document.querySelectorAll('.research-object-card')].map((item) => item.textContent?.trim()),
+    pipelineStages: [...document.querySelectorAll('.research-pipeline-list li')].map((item) => item.textContent?.trim()),
+    nextActions: [...document.querySelectorAll('.research-next-action')].map((item) => item.textContent?.trim()),
+    riskItems: [...document.querySelectorAll('.research-risk-list article')].map((item) => item.textContent?.trim()),
+    commandTexts: [...document.querySelectorAll('.research-command-strip button')].map((button) => button.textContent?.trim()),
     hasPaperTable: Boolean(document.querySelector('.paper-table')),
-    moduleTitles: [...document.querySelectorAll('.home-module-card h2')].map((item) => item.textContent?.trim()),
-    headerActions: [...document.querySelectorAll('.home-header-actions button')].map((button) => button.textContent?.trim()),
+    hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+    headerActions: [...document.querySelectorAll('.research-workbench-actions button')].map((button) => button.textContent?.trim()),
     markStyle: (() => {
       const mark = document.querySelector('.home-header-mark');
       if (!mark) return null;
@@ -933,18 +941,33 @@ async function runHomeScenario(client) {
     })()
   })`);
 
-  if (!hub.hasHome || !hub.hasModuleGrid || hub.hasPaperTable) {
-    throw new Error(`home: expected module hub before entering a module, got ${JSON.stringify(hub)}`);
+  if (
+    !hub.hasHome ||
+    !hub.hasResearchWorkbench ||
+    !hub.hasWorkbenchShell ||
+    !hub.hasObjectPanel ||
+    !hub.hasPipelinePanel ||
+    hub.hasPaperTable ||
+    hub.hasHorizontalOverflow
+  ) {
+    throw new Error(`home: expected research workbench before entering a module, got ${JSON.stringify(hub)}`);
   }
-  if (!hub.moduleTitles.includes('研究表格') || !hub.moduleTitles.includes('论文库')) {
-    throw new Error(`home: expected peer module cards, got ${JSON.stringify(hub.moduleTitles)}`);
+  if (
+    hub.objectCards.length < 4 ||
+    hub.pipelineStages.length < 4 ||
+    hub.nextActions.length < 2 ||
+    hub.riskItems.length < 3 ||
+    !hub.commandTexts.includes('实验矩阵') ||
+    !hub.commandTexts.includes('证据图谱')
+  ) {
+    throw new Error(`home: expected object cards, R&D loop, risks and commands, got ${JSON.stringify(hub)}`);
   }
 
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'home.png'), Buffer.from(shot.data, 'base64'))
   );
 
-  await clickButtonByText(client, '进入论文库');
+  await clickSidebarSection(client, 'library');
   const library = await evaluateJson(client, `() => ({
     hasHome: Boolean(document.querySelector('.home-page')),
     hasAgGrid: Boolean(document.querySelector('.ag-root, .paper-grid')),
@@ -998,11 +1021,12 @@ async function runHomeScenario(client) {
     throw new Error(`home: expected transparent icon corners, got ${JSON.stringify(hub.imageAlpha)}`);
   }
   if (
-    hub.markStyle?.background !== 'rgba(0, 0, 0, 0)' ||
-    hub.markStyle?.border !== '0px' ||
-    hub.markStyle?.boxShadow !== 'none'
+    !['rgba(0, 0, 0, 0)', 'rgb(255, 255, 255)'].includes(hub.markStyle?.background) ||
+    !/^(0px|0\.8px|1px)$/u.test(hub.markStyle?.border ?? '') ||
+    hub.markStyle?.boxShadow !== 'none' ||
+    !/^(0px|8px)$/u.test(hub.markStyle?.borderRadius ?? '')
   ) {
-    throw new Error(`home: expected no icon wrapper background/border/shadow, got ${JSON.stringify(hub.markStyle)}`);
+    throw new Error(`home: expected restrained icon wrapper without shadow, got ${JSON.stringify(hub.markStyle)}`);
   }
 
   await clickButtonByText(client, '返回主页');
@@ -1010,7 +1034,7 @@ async function runHomeScenario(client) {
 }
 
 async function runResearchSheetScenario(client) {
-  await clickButtonByText(client, '打开研究表格');
+  await clickSidebarSection(client, 'researchSheet');
   await waitForAppReady(client);
   const canvasStatus = await waitForResearchSheetCanvas(client);
   await rightClickResearchSheetCanvas(client);

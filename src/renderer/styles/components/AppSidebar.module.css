@@ -1,12 +1,12 @@
 .sidebar {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 9px;
+  gap: 10px;
   min-width: 0;
-  padding: 12px 8px;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  background: #030509;
-  color: #eef2f7;
+  padding: 10px 8px;
+  border-right: 1px solid #d9dee7;
+  background: #ffffff;
+  color: #161616;
 }
 
 .brand {
@@ -15,9 +15,9 @@
   gap: 8px;
   height: 40px;
   padding-inline: 4px;
-  color: #ffffff;
+  color: #161616;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 750;
 }
 
 .brand img {
@@ -29,7 +29,7 @@
 .nav {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   min-height: 0;
 }
 
@@ -37,42 +37,42 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 7px;
+  gap: 8px;
   width: 100%;
-  height: 38px;
-  padding: 0 10px;
+  height: 36px;
+  padding: 0 9px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
-  color: #d7dfeb;
+  color: #525866;
   font: inherit;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 720;
   letter-spacing: 0;
   text-align: left;
   cursor: pointer;
 }
 
 .link:hover:not(:disabled) {
-  border-color: rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.07);
-  color: #ffffff;
+  border-color: #d9dee7;
+  background: #f2f4f7;
+  color: #161616;
 }
 
 .linkActive {
-  border-color: rgba(146, 131, 255, 0.28);
-  background: #202233;
-  color: #ffffff;
-  box-shadow: inset 3px 0 0 #7c5cff;
+  border-color: #b8cdfd;
+  background: #e8f0ff;
+  color: #0f3c8c;
+  box-shadow: inset 3px 0 0 #0f62fe;
 }
 
 .linkUtility {
-  color: #c5cfdd;
+  color: #64748b;
 }
 
 .link:disabled {
   cursor: not-allowed;
-  color: rgba(183, 191, 204, 0.45);
+  color: rgba(82, 88, 102, 0.45);
   opacity: 0.72;
 }
 
@@ -81,8 +81,8 @@
   height: 16px;
   flex: 0 0 auto;
   object-fit: contain;
-  filter: brightness(0) invert(1);
-  opacity: 0.82;
+  filter: none;
+  opacity: 0.74;
   pointer-events: none;
 }
 
@@ -92,10 +92,10 @@
   gap: 7px;
   min-height: 30px;
   padding-inline: 7px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.03);
-  color: #9fa8b7;
+  border: 1px solid #e7ebf1;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #525866;
   font-size: 11px;
 }
 
@@ -103,6 +103,6 @@
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: #7c5cff;
-  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.16);
+  background: #24a148;
+  box-shadow: 0 0 0 3px rgba(36, 161, 72, 0.14);
 }

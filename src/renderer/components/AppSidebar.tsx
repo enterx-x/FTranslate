@@ -44,9 +44,9 @@ export interface AppSidebarNavigationItem {
 }
 
 const navigationItems: AppSidebarNavigationItem[] = [
-  { section: 'workspace', label: '工作台', icon: workspaceIcon },
-  { section: 'researchSheet', label: '研究表格', icon: researchSheetIcon },
-  { section: 'knowledgeGraph', label: '知识图谱', icon: analysisIcon },
+  { section: 'workspace', label: '项目空间', icon: workspaceIcon },
+  { section: 'researchSheet', label: '实验矩阵', icon: researchSheetIcon },
+  { section: 'knowledgeGraph', label: '证据图谱', icon: analysisIcon },
   { section: 'presentation', label: '组会 PPT', icon: translateIcon },
   { section: 'arxiv', label: 'arXiv 检索', icon: searchIcon },
   { section: 'library', label: '论文库', icon: libraryIcon },

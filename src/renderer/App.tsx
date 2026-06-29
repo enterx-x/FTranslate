@@ -25,6 +25,14 @@ import { AppSidebar, type AppSidebarSection } from './components/AppSidebar';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { HomePage } from './components/HomePage';
 import { buildKnowledgeGraph } from './lib/knowledgeGraph';
+import {
+  RESEARCH_PROJECTS_KEY,
+  buildProjectWorkspaceSnapshot,
+  ensureResearchProjects,
+  parseResearchProjects,
+  serializeResearchProjects,
+  type ResearchProject
+} from './lib/researchProjects';
 import { describeReferenceStrategy } from './lib/appSettings';
 import {
   buildPresentationDraft,
@@ -163,6 +171,9 @@ export default function App() {
     updatePaper: handleUpdatePaper,
     removePaper: handleRemovePaper
   } = usePaperLibrary();
+  const [researchProjects, setResearchProjects] = useState<ResearchProject[]>(() =>
+    parseResearchProjects(localStorage.getItem(RESEARCH_PROJECTS_KEY))
+  );
   const legacyPapersWithSheetCells = useMemo(
     () => readLegacyPapersWithSheetCells(initialPaperLibraryRaw, paperLibrary),
     [initialPaperLibraryRaw, paperLibrary]
@@ -304,6 +315,10 @@ export default function App() {
       }).stats,
     [paperLibrary, researchWorkbook, researchSheetLinks]
   );
+  const projectWorkspaceSnapshot = useMemo(
+    () => buildProjectWorkspaceSnapshot(researchProjects, paperLibrary),
+    [paperLibrary, researchProjects]
+  );
   const appSettings = useAppSettings(view);
 
   useRecentProject({
@@ -311,6 +326,14 @@ export default function App() {
     translationPath: translationDocument?.sourcePath,
     aiCachePath: aiCacheDocument?.sourcePath
   });
+
+  useEffect(() => {
+    setResearchProjects((projects) => ensureResearchProjects(projects, paperLibrary));
+  }, [paperLibrary]);
+
+  useEffect(() => {
+    localStorage.setItem(RESEARCH_PROJECTS_KEY, serializeResearchProjects(researchProjects));
+  }, [researchProjects]);
 
   useEffect(() => {
     sourcePdfRef.current = pdf;
@@ -2041,6 +2064,7 @@ export default function App() {
             onOpenKnowledgeGraph={openKnowledgeGraph}
             onOpenPresentationGenerator={openPresentationGenerator}
             knowledgeGraphStats={knowledgeGraphSummary}
+            projectWorkspaceSnapshot={projectWorkspaceSnapshot}
             onUpdatePaper={handleUpdatePaper}
             onRemovePaper={handleRemovePaper}
           />

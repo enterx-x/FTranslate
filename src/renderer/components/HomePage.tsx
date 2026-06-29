@@ -8,6 +8,7 @@ import pdfReaderIcon from '../assets/icons/duotone/pdf-reader.svg';
 import backIcon from '../assets/icons/duotone/back.svg';
 import deleteIcon from '../assets/icons/duotone/delete.svg';
 import type { PaperRecord } from '../lib/papers';
+import type { ProjectWorkspaceSnapshot } from '../lib/researchProjects';
 
 interface HomePageProps {
   papers: PaperRecord[];
@@ -23,6 +24,7 @@ interface HomePageProps {
     nodeCount: number;
     edgeCount: number;
   };
+  projectWorkspaceSnapshot: ProjectWorkspaceSnapshot;
   onUpdatePaper: (paper: PaperRecord) => void;
   onRemovePaper: (paper: PaperRecord) => void;
 }
@@ -33,6 +35,47 @@ type EditablePaperField =
   | 'journal'
   | 'authors'
   | 'year';
+
+type KnowledgeGraphStats = HomePageProps['knowledgeGraphStats'];
+
+type ResearchObjectStatus = 'Ready' | 'Cached' | 'Setup needed' | 'Evidence missing';
+type ResearchPipelineStatus = 'Ready' | 'Draftable' | 'Needs paper' | 'Needs evidence' | 'Planned';
+
+interface ResearchWorkspaceObjectCard {
+  key: 'papers' | 'evidenceGraph' | 'notes' | 'bilingualAssets';
+  label: string;
+  value: string;
+  detail: string;
+  status: ResearchObjectStatus;
+}
+
+interface ResearchWorkspacePipelineStage {
+  key: 'method' | 'code' | 'experiment' | 'runtime';
+  label: string;
+  status: ResearchPipelineStatus;
+  detail: string;
+}
+
+interface ResearchWorkspaceRisk {
+  key: 'project-space' | 'code-mapping' | 'runtime-center';
+  label: string;
+  detail: string;
+  actionLabel: string;
+}
+
+interface ResearchWorkspaceNextAction {
+  key: 'import-paper' | 'continue-reading' | 'open-research-sheet' | 'open-graph' | 'open-presentation' | 'open-library';
+  label: string;
+  detail: string;
+  actionLabel: string;
+}
+
+export interface ResearchWorkspaceOverview {
+  objectCards: ResearchWorkspaceObjectCard[];
+  pipeline: ResearchWorkspacePipelineStage[];
+  risks: ResearchWorkspaceRisk[];
+  nextActions: ResearchWorkspaceNextAction[];
+}
 
 const editableFields: Array<{
   key: EditablePaperField;
@@ -62,12 +105,153 @@ export function buildHomePageMetrics(papers: PaperRecord[]): {
   };
 }
 
+export function buildResearchWorkspaceOverview(
+  papers: PaperRecord[],
+  knowledgeGraphStats: KnowledgeGraphStats
+): ResearchWorkspaceOverview {
+  const { latestPaper, notedPaperCount, dualPdfCount } = buildHomePageMetrics(papers);
+  const paperCount = papers.length;
+  const graphNodeCount = Math.max(knowledgeGraphStats.nodeCount, 0);
+  const graphEdgeCount = Math.max(knowledgeGraphStats.edgeCount, 0);
+  const hasPapers = paperCount > 0;
+  const hasEvidenceGraph = graphNodeCount > 0 || graphEdgeCount > 0;
+  const hasNotes = notedPaperCount > 0;
+  const hasBilingualAssets = dualPdfCount > 0;
+  const latestPaperTitle = latestPaper
+    ? latestPaper.chineseTitle || latestPaper.englishTitle || latestPaper.pdfName
+    : '';
+
+  return {
+    objectCards: [
+      {
+        key: 'papers',
+        label: '论文对象',
+        value: String(paperCount),
+        status: hasPapers ? 'Ready' : 'Setup needed',
+        detail: hasPapers ? '论文库已形成可追踪对象' : '先导入论文建立本地研究对象'
+      },
+      {
+        key: 'evidenceGraph',
+        label: '证据图谱',
+        value: String(graphNodeCount),
+        status: hasEvidenceGraph ? 'Ready' : 'Evidence missing',
+        detail: hasEvidenceGraph ? `${graphEdgeCount} 条证据关系可用` : '等待论文、表格或笔记生成关系'
+      },
+      {
+        key: 'notes',
+        label: '阅读笔记',
+        value: String(notedPaperCount),
+        status: hasNotes ? 'Ready' : 'Setup needed',
+        detail: hasNotes ? '可作为方法卡和实验设计线索' : '尚未沉淀阅读判断'
+      },
+      {
+        key: 'bilingualAssets',
+        label: '双语资产',
+        value: String(dualPdfCount),
+        status: hasBilingualAssets ? 'Cached' : 'Setup needed',
+        detail: hasBilingualAssets ? '已有整体双语 PDF 缓存' : '尚未绑定可复用双语 PDF'
+      }
+    ],
+    pipeline: [
+      {
+        key: 'method',
+        label: 'Paper-to-Method',
+        status: hasPapers ? 'Ready' : 'Needs paper',
+        detail: hasPapers ? '可从论文、笔记和表格抽取方法卡' : '需要至少一篇论文作为输入'
+      },
+      {
+        key: 'code',
+        label: 'Paper-to-Code',
+        status: 'Planned',
+        detail: '代码仓库导入和方法-实现映射仍待接入'
+      },
+      {
+        key: 'experiment',
+        label: '实验矩阵',
+        status: hasNotes || hasEvidenceGraph ? 'Draftable' : 'Needs evidence',
+        detail: hasNotes || hasEvidenceGraph ? '已有证据可转化为 baseline / ablation' : '需要方法证据后再设计实验'
+      },
+      {
+        key: 'runtime',
+        label: 'Runtime Center',
+        status: 'Planned',
+        detail: 'NLLB、pdf2zh、API provider 和任务队列将集中展示'
+      }
+    ],
+    risks: [
+      {
+        key: 'project-space',
+        label: '项目空间数据结构仍未落地',
+        detail: '当前仍以论文库和研究表格承载研发对象，项目、实验和决策还没有统一实体。',
+        actionLabel: '定义项目模型'
+      },
+      {
+        key: 'code-mapping',
+        label: 'Paper-to-Code 复现链路缺口',
+        detail: '还不能导入本地代码仓库、识别入口脚本或把论文模块映射到文件。',
+        actionLabel: '接入仓库分析'
+      },
+      {
+        key: 'runtime-center',
+        label: 'Runtime 状态分散',
+        detail: '离线翻译、pdf2zh、API 和缓存状态还散落在多个页面，排错成本高。',
+        actionLabel: '建设 Runtime Center'
+      }
+    ],
+    nextActions: hasPapers
+      ? [
+          {
+            key: 'continue-reading',
+            label: '继续最近论文',
+            detail: latestPaperTitle || '打开最近收录论文继续阅读和整理证据',
+            actionLabel: '继续阅读'
+          },
+          {
+            key: 'open-research-sheet',
+            label: '补全方法字段',
+            detail: '把 problem、method、baseline、metric 和 limitation 写入研究表格',
+            actionLabel: '打开表格'
+          },
+          {
+            key: hasEvidenceGraph ? 'open-graph' : 'open-library',
+            label: hasEvidenceGraph ? '检查证据关系' : '整理论文库',
+            detail: hasEvidenceGraph ? '查看论文、方法、作者和指标之间的关系' : '先补齐标题、作者、期刊和年份',
+            actionLabel: hasEvidenceGraph ? '打开图谱' : '进入论文库'
+          }
+        ]
+      : [
+          {
+            key: 'import-paper',
+            label: '建立第一个研究对象',
+            detail: '选择英文论文 PDF，形成论文库记录和后续证据链入口',
+            actionLabel: '导入论文'
+          },
+          {
+            key: 'open-research-sheet',
+            label: '查看研究表格结构',
+            detail: '确认后续方法卡和实验矩阵的字段边界',
+            actionLabel: '打开表格'
+          },
+          {
+            key: 'open-presentation',
+            label: '准备组会输出',
+            detail: '导入 PDF 后可基于正文和图表候选生成 PPT 草稿',
+            actionLabel: 'PPT 生成'
+          }
+        ]
+  };
+}
+
 export const HomePage = memo(function HomePage(props: HomePageProps) {
   const [editingPaperId, setEditingPaperId] = useState<string | null>(null);
   const [draftPaper, setDraftPaper] = useState<PaperRecord | null>(null);
   const { latestPaper, notedPaperCount, dualPdfCount } = useMemo(
     () => buildHomePageMetrics(props.papers),
     [props.papers]
+  );
+  const workspaceOverview = useMemo(
+    () => buildResearchWorkspaceOverview(props.papers, props.knowledgeGraphStats),
+    [props.knowledgeGraphStats, props.papers]
   );
 
   function startEdit(paper: PaperRecord): void {
@@ -100,165 +284,228 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
     }
   }
 
+  function runWorkspaceAction(actionKey: ResearchWorkspaceNextAction['key']): void {
+    switch (actionKey) {
+      case 'import-paper':
+        props.onNewProject();
+        return;
+      case 'continue-reading':
+        latestPaper ? props.onOpenPaper(latestPaper) : props.onNewProject();
+        return;
+      case 'open-research-sheet':
+        props.onOpenResearchSheet(latestPaper);
+        return;
+      case 'open-graph':
+        props.onOpenKnowledgeGraph();
+        return;
+      case 'open-presentation':
+        props.onOpenPresentationGenerator();
+        return;
+      case 'open-library':
+        props.onSectionChange('library');
+        return;
+      default:
+        return;
+    }
+  }
+
   if (props.activeSection === 'hub') {
     return (
-      <main className="home-page home-hub-page">
-        <header className="home-hero">
-          <div className="home-hero-brand">
+      <main className="home-page home-hub-page research-workbench-page">
+        <header className="research-workbench-header">
+          <div className="research-workbench-title">
             <img className="home-header-mark" src={brandMark} alt="" />
             <div>
-              <span className="eyebrow">FTranslate Workspace</span>
-              <h1>论文阅读、PDF 翻译与研究工作台</h1>
-              <p>把论文阅读、双语 PDF、研究表格和后续 idea 整合到同一个桌面工具里。</p>
+              <span className="eyebrow">Local AI R&D Workspace</span>
+              <h1>AI 科创项目空间</h1>
+              <p>把论文、证据、实验计划和本地运行状态收敛到可追踪的研发闭环。</p>
             </div>
           </div>
-          <div className="home-header-actions">
+          <div className="research-workbench-actions">
             <button type="button" className="primary-button button-with-icon" onClick={props.onNewProject}>
               <img className="button-icon" src={translateIcon} alt="" />
-              <span>新建 PDF 翻译</span>
+              <span>导入论文</span>
+            </button>
+            <button type="button" className="secondary-button button-with-icon" onClick={() => props.onOpenResearchSheet()}>
+              <img className="button-icon" src={researchSheetIcon} alt="" />
+              <span>实验矩阵</span>
+            </button>
+            <button type="button" className="secondary-button button-with-icon" onClick={props.onOpenKnowledgeGraph}>
+              <img className="button-icon" src={graphIcon} alt="" />
+              <span>证据图谱</span>
             </button>
           </div>
         </header>
 
-        <section className="home-dashboard-stats" aria-label="工作台统计">
-          <article>
-            <span>已收录论文</span>
-            <strong>{props.papers.length}</strong>
-            <small>论文库主记录</small>
-          </article>
-          <article>
-            <span>双语 PDF</span>
-            <strong>{dualPdfCount}</strong>
-            <small>已绑定整体译文</small>
-          </article>
-          <article>
-            <span>阅读笔记</span>
-            <strong>{notedPaperCount}</strong>
-            <small>已有本地笔记</small>
-          </article>
-          <article>
-            <span>知识图谱</span>
-            <strong>{props.knowledgeGraphStats.nodeCount}</strong>
-            <small>{props.knowledgeGraphStats.edgeCount} 条关系边</small>
-          </article>
-          <article>
-            <span>最近打开</span>
-            <strong>{latestPaper ? latestPaper.pdfName.replace(/\.pdf$/iu, '').slice(0, 18) : '暂无'}</strong>
-            <small>{latestPaper?.lastOpenedAt ? new Date(latestPaper.lastOpenedAt).toLocaleString() : '从新建项目开始'}</small>
-          </article>
-        </section>
-
-        <section className="home-module-grid" aria-label="功能模块">
-          <article className="home-module-card">
-            <span className="home-module-kicker">
-              <img className="button-icon" src={researchSheetIcon} alt="" />
-              Research Sheet
-            </span>
-            <h2>研究表格</h2>
-            <p>像表格软件一样整理创新点、局限、方法、复现计划和后续 idea，支持格式、公式、导入导出和选区级 AI 填写。</p>
-            <div className="home-module-meta">
-              <span className="badge">独立工作台</span>
-              <span className="badge">首行冻结</span>
-              <span className="badge">AI 填表</span>
-            </div>
-            <div className="home-module-actions">
-              <button type="button" className="primary-button button-with-icon" onClick={() => props.onOpenResearchSheet()}>
-                <img className="button-icon" src={researchSheetIcon} alt="" />
-                <span>打开研究表格</span>
-              </button>
-            </div>
-          </article>
-
-          <article className="home-module-card">
-            <span className="home-module-kicker">
-              <img className="button-icon" src={graphIcon} alt="" />
-              Knowledge Graph
-            </span>
-            <h2>知识图谱</h2>
-            <p>自动从研究表格和论文库中抽取论文、作者、年份、关键词、方法、场景和指标，形成可点击的主题关系图。</p>
-            <div className="home-module-meta">
-              <span className="badge">{props.knowledgeGraphStats.nodeCount} 节点</span>
-              <span className="badge">{props.knowledgeGraphStats.edgeCount} 关系</span>
-              <span className="badge">自动生成</span>
-            </div>
-            <div className="home-module-actions">
-              <button type="button" className="primary-button button-with-icon" onClick={props.onOpenKnowledgeGraph}>
-                <img className="button-icon" src={graphIcon} alt="" />
-                <span>打开知识图谱</span>
-              </button>
-            </div>
-          </article>
-
-          <article className="home-module-card">
-            <span className="home-module-kicker">
-              <img className="button-icon" src={translateIcon} alt="" />
-              Seminar PPT
-            </span>
-            <h2>组会 PPT 生成</h2>
-            <p>基于当前 PDF 原文抽取标题、关键章节、图表 caption 和来源页码，生成完整学术组会 PPT 大纲、预览、Markdown 和 PPTX。</p>
-            <div className="home-module-meta">
-              <span className="badge">PDF 原文优先</span>
-              <span className="badge">可编辑大纲</span>
-              <span className="badge">Markdown 导出</span>
-            </div>
-            <div className="home-module-actions">
-              <button type="button" className="primary-button button-with-icon" onClick={props.onOpenPresentationGenerator}>
-                <img className="button-icon" src={translateIcon} alt="" />
-                <span>打开 PPT 生成器</span>
-              </button>
-            </div>
-          </article>
-
-          <article className="home-module-card">
-            <span className="home-module-kicker">
-              <img className="button-icon" src={libraryLineIcon} alt="" />
-              Paper Library
-            </span>
-            <h2>论文库</h2>
-            <p>快速浏览已打开论文的标题、作者、期刊、年份、文件状态和最近阅读位置，保持信息轻量清晰。</p>
-            <div className="home-module-meta">
-              <span className="badge">已收录 {props.papers.length} 篇</span>
-              <span className="badge">状态标签</span>
-              <span className="badge">一键阅读</span>
-            </div>
-            <div className="home-module-actions">
-              <button type="button" className="primary-button button-with-icon" onClick={() => props.onSectionChange('library')}>
+        <section className="research-workbench-shell" aria-label="AI 科创研发工作台">
+          <aside className="research-workbench-rail" aria-label="当前项目概览">
+            <section className="research-panel research-current-project">
+              <div className="research-panel-heading">
+                <span className="eyebrow">Project Space</span>
+                <h2>{props.projectWorkspaceSnapshot.activeProject.name}</h2>
+                <small>{props.projectWorkspaceSnapshot.projectStatusText}</small>
+              </div>
+              <dl className="research-kpi-list">
+                <div>
+                  <dt>论文</dt>
+                  <dd>{props.projectWorkspaceSnapshot.linkedPaperCount}</dd>
+                </div>
+                <div>
+                  <dt>证据</dt>
+                  <dd>{props.projectWorkspaceSnapshot.evidenceCount}</dd>
+                </div>
+                <div>
+                  <dt>双语 PDF</dt>
+                  <dd>{props.projectWorkspaceSnapshot.dualPdfCount}</dd>
+                </div>
+                <div>
+                  <dt>项目</dt>
+                  <dd>{props.projectWorkspaceSnapshot.projectCount}</dd>
+                </div>
+              </dl>
+              <button type="button" className="secondary-button button-with-icon" onClick={() => props.onSectionChange('library')}>
                 <img className="button-icon" src={libraryLineIcon} alt="" />
                 <span>进入论文库</span>
               </button>
-              <button type="button" className="secondary-button button-with-icon" onClick={props.onNewProject}>
-                <img className="button-icon" src={translateIcon} alt="" />
-                <span>新建项目</span>
-              </button>
-            </div>
-          </article>
-        </section>
+            </section>
 
-        <section className="home-overview-panel" aria-label="最近项目和工作台状态">
-          <div className="home-overview-head">
-            <div>
-              <span className="eyebrow">Recent Workspace</span>
-              <h2>最近研究进度</h2>
-            </div>
-            <span className="badge">已收录 {props.papers.length} 篇论文</span>
-          </div>
-          <div className="home-recent-list">
-            {props.papers.slice(0, 3).map((paper) => (
-              <button
-                key={paper.id}
-                type="button"
-                className="home-recent-item"
-                onClick={() => props.onOpenPaper(paper)}
-                title={paper.chineseTitle || paper.englishTitle || paper.pdfName}
-              >
-                <span>{paper.chineseTitle || paper.englishTitle || paper.pdfName}</span>
-                <small>{paper.journal || paper.year || paper.pdfName}</small>
+            <section className="research-panel">
+              <div className="research-panel-heading is-row">
+                <div>
+                  <span className="eyebrow">Recent Papers</span>
+                  <h2>最近论文</h2>
+                </div>
+                <span className="research-mini-badge">{props.papers.length}</span>
+              </div>
+              <div className="research-recent-stack">
+                {props.papers.slice(0, 5).map((paper) => (
+                  <button
+                    key={paper.id}
+                    type="button"
+                    className="research-recent-paper"
+                    onClick={() => props.onOpenPaper(paper)}
+                    title={getPaperTitle(paper)}
+                  >
+                    <span>{getPaperTitle(paper)}</span>
+                    <small>
+                      {paper.journal || paper.year || paper.pdfName}
+                      {paper.lastOpenedAt ? ` · ${formatDateTime(paper.lastOpenedAt)}` : ''}
+                    </small>
+                  </button>
+                ))}
+                {props.papers.length === 0 ? (
+                  <p className="research-empty-copy">暂无论文对象。</p>
+                ) : null}
+              </div>
+            </section>
+          </aside>
+
+          <section className="research-workbench-main" aria-label="研发对象和工作流">
+            <section className="research-panel research-object-panel">
+              <div className="research-panel-heading is-row">
+                <div>
+                  <span className="eyebrow">Research Objects</span>
+                  <h2>当前研发对象</h2>
+                </div>
+                <span className="research-mini-badge">Local only</span>
+              </div>
+              <div className="research-object-grid">
+                {workspaceOverview.objectCards.map((card) => (
+                  <article key={card.key} className={`research-object-card status-${toStatusClassName(card.status)}`}>
+                    <span>{card.label}</span>
+                    <strong>{card.value}</strong>
+                    <small>{card.detail}</small>
+                    <em>{card.status}</em>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section className="research-panel research-pipeline-panel">
+              <div className="research-panel-heading is-row">
+                <div>
+                  <span className="eyebrow">R&D Loop</span>
+                  <h2>论文到实验闭环</h2>
+                </div>
+                <button type="button" className="secondary-button button-with-icon" onClick={props.onOpenPresentationGenerator}>
+                  <img className="button-icon" src={translateIcon} alt="" />
+                  <span>组会输出</span>
+                </button>
+              </div>
+              <ol className="research-pipeline-list">
+                {workspaceOverview.pipeline.map((stage, index) => (
+                  <li key={stage.key} className={`status-${toStatusClassName(stage.status)}`}>
+                    <span className="research-pipeline-index">{String(index + 1).padStart(2, '0')}</span>
+                    <div>
+                      <strong>{stage.label}</strong>
+                      <small>{stage.detail}</small>
+                    </div>
+                    <em>{stage.status}</em>
+                  </li>
+                ))}
+              </ol>
+            </section>
+
+            <section className="research-command-strip" aria-label="主要研发入口">
+              <button type="button" onClick={() => props.onOpenResearchSheet()}>
+                <img className="button-icon" src={researchSheetIcon} alt="" />
+                <span>实验矩阵</span>
               </button>
-            ))}
-            {props.papers.length === 0 ? (
-              <p className="home-recent-empty">还没有最近项目，可以从“新建 PDF 翻译”开始。</p>
-            ) : null}
-          </div>
+              <button type="button" onClick={props.onOpenKnowledgeGraph}>
+                <img className="button-icon" src={graphIcon} alt="" />
+                <span>证据图谱</span>
+              </button>
+              <button type="button" onClick={props.onOpenPresentationGenerator}>
+                <img className="button-icon" src={translateIcon} alt="" />
+                <span>组会 PPT</span>
+              </button>
+              <button type="button" onClick={() => props.onSectionChange('library')}>
+                <img className="button-icon" src={libraryLineIcon} alt="" />
+                <span>论文库</span>
+              </button>
+            </section>
+          </section>
+
+          <aside className="research-workbench-detail" aria-label="决策和风险">
+            <section className="research-panel research-next-actions">
+              <div className="research-panel-heading">
+                <span className="eyebrow">Next Actions</span>
+                <h2>下一步</h2>
+              </div>
+              <div className="research-action-stack">
+                {workspaceOverview.nextActions.map((action) => (
+                  <button
+                    key={action.key}
+                    type="button"
+                    className="research-next-action"
+                    onClick={() => runWorkspaceAction(action.key)}
+                  >
+                    <span>
+                      <strong>{action.label}</strong>
+                      <small>{action.detail}</small>
+                    </span>
+                    <em>{action.actionLabel}</em>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="research-panel research-risk-panel">
+              <div className="research-panel-heading">
+                <span className="eyebrow">Decision Queue</span>
+                <h2>风险与缺口</h2>
+              </div>
+              <div className="research-risk-list">
+                {workspaceOverview.risks.map((risk) => (
+                  <article key={risk.key}>
+                    <span>{risk.actionLabel}</span>
+                    <strong>{risk.label}</strong>
+                    <p>{risk.detail}</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+          </aside>
         </section>
       </main>
     );
@@ -419,4 +666,15 @@ function formatDateTime(value: string): string {
     hour: '2-digit',
     minute: '2-digit'
   });
+}
+
+function getPaperTitle(paper: PaperRecord): string {
+  return paper.chineseTitle || paper.englishTitle || paper.pdfName;
+}
+
+function toStatusClassName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-|-$/gu, '');
 }
