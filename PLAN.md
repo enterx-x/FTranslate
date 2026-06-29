@@ -263,4 +263,4 @@ AI 科创团队的真实瓶颈：
 | --- | --- | --- | --- | --- |
 | 2026-06-29 | 新增 `AGENTS.md`、`PLAN.md` | 未运行代码测试 | 文档-only 修改 | 需通过 `git diff` 人工检查 |
 | 2026-06-29 | 新增 `DESIGN.md`，同步 README 和 PLAN 的 UI 设计方向 | `git diff -- README.md PLAN.md DESIGN.md`、`git status --short --branch` | 已检查 | 文档-only 修改，不触发代码构建 |
-| 2026-06-29 | 首页和导航迁移为 AI 科创项目空间；新增项目空间快照模型；视觉检查改为验证 research workbench | `npx vitest run src\renderer\components\HomePage.test.ts src\renderer\components\AppSidebar.test.ts src\renderer\lib\researchProjects.test.ts`、`npm run typecheck`、`npm run build:renderer`、`npm run visual:check` | 通过 | `visual:check` 输出在 `.tmp-visual-check`；未引入 GSAP，当前阶段不需要新增动效依赖 |
+| 2026-06-29 | 首页和导航迁移为 AI 科创项目空间；新增项目空间快照模型；视觉检查改为验证 research workbench | `npm test -- src/renderer/lib/researchProjects.test.ts src/renderer/components/AppSidebar.test.ts src/renderer/components/HomePage.test.ts`、`npm run typecheck`、`npm run build`、`npm run visual:check` | 通过 | `npm run build` 已刷新 `dist-renderer` / `dist-electron`；`visual:check` 输出在 `.tmp-visual-check` |
