@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EXPERIMENT_MATRICES_KEY,
   EXPERIMENT_MATRIX_COLUMNS,
   buildExperimentMatrixRowsFromMethodCard,
-  buildExperimentMatrixWorkbookFromMethodCards
+  buildExperimentMatrixWorkbookFromMethodCards,
+  buildExperimentMatrixWorkbookFromRows,
+  exportExperimentMatrixMarkdown,
+  mergeGeneratedExperimentRows,
+  parseExperimentMatrixStates,
+  serializeExperimentMatrixStates,
+  updateExperimentMatrixRow
 } from './experimentMatrix';
 import type { EvidenceSource, MethodCard, MethodCardField, MethodCardFieldKey } from './methodCards';
 
@@ -115,5 +122,99 @@ describe('experiment matrix', () => {
 
     expect(buildExperimentMatrixRowsFromMethodCard(emptyCard)).toEqual([]);
     expect(buildExperimentMatrixWorkbookFromMethodCards([emptyCard]).rows).toHaveLength(1);
+  });
+
+  it('parses project-scoped experiment matrix states and ignores invalid records', () => {
+    const rows = buildExperimentMatrixRowsFromMethodCard(makeCard());
+    const rawValue = JSON.stringify([
+      {
+        projectId: 'local-ai-rd-workspace',
+        rows,
+        selectedRowId: rows[1].id,
+        updatedAt: '2026-06-30T10:00:00.000Z',
+        version: 2
+      },
+      { projectId: '', rows: 'bad' }
+    ]);
+
+    expect(EXPERIMENT_MATRICES_KEY).toBe('pdfTranslationReader:experimentMatrices');
+    expect(parseExperimentMatrixStates(rawValue)).toEqual([
+      {
+        projectId: 'local-ai-rd-workspace',
+        rows,
+        selectedRowId: rows[1].id,
+        updatedAt: '2026-06-30T10:00:00.000Z',
+        version: 2
+      }
+    ]);
+  });
+
+  it('serializes experiment matrix states with stable formatting', () => {
+    const rows = buildExperimentMatrixRowsFromMethodCard(makeCard());
+    const states = [
+      {
+        projectId: 'local-ai-rd-workspace',
+        rows,
+        selectedRowId: rows[0].id,
+        updatedAt: '2026-06-30T10:00:00.000Z',
+        version: 1
+      }
+    ];
+
+    expect(serializeExperimentMatrixStates(states)).toBe(JSON.stringify(states, null, 2));
+  });
+
+  it('merges generated rows without overwriting user-edited rows', () => {
+    const rows = buildExperimentMatrixRowsFromMethodCard(makeCard());
+    const edited = {
+      ...rows[1],
+      hypothesis: 'user edited hypothesis',
+      status: 'running' as const
+    };
+
+    const merged = mergeGeneratedExperimentRows([edited], rows);
+
+    expect(merged.find((row) => row.id === edited.id)).toMatchObject({
+      hypothesis: 'user edited hypothesis',
+      status: 'running'
+    });
+    expect(merged.map((row) => row.group)).toEqual(['baseline', 'proposed', 'ablation']);
+  });
+
+  it('patches one experiment matrix row while preserving immutable identifiers', () => {
+    const rows = buildExperimentMatrixRowsFromMethodCard(makeCard());
+    const nextRows = updateExperimentMatrixRow(rows, rows[0].id, {
+      status: 'blocked',
+      metrics: 'manual metric'
+    });
+
+    expect(nextRows[0]).toMatchObject({
+      id: rows[0].id,
+      projectId: rows[0].projectId,
+      paperId: rows[0].paperId,
+      status: 'blocked',
+      metrics: 'manual metric'
+    });
+  });
+
+  it('exports experiment matrix rows to evidence-preserving markdown', () => {
+    const rows = buildExperimentMatrixRowsFromMethodCard(makeCard());
+    const markdown = exportExperimentMatrixMarkdown(rows);
+
+    expect(markdown).toContain('# 实验矩阵');
+    expect(markdown).toContain(
+      '| 论文 | 实验组 | 假设 | Baseline | Proposed Method | Ablation | 控制变量 | Seeds | 指标 | 预期结果 | 状态 | 证据 |'
+    );
+    expect(markdown).toContain('Safe RL for Robot Navigation');
+    expect(markdown).toContain('p. 7 · Results');
+  });
+
+  it('builds an experiment matrix workbook from edited rows', () => {
+    const rows = updateExperimentMatrixRow(buildExperimentMatrixRowsFromMethodCard(makeCard()), 'missing', {});
+    const workbook = buildExperimentMatrixWorkbookFromRows(rows);
+
+    expect(workbook.sheetName).toBe('实验矩阵');
+    expect(workbook.rows).toHaveLength(rows.length + 1);
+    expect(workbook.rows[1].id).toBe(rows[0].id);
   });
 });

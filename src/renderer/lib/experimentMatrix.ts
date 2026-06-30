@@ -2,6 +2,7 @@ import type { MethodCard, MethodCardField, MethodCardFieldKey } from './methodCa
 import type { ResearchRow, ResearchSheetColumn, ResearchWorkbook } from './researchWorkbook';
 
 export const EXPERIMENT_MATRIX_KEY = 'pdfTranslationReader:experimentMatrix';
+export const EXPERIMENT_MATRICES_KEY = 'pdfTranslationReader:experimentMatrices';
 
 export type ExperimentMatrixGroup = 'baseline' | 'proposed' | 'ablation';
 export type ExperimentMatrixStatus = 'planned' | 'running' | 'blocked' | 'done';
@@ -38,6 +39,14 @@ export interface ExperimentMatrixRow {
   status: ExperimentMatrixStatus;
   evidenceSourceIds: string[];
   evidenceLocators: string[];
+}
+
+export interface ExperimentMatrixState {
+  projectId: string;
+  rows: ExperimentMatrixRow[];
+  selectedRowId: string | null;
+  updatedAt: string;
+  version: number;
 }
 
 export const EXPERIMENT_MATRIX_COLUMNS: ResearchSheetColumn[] = [
@@ -113,6 +122,10 @@ export function buildExperimentMatrixRowsFromMethodCard(card: MethodCard): Exper
 
 export function buildExperimentMatrixWorkbookFromMethodCards(cards: MethodCard[]): ResearchWorkbook {
   const matrixRows = cards.flatMap(buildExperimentMatrixRowsFromMethodCard);
+  return buildExperimentMatrixWorkbookFromRows(matrixRows);
+}
+
+export function buildExperimentMatrixWorkbookFromRows(rows: ExperimentMatrixRow[]): ResearchWorkbook {
   return {
     id: 'experiment-matrix-workbook',
     sheetName: '实验矩阵',
@@ -121,8 +134,66 @@ export function buildExperimentMatrixWorkbookFromMethodCards(cards: MethodCard[]
       xSplit: 0
     },
     columns: EXPERIMENT_MATRIX_COLUMNS,
-    rows: [buildHeaderRow(), ...matrixRows.map(toResearchRow)]
+    rows: [buildHeaderRow(), ...rows.map(toResearchRow)]
   };
+}
+
+export function exportExperimentMatrixMarkdown(rows: ExperimentMatrixRow[]): string {
+  const header = EXPERIMENT_MATRIX_COLUMNS.map((column) => column.label);
+  const bodyRows = rows.map((row) =>
+    EXPERIMENT_MATRIX_COLUMNS.map((column) =>
+      escapeMarkdownCell(toCellValue(row, column.key as ExperimentMatrixColumnKey))
+    )
+  );
+
+  return [
+    '# 实验矩阵',
+    '',
+    `| ${header.join(' | ')} |`,
+    `| ${header.map(() => '---').join(' | ')} |`,
+    ...bodyRows.map((cells) => `| ${cells.join(' | ')} |`)
+  ].join('\n');
+}
+
+export function parseExperimentMatrixStates(value: string | null): ExperimentMatrixState[] {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .map(normalizeExperimentMatrixState)
+      .filter((state): state is ExperimentMatrixState => Boolean(state));
+  } catch {
+    return [];
+  }
+}
+
+export function serializeExperimentMatrixStates(states: ExperimentMatrixState[]): string {
+  return JSON.stringify(states, null, 2);
+}
+
+export function mergeGeneratedExperimentRows(
+  currentRows: ExperimentMatrixRow[],
+  generatedRows: ExperimentMatrixRow[]
+): ExperimentMatrixRow[] {
+  const currentById = new Map(currentRows.map((row) => [row.id, row]));
+  const generatedIds = new Set(generatedRows.map((row) => row.id));
+  const mergedRows = generatedRows.map((generated) => currentById.get(generated.id) ?? generated);
+  return [...mergedRows, ...currentRows.filter((row) => !generatedIds.has(row.id))];
+}
+
+export function updateExperimentMatrixRow(
+  rows: ExperimentMatrixRow[],
+  rowId: string,
+  patch: Partial<Omit<ExperimentMatrixRow, 'id' | 'projectId' | 'paperId' | 'methodCardId'>>
+): ExperimentMatrixRow[] {
+  return rows.map((row) => (row.id === rowId ? { ...row, ...patch } : row));
 }
 
 function buildMatrixRow(
@@ -165,6 +236,75 @@ function buildMatrixRow(
     evidenceSourceIds,
     evidenceLocators
   };
+}
+
+function normalizeExperimentMatrixState(value: unknown): ExperimentMatrixState | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const projectId = readString(value.projectId);
+  if (!projectId || !Array.isArray(value.rows)) {
+    return null;
+  }
+
+  const rows = value.rows.map(normalizeExperimentMatrixRow).filter((row): row is ExperimentMatrixRow => Boolean(row));
+  const selectedRowId = value.selectedRowId === null ? null : readString(value.selectedRowId) || null;
+  const updatedAt = readString(value.updatedAt) || new Date(0).toISOString();
+  const version = Math.max(1, Number(value.version) || 1);
+
+  return {
+    projectId,
+    rows,
+    selectedRowId,
+    updatedAt,
+    version
+  };
+}
+
+function normalizeExperimentMatrixRow(value: unknown): ExperimentMatrixRow | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readString(value.id);
+  const projectId = readString(value.projectId);
+  const paperId = readString(value.paperId);
+  const methodCardId = readString(value.methodCardId);
+  const group = readExperimentGroup(value.group);
+  const status = readExperimentStatus(value.status);
+
+  if (!id || !projectId || !paperId || !methodCardId || !group || !status) {
+    return null;
+  }
+
+  return {
+    id,
+    projectId,
+    paperId,
+    methodCardId,
+    group,
+    paper: readString(value.paper),
+    hypothesis: readString(value.hypothesis),
+    baseline: readString(value.baseline),
+    proposed: readString(value.proposed),
+    ablation: readString(value.ablation),
+    controlledVariables: readString(value.controlledVariables),
+    seeds: readString(value.seeds),
+    metrics: readString(value.metrics),
+    expectedResult: readString(value.expectedResult),
+    status,
+    evidenceSourceIds: readStringArray(value.evidenceSourceIds),
+    evidenceLocators: readStringArray(value.evidenceLocators)
+  };
+}
+
+function readExperimentGroup(value: unknown): ExperimentMatrixGroup | null {
+  return value === 'baseline' || value === 'proposed' || value === 'ablation' ? value : null;
+}
+
+function readExperimentStatus(value: unknown): ExperimentMatrixStatus | null {
+  return value === 'planned' || value === 'running' || value === 'blocked' || value === 'done' ? value : null;
 }
 
 function toResearchRow(row: ExperimentMatrixRow): ResearchRow {
@@ -248,4 +388,20 @@ function hashText(value: string): string {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
+}
+
+function escapeMarkdownCell(value: string): string {
+  return value.replace(/\r?\n/gu, '<br>').replace(/\|/gu, '\\|').trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }

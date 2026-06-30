@@ -103,7 +103,10 @@ Paper-to-Method 是阶段 2 的核心研发对象，不是参赛材料生成器�
 - 实验矩阵列覆盖 paper、group、hypothesis、baseline、proposed method、ablation、controlled variables、seeds、metrics、expected result、status 和 evidence；
 - `buildExperimentMatrixWorkbookFromMethodCards` 会生成独立 workbook，sheet 名为 `实验矩阵`，不会修改已有研究表格数据；
 - 只从已绑定 evidence 的方法卡字段生成实验行，避免凭空发明实验；
-- 当前默认状态为 `planned`，后续 UI 中需要用户确认后再写回项目空间或导出。
+- 当前默认状态为 `planned`，后续 UI 中需要用户确认后再写回项目空间或导出；
+- 新增 `pdfTranslationReader:experimentMatrices` 持久化键，按 projectId 保存用户确认和编辑后的实验矩阵；
+- 提供安全合并逻辑，重新从方法卡生成时不会静默覆盖用户已编辑行；
+- 提供 Markdown 导出和 `ResearchWorkbook` workbook 导出核心，后续 UI 可直接调用。
 
 研究表格继续作为自由整理和人工编辑区域；实验矩阵作为结构化的“实验设计层”，二者后续可以互相跳转，但不能互相替代。
 
