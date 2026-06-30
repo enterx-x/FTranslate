@@ -79,6 +79,18 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 右侧：下一步动作、项目空间迁移风险和后续决策队列；
 - 底部/导航：实验矩阵、证据图谱、组会 PPT、论文库、PDF 阅读、论文导师、AI 助手和设置等兼容入口。
 
+### Paper-to-Method 方法卡
+
+Paper-to-Method 是阶段 2 的核心研发对象，不是参赛材料生成器。当前已落地本地方法卡数据核心：
+
+- 新增 `pdfTranslationReader:methodCards` 持久化键和 `MethodCard` / `EvidenceSource` / `MethodCardField` 数据结构；
+- 可从 PDF 文本块、Figure / Table caption 和阅读笔记中抽取字段级证据；
+- 方法卡字段覆盖 problem、input / output、model architecture、training objective、loss function、constraints、dataset / environment、baseline、metrics、claimed contribution、limitations 和 reproduction risk；
+- 非空字段必须绑定 evidence source，没有证据时保持空值和 `unconfirmed`，避免生成不可追踪结论；
+- 同一项目同一论文再次保存会提升 version，不静默覆盖已有方法卡。
+
+当前阶段只完成纯函数和单元测试，尚未接入三栏 UI、项目空间 hook 或研究表格写回入口。
+
 ### PDF 阅读与双语 PDF
 
 - 打开本地 PDF；
@@ -496,6 +508,7 @@ src/
       knowledgeGraph.ts     知识图谱数据生成与导出
       presentationOutline.ts 组会 PPT 大纲生成与 Markdown 导出
       presentationPptx.ts    组会 PPTX 版式计划与 PptxGenJS 导出
+      methodCards.ts         Paper-to-Method 方法卡、证据抽取和本地序列化
       markdownDocument.ts   安全文档渲染
       paperTutor.ts         论文导师上下文、证据和追问逻辑
       papers.ts             论文库记录
