@@ -88,9 +88,24 @@ Paper-to-Method 是阶段 2 的核心研发对象，不是参赛材料生成器�
 - 可从 PDF 文本块、Figure / Table caption 和阅读笔记中抽取字段级证据；
 - 方法卡字段覆盖 problem、input / output、model architecture、training objective、loss function、constraints、dataset / environment、baseline、metrics、claimed contribution、limitations 和 reproduction risk；
 - 非空字段必须绑定 evidence source，没有证据时保持空值和 `unconfirmed`，避免生成不可追踪结论；
-- 同一项目同一论文再次保存会提升 version，不静默覆盖已有方法卡。
+- 同一项目同一论文再次保存会提升 version，不静默覆盖已有方法卡；
+- 方法卡可进一步派生实验矩阵行，把论文中的 baseline、proposed method、constraints、environment、metrics 和 evidence 转成可执行实验设计。
 
 当前阶段只完成纯函数和单元测试，尚未接入三栏 UI、项目空间 hook 或研究表格写回入口。
+
+### 实验矩阵
+
+实验矩阵不是把现有研究表格改名，也不是覆盖 Univer 自由表格。它是独立的结构化实验设计视图，用来把方法卡中的证据字段转换成可执行实验行。
+
+当前已落地本地实验矩阵数据核心：
+
+- 新增 `src/renderer/lib/experimentMatrix.ts`，从 `MethodCard` 派生 baseline / proposed / ablation 三类实验行；
+- 实验矩阵列覆盖 paper、group、hypothesis、baseline、proposed method、ablation、controlled variables、seeds、metrics、expected result、status 和 evidence；
+- `buildExperimentMatrixWorkbookFromMethodCards` 会生成独立 workbook，sheet 名为 `实验矩阵`，不会修改已有研究表格数据；
+- 只从已绑定 evidence 的方法卡字段生成实验行，避免凭空发明实验；
+- 当前默认状态为 `planned`，后续 UI 中需要用户确认后再写回项目空间或导出。
+
+研究表格继续作为自由整理和人工编辑区域；实验矩阵作为结构化的“实验设计层”，二者后续可以互相跳转，但不能互相替代。
 
 ### PDF 阅读与双语 PDF
 
@@ -251,7 +266,7 @@ AI 助手集中管理：
 
 ### 研究表格
 
-研究表格基于 Univer，作为独立模块存在，不和论文库混在一起。支持：
+研究表格基于 Univer，作为独立模块存在，不和论文库混在一起，也不会被实验矩阵替换。它保留自由编辑、临时整理和人工分析空间；实验矩阵是另一层结构化设计视图。研究表格支持：
 
 - 多工作表；
 - 首行冻结；
@@ -518,6 +533,7 @@ src/
       presentationOutline.ts 组会 PPT 大纲生成与 Markdown 导出
       presentationPptx.ts    组会 PPTX 版式计划与 PptxGenJS 导出
       methodCards.ts         Paper-to-Method 方法卡、证据抽取和本地序列化
+      experimentMatrix.ts    从方法卡派生 baseline / proposed / ablation 实验矩阵
       markdownDocument.ts   安全文档渲染
       paperTutor.ts         论文导师上下文、证据和追问逻辑
       papers.ts             论文库记录
