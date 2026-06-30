@@ -17009,3 +17009,404 @@ body.is-resizing-layout .arxiv-detail-resize-handle::after {
   background: #fff4ce;
   color: #684e00;
 }
+
+/* Workflow board pass: keep cards for real workflow objects, not for every metric row. */
+.research-workbench-shell {
+  grid-template-columns: minmax(242px, 268px) minmax(0, 1fr) minmax(286px, 318px);
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.research-workbench-main {
+  grid-template-rows: minmax(0, 1fr) 52px;
+  overflow: hidden;
+}
+
+.research-workbench-detail.research-workflow-inspector {
+  grid-template-rows: 165px 185px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.research-workflow-board {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.research-workflow-board-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px 12px 18px;
+  border-bottom: 1px solid #e8edf4;
+  background:
+    linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%),
+    #ffffff;
+}
+
+.research-workflow-board-header h2 {
+  margin: 1px 0 0;
+  color: #0f172a;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.research-workflow-board-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.research-workflow-board-meta span,
+.research-workflow-board-meta em {
+  border: 1px solid #dde5ef;
+  border-radius: 6px;
+  padding: 3px 7px;
+  color: #465267;
+  background: #f6f8fb;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 720;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.research-workflow-board-meta em {
+  border-color: rgba(15, 98, 254, 0.18);
+  color: #0f62fe;
+  background: #e8f0ff;
+}
+
+.research-workflow-grid {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  overflow: hidden;
+  padding: 14px;
+  background:
+    linear-gradient(180deg, #fbfcfe 0%, #f4f7fb 100%),
+    #f7f9fc;
+}
+
+.research-workflow-column {
+  display: grid;
+  min-width: 0;
+  min-height: 164px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  overflow: hidden;
+  border: 1px solid #e0e7f0;
+  border-radius: 12px;
+  padding: 11px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 252, 0.94)),
+    #f8fafc;
+}
+
+.research-workflow-column-head {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.research-workflow-step {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: #344054;
+  background: #eef2f7;
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.research-workflow-column-head .button-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.research-workflow-column-head strong,
+.research-workflow-column-head small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-workflow-column-head strong {
+  color: #101828;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.research-workflow-column-head small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 11px;
+}
+
+.research-workflow-column-head em,
+.research-inspector-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 3px 7px;
+  color: #027a48;
+  background: #dcfae6;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 760;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.research-workflow-column-head em.status-planned,
+.research-inspector-status.status-planned {
+  color: #7a4f00;
+  background: #fff4ce;
+}
+
+.research-workflow-card {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: 108px;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 7px;
+  overflow: hidden;
+  border: 1px solid #dbe4f0;
+  border-radius: 12px;
+  padding: 12px;
+  color: inherit;
+  background:
+    linear-gradient(180deg, #ffffff 0%, #fbfdff 100%),
+    #ffffff;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.92) inset,
+    0 8px 18px rgba(15, 23, 42, 0.045);
+  text-align: left;
+}
+
+.research-workflow-card:hover {
+  border-color: #b8cdfd;
+  background: #f8fbff;
+}
+
+.research-workflow-card-kicker {
+  color: #536071;
+  font-size: 11px;
+  font-weight: 740;
+  line-height: 1.2;
+}
+
+.research-workflow-card > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 16px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-workflow-card p {
+  display: -webkit-box;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #4f5d72;
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.research-workflow-card-foot {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.research-workflow-card-foot b {
+  color: #111827;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.research-workflow-card-foot em {
+  flex: 0 0 auto;
+  border-radius: 6px;
+  padding: 4px 7px;
+  color: #0f62fe;
+  background: #e8f0ff;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 760;
+}
+
+.research-inspector-focus .research-panel-heading {
+  padding-top: 10px;
+  padding-bottom: 8px;
+}
+
+.research-workflow-inspector .research-panel-heading {
+  padding-top: 10px;
+  padding-bottom: 8px;
+}
+
+.research-workflow-inspector .research-panel-heading h2 {
+  font-size: 15px;
+}
+
+.research-inspector-body {
+  display: grid;
+  gap: 6px;
+  padding: 8px 14px 10px;
+}
+
+.research-inspector-body p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: #4f5d72;
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.research-inspector-metrics {
+  display: none;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid #edf1f6;
+  border-radius: 8px;
+  background: #edf1f6;
+}
+
+.research-inspector-metrics div {
+  min-width: 0;
+  padding: 5px 7px;
+  background: #fbfcfe;
+}
+
+.research-inspector-metrics dt,
+.research-inspector-metrics dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-inspector-metrics dt {
+  color: #667085;
+  font-size: 11px;
+}
+
+.research-inspector-metrics dd {
+  margin-top: 2px;
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 780;
+}
+
+.research-inspector-body .secondary-button {
+  min-height: 30px;
+  justify-content: center;
+}
+
+.research-next-action {
+  min-height: 40px;
+  padding: 5px 12px;
+  border: 0;
+  border-bottom: 1px solid #edf1f6;
+  border-radius: 0;
+  background: transparent;
+}
+
+.research-next-action strong {
+  margin-bottom: 2px;
+  font-size: 12.5px;
+}
+
+.research-next-action small {
+  display: none;
+  -webkit-line-clamp: 1;
+}
+
+.research-next-action em {
+  min-width: 64px;
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
+.research-risk-list article {
+  min-height: 0;
+  gap: 3px;
+  padding: 5px 11px 5px 18px;
+  border: 0;
+  border-bottom: 1px solid #edf1f6;
+  border-radius: 0;
+  background: transparent;
+}
+
+.research-risk-list span {
+  font-size: 10.5px;
+  line-height: 1.15;
+  padding: 2px 6px;
+}
+
+.research-risk-list strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-risk-list p {
+  font-size: 11px;
+  line-height: 1.25;
+  -webkit-line-clamp: 1;
+}
+
+@media (max-width: 1280px) {
+  .research-workbench-shell {
+    grid-template-columns: minmax(236px, 264px) minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .research-workbench-detail.research-workflow-inspector {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: auto;
+  }
+
+  .research-workflow-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(4, minmax(0, 1fr));
+  }
+}

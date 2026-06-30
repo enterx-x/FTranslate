@@ -909,10 +909,12 @@ async function runHomeScenario(client) {
     hasHome: Boolean(document.querySelector('.home-page')),
     hasResearchWorkbench: Boolean(document.querySelector('.research-workbench-page')),
     hasWorkbenchShell: Boolean(document.querySelector('.research-workbench-shell')),
-    hasObjectPanel: Boolean(document.querySelector('.research-object-panel')),
-    hasPipelinePanel: Boolean(document.querySelector('.research-pipeline-panel')),
-    objectCards: [...document.querySelectorAll('.research-object-card')].map((item) => item.textContent?.trim()),
-    pipelineStages: [...document.querySelectorAll('.research-pipeline-list li')].map((item) => item.textContent?.trim()),
+    hasWorkflowBoard: Boolean(document.querySelector('.research-workflow-board')),
+    hasWorkflowInspector: Boolean(document.querySelector('.research-workflow-inspector')),
+    hasLegacyObjectPanel: Boolean(document.querySelector('.research-object-panel')),
+    hasLegacyPipelinePanel: Boolean(document.querySelector('.research-pipeline-panel')),
+    workflowColumns: [...document.querySelectorAll('.research-workflow-column')].map((item) => item.textContent?.trim()),
+    workflowCards: [...document.querySelectorAll('.research-workflow-card')].map((item) => item.textContent?.trim()),
     nextActions: [...document.querySelectorAll('.research-next-action')].map((item) => item.textContent?.trim()),
     riskItems: [...document.querySelectorAll('.research-risk-list article')].map((item) => item.textContent?.trim()),
     commandTexts: [...document.querySelectorAll('.research-command-strip button')].map((button) => button.textContent?.trim()),
@@ -962,8 +964,7 @@ async function runHomeScenario(client) {
           [
             '.research-kpi-list div',
             '.research-recent-paper',
-            '.research-object-card',
-            '.research-pipeline-list li',
+            '.research-workflow-card',
             '.research-next-action',
             '.research-risk-list article'
           ].join(',')
@@ -991,6 +992,19 @@ async function runHomeScenario(client) {
             item.borderWidth > 0 &&
             !['rgba(0, 0, 0, 0)', 'transparent'].includes(item.background)
         );
+      const workflowBoard = document.querySelector('.research-workflow-board');
+      const workflowCardRects = [...document.querySelectorAll('.research-workflow-card')].map((item) => {
+        const box = item.getBoundingClientRect();
+        return {
+          text: (item.textContent ?? '').trim().slice(0, 100),
+          width: Math.round(box.width),
+          height: Math.round(box.height),
+          scrollWidth: item.scrollWidth,
+          clientWidth: item.clientWidth,
+          scrollHeight: item.scrollHeight,
+          clientHeight: item.clientHeight
+        };
+      });
       const nextActionOverlaps = [...document.querySelectorAll('.research-next-action')]
         .map((button) => ({
           text: (button.textContent ?? '').trim(),
@@ -1005,6 +1019,26 @@ async function runHomeScenario(client) {
           meta: rect(button.querySelector('small'))
         }))
         .filter((item) => overlaps(item.title, item.meta));
+      const clippedRiskItems = (() => {
+        const panel = document.querySelector('.research-risk-panel');
+        const panelBox = panel?.getBoundingClientRect();
+        if (!panelBox) {
+          return [];
+        }
+        return [...document.querySelectorAll('.research-risk-list article')]
+          .map((item) => {
+            const itemBox = item.getBoundingClientRect();
+            return {
+              text: (item.textContent ?? '').trim().slice(0, 100),
+              top: Math.round(itemBox.top),
+              bottom: Math.round(itemBox.bottom),
+              height: Math.round(itemBox.height),
+              panelTop: Math.round(panelBox.top),
+              panelBottom: Math.round(panelBox.bottom)
+            };
+          })
+          .filter((item) => item.top < item.panelTop - 2 || item.bottom > item.panelBottom + 2 || item.height < 34);
+      })();
       const recentPanelExcessHeight = (() => {
         const panel = document.querySelector('.research-workbench-rail .research-panel:nth-of-type(2)');
         const rows = [...document.querySelectorAll('.research-recent-paper')];
@@ -1033,10 +1067,18 @@ async function runHomeScenario(client) {
         })(),
         cardLikeCount: cardLikeElements.length,
         cardLikeElements: cardLikeElements.slice(0, 12),
+        workflowBoardHorizontalOverflow: workflowBoard ? workflowBoard.scrollWidth > workflowBoard.clientWidth + 3 : true,
+        workflowMinCardWidth: workflowCardRects.reduce((min, item) => Math.min(min, item.width), Number.POSITIVE_INFINITY),
+        workflowCardOverflowCount: workflowCardRects.filter(
+          (item) => item.scrollWidth > item.clientWidth + 3 || item.scrollHeight > item.clientHeight + 3
+        ).length,
+        workflowCardRects,
         nextActionOverlapCount: nextActionOverlaps.length,
         nextActionOverlaps,
         recentTextOverlapCount: recentTextOverlaps.length,
         recentTextOverlaps,
+        clippedRiskCount: clippedRiskItems.length,
+        clippedRiskItems,
         recentPanelExcessHeight,
         eyebrowColor: getComputedStyle(document.querySelector('.research-workbench-title .eyebrow') ?? document.body)
           .color,
@@ -1073,19 +1115,25 @@ async function runHomeScenario(client) {
     !hub.hasHome ||
     !hub.hasResearchWorkbench ||
     !hub.hasWorkbenchShell ||
-    !hub.hasObjectPanel ||
-    !hub.hasPipelinePanel ||
+    !hub.hasWorkflowBoard ||
+    !hub.hasWorkflowInspector ||
+    hub.hasLegacyObjectPanel ||
+    hub.hasLegacyPipelinePanel ||
     hub.hasPaperTable ||
     hub.hasHorizontalOverflow
   ) {
-    throw new Error(`home: expected research workbench before entering a module, got ${JSON.stringify(hub)}`);
+    throw new Error(`home: expected workflow board workbench before entering a module, got ${JSON.stringify(hub)}`);
   }
   if (
     hub.adversarialLayout.nestedVerticalScrollers.length > 0 ||
     hub.adversarialLayout.pageVerticalOverflow ||
-    hub.adversarialLayout.cardLikeCount > 4 ||
+    hub.adversarialLayout.cardLikeCount > 8 ||
+    hub.adversarialLayout.workflowBoardHorizontalOverflow ||
+    hub.adversarialLayout.workflowMinCardWidth < 180 ||
+    hub.adversarialLayout.workflowCardOverflowCount > 0 ||
     hub.adversarialLayout.nextActionOverlapCount > 0 ||
     hub.adversarialLayout.recentTextOverlapCount > 0 ||
+    hub.adversarialLayout.clippedRiskCount > 0 ||
     hub.adversarialLayout.recentPanelExcessHeight > 160 ||
     /128,\s*118,\s*255|99,\s*91,\s*255|purple/i.test(hub.adversarialLayout.eyebrowColor)
   ) {
@@ -1095,14 +1143,14 @@ async function runHomeScenario(client) {
     throw new Error(`home: adversarial visual review failed, got ${JSON.stringify(hub.adversarialLayout)}`);
   }
   if (
-    hub.objectCards.length < 4 ||
-    hub.pipelineStages.length < 4 ||
+    hub.workflowColumns.length < 4 ||
+    hub.workflowCards.length < 4 ||
     hub.nextActions.length < 2 ||
     hub.riskItems.length < 3 ||
     !hub.commandTexts.includes('实验矩阵') ||
     !hub.commandTexts.includes('证据图谱')
   ) {
-    throw new Error(`home: expected object cards, R&D loop, risks and commands, got ${JSON.stringify(hub)}`);
+    throw new Error(`home: expected workflow cards, inspector risks and commands, got ${JSON.stringify(hub)}`);
   }
 
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>

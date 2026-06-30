@@ -70,6 +70,26 @@ interface ResearchWorkspaceNextAction {
   actionLabel: string;
 }
 
+interface ResearchWorkflowCard {
+  key: string;
+  label: string;
+  detail: string;
+  metricLabel: string;
+  metricValue: string;
+  status: ResearchObjectStatus | ResearchPipelineStatus;
+  actionKey: ResearchWorkspaceNextAction['key'];
+  actionLabel: string;
+}
+
+interface ResearchWorkflowColumn {
+  key: ResearchWorkspacePipelineStage['key'];
+  title: string;
+  subtitle: string;
+  icon: string;
+  stage: ResearchWorkspacePipelineStage;
+  cards: ResearchWorkflowCard[];
+}
+
 export interface ResearchWorkspaceOverview {
   objectCards: ResearchWorkspaceObjectCard[];
   pipeline: ResearchWorkspacePipelineStage[];
@@ -253,6 +273,93 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
     () => buildResearchWorkspaceOverview(props.papers, props.knowledgeGraphStats),
     [props.knowledgeGraphStats, props.papers]
   );
+  const papersObject = workspaceOverview.objectCards.find((card) => card.key === 'papers')!;
+  const evidenceObject = workspaceOverview.objectCards.find((card) => card.key === 'evidenceGraph')!;
+  const notesObject = workspaceOverview.objectCards.find((card) => card.key === 'notes')!;
+  const bilingualObject = workspaceOverview.objectCards.find((card) => card.key === 'bilingualAssets')!;
+  const methodStage = workspaceOverview.pipeline.find((stage) => stage.key === 'method')!;
+  const codeStage = workspaceOverview.pipeline.find((stage) => stage.key === 'code')!;
+  const experimentStage = workspaceOverview.pipeline.find((stage) => stage.key === 'experiment')!;
+  const runtimeStage = workspaceOverview.pipeline.find((stage) => stage.key === 'runtime')!;
+  const workflowColumns: ResearchWorkflowColumn[] = [
+    {
+      key: 'method',
+      title: 'Paper-to-Method',
+      subtitle: '论文证据编译',
+      icon: libraryLineIcon,
+      stage: methodStage,
+      cards: [
+        {
+          key: 'method-card',
+          label: '方法卡字段',
+          detail: methodStage.detail,
+          metricLabel: papersObject.label,
+          metricValue: papersObject.value,
+          status: methodStage.status,
+          actionKey: props.papers.length > 0 ? 'open-research-sheet' : 'import-paper',
+          actionLabel: props.papers.length > 0 ? '整理字段' : '导入论文'
+        }
+      ]
+    },
+    {
+      key: 'code',
+      title: 'Paper-to-Code',
+      subtitle: '复现路径映射',
+      icon: pdfReaderIcon,
+      stage: codeStage,
+      cards: [
+        {
+          key: 'code-mapping',
+          label: '复现映射入口',
+          detail: codeStage.detail,
+          metricLabel: '仓库状态',
+          metricValue: '待接入',
+          status: codeStage.status,
+          actionKey: 'open-library',
+          actionLabel: '整理论文'
+        }
+      ]
+    },
+    {
+      key: 'experiment',
+      title: 'Experiment Matrix',
+      subtitle: 'baseline / ablation',
+      icon: researchSheetIcon,
+      stage: experimentStage,
+      cards: [
+        {
+          key: 'experiment-design',
+          label: '实验矩阵草案',
+          detail: experimentStage.detail,
+          metricLabel: notesObject.label,
+          metricValue: String(notedPaperCount),
+          status: experimentStage.status,
+          actionKey: 'open-research-sheet',
+          actionLabel: '设计实验'
+        }
+      ]
+    },
+    {
+      key: 'runtime',
+      title: 'Runtime Center',
+      subtitle: '本地能力状态',
+      icon: translateIcon,
+      stage: runtimeStage,
+      cards: [
+        {
+          key: 'runtime-assets',
+          label: '本地运行资产',
+          detail: runtimeStage.detail,
+          metricLabel: bilingualObject.label,
+          metricValue: String(dualPdfCount),
+          status: runtimeStage.status,
+          actionKey: props.papers.length > 0 ? 'continue-reading' : 'import-paper',
+          actionLabel: props.papers.length > 0 ? '检查资产' : '导入论文'
+        }
+      ]
+    }
+  ];
+  const inspectorFocus = workflowColumns[0];
 
   function startEdit(paper: PaperRecord): void {
     setEditingPaperId(paper.id);
@@ -400,50 +507,52 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
             </section>
           </aside>
 
-          <section className="research-workbench-main" aria-label="研发对象和工作流">
-            <section className="research-panel research-object-panel">
-              <div className="research-panel-heading is-row">
+          <section className="research-workbench-main" aria-label="研发流程看板">
+            <section className="research-panel research-workflow-board" aria-label="研发流程看板">
+              <div className="research-workflow-board-header">
                 <div>
-                  <span className="eyebrow">Research Objects</span>
-                  <h2>当前研发对象</h2>
+                  <span className="eyebrow">Workflow Board</span>
+                  <h2>论文到实验研发看板</h2>
                 </div>
-                <span className="research-mini-badge">Local only</span>
+                <div className="research-workflow-board-meta" aria-label="本地研发对象概览">
+                  <span>{papersObject.value} 论文</span>
+                  <span>{evidenceObject.value} 证据节点</span>
+                  <span>{bilingualObject.value} 双语资产</span>
+                  <em>Local only</em>
+                </div>
               </div>
-              <div className="research-object-grid">
-                {workspaceOverview.objectCards.map((card) => (
-                  <article key={card.key} className={`research-object-card status-${toStatusClassName(card.status)}`}>
-                    <span>{card.label}</span>
-                    <strong>{card.value}</strong>
-                    <small>{card.detail}</small>
-                    <em>{card.status}</em>
-                  </article>
-                ))}
-              </div>
-            </section>
 
-            <section className="research-panel research-pipeline-panel">
-              <div className="research-panel-heading is-row">
-                <div>
-                  <span className="eyebrow">R&D Loop</span>
-                  <h2>论文到实验闭环</h2>
-                </div>
-                <button type="button" className="secondary-button button-with-icon" onClick={props.onOpenPresentationGenerator}>
-                  <img className="button-icon" src={translateIcon} alt="" />
-                  <span>组会输出</span>
-                </button>
-              </div>
-              <ol className="research-pipeline-list">
-                {workspaceOverview.pipeline.map((stage, index) => (
-                  <li key={stage.key} className={`status-${toStatusClassName(stage.status)}`}>
-                    <span className="research-pipeline-index">{String(index + 1).padStart(2, '0')}</span>
-                    <div>
-                      <strong>{stage.label}</strong>
-                      <small>{stage.detail}</small>
+              <div className="research-workflow-grid">
+                {workflowColumns.map((column, index) => (
+                  <section key={column.key} className={`research-workflow-column status-${toStatusClassName(column.stage.status)}`}>
+                    <div className="research-workflow-column-head">
+                      <span className="research-workflow-step">{String(index + 1).padStart(2, '0')}</span>
+                      <img className="button-icon" src={column.icon} alt="" />
+                      <span>
+                        <strong>{column.title}</strong>
+                        <small>{column.subtitle}</small>
+                      </span>
+                      <em>{column.stage.status}</em>
                     </div>
-                    <em>{stage.status}</em>
-                  </li>
+                    {column.cards.map((card) => (
+                      <button
+                        key={card.key}
+                        type="button"
+                        className={`research-workflow-card status-${toStatusClassName(card.status)}`}
+                        onClick={() => runWorkspaceAction(card.actionKey)}
+                      >
+                        <span className="research-workflow-card-kicker">{card.metricLabel}</span>
+                        <strong>{card.label}</strong>
+                        <p>{card.detail}</p>
+                        <span className="research-workflow-card-foot">
+                          <b>{card.metricValue}</b>
+                          <em>{card.actionLabel}</em>
+                        </span>
+                      </button>
+                    ))}
+                  </section>
                 ))}
-              </ol>
+              </div>
             </section>
 
             <section className="research-command-strip" aria-label="主要研发入口">
@@ -466,7 +575,38 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
             </section>
           </section>
 
-          <aside className="research-workbench-detail" aria-label="决策和风险">
+          <aside className="research-workbench-detail research-workflow-inspector" aria-label="当前焦点和决策">
+            <section className="research-panel research-inspector-focus">
+              <div className="research-panel-heading">
+                <span className="eyebrow">Current Focus</span>
+                <h2>{inspectorFocus.title}</h2>
+              </div>
+              <div className="research-inspector-body">
+                <span className={`research-inspector-status status-${toStatusClassName(inspectorFocus.stage.status)}`}>
+                  {inspectorFocus.stage.status}
+                </span>
+                <p>{inspectorFocus.stage.detail}</p>
+                <dl className="research-inspector-metrics">
+                  <div>
+                    <dt>{papersObject.label}</dt>
+                    <dd>{papersObject.value}</dd>
+                  </div>
+                  <div>
+                    <dt>{evidenceObject.label}</dt>
+                    <dd>{evidenceObject.value}</dd>
+                  </div>
+                  <div>
+                    <dt>{notesObject.label}</dt>
+                    <dd>{notesObject.value}</dd>
+                  </div>
+                </dl>
+                <button type="button" className="secondary-button button-with-icon" onClick={() => runWorkspaceAction(inspectorFocus.cards[0].actionKey)}>
+                  <img className="button-icon" src={inspectorFocus.icon} alt="" />
+                  <span>{inspectorFocus.cards[0].actionLabel}</span>
+                </button>
+              </div>
+            </section>
+
             <section className="research-panel research-next-actions">
               <div className="research-panel-heading">
                 <span className="eyebrow">Next Actions</span>
