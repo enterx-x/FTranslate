@@ -3,10 +3,10 @@
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 10px;
   min-width: 0;
-  padding: 10px 8px;
-  border-right: 1px solid #d9dee7;
-  background: #ffffff;
-  color: #161616;
+  padding: 12px 10px;
+  border-right: 1px solid #111827;
+  background: #0b0f17;
+  color: #f8fafc;
 }
 
 .brand {
@@ -15,7 +15,7 @@
   gap: 8px;
   height: 40px;
   padding-inline: 4px;
-  color: #161616;
+  color: #f8fafc;
   font-size: 13px;
   font-weight: 750;
 }
@@ -44,7 +44,7 @@
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-  color: #525866;
+  color: #aab5c7;
   font: inherit;
   font-size: 12px;
   font-weight: 720;
@@ -54,25 +54,25 @@
 }
 
 .link:hover:not(:disabled) {
-  border-color: #d9dee7;
-  background: #f2f4f7;
-  color: #161616;
+  border-color: #263244;
+  background: #111827;
+  color: #ffffff;
 }
 
 .linkActive {
-  border-color: #b8cdfd;
-  background: #e8f0ff;
-  color: #0f3c8c;
+  border-color: #365edc;
+  background: #16223a;
+  color: #ffffff;
   box-shadow: inset 3px 0 0 #0f62fe;
 }
 
 .linkUtility {
-  color: #64748b;
+  color: #8996ab;
 }
 
 .link:disabled {
   cursor: not-allowed;
-  color: rgba(82, 88, 102, 0.45);
+  color: rgba(170, 181, 199, 0.42);
   opacity: 0.72;
 }
 
@@ -81,8 +81,8 @@
   height: 16px;
   flex: 0 0 auto;
   object-fit: contain;
-  filter: none;
-  opacity: 0.74;
+  filter: brightness(0) invert(1);
+  opacity: 0.78;
   pointer-events: none;
 }
 
@@ -92,10 +92,10 @@
   gap: 7px;
   min-height: 30px;
   padding-inline: 7px;
-  border: 1px solid #e7ebf1;
+  border: 1px solid #263244;
   border-radius: 6px;
-  background: #f8fafc;
-  color: #525866;
+  background: #111827;
+  color: #c7d2e5;
   font-size: 11px;
 }
 

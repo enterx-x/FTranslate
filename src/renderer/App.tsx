@@ -823,6 +823,10 @@ export default function App() {
       }
       const visibleCandidates = candidates.slice(0, 8);
       setPdfFigureAssets(candidates);
+      rememberPaperTutorEvidence(evidencePaper?.id ?? activePaperId, {
+        figures: candidates,
+        pdfTextSnippets: buildPaperTutorTextSnippets(blocks)
+      });
 
       const figures = await extractPdfFigureAssets(pdf.data, candidates, {
         maxFigures: 8,

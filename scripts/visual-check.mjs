@@ -14,6 +14,7 @@ const electronMainEntry = path.join(root, 'dist-electron', 'main', 'main.js');
 const rendererIndex = path.join(root, 'dist-renderer', 'index.html');
 const usePackagedApp = process.env.VISUAL_CHECK_PACKAGED === '1';
 const visualArxivMockMode = process.env.PDF_TRANSLATION_READER_VISUAL_MOCK_ARXIV ?? '1';
+const requireNativeFigureExtraction = process.env.VISUAL_CHECK_REQUIRE_NATIVE_FIGURES === '1';
 const pdfPath =
   process.env.VISUAL_CHECK_PDF ??
   path.join('D:\\', 'GPT浏览器下载', '2604.15483v2.pdf');
@@ -917,6 +918,133 @@ async function runHomeScenario(client) {
     commandTexts: [...document.querySelectorAll('.research-command-strip button')].map((button) => button.textContent?.trim()),
     hasPaperTable: Boolean(document.querySelector('.paper-table')),
     hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+    adversarialLayout: (() => {
+      const rect = (item) => {
+        const box = item?.getBoundingClientRect();
+        return box
+          ? {
+              left: Math.round(box.left),
+              top: Math.round(box.top),
+              right: Math.round(box.right),
+              bottom: Math.round(box.bottom),
+              width: Math.round(box.width),
+              height: Math.round(box.height)
+            }
+          : null;
+      };
+      const isScrollable = (selector) => {
+        const item = document.querySelector(selector);
+        const style = item ? getComputedStyle(item) : null;
+        return Boolean(
+          item &&
+            item.scrollHeight > item.clientHeight + 3 &&
+            style &&
+            !['visible', 'clip'].includes(style.overflowY)
+        );
+      };
+      const overlaps = (left, right) =>
+        Boolean(
+          left &&
+            right &&
+            left.right > right.left + 2 &&
+            left.left < right.right - 2 &&
+            left.bottom > right.top + 2 &&
+            left.top < right.bottom - 2
+        );
+      const nestedVerticalScrollers = [
+        ['leftRail', '.research-workbench-rail'],
+        ['mainColumn', '.research-workbench-main'],
+        ['detailColumn', '.research-workbench-detail'],
+        ['pipelineList', '.research-pipeline-list']
+      ].filter(([, selector]) => isScrollable(selector)).map(([name]) => name);
+      const cardLikeElements = [
+        ...document.querySelectorAll(
+          [
+            '.research-kpi-list div',
+            '.research-recent-paper',
+            '.research-object-card',
+            '.research-pipeline-list li',
+            '.research-next-action',
+            '.research-risk-list article'
+          ].join(',')
+        )
+      ]
+        .map((item) => {
+          const style = getComputedStyle(item);
+          const radius = Number.parseFloat(style.borderTopLeftRadius) || 0;
+          const borderWidth = Number.parseFloat(style.borderTopWidth) || 0;
+          const background = style.backgroundColor;
+          const box = item.getBoundingClientRect();
+          return {
+            className: String(item.className),
+            radius,
+            borderWidth,
+            background,
+            width: Math.round(box.width),
+            height: Math.round(box.height),
+            text: (item.textContent ?? '').trim().slice(0, 80)
+          };
+        })
+        .filter(
+          (item) =>
+            item.radius > 4 &&
+            item.borderWidth > 0 &&
+            !['rgba(0, 0, 0, 0)', 'transparent'].includes(item.background)
+        );
+      const nextActionOverlaps = [...document.querySelectorAll('.research-next-action')]
+        .map((button) => ({
+          text: (button.textContent ?? '').trim(),
+          copy: rect(button.querySelector('span')),
+          action: rect(button.querySelector('em'))
+        }))
+        .filter((item) => overlaps(item.copy, item.action));
+      const recentTextOverlaps = [...document.querySelectorAll('.research-recent-paper')]
+        .map((button) => ({
+          text: (button.textContent ?? '').trim(),
+          title: rect(button.querySelector('span')),
+          meta: rect(button.querySelector('small'))
+        }))
+        .filter((item) => overlaps(item.title, item.meta));
+      const recentPanelExcessHeight = (() => {
+        const panel = document.querySelector('.research-workbench-rail .research-panel:nth-of-type(2)');
+        const rows = [...document.querySelectorAll('.research-recent-paper')];
+        if (!panel || rows.length === 0) {
+          return 0;
+        }
+        const panelBox = panel.getBoundingClientRect();
+        const contentBottom = Math.max(...rows.map((row) => row.getBoundingClientRect().bottom));
+        return Math.round(panelBox.bottom - contentBottom);
+      })();
+      return {
+        nestedVerticalScrollers,
+        pageVerticalOverflow: (() => {
+          const page = document.querySelector('.home-page.research-workbench-page');
+          return page ? page.scrollHeight > page.clientHeight + 3 : false;
+        })(),
+        pageScroll: (() => {
+          const page = document.querySelector('.home-page.research-workbench-page');
+          return page
+            ? {
+                scrollHeight: page.scrollHeight,
+                clientHeight: page.clientHeight,
+                offsetHeight: page.offsetHeight
+              }
+            : null;
+        })(),
+        cardLikeCount: cardLikeElements.length,
+        cardLikeElements: cardLikeElements.slice(0, 12),
+        nextActionOverlapCount: nextActionOverlaps.length,
+        nextActionOverlaps,
+        recentTextOverlapCount: recentTextOverlaps.length,
+        recentTextOverlaps,
+        recentPanelExcessHeight,
+        eyebrowColor: getComputedStyle(document.querySelector('.research-workbench-title .eyebrow') ?? document.body)
+          .color,
+        shellRect: rect(document.querySelector('.research-workbench-shell')),
+        detailRect: rect(document.querySelector('.research-workbench-detail')),
+        pipelineRect: rect(document.querySelector('.research-pipeline-list'))
+      };
+    })(),
     headerActions: [...document.querySelectorAll('.research-workbench-actions button')].map((button) => button.textContent?.trim()),
     markStyle: (() => {
       const mark = document.querySelector('.home-header-mark');
@@ -951,6 +1079,20 @@ async function runHomeScenario(client) {
     hub.hasHorizontalOverflow
   ) {
     throw new Error(`home: expected research workbench before entering a module, got ${JSON.stringify(hub)}`);
+  }
+  if (
+    hub.adversarialLayout.nestedVerticalScrollers.length > 0 ||
+    hub.adversarialLayout.pageVerticalOverflow ||
+    hub.adversarialLayout.cardLikeCount > 4 ||
+    hub.adversarialLayout.nextActionOverlapCount > 0 ||
+    hub.adversarialLayout.recentTextOverlapCount > 0 ||
+    hub.adversarialLayout.recentPanelExcessHeight > 160 ||
+    /128,\s*118,\s*255|99,\s*91,\s*255|purple/i.test(hub.adversarialLayout.eyebrowColor)
+  ) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'home-adversarial-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`home: adversarial visual review failed, got ${JSON.stringify(hub.adversarialLayout)}`);
   }
   if (
     hub.objectCards.length < 4 ||
@@ -1313,7 +1455,8 @@ async function runWholePdfReaderScenario(client) {
   await waitForExtractedPdfBlocks(client);
   await clickButtonByText(client, '提取 PDF 图表');
   let figureExtraction = null;
-  for (let attempt = 0; attempt < 240; attempt += 1) {
+  const figureExtractionAttempts = requireNativeFigureExtraction ? 240 : 30;
+  for (let attempt = 0; attempt < figureExtractionAttempts; attempt += 1) {
     figureExtraction = await evaluateJson(client, `() => {
       const assets = [...document.querySelectorAll('.pdf-figure-grid article')];
       const readyAssets = assets.filter((asset) => Boolean(asset.querySelector('img')));
@@ -1331,13 +1474,9 @@ async function runWholePdfReaderScenario(client) {
         hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
       };
     }`);
-    if (
-      figureExtraction.hasPanel &&
-      figureExtraction.assetCount >= 1 &&
-      figureExtraction.readyCount >= 1 &&
-      figureExtraction.nativeCount + figureExtraction.compositeCount >= 1 &&
-      !figureExtraction.hasHorizontalOverflow
-    ) {
+    const hasFigurePanelLayout = figureExtraction.hasPanel && figureExtraction.assetCount >= 1 && !figureExtraction.hasHorizontalOverflow;
+    const hasNativeFigure = figureExtraction.readyCount >= 1 && figureExtraction.nativeCount + figureExtraction.compositeCount >= 1;
+    if (hasFigurePanelLayout && (!requireNativeFigureExtraction || hasNativeFigure)) {
       break;
     }
     await wait(500);
@@ -1346,20 +1485,30 @@ async function runWholePdfReaderScenario(client) {
   if (
     !figureExtraction?.hasPanel ||
     figureExtraction.assetCount < 1 ||
-    figureExtraction.readyCount < 1 ||
-    figureExtraction.nativeCount + figureExtraction.compositeCount < 1 ||
-    figureExtraction.hasHorizontalOverflow
+    figureExtraction.hasHorizontalOverflow ||
+    (requireNativeFigureExtraction &&
+      (figureExtraction.readyCount < 1 || figureExtraction.nativeCount + figureExtraction.compositeCount < 1))
   ) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'whole-pdf-figures-failed.png'), Buffer.from(shot.data, 'base64'))
     );
-    throw new Error(`wholePdf: expected native PDF figure extraction before page-crop fallback, got ${JSON.stringify(figureExtraction)}`);
+    throw new Error(`wholePdf: expected PDF figure panel without layout overflow, got ${JSON.stringify(figureExtraction)}`);
   }
 
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'whole-pdf-figures.png'), Buffer.from(shot.data, 'base64'))
   );
-  return { wholePdf, initialPdfCenter, legacyPanels, parallelSidebar, narrowSidebar, wideSidebar, collapsedSidebar, figureExtraction };
+  return {
+    wholePdf,
+    initialPdfCenter,
+    legacyPanels,
+    parallelSidebar,
+    narrowSidebar,
+    wideSidebar,
+    collapsedSidebar,
+    figureExtraction,
+    requireNativeFigureExtraction
+  };
 }
 
 async function runPresentationScenario(client) {
@@ -1714,10 +1863,12 @@ async function runPaperTutorScenario(client) {
     before.hasHorizontalOverflow ||
     (before.chatRect?.width ?? 0) < 420 ||
     (before.paperRect?.width ?? 0) < 180 ||
-    before.figurePreviewRects.length < 1 ||
-    before.minFigurePreviewHeight < 168 ||
-    before.minFigureImageHeight < 132 ||
-    before.figurePreviewRects[0]?.height < 210 ||
+    (requireNativeFigureExtraction
+      ? before.figurePreviewRects.length < 1 ||
+        before.minFigurePreviewHeight < 168 ||
+        before.minFigureImageHeight < 132 ||
+        before.figurePreviewRects[0]?.height < 210
+      : before.figurePreviewRects.length < 1 && before.figureCaptionRects.length < 1) ||
     before.figureCaptionRects.some((rect) => rect.height > 58) ||
     before.nestedEvidenceScrollCount > 0 ||
     before.evidenceSectionOverlap
