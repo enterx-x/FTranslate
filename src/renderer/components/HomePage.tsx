@@ -17,6 +17,7 @@ interface HomePageProps {
   onNewProject: () => void;
   onOpenPaper: (paper: PaperRecord) => void;
   onOpenResearchSheet: (paper?: PaperRecord) => void;
+  onOpenExperimentMatrix: () => void;
   onOpenKnowledgeGraph: () => void;
   onOpenPresentationGenerator: () => void;
   knowledgeGraphStats: {
@@ -64,7 +65,14 @@ interface ResearchWorkspaceRisk {
 }
 
 interface ResearchWorkspaceNextAction {
-  key: 'import-paper' | 'continue-reading' | 'open-research-sheet' | 'open-graph' | 'open-presentation' | 'open-library';
+  key:
+    | 'import-paper'
+    | 'continue-reading'
+    | 'open-research-sheet'
+    | 'open-experiment-matrix'
+    | 'open-graph'
+    | 'open-presentation'
+    | 'open-library';
   label: string;
   detail: string;
   actionLabel: string;
@@ -334,7 +342,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
           metricLabel: notesObject.label,
           metricValue: String(notedPaperCount),
           status: experimentStage.status,
-          actionKey: 'open-research-sheet',
+          actionKey: 'open-experiment-matrix',
           actionLabel: '设计实验'
         }
       ]
@@ -401,6 +409,9 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
         return;
       case 'open-research-sheet':
         props.onOpenResearchSheet(latestPaper);
+        return;
+      case 'open-experiment-matrix':
+        props.onOpenExperimentMatrix();
         return;
       case 'open-graph':
         props.onOpenKnowledgeGraph();
@@ -541,7 +552,12 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                         className={`research-workflow-card status-${toStatusClassName(card.status)}`}
                         onClick={() => runWorkspaceAction(card.actionKey)}
                       >
-                        <span className="research-workflow-card-kicker">{card.metricLabel}</span>
+                        <span className="research-workflow-card-top">
+                          <span className="research-workflow-card-kicker">{card.metricLabel}</span>
+                          <span className={`research-workflow-card-state status-${toStatusClassName(card.status)}`}>
+                            {card.status}
+                          </span>
+                        </span>
                         <strong>{card.label}</strong>
                         <p>{card.detail}</p>
                         <span className="research-workflow-card-foot">
@@ -576,74 +592,76 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
           </section>
 
           <aside className="research-workbench-detail research-workflow-inspector" aria-label="当前焦点和决策">
-            <section className="research-panel research-inspector-focus">
-              <div className="research-panel-heading">
-                <span className="eyebrow">Current Focus</span>
-                <h2>{inspectorFocus.title}</h2>
-              </div>
-              <div className="research-inspector-body">
-                <span className={`research-inspector-status status-${toStatusClassName(inspectorFocus.stage.status)}`}>
-                  {inspectorFocus.stage.status}
-                </span>
-                <p>{inspectorFocus.stage.detail}</p>
-                <dl className="research-inspector-metrics">
-                  <div>
-                    <dt>{papersObject.label}</dt>
-                    <dd>{papersObject.value}</dd>
-                  </div>
-                  <div>
-                    <dt>{evidenceObject.label}</dt>
-                    <dd>{evidenceObject.value}</dd>
-                  </div>
-                  <div>
-                    <dt>{notesObject.label}</dt>
-                    <dd>{notesObject.value}</dd>
-                  </div>
-                </dl>
-                <button type="button" className="secondary-button button-with-icon" onClick={() => runWorkspaceAction(inspectorFocus.cards[0].actionKey)}>
-                  <img className="button-icon" src={inspectorFocus.icon} alt="" />
-                  <span>{inspectorFocus.cards[0].actionLabel}</span>
-                </button>
-              </div>
-            </section>
-
-            <section className="research-panel research-next-actions">
-              <div className="research-panel-heading">
-                <span className="eyebrow">Next Actions</span>
-                <h2>下一步</h2>
-              </div>
-              <div className="research-action-stack">
-                {workspaceOverview.nextActions.map((action) => (
-                  <button
-                    key={action.key}
-                    type="button"
-                    className="research-next-action"
-                    onClick={() => runWorkspaceAction(action.key)}
-                  >
-                    <span>
-                      <strong>{action.label}</strong>
-                      <small>{action.detail}</small>
-                    </span>
-                    <em>{action.actionLabel}</em>
+            <section className="research-panel research-inspector-shell">
+              <section className="research-inspector-section research-inspector-focus">
+                <div className="research-panel-heading">
+                  <span className="eyebrow">Current Focus</span>
+                  <h2>{inspectorFocus.title}</h2>
+                </div>
+                <div className="research-inspector-body">
+                  <span className={`research-inspector-status status-${toStatusClassName(inspectorFocus.stage.status)}`}>
+                    {inspectorFocus.stage.status}
+                  </span>
+                  <p>{inspectorFocus.stage.detail}</p>
+                  <dl className="research-inspector-metrics">
+                    <div>
+                      <dt>{papersObject.label}</dt>
+                      <dd>{papersObject.value}</dd>
+                    </div>
+                    <div>
+                      <dt>{evidenceObject.label}</dt>
+                      <dd>{evidenceObject.value}</dd>
+                    </div>
+                    <div>
+                      <dt>{notesObject.label}</dt>
+                      <dd>{notesObject.value}</dd>
+                    </div>
+                  </dl>
+                  <button type="button" className="secondary-button button-with-icon" onClick={() => runWorkspaceAction(inspectorFocus.cards[0].actionKey)}>
+                    <img className="button-icon" src={inspectorFocus.icon} alt="" />
+                    <span>{inspectorFocus.cards[0].actionLabel}</span>
                   </button>
-                ))}
-              </div>
-            </section>
+                </div>
+              </section>
 
-            <section className="research-panel research-risk-panel">
-              <div className="research-panel-heading">
-                <span className="eyebrow">Decision Queue</span>
-                <h2>风险与缺口</h2>
-              </div>
-              <div className="research-risk-list">
-                {workspaceOverview.risks.map((risk) => (
-                  <article key={risk.key}>
-                    <span>{risk.actionLabel}</span>
-                    <strong>{risk.label}</strong>
-                    <p>{risk.detail}</p>
-                  </article>
-                ))}
-              </div>
+              <section className="research-inspector-section research-next-actions">
+                <div className="research-panel-heading">
+                  <span className="eyebrow">Next Actions</span>
+                  <h2>下一步</h2>
+                </div>
+                <div className="research-action-stack">
+                  {workspaceOverview.nextActions.map((action) => (
+                    <button
+                      key={action.key}
+                      type="button"
+                      className="research-next-action"
+                      onClick={() => runWorkspaceAction(action.key)}
+                    >
+                      <span>
+                        <strong>{action.label}</strong>
+                        <small>{action.detail}</small>
+                      </span>
+                      <em>{action.actionLabel}</em>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="research-inspector-section research-risk-panel">
+                <div className="research-panel-heading">
+                  <span className="eyebrow">Decision Queue</span>
+                  <h2>风险与缺口</h2>
+                </div>
+                <div className="research-risk-list">
+                  {workspaceOverview.risks.map((risk) => (
+                    <article key={risk.key}>
+                      <span>{risk.actionLabel}</span>
+                      <strong>{risk.label}</strong>
+                      <p>{risk.detail}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
             </section>
           </aside>
         </section>

@@ -30,9 +30,9 @@ FTranslate 的长期方向是本地化 AI 科创研发工作台，而不是单�
 
 当前第一阶段已把首页和左侧导航从“PDF 翻译器入口集合”迁移为“本地 AI 科创研发项目空间”：
 
-- 左侧导航优先展示“项目空间 / 实验矩阵 / 证据图谱 / 组会 PPT”，旧的论文库、PDF 阅读、论文导师、AI 助手和设置仍保留为兼容入口。
+- 左侧导航优先展示“项目空间 / 实验矩阵 / 证据图谱 / 组会 PPT”，旧的论文库、研究表格、PDF 阅读、论文导师、AI 助手和设置仍保留为兼容入口。
 - 首页展示当前本地项目、论文对象、证据数量、双语 PDF、研发闭环阶段、下一步动作和风险队列。
-- 首页视觉已改为“研发流程看板 + 右侧 Inspector”：中心只保留 4 张真实流程对象卡，指标、动作和风险使用顶部 meta、紧凑列表和状态标签表达，避免指标卡、动作卡、风险卡满屏堆叠。
+- 首页视觉已改为“研发流程看板 + 右侧 Inspector”：中心只保留 4 张真实流程对象卡，右侧使用单一连续 Inspector；状态色采用低饱和灰绿、暖灰和蓝灰，避免亮蓝/亮绿/亮黄塑料感。
 - 新增项目空间本地数据模型，存储键为 `pdfTranslationReader:researchProjects`，会自动把当前论文库记录合并到默认本地 AI 研发项目中。
 - 旧论文库、研究表格、知识图谱、PDF 阅读和 PPT 生成数据仍沿用原有 localStorage 与本地文件结构，不做破坏性迁移。
 - 本次未引入 GSAP；当前阶段以信息架构、密度和状态表达为主，CSS 过渡已足够，避免增加依赖和 Windows 打包风险。
@@ -76,9 +76,9 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 首页采用浅色高密度研发工作台，当前布局是“项目概览 + 研发流程看板 + Inspector”，不是入口卡片集合。主要区域包括：
 
 - 左侧：当前本地项目、项目状态、论文 / 证据 / 双语 PDF 计数和最近论文；
-- 中间：Workflow Board 以 2x2 流程列展示 Paper-to-Method、Paper-to-Code、实验矩阵和 Runtime Center，每列只保留一张可执行对象卡；
-- 右侧：Current Focus、Next Actions 和 Decision Queue，以紧凑 Inspector 承载当前焦点、下一步动作和风险缺口；
-- 底部/导航：实验矩阵、证据图谱、组会 PPT、论文库、PDF 阅读、论文导师、AI 助手和设置等兼容入口。
+- 中间：Workflow Board 以 2x2 流程列展示 Paper-to-Method、Paper-to-Code、实验矩阵和 Runtime Center，每列只保留一张可执行对象卡，并用低饱和状态线和 badge 表达阶段；
+- 右侧：Current Focus、Next Actions 和 Decision Queue 统一放入一个连续 Inspector，避免三张右侧卡片继续堆叠；
+- 底部/导航：实验矩阵、证据图谱、组会 PPT、论文库、研究表格、PDF 阅读、论文导师、AI 助手和设置等兼容入口。
 
 ### Paper-to-Method 方法卡
 
@@ -97,16 +97,18 @@ Paper-to-Method 是阶段 2 的核心研发对象，不是参赛材料生成器�
 
 实验矩阵不是把现有研究表格改名，也不是覆盖 Univer 自由表格。它是独立的结构化实验设计视图，用来把方法卡中的证据字段转换成可执行实验行。
 
-当前已落地本地实验矩阵数据核心：
+当前已落地本地实验矩阵数据核心和独立页面：
 
 - 新增 `src/renderer/lib/experimentMatrix.ts`，从 `MethodCard` 派生 baseline / proposed / ablation 三类实验行；
 - 实验矩阵列覆盖 paper、group、hypothesis、baseline、proposed method、ablation、controlled variables、seeds、metrics、expected result、status 和 evidence；
 - `buildExperimentMatrixWorkbookFromMethodCards` 会生成独立 workbook，sheet 名为 `实验矩阵`，不会修改已有研究表格数据；
 - 只从已绑定 evidence 的方法卡字段生成实验行，避免凭空发明实验；
-- 当前默认状态为 `planned`，后续 UI 中需要用户确认后再写回项目空间或导出；
+- 当前默认状态为 `planned`，独立页面可把行状态切换为 planned / running / blocked / done；
 - 新增 `pdfTranslationReader:experimentMatrices` 持久化键，按 projectId 保存用户确认和编辑后的实验矩阵；
 - 提供安全合并逻辑，重新从方法卡生成时不会静默覆盖用户已编辑行；
-- 提供 Markdown 导出和 `ResearchWorkbook` workbook 导出核心，后续 UI 可直接调用。
+- 侧栏“实验矩阵”进入独立结构化页面，包含项目摘要、实验组 / 状态 / 关键词筛选、高密度表格、右侧实验详情和证据定位；
+- 页面支持复制 Markdown；`ResearchWorkbook` workbook 导出核心已存在，Excel 文件导出入口后续再接；
+- 侧栏“研究表格”保留 Univer 自由表格，不再和实验矩阵混用。
 
 研究表格继续作为自由整理和人工编辑区域；实验矩阵作为结构化的“实验设计层”，二者后续可以互相跳转，但不能互相替代。
 
@@ -444,9 +446,9 @@ npm run visual:check
 .tmp-visual-check/
 ```
 
-当前视觉检查会覆盖首页、论文库、研究表格、PDF 阅读、组会 PPT、AI 问答、AI 助手、arXiv 检索和设置页。arXiv 检索会检查三列 / 双列 / 单列布局、列数持久化、顶部高级筛选密度、空结果备选论文库紧凑状态、右侧详情面板、分页和横向溢出；AI 问答会检查独立页面、会话窗口入口和 ChatGPT 式布局。失败时会保留对应截图，便于继续定位布局或渲染问题。
+当前视觉检查会覆盖首页、论文库、实验矩阵、研究表格、PDF 阅读、组会 PPT、AI 问答、AI 助手、arXiv 检索和设置页。实验矩阵会检查独立页面、侧栏高亮、摘要、筛选、表格、右侧详情、证据面板、Markdown 操作和横向溢出；arXiv 检索会检查三列 / 双列 / 单列布局、列数持久化、顶部高级筛选密度、空结果备选论文库紧凑状态、右侧详情面板、分页和横向溢出；AI 问答会检查独立页面、会话窗口入口和 ChatGPT 式布局。失败时会保留对应截图，便于继续定位布局或渲染问题。
 
-首页视觉检查额外执行对抗式审查：检查 Workflow Board / Inspector 是否存在、横向/纵向溢出、内部滚动条、流程对象卡裁切、最近论文文字重叠、下一步动作按钮遮挡、风险行裁切、紫色品牌色回潮，以及指标/行动/风险是否重新变成卡片式堆叠。
+首页视觉检查额外执行对抗式审查：检查 Workflow Board / 单一 Inspector 是否存在、横向/纵向溢出、内部滚动条、流程对象卡裁切、流程卡标题/说明/动作重叠、状态 badge 是否回到高饱和亮蓝/亮绿/亮黄、最近论文文字重叠、下一步动作按钮遮挡、风险行裁切、紫色品牌色回潮，以及指标/行动/风险是否重新变成卡片式堆叠。
 
 默认视觉检查聚焦 UI 回归和证据面板布局：PDF 图表场景允许 caption-only 或页面裁剪结果通过，避免把耗时的 native PDF 图像提取绑定到每次 UI 检查。需要专项验证 native 图像提取时运行：
 
@@ -474,6 +476,7 @@ npm run visual:check
 - arXiv 三列 / 双列 / 单列布局的卡片宽度、标题高度、分页高度和右侧详情栏宽度；
 - arXiv 备选论文库是否被结果卡片遮挡，以及是否使用会盖住卡片的原生长 `title` tooltip；
 - 研究表格顶部工具区高度、命令栏溢出和表格主体可用高度；
+- 实验矩阵表格横向滚动是否被限制在表格 viewport，右侧详情是否和证据面板重叠；
 - 设置页默认“通用设置”是否真的显示表单控件。
 
 ## 架构边界
@@ -502,6 +505,7 @@ src/
     App.tsx                 顶层视图路由、Provider 组合和页面布局
     components/
       HomePage.tsx          工作台首页和论文库
+      ExperimentMatrixPage.tsx 独立实验矩阵页面
       PdfViewer.tsx         PDF.js 阅读器
       ResearchSheetPage.tsx 独立研究表格
       AiAssistantPage.tsx   AI 助手
@@ -523,6 +527,7 @@ src/
     hooks/
       usePdfSession.ts      当前 PDF、页码、缩放和视图模式
       usePaperLibrary.ts    论文库 CRUD 和 localStorage 同步
+      useExperimentMatrix.ts 实验矩阵项目级持久化和行状态更新
       useResearchWorkbook.ts 研究表格、绑定和导入导出状态
       useAiTranslation.ts   段落翻译、AI cache 和批量翻译状态
       usePdfTranslation.ts  双语 PDF 生成进度和 sidecar 状态
@@ -537,6 +542,7 @@ src/
       presentationPptx.ts    组会 PPTX 版式计划与 PptxGenJS 导出
       methodCards.ts         Paper-to-Method 方法卡、证据抽取和本地序列化
       experimentMatrix.ts    从方法卡派生 baseline / proposed / ablation 实验矩阵
+      experimentMatrixView.ts 实验矩阵筛选、摘要和选中行视图逻辑
       markdownDocument.ts   安全文档渲染
       paperTutor.ts         论文导师上下文、证据和追问逻辑
       papers.ts             论文库记录

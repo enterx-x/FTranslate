@@ -184,18 +184,34 @@ async function evaluateJson(client, expression) {
 }
 
 async function waitForAppReady(client) {
+  let lastSnapshot = null;
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => ({
-      ready: Boolean(document.querySelector('.home-page, .split-layout, .research-sheet-page, .ai-assistant-page, .paper-tutor-page, .knowledge-graph-page, .presentation-page, .arxiv-page, .settings-page')),
-      text: document.body.textContent ?? ''
+      ready: Boolean(document.querySelector('.home-page, .split-layout, .experiment-matrix-page, .research-sheet-page, .ai-assistant-page, .paper-tutor-page, .knowledge-graph-page, .presentation-page, .arxiv-page, .settings-page')),
+      activeSidebar: document.querySelector('.app-sidebar-link.active')?.getAttribute('data-sidebar-section') ?? '',
+      knownViews: {
+        home: Boolean(document.querySelector('.home-page')),
+        reader: Boolean(document.querySelector('.split-layout')),
+        experimentMatrix: Boolean(document.querySelector('.experiment-matrix-page')),
+        researchSheet: Boolean(document.querySelector('.research-sheet-page')),
+        aiAssistant: Boolean(document.querySelector('.ai-assistant-page')),
+        paperTutor: Boolean(document.querySelector('.paper-tutor-page')),
+        knowledgeGraph: Boolean(document.querySelector('.knowledge-graph-page')),
+        presentation: Boolean(document.querySelector('.presentation-page')),
+        arxiv: Boolean(document.querySelector('.arxiv-page')),
+        settings: Boolean(document.querySelector('.settings-page')),
+        settingsLoading: Boolean(document.querySelector('.settings-loading'))
+      },
+      text: (document.body.textContent ?? '').slice(0, 1200)
     })`);
+    lastSnapshot = snapshot;
     if (snapshot.ready) {
       return;
     }
     await wait(250);
   }
 
-  throw new Error('App did not render a known view.');
+  throw new Error(`App did not render a known view: ${JSON.stringify(lastSnapshot)}`);
 }
 
 async function waitForResearchSheetCanvas(client) {
@@ -892,10 +908,40 @@ async function loadPaperRecord(client, translationPath, extraPaperFields = {}) {
     lastPage: 1,
     ...extraPaperFields
   };
+  const experimentMatrixState = [
+    {
+      projectId: 'local-ai-rd-workspace',
+      rows: [
+        {
+          id: 'visual-matrix-row',
+          projectId: 'local-ai-rd-workspace',
+          paperId: paper.id,
+          methodCardId: 'visual-method-card',
+          group: 'proposed',
+          paper: paper.chineseTitle,
+          hypothesis: '验证证据绑定的 proposed method 是否优于 baseline。',
+          baseline: 'PPO baseline',
+          proposed: 'CBF safety layer + physics-informed reward',
+          ablation: 'without CBF safety layer',
+          controlledVariables: '保持 dynamic obstacles、baseline、metrics 和 seeds 不变。',
+          seeds: '1, 2, 3',
+          metrics: 'success rate, collision rate, trajectory smoothness',
+          expectedResult: '如果安全约束有效，应降低 collision rate 并保持 success rate。',
+          status: 'planned',
+          evidenceSourceIds: ['visual-evidence-method', 'visual-evidence-metric'],
+          evidenceLocators: ['p. 4 Method', 'p. 7 Results']
+        }
+      ],
+      selectedRowId: 'visual-matrix-row',
+      updatedAt: new Date().toISOString(),
+      version: 1
+    }
+  ];
 
   await client.send('Runtime.evaluate', {
     expression: `
       localStorage.setItem('pdfTranslationReader:paperLibrary', ${JSON.stringify(JSON.stringify([paper]))});
+      localStorage.setItem('pdfTranslationReader:experimentMatrices', ${JSON.stringify(JSON.stringify(experimentMatrixState))});
       localStorage.removeItem('pdfTranslationReader:researchWorkbook');
       localStorage.removeItem('pdfTranslationReader:researchSheetLinks');
       location.reload();
@@ -915,6 +961,8 @@ async function runHomeScenario(client) {
     hasLegacyPipelinePanel: Boolean(document.querySelector('.research-pipeline-panel')),
     workflowColumns: [...document.querySelectorAll('.research-workflow-column')].map((item) => item.textContent?.trim()),
     workflowCards: [...document.querySelectorAll('.research-workflow-card')].map((item) => item.textContent?.trim()),
+    workflowInspectorPanelCount: document.querySelectorAll('.research-workflow-inspector > .research-panel').length,
+    hasInspectorShell: Boolean(document.querySelector('.research-inspector-shell')),
     nextActions: [...document.querySelectorAll('.research-next-action')].map((item) => item.textContent?.trim()),
     riskItems: [...document.querySelectorAll('.research-risk-list article')].map((item) => item.textContent?.trim()),
     commandTexts: [...document.querySelectorAll('.research-command-strip button')].map((button) => button.textContent?.trim()),
@@ -1005,6 +1053,14 @@ async function runHomeScenario(client) {
           clientHeight: item.clientHeight
         };
       });
+      const workflowCardTextOverlaps = [...document.querySelectorAll('.research-workflow-card')]
+        .map((card) => ({
+          text: (card.textContent ?? '').trim().slice(0, 100),
+          title: rect(card.querySelector(':scope > strong')),
+          detail: rect(card.querySelector(':scope > p')),
+          foot: rect(card.querySelector('.research-workflow-card-foot'))
+        }))
+        .filter((item) => overlaps(item.title, item.detail) || overlaps(item.detail, item.foot));
       const nextActionOverlaps = [...document.querySelectorAll('.research-next-action')]
         .map((button) => ({
           text: (button.textContent ?? '').trim(),
@@ -1073,12 +1129,31 @@ async function runHomeScenario(client) {
           (item) => item.scrollWidth > item.clientWidth + 3 || item.scrollHeight > item.clientHeight + 3
         ).length,
         workflowCardRects,
+        workflowCardTextOverlapCount: workflowCardTextOverlaps.length,
+        workflowCardTextOverlaps,
         nextActionOverlapCount: nextActionOverlaps.length,
         nextActionOverlaps,
         recentTextOverlapCount: recentTextOverlaps.length,
         recentTextOverlaps,
         clippedRiskCount: clippedRiskItems.length,
         clippedRiskItems,
+        statusBadgeBackgrounds: [
+          ...document.querySelectorAll(
+            [
+              '.research-workflow-column-head em',
+              '.research-workflow-card-state',
+              '.research-inspector-status'
+            ].join(',')
+          )
+        ].map((item) => {
+          const background = getComputedStyle(item).backgroundColor;
+          const channels = background.match(/\\d+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+          return {
+            text: (item.textContent ?? '').trim(),
+            background,
+            channelDelta: Math.max(...channels) - Math.min(...channels)
+          };
+        }),
         recentPanelExcessHeight,
         eyebrowColor: getComputedStyle(document.querySelector('.research-workbench-title .eyebrow') ?? document.body)
           .color,
@@ -1131,10 +1206,14 @@ async function runHomeScenario(client) {
     hub.adversarialLayout.workflowBoardHorizontalOverflow ||
     hub.adversarialLayout.workflowMinCardWidth < 180 ||
     hub.adversarialLayout.workflowCardOverflowCount > 0 ||
+    hub.adversarialLayout.workflowCardTextOverlapCount > 0 ||
     hub.adversarialLayout.nextActionOverlapCount > 0 ||
     hub.adversarialLayout.recentTextOverlapCount > 0 ||
     hub.adversarialLayout.clippedRiskCount > 0 ||
     hub.adversarialLayout.recentPanelExcessHeight > 160 ||
+    hub.workflowInspectorPanelCount !== 1 ||
+    !hub.hasInspectorShell ||
+    hub.adversarialLayout.statusBadgeBackgrounds.some((item) => item.channelDelta > 24) ||
     /128,\s*118,\s*255|99,\s*91,\s*255|purple/i.test(hub.adversarialLayout.eyebrowColor)
   ) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
@@ -1221,6 +1300,139 @@ async function runHomeScenario(client) {
 
   await clickButtonByText(client, '返回主页');
   return { hub, library };
+}
+
+async function runExperimentMatrixScenario(client) {
+  await clickSidebarSection(client, 'experimentMatrix');
+  await waitForAppReady(client);
+  await wait(700);
+
+  const snapshot = await evaluateJson(client, `() => {
+    const page = document.querySelector('.experiment-matrix-page');
+    const header = document.querySelector('.experiment-matrix-header');
+    const summary = document.querySelector('.experiment-matrix-summary');
+    const toolbar = document.querySelector('.experiment-matrix-toolbar');
+    const tableWrap = document.querySelector('.experiment-matrix-table-wrap');
+    const table = document.querySelector('.experiment-matrix-table');
+    const detail = document.querySelector('.experiment-matrix-detail');
+    const activeSidebar = document.querySelector('.app-sidebar-link.active');
+    const pageRect = page?.getBoundingClientRect();
+    const tableWrapRect = tableWrap?.getBoundingClientRect();
+    const detailRect = detail?.getBoundingClientRect();
+    const channelDelta = (background) => {
+      const channels = background.match(/\\d+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+      return Math.max(...channels) - Math.min(...channels);
+    };
+    const actionButtons = [...document.querySelectorAll('.experiment-matrix-actions button')].map((button) => {
+      const rect = button.getBoundingClientRect();
+      const background = window.getComputedStyle(button).backgroundColor;
+      return {
+        text: (button.textContent ?? '').trim(),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        scrollWidth: button.scrollWidth,
+        clientWidth: button.clientWidth,
+        wraps: button.scrollHeight > button.clientHeight + 3,
+        background,
+        channelDelta: channelDelta(background),
+        isPrimary: button.classList.contains('primary-button')
+      };
+    });
+    const experimentBadgeBackgrounds = [...document.querySelectorAll('.experiment-badge')].map((badge) => {
+      const background = window.getComputedStyle(badge).backgroundColor;
+      return {
+        text: (badge.textContent ?? '').trim(),
+        background,
+        channelDelta: channelDelta(background)
+      };
+    });
+    return {
+      hasPage: Boolean(page && header && summary && toolbar && tableWrap && table && detail),
+      activeSidebar: activeSidebar?.getAttribute('data-sidebar-section') ?? '',
+      titleText: document.querySelector('.experiment-matrix-title')?.textContent ?? '',
+      summaryText: summary?.textContent ?? '',
+      rowCount: document.querySelectorAll('.experiment-matrix-table tbody tr').length,
+      detailText: detail?.textContent ?? '',
+      hasStatusActions: document.querySelectorAll('.experiment-detail-status button').length >= 4,
+      hasEvidencePanel: Boolean(document.querySelector('.experiment-evidence-panel')),
+      hasResearchSheetButton: actionButtons.some((button) => /研究表格/.test(button.text)),
+      hasMarkdownButton: actionButtons.some((button) => /Markdown/.test(button.text)),
+      actionButtons,
+      experimentBadgeBackgrounds,
+      tableWrapScrollbarColor: tableWrap ? window.getComputedStyle(tableWrap).scrollbarColor : '',
+      hasDocumentHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+      hasPageHorizontalOverflow: page ? page.scrollWidth > page.clientWidth + 3 : true,
+      tableOverflowScoped: tableWrap ? tableWrap.scrollWidth >= tableWrap.clientWidth : false,
+      tableWrapRect: tableWrapRect
+        ? {
+            left: Math.round(tableWrapRect.left),
+            right: Math.round(tableWrapRect.right),
+            width: Math.round(tableWrapRect.width),
+            height: Math.round(tableWrapRect.height)
+          }
+        : null,
+      detailRect: detailRect
+        ? {
+            left: Math.round(detailRect.left),
+            right: Math.round(detailRect.right),
+            width: Math.round(detailRect.width),
+            height: Math.round(detailRect.height)
+          }
+        : null,
+      pageRect: pageRect
+        ? {
+            left: Math.round(pageRect.left),
+            right: Math.round(pageRect.right),
+            width: Math.round(pageRect.width),
+            height: Math.round(pageRect.height)
+          }
+        : null
+    };
+  }`);
+
+  if (
+    !snapshot.hasPage ||
+    snapshot.activeSidebar !== 'experimentMatrix' ||
+    snapshot.rowCount < 1 ||
+    !/独立于研究表格/.test(snapshot.titleText) ||
+    !/证据覆盖/.test(snapshot.summaryText) ||
+    !/CBF safety layer/.test(snapshot.detailText) ||
+    !snapshot.hasStatusActions ||
+    !snapshot.hasEvidencePanel ||
+    !snapshot.hasResearchSheetButton ||
+    !snapshot.hasMarkdownButton ||
+    snapshot.hasDocumentHorizontalOverflow ||
+    snapshot.hasPageHorizontalOverflow
+  ) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'experiment-matrix-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`experimentMatrix: expected independent dense matrix view, got ${JSON.stringify(snapshot)}`);
+  }
+
+  const brokenButton = snapshot.actionButtons.find((button) => button.wraps || button.scrollWidth > button.clientWidth + 3);
+  if (brokenButton) {
+    throw new Error(`experimentMatrix: header action text wraps or clips, got ${JSON.stringify({ brokenButton, snapshot })}`);
+  }
+
+  const plasticButton = snapshot.actionButtons.find((button) => button.isPrimary && button.channelDelta > 40);
+  const plasticBadge = snapshot.experimentBadgeBackgrounds.find((badge) => badge.channelDelta > 24);
+  if (plasticButton || plasticBadge) {
+    throw new Error(
+      `experimentMatrix: high-saturation button or badge found, got ${JSON.stringify({
+        plasticButton,
+        plasticBadge,
+        actionButtons: snapshot.actionButtons,
+        experimentBadgeBackgrounds: snapshot.experimentBadgeBackgrounds
+      })}`
+    );
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'experiment-matrix.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  return snapshot;
 }
 
 async function runResearchSheetScenario(client) {
@@ -2434,6 +2646,7 @@ async function main() {
     await waitForAppReady(client);
 
     const home = await runHomeScenario(client);
+    const experimentMatrix = await runExperimentMatrixScenario(client);
     const researchSheet = await runResearchSheetScenario(client);
     const wholePdfReader = await runWholePdfReaderScenario(client);
     const presentation = await runPresentationScenario(client);
@@ -2444,7 +2657,7 @@ async function main() {
     client.close();
     console.log(
       JSON.stringify(
-        { pdfPath, home, researchSheet, wholePdfReader, presentation, aiAssistant, paperTutor, arxivSearch, settings, outputDir },
+        { pdfPath, home, experimentMatrix, researchSheet, wholePdfReader, presentation, aiAssistant, paperTutor, arxivSearch, settings, outputDir },
         null,
         2
       )

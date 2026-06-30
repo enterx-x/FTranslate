@@ -113,6 +113,7 @@ import {
   readLegacyPapersWithSheetCells,
   useResearchWorkbook
 } from './hooks/useResearchWorkbook';
+import { useExperimentMatrix } from './hooks/useExperimentMatrix';
 import { usePdfTranslation } from './hooks/usePdfTranslation';
 import { useStatusQueue } from './hooks/useStatusQueue';
 import { usePdfSession, type PdfState } from './hooks/usePdfSession';
@@ -132,6 +133,10 @@ type ReaderMode = 'manual' | 'ai';
 const ResearchSheetPage = lazy(async () => {
   const module = await import('./components/ResearchSheetPage');
   return { default: module.ResearchSheetPage };
+});
+const ExperimentMatrixPage = lazy(async () => {
+  const module = await import('./components/ExperimentMatrixPage');
+  return { default: module.ExperimentMatrixPage };
 });
 const AiAssistantPage = lazy(async () => {
   const module = await import('./components/AiAssistantPage');
@@ -319,6 +324,7 @@ export default function App() {
     () => buildProjectWorkspaceSnapshot(researchProjects, paperLibrary),
     [paperLibrary, researchProjects]
   );
+  const experimentMatrix = useExperimentMatrix(projectWorkspaceSnapshot.activeProject.id);
   const appSettings = useAppSettings(view);
 
   useRecentProject({
@@ -1808,6 +1814,10 @@ export default function App() {
     setView('paperTutor');
   }
 
+  function openExperimentMatrix(): void {
+    setView('experimentMatrix');
+  }
+
   function openResearchSheetFromSidebar(): void {
     void handleOpenResearchSheet();
   }
@@ -1884,6 +1894,10 @@ export default function App() {
   }, []);
 
   function getSidebarActiveSection(): AppSidebarSection {
+    if (view === 'experimentMatrix') {
+      return 'experimentMatrix';
+    }
+
     if (view === 'researchSheet') {
       return 'researchSheet';
     }
@@ -2040,6 +2054,7 @@ export default function App() {
       <AppSidebar
         activeSection={activeSidebarSection}
         onOpenWorkspace={openWorkspace}
+        onOpenExperimentMatrix={openExperimentMatrix}
         onOpenLibrary={openLibrary}
         onOpenResearchSheet={openResearchSheetFromSidebar}
         onOpenKnowledgeGraph={openKnowledgeGraph}
@@ -2065,6 +2080,7 @@ export default function App() {
             onNewProject={handleNewPdfTranslationProject}
             onOpenPaper={handleOpenPaper}
             onOpenResearchSheet={handleOpenResearchSheet}
+            onOpenExperimentMatrix={openExperimentMatrix}
             onOpenKnowledgeGraph={openKnowledgeGraph}
             onOpenPresentationGenerator={openPresentationGenerator}
             knowledgeGraphStats={knowledgeGraphSummary}
@@ -2072,6 +2088,31 @@ export default function App() {
             onUpdatePaper={handleUpdatePaper}
             onRemovePaper={handleRemovePaper}
           />
+          <ConnectedStatusBar />
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'experimentMatrix') {
+    return renderWithContexts(
+      <div className="app-shell desktop-shell experiment-matrix-shell">
+        {renderSidebar()}
+        <div className={getAppMainClassName()}>
+          <ErrorBoundary fallback={<main className="experiment-matrix-loading">实验矩阵加载失败，请返回后重试。</main>}>
+            <Suspense fallback={<main className="experiment-matrix-loading">正在加载实验矩阵...</main>}>
+              <ExperimentMatrixPage
+                projectName={projectWorkspaceSnapshot.activeProject.name}
+                paperCount={projectWorkspaceSnapshot.linkedPaperCount}
+                matrixState={experimentMatrix.matrixState}
+                onBackHome={openWorkspace}
+                onOpenResearchSheet={() => void handleOpenResearchSheet()}
+                onSelectRow={experimentMatrix.selectRow}
+                onPatchRowStatus={(rowId, status) => experimentMatrix.patchRow(rowId, { status })}
+                onStatusMessage={setStatusMessage}
+              />
+            </Suspense>
+          </ErrorBoundary>
           <ConnectedStatusBar />
         </div>
       </div>

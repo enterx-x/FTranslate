@@ -12,6 +12,7 @@ import styles from '../styles/components/AppSidebar.module.css';
 
 export type AppSidebarSection =
   | 'workspace'
+  | 'experimentMatrix'
   | 'library'
   | 'researchSheet'
   | 'knowledgeGraph'
@@ -25,6 +26,7 @@ export type AppSidebarSection =
 export interface AppSidebarProps {
   activeSection: AppSidebarSection;
   onOpenWorkspace: () => void;
+  onOpenExperimentMatrix: () => void;
   onOpenLibrary: () => void;
   onOpenResearchSheet: () => void;
   onOpenKnowledgeGraph: () => void;
@@ -45,11 +47,12 @@ export interface AppSidebarNavigationItem {
 
 const navigationItems: AppSidebarNavigationItem[] = [
   { section: 'workspace', label: '项目空间', icon: workspaceIcon },
-  { section: 'researchSheet', label: '实验矩阵', icon: researchSheetIcon },
+  { section: 'experimentMatrix', label: '实验矩阵', icon: researchSheetIcon },
   { section: 'knowledgeGraph', label: '证据图谱', icon: analysisIcon },
   { section: 'presentation', label: '组会 PPT', icon: translateIcon },
   { section: 'arxiv', label: 'arXiv 检索', icon: searchIcon },
   { section: 'library', label: '论文库', icon: libraryIcon },
+  { section: 'researchSheet', label: '研究表格', icon: researchSheetIcon },
   { section: 'reader', label: 'PDF 阅读', icon: pdfReaderIcon },
   { section: 'paperTutor', label: '论文导师', icon: aiFillIcon, isUtility: true },
   { section: 'ai', label: 'AI 助手', icon: aiFillIcon, isUtility: true },
@@ -69,6 +72,7 @@ export function createSidebarNavigationHandlers(
 ): Record<AppSidebarSection, () => void> {
   return {
     workspace: props.onOpenWorkspace,
+    experimentMatrix: props.onOpenExperimentMatrix,
     library: props.onOpenLibrary,
     researchSheet: props.onOpenResearchSheet,
     knowledgeGraph: props.onOpenKnowledgeGraph,

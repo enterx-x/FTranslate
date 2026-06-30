@@ -6,6 +6,7 @@ import type { StatusQueueItem } from '../hooks/useStatusQueue';
 export type AppView =
   | 'home'
   | 'reader'
+  | 'experimentMatrix'
   | 'researchSheet'
   | 'aiAssistant'
   | 'paperTutor'
