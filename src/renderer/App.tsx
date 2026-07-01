@@ -114,6 +114,7 @@ import {
   useResearchWorkbook
 } from './hooks/useResearchWorkbook';
 import { useExperimentMatrix } from './hooks/useExperimentMatrix';
+import { useMethodCards } from './hooks/useMethodCards';
 import { usePdfTranslation } from './hooks/usePdfTranslation';
 import { useStatusQueue } from './hooks/useStatusQueue';
 import { usePdfSession, type PdfState } from './hooks/usePdfSession';
@@ -123,6 +124,10 @@ import { useReaderSidePanel } from './hooks/useReaderSidePanel';
 import { useRecentProject } from './hooks/useRecentProject';
 import { useViewTransition } from './hooks/useViewTransition';
 import { useAppSettings } from './hooks/useAppSettings';
+import {
+  buildExperimentRowsFromProjectMethodCards,
+  summarizeMethodCardExperimentBridge
+} from './lib/experimentMatrixBridge';
 import { AiTranslationProvider } from './contexts/AiTranslationContext';
 import { PaperLibraryProvider } from './contexts/PaperLibraryContext';
 import { PdfSessionProvider } from './contexts/PdfSessionContext';
@@ -325,6 +330,15 @@ export default function App() {
     [paperLibrary, researchProjects]
   );
   const experimentMatrix = useExperimentMatrix(projectWorkspaceSnapshot.activeProject.id);
+  const { methodCards } = useMethodCards(projectWorkspaceSnapshot.activeProject.id);
+  const generatedExperimentRowsFromMethodCards = useMemo(
+    () => buildExperimentRowsFromProjectMethodCards(methodCards, projectWorkspaceSnapshot.activeProject.id),
+    [methodCards, projectWorkspaceSnapshot.activeProject.id]
+  );
+  const methodCardBridgeSummary = useMemo(
+    () => summarizeMethodCardExperimentBridge(methodCards, projectWorkspaceSnapshot.activeProject.id),
+    [methodCards, projectWorkspaceSnapshot.activeProject.id]
+  );
   const appSettings = useAppSettings(view);
 
   useRecentProject({
@@ -1818,6 +1832,22 @@ export default function App() {
     setView('experimentMatrix');
   }
 
+  function handleGenerateExperimentMatrixFromMethodCards(): void {
+    if (generatedExperimentRowsFromMethodCards.length === 0) {
+      const message =
+        methodCardBridgeSummary.methodCardCount > 0
+          ? '当前项目的方法卡还没有足够的证据字段，暂不能生成实验矩阵行。'
+          : '当前项目还没有方法卡，无法从论文证据生成实验矩阵行。';
+      setStatusMessage(message);
+      return;
+    }
+
+    experimentMatrix.mergeGeneratedRows(generatedExperimentRowsFromMethodCards);
+    setStatusMessage(
+      `已从 ${methodCardBridgeSummary.groundedMethodCardCount} 张方法卡合并 ${methodCardBridgeSummary.generatedRowCount} 行实验矩阵，已保留已有编辑。`
+    );
+  }
+
   function openResearchSheetFromSidebar(): void {
     void handleOpenResearchSheet();
   }
@@ -2105,8 +2135,10 @@ export default function App() {
                 projectName={projectWorkspaceSnapshot.activeProject.name}
                 paperCount={projectWorkspaceSnapshot.linkedPaperCount}
                 matrixState={experimentMatrix.matrixState}
+                methodCardBridgeSummary={methodCardBridgeSummary}
                 onBackHome={openWorkspace}
                 onOpenResearchSheet={() => void handleOpenResearchSheet()}
+                onGenerateFromMethodCards={handleGenerateExperimentMatrixFromMethodCards}
                 onSelectRow={experimentMatrix.selectRow}
                 onPatchRowStatus={(rowId, status) => experimentMatrix.patchRow(rowId, { status })}
                 onStatusMessage={setStatusMessage}

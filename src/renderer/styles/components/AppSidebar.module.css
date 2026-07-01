@@ -60,10 +60,10 @@
 }
 
 .linkActive {
-  border-color: #365edc;
-  background: #16223a;
+  border-color: #303946;
+  background: #151b24;
   color: #ffffff;
-  box-shadow: inset 3px 0 0 #0f62fe;
+  box-shadow: inset 3px 0 0 #7c8795;
 }
 
 .linkUtility {
@@ -103,6 +103,6 @@
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: #24a148;
-  box-shadow: 0 0 0 3px rgba(36, 161, 72, 0.14);
+  background: #6f8f7b;
+  box-shadow: 0 0 0 3px rgba(111, 143, 123, 0.16);
 }

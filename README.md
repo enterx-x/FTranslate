@@ -33,6 +33,7 @@ FTranslate 的长期方向是本地化 AI 科创研发工作台，而不是单�
 - 左侧导航优先展示“项目空间 / 实验矩阵 / 证据图谱 / 组会 PPT”，旧的论文库、研究表格、PDF 阅读、论文导师、AI 助手和设置仍保留为兼容入口。
 - 首页展示当前本地项目、论文对象、证据数量、双语 PDF、研发闭环阶段、下一步动作和风险队列。
 - 首页视觉已改为“研发流程看板 + 右侧 Inspector”：中心只保留 4 张真实流程对象卡，右侧使用单一连续 Inspector；状态色采用低饱和灰绿、暖灰和蓝灰，避免亮蓝/亮绿/亮黄塑料感。
+- 左侧 App Shell 选中态已收敛为石墨 / 蓝灰，不再使用高饱和紫蓝描边；视觉检查会拦截侧栏选中态颜色通道差过高的回潮。
 - 新增项目空间本地数据模型，存储键为 `pdfTranslationReader:researchProjects`，会自动把当前论文库记录合并到默认本地 AI 研发项目中。
 - 旧论文库、研究表格、知识图谱、PDF 阅读和 PPT 生成数据仍沿用原有 localStorage 与本地文件结构，不做破坏性迁移。
 - 本次未引入 GSAP；当前阶段以信息架构、密度和状态表达为主，CSS 过渡已足够，避免增加依赖和 Windows 打包风险。
@@ -89,9 +90,10 @@ Paper-to-Method 是阶段 2 的核心研发对象，不是参赛材料生成器�
 - 方法卡字段覆盖 problem、input / output、model architecture、training objective、loss function、constraints、dataset / environment、baseline、metrics、claimed contribution、limitations 和 reproduction risk；
 - 非空字段必须绑定 evidence source，没有证据时保持空值和 `unconfirmed`，避免生成不可追踪结论；
 - 同一项目同一论文再次保存会提升 version，不静默覆盖已有方法卡；
+- 新增 `useMethodCards` 本地 hook，可按当前项目读取 `pdfTranslationReader:methodCards`，避免跨项目方法卡串入实验矩阵；
 - 方法卡可进一步派生实验矩阵行，把论文中的 baseline、proposed method、constraints、environment、metrics 和 evidence 转成可执行实验设计。
 
-当前阶段只完成纯函数和单元测试，尚未接入三栏 UI、项目空间 hook 或研究表格写回入口。
+当前阶段已完成数据核心、项目级本地读取和实验矩阵桥接；尚未接入三栏方法卡审查 UI 或研究表格写回入口。
 
 ### 实验矩阵
 
@@ -106,7 +108,9 @@ Paper-to-Method 是阶段 2 的核心研发对象，不是参赛材料生成器�
 - 当前默认状态为 `planned`，独立页面可把行状态切换为 planned / running / blocked / done；
 - 新增 `pdfTranslationReader:experimentMatrices` 持久化键，按 projectId 保存用户确认和编辑后的实验矩阵；
 - 提供安全合并逻辑，重新从方法卡生成时不会静默覆盖用户已编辑行；
-- 侧栏“实验矩阵”进入独立结构化页面，包含项目摘要、实验组 / 状态 / 关键词筛选、高密度表格、右侧实验详情和证据定位；
+- 侧栏“实验矩阵”进入独立结构化页面，包含方法卡桥接摘要、项目摘要、实验组 / 状态 / 关键词筛选、高密度表格、右侧实验详情和证据定位；
+- 页面可从当前项目方法卡合并 baseline / proposed / ablation 实验行，只使用带 evidence locator 的字段，并保留已有手动编辑；
+- 1366px / 1440px 桌面宽度下，实验矩阵主表优先展示实验组、论文、假设、方法和指标；状态切换与证据定位交给右侧详情面板承载，避免底部横向滚动条破坏扫描体验；
 - 页面支持复制 Markdown；`ResearchWorkbook` workbook 导出核心已存在，Excel 文件导出入口后续再接；
 - 页面主操作使用深石墨色，实验组和状态 badge 使用低饱和灰蓝、暖灰和灰绿，避免亮蓝/亮绿/亮黄塑料感；
 - 侧栏“研究表格”保留 Univer 自由表格，不再和实验矩阵混用。
@@ -447,9 +451,9 @@ npm run visual:check
 .tmp-visual-check/
 ```
 
-当前视觉检查会覆盖首页、论文库、实验矩阵、研究表格、PDF 阅读、组会 PPT、AI 问答、AI 助手、arXiv 检索和设置页。实验矩阵会检查独立页面、侧栏高亮、摘要、筛选、表格、右侧详情、证据面板、Markdown 操作、横向溢出，以及主按钮 / badge 是否回到高饱和蓝绿黄；arXiv 检索会检查三列 / 双列 / 单列布局、列数持久化、顶部高级筛选密度、空结果备选论文库紧凑状态、右侧详情面板、分页和横向溢出；AI 问答会检查独立页面、会话窗口入口和 ChatGPT 式布局。失败时会保留对应截图，便于继续定位布局或渲染问题。
+当前视觉检查会覆盖首页、论文库、实验矩阵、研究表格、PDF 阅读、组会 PPT、AI 问答、AI 助手、arXiv 检索和设置页。实验矩阵会检查独立页面、侧栏高亮、方法卡桥接摘要、摘要、筛选、表格、右侧详情、证据面板、Markdown 操作、横向溢出，以及主按钮 / badge 是否回到高饱和蓝绿黄；arXiv 检索会检查三列 / 双列 / 单列布局、列数持久化、顶部高级筛选密度、空结果备选论文库紧凑状态、右侧详情面板、分页和横向溢出；AI 问答会检查独立页面、会话窗口入口和 ChatGPT 式布局。失败时会保留对应截图，便于继续定位布局或渲染问题。
 
-首页视觉检查额外执行对抗式审查：检查 Workflow Board / 单一 Inspector 是否存在、横向/纵向溢出、内部滚动条、流程对象卡裁切、流程卡标题/说明/动作重叠、状态 badge 是否回到高饱和亮蓝/亮绿/亮黄、最近论文文字重叠、下一步动作按钮遮挡、风险行裁切、紫色品牌色回潮，以及指标/行动/风险是否重新变成卡片式堆叠。
+首页视觉检查额外执行对抗式审查：检查 Workflow Board / 单一 Inspector 是否存在、横向/纵向溢出、内部滚动条、流程对象卡裁切、流程卡标题/说明/动作重叠、状态 badge 是否回到高饱和亮蓝/亮绿/亮黄、侧栏选中态是否回到高饱和紫蓝、最近论文文字重叠、下一步动作按钮遮挡、风险行裁切、紫色品牌色回潮，以及指标/行动/风险是否重新变成卡片式堆叠。
 
 默认视觉检查聚焦 UI 回归和证据面板布局：PDF 图表场景允许 caption-only 或页面裁剪结果通过，避免把耗时的 native PDF 图像提取绑定到每次 UI 检查。需要专项验证 native 图像提取时运行：
 
@@ -477,7 +481,7 @@ npm run visual:check
 - arXiv 三列 / 双列 / 单列布局的卡片宽度、标题高度、分页高度和右侧详情栏宽度；
 - arXiv 备选论文库是否被结果卡片遮挡，以及是否使用会盖住卡片的原生长 `title` tooltip；
 - 研究表格顶部工具区高度、命令栏溢出和表格主体可用高度；
-- 实验矩阵表格横向滚动是否被限制在表格 viewport，右侧详情是否和证据面板重叠，主按钮和状态 badge 是否出现高饱和塑料感；
+- 实验矩阵表格横向滚动是否被限制在表格 viewport，1366px 下主表是否能自然扫描，右侧详情是否和证据面板重叠，主按钮和状态 badge 是否出现高饱和塑料感；
 - 设置页默认“通用设置”是否真的显示表单控件。
 
 ## 架构边界
@@ -529,6 +533,7 @@ src/
       usePdfSession.ts      当前 PDF、页码、缩放和视图模式
       usePaperLibrary.ts    论文库 CRUD 和 localStorage 同步
       useExperimentMatrix.ts 实验矩阵项目级持久化和行状态更新
+      useMethodCards.ts    方法卡本地持久化读取和项目过滤
       useResearchWorkbook.ts 研究表格、绑定和导入导出状态
       useAiTranslation.ts   段落翻译、AI cache 和批量翻译状态
       usePdfTranslation.ts  双语 PDF 生成进度和 sidecar 状态
@@ -543,6 +548,7 @@ src/
       presentationPptx.ts    组会 PPTX 版式计划与 PptxGenJS 导出
       methodCards.ts         Paper-to-Method 方法卡、证据抽取和本地序列化
       experimentMatrix.ts    从方法卡派生 baseline / proposed / ablation 实验矩阵
+      experimentMatrixBridge.ts 方法卡到当前项目实验矩阵的桥接摘要和候选行生成
       experimentMatrixView.ts 实验矩阵筛选、摘要和选中行视图逻辑
       markdownDocument.ts   安全文档渲染
       paperTutor.ts         论文导师上下文、证据和追问逻辑

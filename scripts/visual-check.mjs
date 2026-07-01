@@ -937,10 +937,105 @@ async function loadPaperRecord(client, translationPath, extraPaperFields = {}) {
       version: 1
     }
   ];
+  const methodCards = [
+    {
+      id: 'visual-method-card',
+      projectId: 'local-ai-rd-workspace',
+      paperId: paper.id,
+      title: paper.chineseTitle,
+      status: 'needs-review',
+      fields: [
+        {
+          key: 'modelArchitecture',
+          label: 'Model Architecture',
+          value: 'CBF safety layer + physics-informed reward',
+          confidence: 0.82,
+          evidenceSourceIds: ['visual-evidence-method'],
+          reviewState: 'unconfirmed'
+        },
+        {
+          key: 'constraints',
+          label: 'Constraints',
+          value: 'CBF safety layer',
+          confidence: 0.8,
+          evidenceSourceIds: ['visual-evidence-method'],
+          reviewState: 'unconfirmed'
+        },
+        {
+          key: 'datasetOrEnvironment',
+          label: 'Dataset / Environment',
+          value: 'dynamic obstacles',
+          confidence: 0.76,
+          evidenceSourceIds: ['visual-evidence-method'],
+          reviewState: 'unconfirmed'
+        },
+        {
+          key: 'baseline',
+          label: 'Baseline',
+          value: 'PPO baseline',
+          confidence: 0.78,
+          evidenceSourceIds: ['visual-evidence-baseline'],
+          reviewState: 'unconfirmed'
+        },
+        {
+          key: 'metrics',
+          label: 'Evaluation Metrics',
+          value: 'success rate, collision rate, trajectory smoothness',
+          confidence: 0.84,
+          evidenceSourceIds: ['visual-evidence-metric'],
+          reviewState: 'unconfirmed'
+        },
+        {
+          key: 'claimedContribution',
+          label: 'Claimed Contribution',
+          value: '降低 collision rate 并保持 success rate。',
+          confidence: 0.74,
+          evidenceSourceIds: ['visual-evidence-method'],
+          reviewState: 'unconfirmed'
+        }
+      ],
+      evidenceSources: [
+        {
+          id: 'visual-evidence-method',
+          paperId: paper.id,
+          type: 'pdf-text',
+          page: 4,
+          section: 'Method',
+          locator: 'p. 4 Method',
+          text: 'The method uses a CBF safety layer and physics-informed reward.',
+          score: 8
+        },
+        {
+          id: 'visual-evidence-baseline',
+          paperId: paper.id,
+          type: 'pdf-text',
+          page: 6,
+          section: 'Experiments',
+          locator: 'p. 6 Experiments',
+          text: 'The baseline is PPO.',
+          score: 8
+        },
+        {
+          id: 'visual-evidence-metric',
+          paperId: paper.id,
+          type: 'table-caption',
+          page: 7,
+          section: 'Results',
+          locator: 'p. 7 Results',
+          text: 'Table 1 reports success rate, collision rate and trajectory smoothness.',
+          score: 9
+        }
+      ],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      version: 1
+    }
+  ];
 
   await client.send('Runtime.evaluate', {
     expression: `
       localStorage.setItem('pdfTranslationReader:paperLibrary', ${JSON.stringify(JSON.stringify([paper]))});
+      localStorage.setItem('pdfTranslationReader:methodCards', ${JSON.stringify(JSON.stringify(methodCards))});
       localStorage.setItem('pdfTranslationReader:experimentMatrices', ${JSON.stringify(JSON.stringify(experimentMatrixState))});
       localStorage.removeItem('pdfTranslationReader:researchWorkbook');
       localStorage.removeItem('pdfTranslationReader:researchSheetLinks');
@@ -1105,6 +1200,28 @@ async function runHomeScenario(client) {
         const contentBottom = Math.max(...rows.map((row) => row.getBoundingClientRect().bottom));
         return Math.round(panelBox.bottom - contentBottom);
       })();
+      const channelDelta = (value) => {
+        const matches = [...String(value).matchAll(/rgba?\\(([^)]+)\\)/g)];
+        const deltas = matches.map((match) => {
+          const channels = match[1].match(/\\d+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+          return Math.max(...channels) - Math.min(...channels);
+        });
+        return deltas.length > 0 ? Math.max(...deltas) : 0;
+      };
+      const sidebarActiveStyles = (() => {
+        const item = document.querySelector('.app-sidebar-link.active');
+        const style = item ? getComputedStyle(item) : null;
+        const values = style
+          ? [style.backgroundColor, style.borderTopColor, style.borderLeftColor, style.boxShadow]
+          : [];
+        return {
+          background: style?.backgroundColor ?? '',
+          borderTopColor: style?.borderTopColor ?? '',
+          borderLeftColor: style?.borderLeftColor ?? '',
+          boxShadow: style?.boxShadow ?? '',
+          maxChannelDelta: values.reduce((max, value) => Math.max(max, channelDelta(value)), 0)
+        };
+      })();
       return {
         nestedVerticalScrollers,
         pageVerticalOverflow: (() => {
@@ -1155,6 +1272,7 @@ async function runHomeScenario(client) {
           };
         }),
         recentPanelExcessHeight,
+        sidebarActiveStyles,
         eyebrowColor: getComputedStyle(document.querySelector('.research-workbench-title .eyebrow') ?? document.body)
           .color,
         shellRect: rect(document.querySelector('.research-workbench-shell')),
@@ -1211,6 +1329,7 @@ async function runHomeScenario(client) {
     hub.adversarialLayout.recentTextOverlapCount > 0 ||
     hub.adversarialLayout.clippedRiskCount > 0 ||
     hub.adversarialLayout.recentPanelExcessHeight > 160 ||
+    hub.adversarialLayout.sidebarActiveStyles.maxChannelDelta > 80 ||
     hub.workflowInspectorPanelCount !== 1 ||
     !hub.hasInspectorShell ||
     hub.adversarialLayout.statusBadgeBackgrounds.some((item) => item.channelDelta > 24) ||
@@ -1311,6 +1430,7 @@ async function runExperimentMatrixScenario(client) {
     const page = document.querySelector('.experiment-matrix-page');
     const header = document.querySelector('.experiment-matrix-header');
     const summary = document.querySelector('.experiment-matrix-summary');
+    const sourceStrip = document.querySelector('.experiment-matrix-source-strip');
     const toolbar = document.querySelector('.experiment-matrix-toolbar');
     const tableWrap = document.querySelector('.experiment-matrix-table-wrap');
     const table = document.querySelector('.experiment-matrix-table');
@@ -1347,9 +1467,10 @@ async function runExperimentMatrixScenario(client) {
       };
     });
     return {
-      hasPage: Boolean(page && header && summary && toolbar && tableWrap && table && detail),
+      hasPage: Boolean(page && header && summary && sourceStrip && toolbar && tableWrap && table && detail),
       activeSidebar: activeSidebar?.getAttribute('data-sidebar-section') ?? '',
       titleText: document.querySelector('.experiment-matrix-title')?.textContent ?? '',
+      sourceStripText: sourceStrip?.textContent ?? '',
       summaryText: summary?.textContent ?? '',
       rowCount: document.querySelectorAll('.experiment-matrix-table tbody tr').length,
       detailText: detail?.textContent ?? '',
@@ -1357,6 +1478,7 @@ async function runExperimentMatrixScenario(client) {
       hasEvidencePanel: Boolean(document.querySelector('.experiment-evidence-panel')),
       hasResearchSheetButton: actionButtons.some((button) => /研究表格/.test(button.text)),
       hasMarkdownButton: actionButtons.some((button) => /Markdown/.test(button.text)),
+      hasMethodCardMergeButton: Boolean(sourceStrip?.textContent?.includes('从方法卡合并')),
       actionButtons,
       experimentBadgeBackgrounds,
       tableWrapScrollbarColor: tableWrap ? window.getComputedStyle(tableWrap).scrollbarColor : '',
@@ -1395,12 +1517,15 @@ async function runExperimentMatrixScenario(client) {
     snapshot.activeSidebar !== 'experimentMatrix' ||
     snapshot.rowCount < 1 ||
     !/独立于研究表格/.test(snapshot.titleText) ||
+    !/1 张方法卡/.test(snapshot.sourceStripText) ||
+    !/可合并 3 行实验/.test(snapshot.sourceStripText) ||
     !/证据覆盖/.test(snapshot.summaryText) ||
     !/CBF safety layer/.test(snapshot.detailText) ||
     !snapshot.hasStatusActions ||
     !snapshot.hasEvidencePanel ||
     !snapshot.hasResearchSheetButton ||
     !snapshot.hasMarkdownButton ||
+    !snapshot.hasMethodCardMergeButton ||
     snapshot.hasDocumentHorizontalOverflow ||
     snapshot.hasPageHorizontalOverflow
   ) {

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import aiFillIcon from '../assets/icons/duotone/ai-fill.svg';
 import backIcon from '../assets/icons/duotone/back.svg';
 import downloadIcon from '../assets/icons/duotone/download.svg';
 import researchSheetIcon from '../assets/icons/duotone/research-sheet.svg';
@@ -8,6 +9,7 @@ import {
   type ExperimentMatrixState,
   type ExperimentMatrixStatus
 } from '../lib/experimentMatrix';
+import type { MethodCardExperimentBridgeSummary } from '../lib/experimentMatrixBridge';
 import {
   filterExperimentMatrixRows,
   selectExperimentMatrixRow,
@@ -20,8 +22,10 @@ interface ExperimentMatrixPageProps {
   projectName: string;
   paperCount: number;
   matrixState: ExperimentMatrixState;
+  methodCardBridgeSummary: MethodCardExperimentBridgeSummary;
   onBackHome: () => void;
   onOpenResearchSheet: () => void;
+  onGenerateFromMethodCards: () => void;
   onSelectRow: (rowId: string) => void;
   onPatchRowStatus: (rowId: string, status: ExperimentMatrixStatus) => void;
   onStatusMessage: (message: string) => void;
@@ -114,6 +118,27 @@ export function ExperimentMatrixPage(props: ExperimentMatrixPageProps) {
         </div>
       </header>
 
+      <section className="experiment-matrix-source-strip" aria-label="方法卡实验生成入口">
+        <div>
+          <span className="eyebrow">Method Card Bridge</span>
+          <strong>
+            {props.methodCardBridgeSummary.methodCardCount} 张方法卡 · 可合并 {props.methodCardBridgeSummary.generatedRowCount} 行实验
+          </strong>
+          <p>
+            {props.methodCardBridgeSummary.groundedMethodCardCount} 张有证据闭环 · {props.methodCardBridgeSummary.evidenceLocatorCount} 个证据定位 · 已编辑行保持优先
+          </p>
+        </div>
+        <button
+          type="button"
+          className="secondary-button button-with-icon"
+          onClick={props.onGenerateFromMethodCards}
+          disabled={props.methodCardBridgeSummary.generatedRowCount === 0}
+        >
+          <img className="button-icon" src={aiFillIcon} alt="" />
+          <span>从方法卡合并</span>
+        </button>
+      </section>
+
       <section className="experiment-matrix-summary" aria-label="实验矩阵摘要">
         <SummaryItem label="实验行" value={summary.total} />
         <SummaryItem label="Baseline" value={summary.byGroup.baseline} />
@@ -191,6 +216,8 @@ export function ExperimentMatrixPage(props: ExperimentMatrixPageProps) {
             ) : (
               <EmptyMatrixState
                 hasRows={rows.length > 0}
+                bridgeSummary={props.methodCardBridgeSummary}
+                onGenerateFromMethodCards={props.onGenerateFromMethodCards}
                 onOpenResearchSheet={props.onOpenResearchSheet}
               />
             )}
@@ -226,7 +253,13 @@ function SummaryItem(props: { label: string; value: number | string; detail?: st
   );
 }
 
-function EmptyMatrixState(props: { hasRows: boolean; onOpenResearchSheet: () => void }) {
+function EmptyMatrixState(props: {
+  hasRows: boolean;
+  bridgeSummary: MethodCardExperimentBridgeSummary;
+  onGenerateFromMethodCards: () => void;
+  onOpenResearchSheet: () => void;
+}) {
+  const canGenerate = !props.hasRows && props.bridgeSummary.generatedRowCount > 0;
   return (
     <div className="experiment-matrix-empty">
       <span className="eyebrow">{props.hasRows ? 'No Match' : 'Empty Matrix'}</span>
@@ -234,11 +267,21 @@ function EmptyMatrixState(props: { hasRows: boolean; onOpenResearchSheet: () => 
       <p>
         {props.hasRows
           ? '放宽实验组、状态或关键词筛选后再审查。'
-          : '实验矩阵必须来自有证据的方法卡或人工确认的实验行，不能把自由研究表格直接伪装成实验设计。'}
+          : props.bridgeSummary.methodCardCount > 0
+            ? `当前项目有 ${props.bridgeSummary.methodCardCount} 张方法卡，其中 ${props.bridgeSummary.groundedMethodCardCount} 张可形成实验候选。`
+            : '实验矩阵必须来自有证据的方法卡或人工确认的实验行，不能把自由研究表格直接伪装成实验设计。'}
       </p>
-      <button type="button" className="secondary-button" onClick={props.onOpenResearchSheet}>
-        打开研究表格
-      </button>
+      <div className="experiment-matrix-empty-actions">
+        {canGenerate ? (
+          <button type="button" className="primary-button button-with-icon" onClick={props.onGenerateFromMethodCards}>
+            <img className="button-icon" src={aiFillIcon} alt="" />
+            <span>从方法卡合并</span>
+          </button>
+        ) : null}
+        <button type="button" className="secondary-button" onClick={props.onOpenResearchSheet}>
+          打开研究表格
+        </button>
+      </div>
     </div>
   );
 }

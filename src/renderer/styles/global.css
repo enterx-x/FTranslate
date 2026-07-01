@@ -17705,7 +17705,7 @@ body.is-resizing-layout .arxiv-detail-resize-handle::after {
 
 .experiment-matrix-page {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   gap: 12px;
   height: 100%;
   min-height: 0;
@@ -17791,6 +17791,49 @@ body.is-resizing-layout .arxiv-detail-resize-handle::after {
   border-color: #d8dde6;
   background: #eef0f3;
   color: #98a2b3;
+}
+
+.experiment-matrix-source-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid #dfe5ee;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
+}
+
+.experiment-matrix-source-strip > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.experiment-matrix-source-strip strong {
+  overflow: hidden;
+  color: #111827;
+  font-size: 14px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-matrix-source-strip p {
+  margin: 0;
+  overflow: hidden;
+  color: #5d6675;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-matrix-source-strip button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .experiment-matrix-summary {
@@ -18063,6 +18106,12 @@ body.is-resizing-layout .arxiv-detail-resize-handle::after {
   line-height: 1.55;
 }
 
+.experiment-matrix-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .experiment-matrix-detail {
   display: flex;
   flex-direction: column;
@@ -18201,4 +18250,86 @@ body.is-resizing-layout .arxiv-detail-resize-handle::after {
   .experiment-matrix-title p {
     max-width: 560px;
   }
+}
+
+@media (max-width: 1440px) {
+  .experiment-matrix-table {
+    min-width: 760px;
+  }
+
+  .experiment-matrix-table th,
+  .experiment-matrix-table td {
+    padding-inline: 9px;
+  }
+
+  .experiment-matrix-table th:nth-child(1),
+  .experiment-matrix-table td:nth-child(1) {
+    width: 82px;
+  }
+
+  .experiment-matrix-table th:nth-child(2),
+  .experiment-matrix-table td:nth-child(2) {
+    width: 136px;
+  }
+
+  .experiment-matrix-table th:nth-child(3),
+  .experiment-matrix-table td:nth-child(3) {
+    width: 230px;
+  }
+
+  .experiment-matrix-table th:nth-child(4),
+  .experiment-matrix-table td:nth-child(4) {
+    width: 210px;
+  }
+
+  .experiment-matrix-table th:nth-child(5),
+  .experiment-matrix-table td:nth-child(5) {
+    width: 150px;
+  }
+
+  .experiment-matrix-table th:nth-child(6),
+  .experiment-matrix-table td:nth-child(6),
+  .experiment-matrix-table th:nth-child(7),
+  .experiment-matrix-table td:nth-child(7) {
+    display: none;
+  }
+}
+
+/* App shell polish: keep navigation active states in restrained graphite/blue-gray. */
+.app-shell.desktop-shell {
+  background: #090d13;
+}
+
+.app-sidebar {
+  border-right-color: rgba(148, 163, 184, 0.12);
+  background: #0b0f17;
+}
+
+.app-sidebar-link {
+  color: #aeb8c8;
+}
+
+.app-sidebar-link:hover:not(:disabled) {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: #121821;
+  color: #ffffff;
+}
+
+.app-sidebar-link.active {
+  border-color: #303946;
+  background: #151b24;
+  color: #ffffff;
+  box-shadow:
+    inset 3px 0 0 #7c8795,
+    0 0 0 1px rgba(148, 163, 184, 0.08);
+}
+
+.app-sidebar-footer {
+  border-color: rgba(148, 163, 184, 0.2);
+  background: #121821;
+}
+
+.app-sidebar-status-dot {
+  background: #6f8f7b;
+  box-shadow: 0 0 0 3px rgba(111, 143, 123, 0.16);
 }
