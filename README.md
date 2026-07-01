@@ -71,6 +71,11 @@ demo-output/research-loop/
 - `experiment-matrix.md`：可读 Markdown 实验矩阵；
 - `local-storage-seed.json`：可供 UI 或后续自动化使用的 localStorage seed 数据。
 
+后续两个阶段已有实施计划：
+
+- Runtime Center MVP：`docs/superpowers/plans/2026-07-01-runtime-center-mvp.md`，先实现本地 AI 运行时快照、IPC、renderer helper 和 hook，再由 UI 代理接入。
+- Paper-to-Code Mapping MVP：`docs/superpowers/plans/2026-07-01-paper-to-code-mapping-mvp.md`，先实现只读代码仓库扫描、入口识别、项目链接和方法卡到代码证据映射，严禁自动执行用户仓库代码。
+
 生成 Windows 安装包：
 
 ```bash
@@ -588,3 +593,20 @@ scripts/
 assets/
   icon.ico                  Windows 安装包与快捷方式图标
 ```
+
+## 2026-07-01 UI 收口说明
+
+本轮继续把旧页面向统一的本地科研工作台视觉语言收拢，重点不是再增加入口卡片，而是压低遗留的高饱和蓝、绿、黄、紫色块，统一按钮、badge、面板、滚动条和空状态。
+
+已覆盖页面包括设置、AI 助手、论文导师问答、组会 PPT、知识图谱和 arXiv 检索。arXiv 检索结果态的备选论文库现在只保留摘要条，不再展开成列表压住论文卡片；空结果状态保留候选论文快捷定位，但去掉紫色渐变和光晕。
+
+验证方式：
+
+```powershell
+npm run build
+npm run visual:check
+npm run dist
+$env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
+```
+
+关键截图输出在 `.tmp-visual-check/`，建议优先查看 `arxiv-search-empty.png`、`arxiv-search-results.png`、`settings-page.png`、`paper-tutor-page.png` 和 `presentation-page.png`。

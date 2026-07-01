@@ -18333,3 +18333,340 @@ body.is-resizing-layout .arxiv-detail-resize-handle::after {
   background: #6f8f7b;
   box-shadow: 0 0 0 3px rgba(111, 143, 123, 0.16);
 }
+
+/* Whole-app visual unification: defang legacy violet/blue accents on older workspaces. */
+input[type='checkbox'] {
+  accent-color: #4f5968;
+}
+
+.settings-page,
+.ai-assistant-page,
+.paper-tutor-page,
+.presentation-page,
+.arxiv-page,
+.knowledge-graph-page {
+  background: #f3f5f8;
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  .eyebrow {
+  color: #525866;
+  letter-spacing: 0.02em;
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  .primary-button {
+  border-color: #111827;
+  background: #111827;
+  color: #ffffff;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.12) inset,
+    0 12px 24px rgba(15, 23, 42, 0.14);
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  .primary-button:hover:not(:disabled) {
+  border-color: #242b35;
+  background: #242b35;
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  .secondary-button {
+  border-color: #d7dee8;
+  color: #111827;
+}
+
+.toggle-switch.is-on {
+  border-color: #4f5968;
+  background: #4f5968;
+}
+
+.toggle-switch:focus-visible,
+.settings-nav button:focus-visible,
+.paper-tutor-session-item:focus-visible,
+.paper-tutor-paper-item:focus-within {
+  outline: 2px solid rgba(79, 89, 104, 0.34);
+  outline-offset: 2px;
+}
+
+.settings-header,
+.ai-assistant-header,
+.paper-tutor-topbar,
+.presentation-header,
+.arxiv-header,
+.knowledge-graph-header {
+  border-color: #dfe5ee;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.055);
+}
+
+.paper-tutor-topbar {
+  background: #ffffff;
+}
+
+.settings-page .settings-header {
+  background: #ffffff;
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  :is(.panel-title-icon, .button-icon) {
+  filter: grayscale(1) saturate(0) contrast(0.95);
+  opacity: 0.92;
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  .primary-button
+  .button-icon {
+  filter: brightness(0) invert(1);
+  opacity: 0.9;
+}
+
+.ai-work-card,
+.settings-content,
+.settings-nav,
+.paper-tutor-rail,
+.paper-tutor-chat-shell,
+.presentation-outline,
+.presentation-stage,
+.presentation-editor,
+.arxiv-search-card,
+.arxiv-results-panel,
+.arxiv-detail-panel,
+.knowledge-filter-panel,
+.knowledge-canvas-card,
+.knowledge-detail-panel {
+  border-color: #dfe5ee;
+  border-radius: 10px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.045);
+}
+
+.paper-tutor-rail-header span,
+.paper-tutor-session-list-head span,
+.paper-tutor-figure-strip article > span,
+.arxiv-api-badge,
+.arxiv-priority-badge,
+.arxiv-score-badge,
+.arxiv-topic-chip,
+.presentation-page .badge,
+.knowledge-node-type-grid label {
+  border-color: #d8dee8;
+  background: #eef1f4;
+  color: #303946;
+}
+
+.paper-tutor-session-item.active,
+.paper-tutor-paper-item:has(input:checked) {
+  border-color: #b8c2cf;
+  background: #f5f7fa;
+  box-shadow: inset 3px 0 0 #7c8795;
+}
+
+.arxiv-layout-toggle button.active,
+.pdf-view-toggle button.active,
+.presentation-preview-tabs button.active {
+  border-color: #d8dee8;
+  background: #111827;
+  color: #ffffff;
+}
+
+.paper-tutor-suggestions button {
+  border-color: #d8dee8;
+  background: #eef1f4;
+  color: #303946;
+}
+
+.paper-tutor-suggestions button:hover:not(:disabled) {
+  border-color: #c7d0dc;
+  background: #e6ebf1;
+  color: #111827;
+}
+
+.presentation-quality-pass {
+  border-color: #d6dfd9;
+  background: #eef2ef;
+  color: #2f4036;
+}
+
+.presentation-stage {
+  background: #f7f8fb;
+}
+
+.presentation-thumbs span,
+.ppt-slide-kicker,
+.ppt-panel-label,
+.ppt-export-card-label {
+  border-color: #d8dee8;
+  background: #eef1f4;
+  color: #303946;
+}
+
+.ppt-export-preview::before {
+  background: linear-gradient(180deg, #111827, #7c8795);
+}
+
+.ppt-export-claim {
+  border-left-color: #7c8795;
+}
+
+.ppt-export-bullets li::before {
+  background: #7c8795;
+}
+
+.ppt-export-evidence-figure {
+  border-color: #d8dee8;
+  background: #f8fafc;
+}
+
+.ppt-export-visual li {
+  border-color: #d8dee8;
+}
+
+.arxiv-page .arxiv-search-primary-row .primary-button,
+.arxiv-page .arxiv-query-row .primary-button {
+  border-color: #111827;
+  background: #111827;
+  color: #ffffff;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.12) inset,
+    0 12px 24px rgba(15, 23, 42, 0.14);
+}
+
+.arxiv-api-status,
+.arxiv-page .badge,
+.arxiv-page .accent-badge,
+.arxiv-page .success-badge,
+.arxiv-page .pill-tag,
+.arxiv-page .accent-pill-tag,
+.arxiv-reading-queue-head,
+.arxiv-reading-queue-toggle,
+.arxiv-reading-queue-paper,
+.arxiv-date-row span {
+  border-color: #d8dee8;
+  background: #eef1f4;
+  color: #303946;
+}
+
+.arxiv-page .arxiv-tag-row .pill-tag,
+.arxiv-page .arxiv-tag-row .accent-pill-tag,
+.arxiv-page .arxiv-detail-panel .pill-tag,
+.arxiv-page .arxiv-topic-grid .pill-tag {
+  border-color: #d8dee8;
+  background: #eef1f4;
+  color: #303946;
+}
+
+.arxiv-api-status span {
+  background: #6f8f7b;
+  box-shadow: 0 0 0 3px rgba(111, 143, 123, 0.14);
+}
+
+.arxiv-page .priority-pill {
+  border: 1px solid #d8dee8;
+  background: #f3f5f8;
+  color: #303946;
+}
+
+.arxiv-page .priority-high,
+.arxiv-page .priority-medium,
+.arxiv-page .priority-low {
+  border-color: #d8dee8;
+  background: #f3f5f8;
+  color: #303946;
+}
+
+.arxiv-page .arxiv-paper-card:hover,
+.arxiv-page .arxiv-paper-card.is-selected {
+  border-color: #b8c2cf;
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.08);
+}
+
+.arxiv-page .arxiv-favorite-button {
+  border-color: #d8dee8;
+  color: #7c8795;
+  background: #eef1f4;
+}
+
+.arxiv-page .arxiv-layout-toggle button.active,
+.arxiv-page .arxiv-view-switch .segmented-active,
+.arxiv-page .arxiv-layout-switch .segmented-active,
+.arxiv-page .arxiv-results-pagination button[aria-current='page'],
+.arxiv-page .arxiv-page-chip {
+  border-color: #111827;
+  background: #111827;
+  color: #ffffff;
+}
+
+.arxiv-page .eyebrow,
+.arxiv-page .panel-title-row .eyebrow,
+.arxiv-page .arxiv-page-header .eyebrow {
+  border-color: #d8dee8;
+  background: #eef1f4;
+  color: #525866;
+  box-shadow: none;
+}
+
+.arxiv-page .arxiv-page-header .eyebrow::before {
+  background: #7c8795;
+  box-shadow: 0 0 0 4px rgba(124, 135, 149, 0.12);
+}
+
+.arxiv-page .arxiv-reading-queue-paper:hover {
+  border-color: #c7d0dc;
+  background: #e6ebf1;
+  color: #111827;
+}
+
+.arxiv-page .arxiv-reading-queue-mini:not(.is-empty-results) > .arxiv-reading-queue-head {
+  cursor: default;
+}
+
+.arxiv-page .arxiv-reading-queue-mini:not(.is-empty-results) .arxiv-reading-queue-toggle {
+  display: none;
+}
+
+.arxiv-page .arxiv-reading-queue-overflow {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d8dee8;
+  border-radius: 11px;
+  padding: 8px 10px;
+  background: #eef1f4;
+  color: #525866;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.arxiv-page .arxiv-empty-card {
+  border-color: #d8dee8;
+  border-radius: 12px;
+  background: #f8fafc;
+  box-shadow: none;
+}
+
+.arxiv-page .arxiv-empty-card::before {
+  border-color: #d8dee8;
+  background: #eef1f4;
+  color: #303946;
+  box-shadow: none;
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  ::-webkit-scrollbar-track {
+  background: #edf1f5;
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  ::-webkit-scrollbar-thumb {
+  border: 2px solid #edf1f5;
+  border-radius: 999px;
+  background: #aeb6c2;
+}

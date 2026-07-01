@@ -1934,6 +1934,27 @@ async function runPresentationScenario(client) {
       const figures = [...document.querySelectorAll('.ppt-export-preview .ppt-export-visual')].map((item) => item.textContent?.trim() ?? '');
       const thumbs = [...document.querySelectorAll('.presentation-thumbs button')].map((item) => item.textContent?.trim() ?? '');
       const editorText = document.querySelector('.presentation-editor')?.textContent?.slice(0, 1200) ?? '';
+      const channelDelta = (value) => {
+        const matches = [...String(value).matchAll(/rgba?\\(([^)]+)\\)/g)];
+        const deltas = matches.map((match) => {
+          const channels = match[1].match(/\\d+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+          return Math.max(...channels) - Math.min(...channels);
+        });
+        return deltas.length > 0 ? Math.max(...deltas) : 0;
+      };
+      const legacyAccentValues = [
+        getComputedStyle(document.querySelector('.presentation-quality-pass') ?? document.body).backgroundColor,
+        getComputedStyle(document.querySelector('.presentation-quality-pass') ?? document.body).color,
+        getComputedStyle(document.querySelector('.presentation-stage') ?? document.body).backgroundImage,
+        getComputedStyle(document.querySelector('.presentation-thumbs span') ?? document.body).backgroundColor,
+        getComputedStyle(document.querySelector('.presentation-thumbs span') ?? document.body).color,
+        getComputedStyle(document.querySelector('.ppt-slide-kicker') ?? document.body).backgroundColor,
+        getComputedStyle(document.querySelector('.ppt-slide-kicker') ?? document.body).color,
+        getComputedStyle(document.querySelector('.ppt-export-claim') ?? document.body).borderLeftColor,
+        getComputedStyle(document.querySelector('.ppt-export-card-label') ?? document.body).backgroundColor,
+        getComputedStyle(document.querySelector('.ppt-export-card-label') ?? document.body).color,
+        getComputedStyle(preview ?? document.body, '::before').backgroundImage
+      ];
       return {
         hasPage: Boolean(page),
         hasPreview: Boolean(preview),
@@ -1948,7 +1969,12 @@ async function runPresentationScenario(client) {
         thumbs,
         editorText,
         previewText: preview?.textContent?.slice(0, 1200) ?? '',
-        pageText: page?.textContent?.slice(0, 1500) ?? ''
+        pageText: page?.textContent?.slice(0, 1500) ?? '',
+        legacyAccentValues,
+        legacyAccentMaxChannelDelta: legacyAccentValues.reduce(
+          (max, value) => Math.max(max, channelDelta(value)),
+          0
+        )
       };
     }`);
     if (snapshot.hasPage && snapshot.hasPreview && snapshot.slideCount >= 10) {
@@ -1971,6 +1997,9 @@ async function runPresentationScenario(client) {
   }
   if (snapshot.qualityFailed) {
     throw new Error(`presentation: quality gate is still failing, got ${JSON.stringify(snapshot)}`);
+  }
+  if (snapshot.legacyAccentMaxChannelDelta > 80) {
+    throw new Error(`presentation: high-saturation legacy accent found, got ${JSON.stringify(snapshot)}`);
   }
   const rawDraftThumb = (Array.isArray(snapshot.thumbs) ? snapshot.thumbs : []).find((thumb) =>
     hasRawManuscriptFragment(thumb)
@@ -2105,17 +2134,32 @@ async function runAiAssistantScenario(client) {
     const layout = document.querySelector('.ai-assistant-layout');
     const main = document.querySelector('.ai-assistant-main-column');
     const side = document.querySelector('.ai-assistant-side-column');
+    const channelDelta = (value) => {
+      const matches = [...String(value).matchAll(/rgba?\\(([^)]+)\\)/g)];
+      const deltas = matches.map((match) => {
+        const channels = match[1].match(/\\d+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+        return Math.max(...channels) - Math.min(...channels);
+      });
+      return deltas.length > 0 ? Math.max(...deltas) : 0;
+    };
+    const oldAccentValues = [
+      getComputedStyle(document.querySelector('.ai-assistant-page .eyebrow') ?? document.body).color,
+      getComputedStyle(document.querySelector('.ai-assistant-page .toggle-switch.is-on') ?? document.body).backgroundColor,
+      getComputedStyle(document.querySelector('.ai-assistant-page .toggle-switch.is-on') ?? document.body).borderColor
+    ];
     return {
       hasAiAssistant: Boolean(document.querySelector('.ai-assistant-page') && layout && main && side),
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
       bodyIsResizing: document.body.classList.contains('is-resizing-layout'),
       layoutColumns: layout ? getComputedStyle(layout).gridTemplateColumns : '',
       mainWidth: main?.getBoundingClientRect().width ?? 0,
-      sideWidth: side?.getBoundingClientRect().width ?? 0
+      sideWidth: side?.getBoundingClientRect().width ?? 0,
+      oldAccentValues,
+      oldAccentMaxChannelDelta: oldAccentValues.reduce((max, value) => Math.max(max, channelDelta(value)), 0)
     };
   }`);
 
-  if (!after.hasAiAssistant || after.hasHorizontalOverflow || after.bodyIsResizing) {
+  if (!after.hasAiAssistant || after.hasHorizontalOverflow || after.bodyIsResizing || after.oldAccentMaxChannelDelta > 80) {
     throw new Error(`aiAssistant: layout overflow or resize state leaked, got ${JSON.stringify({ before, after })}`);
   }
   if (before.handleVisible && Math.abs(after.mainWidth - before.mainWidth) < 20) {
@@ -2208,6 +2252,25 @@ async function runPaperTutorScenario(client) {
         Number.isFinite(maxFigureArticleBottom) &&
         Math.round(textSnippetsRect.top) < maxFigureArticleBottom - 4
     );
+    const channelDelta = (value) => {
+      const matches = [...String(value).matchAll(/rgba?\\(([^)]+)\\)/g)];
+      const deltas = matches.map((match) => {
+        const channels = match[1].match(/\\d+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+        return Math.max(...channels) - Math.min(...channels);
+      });
+      return deltas.length > 0 ? Math.max(...deltas) : 0;
+    };
+    const evidenceLabelStyles = [...document.querySelectorAll('.paper-tutor-figure-strip article > span')]
+      .slice(0, 10)
+      .map((item) => {
+        const style = getComputedStyle(item);
+        return {
+          text: item.textContent?.trim() ?? '',
+          background: style.backgroundColor,
+          color: style.color,
+          maxChannelDelta: Math.max(channelDelta(style.backgroundColor), channelDelta(style.color))
+        };
+      });
     return {
       hasPage: Boolean(page),
       activeSidebar,
@@ -2231,6 +2294,11 @@ async function runPaperTutorScenario(client) {
       evidenceScrollItems,
       nestedEvidenceScrollCount,
       evidenceSectionOverlap,
+      evidenceLabelStyles,
+      evidenceLabelMaxChannelDelta: evidenceLabelStyles.reduce(
+        (max, item) => Math.max(max, item.maxChannelDelta),
+        0
+      ),
       bodyText: (document.body.textContent ?? '').slice(0, 1200)
     };
   }`);
@@ -2256,7 +2324,8 @@ async function runPaperTutorScenario(client) {
       : before.figurePreviewRects.length < 1 && before.figureCaptionRects.length < 1) ||
     before.figureCaptionRects.some((rect) => rect.height > 58) ||
     before.nestedEvidenceScrollCount > 0 ||
-    before.evidenceSectionOverlap
+    before.evidenceSectionOverlap ||
+    before.evidenceLabelMaxChannelDelta > 80
   ) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'paper-tutor-failed.png'), Buffer.from(shot.data, 'base64'))
@@ -2316,6 +2385,28 @@ async function runArxivSearchScenario(client) {
     const queueButtons = [
       ...document.querySelectorAll('.arxiv-reading-queue-list .arxiv-reading-queue-paper, .arxiv-reading-queue-items .arxiv-reading-queue-paper')
     ];
+    const queueOverflow = document.querySelector('.arxiv-reading-queue-overflow');
+    const channelDelta = (value) => {
+      const matches = [...String(value).matchAll(/rgba?\\(([^)]+)\\)/g)];
+      const deltas = matches.map((match) => {
+        const channels = match[1].match(/\\d+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+        return Math.max(...channels) - Math.min(...channels);
+      });
+      return deltas.length > 0 ? Math.max(...deltas) : 0;
+    };
+    const emptyCard = document.querySelector('.arxiv-empty-card');
+    const emptyCardStyle = getComputedStyle(emptyCard ?? document.body);
+    const emptyCardBeforeStyle = getComputedStyle(emptyCard ?? document.body, '::before');
+    const emptyCardAccentValues = [
+      emptyCardStyle.backgroundColor,
+      emptyCardStyle.backgroundImage,
+      emptyCardStyle.borderTopColor,
+      emptyCardBeforeStyle.backgroundColor,
+      emptyCardBeforeStyle.backgroundImage,
+      emptyCardBeforeStyle.borderTopColor,
+      emptyCardBeforeStyle.color,
+      emptyCardBeforeStyle.boxShadow
+    ];
     const queueButtonRects = queueButtons.map((button) => {
       const rect = button.getBoundingClientRect();
       return {
@@ -2344,6 +2435,9 @@ async function runArxivSearchScenario(client) {
       queueButtonCount: queueButtons.length,
       queueFirstRowCount,
       queueButtonRects,
+      queueOverflowText: queueOverflow?.textContent?.trim() ?? '',
+      emptyCardAccentValues,
+      emptyCardAccentMaxChannelDelta: emptyCardAccentValues.reduce((max, value) => Math.max(max, channelDelta(value)), 0),
       queueUsesLegacyPills: document.querySelectorAll('.arxiv-reading-queue-items .pill-button').length > 0,
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
       inputs,
@@ -2361,7 +2455,9 @@ async function runArxivSearchScenario(client) {
     snapshot.activeSidebar !== 'arxiv' ||
     !snapshot.queueVisible ||
     snapshot.queueHeight < 120 ||
-    snapshot.queueButtonCount !== 4 ||
+    snapshot.queueButtonCount !== 3 ||
+    !/^\+1/.test(snapshot.queueOverflowText) ||
+    snapshot.emptyCardAccentMaxChannelDelta > 80 ||
     snapshot.queueFirstRowCount !== 1 ||
     snapshot.queueUsesLegacyPills ||
     snapshot.hasHorizontalOverflow
@@ -2489,6 +2585,41 @@ async function runArxivSearchScenario(client) {
           const rect = card.getBoundingClientRect();
           return { width: rect.width, height: rect.height, text: card.textContent?.slice(0, 500) ?? '' };
         });
+        const channelDelta = (value) => {
+          const matches = [...String(value).matchAll(/rgba?\\(([^)]+)\\)/g)];
+          const deltas = matches.map((match) => {
+            const channels = match[1].match(/\\d+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+            return Math.max(...channels) - Math.min(...channels);
+          });
+          return deltas.length > 0 ? Math.max(...deltas) : 0;
+        };
+        const readStyles = (selector) => {
+          const item = document.querySelector(selector);
+          const style = getComputedStyle(item ?? document.body);
+          return [style.backgroundColor, style.color, style.borderTopColor, style.borderLeftColor, style.boxShadow];
+        };
+        const headerEyebrow = document.querySelector('.arxiv-page-header .eyebrow');
+        const headerEyebrowStyle = getComputedStyle(headerEyebrow ?? document.body);
+        const headerEyebrowBeforeStyle = getComputedStyle(headerEyebrow ?? document.body, '::before');
+        const legacyAccentValues = [
+          ...readStyles('.arxiv-search-primary-row .primary-button'),
+          ...readStyles('.arxiv-page-header .eyebrow'),
+          headerEyebrowStyle.color,
+          headerEyebrowBeforeStyle.backgroundColor,
+          headerEyebrowBeforeStyle.boxShadow,
+          ...readStyles('.arxiv-detail-panel .panel-title-row .eyebrow'),
+          ...readStyles('.arxiv-reading-queue-overflow'),
+          ...readStyles('.arxiv-api-status'),
+          ...readStyles('.arxiv-api-status span'),
+          ...readStyles('.arxiv-paper-card.is-selected'),
+          ...readStyles('.arxiv-page .priority-pill'),
+          ...readStyles('.arxiv-page .accent-badge'),
+          ...readStyles('.arxiv-page .success-badge'),
+          ...readStyles('.arxiv-page .pill-tag'),
+          ...readStyles('.arxiv-page .accent-pill-tag'),
+          ...readStyles('.arxiv-page-chip'),
+          ...readStyles('.arxiv-favorite-button')
+        ];
         return {
           hasResultsList: Boolean(document.querySelector('.arxiv-results-list')),
           cardCount: cards.length,
@@ -2501,7 +2632,12 @@ async function runArxivSearchScenario(client) {
               advancedFilters.querySelectorAll('select').length >= 3 &&
               advancedFilters.querySelectorAll('input[type="checkbox"]').length >= 4;
           })(),
-          hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+          hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+          legacyAccentValues,
+          legacyAccentMaxChannelDelta: legacyAccentValues.reduce(
+            (max, value) => Math.max(max, channelDelta(value)),
+            0
+          )
         };
       }`);
       if (resultsSnapshot.cardCount >= 3 && resultsSnapshot.zhCount >= 1) {
@@ -2518,7 +2654,8 @@ async function runArxivSearchScenario(client) {
       resultsSnapshot.hasPageFilterPanel ||
       !resultsSnapshot.hasTopPageFilters ||
       compressedCard ||
-      resultsSnapshot.hasHorizontalOverflow
+      resultsSnapshot.hasHorizontalOverflow ||
+      resultsSnapshot.legacyAccentMaxChannelDelta > 80
     ) {
       await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
         writeFile(path.join(outputDir, 'arxiv-search-results-failed.png'), Buffer.from(shot.data, 'base64'))
@@ -2653,6 +2790,20 @@ async function runSettingsScenario(client) {
       };
     });
     const rect = page?.getBoundingClientRect();
+    const channelDelta = (value) => {
+      const matches = [...String(value).matchAll(/rgba?\\(([^)]+)\\)/g)];
+      const deltas = matches.map((match) => {
+        const channels = match[1].match(/\\d+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+        return Math.max(...channels) - Math.min(...channels);
+      });
+      return deltas.length > 0 ? Math.max(...deltas) : 0;
+    };
+    const oldAccentValues = [
+      getComputedStyle(document.querySelector('.settings-page .eyebrow') ?? document.body).color,
+      getComputedStyle(document.querySelector('.settings-page input[type="checkbox"]:checked') ?? document.body).accentColor,
+      getComputedStyle(document.querySelector('.settings-page .settings-header') ?? document.body).backgroundColor,
+      getComputedStyle(document.querySelector('.settings-page .settings-header') ?? document.body).backgroundImage
+    ];
     return {
       hasPage: Boolean(page && layout && nav && content),
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
@@ -2665,7 +2816,14 @@ async function runSettingsScenario(client) {
       formControlCount: document.querySelectorAll('.settings-content input, .settings-content select, .settings-content textarea').length,
       pathRows: document.querySelectorAll('.path-input-row').length,
       disabledTodoDirectoryButtons: [...document.querySelectorAll('.path-input-row button')]
-        .filter((button) => button.disabled || /TODO/.test(button.getAttribute('title') ?? '')).length
+        .filter((button) => button.disabled || /TODO/.test(button.getAttribute('title') ?? '')).length,
+      oldAccentValues,
+      oldAccentMaxChannelDelta: oldAccentValues.reduce((max, value) => Math.max(max, channelDelta(value)), 0),
+      headerBackgroundImage: getComputedStyle(document.querySelector('.settings-page .settings-header') ?? document.body)
+        .backgroundImage,
+      headerIconFilter: getComputedStyle(
+        document.querySelector('.settings-page .settings-header .panel-title-icon') ?? document.body
+      ).filter
     };
   }`);
 
@@ -2681,6 +2839,12 @@ async function runSettingsScenario(client) {
   }
   if (snapshot.disabledTodoDirectoryButtons > 0) {
     throw new Error(`settings: directory picker buttons should be enabled and not TODO, got ${JSON.stringify(snapshot)}`);
+  }
+  if (snapshot.oldAccentMaxChannelDelta > 80) {
+    throw new Error(`settings: high-saturation legacy accent found, got ${JSON.stringify(snapshot)}`);
+  }
+  if (snapshot.headerBackgroundImage !== 'none' || snapshot.headerIconFilter === 'none') {
+    throw new Error(`settings: legacy header gradient or unfiltered icon found, got ${JSON.stringify(snapshot)}`);
   }
   if (!/通用设置/.test(snapshot.activeText) || snapshot.formControlCount < 3) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>

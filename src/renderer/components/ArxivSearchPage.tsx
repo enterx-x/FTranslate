@@ -903,7 +903,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     selectedPaper && selectedInsight
       ? buildVisibleArxivCardTags(buildArxivMatchReasons(selectedPaper, query), selectedInsight.tags, 8)
       : { visible: [], hiddenCount: 0 };
-  const readingQueuePreview = buildArxivReadingQueuePreview(readingQueue, papers.length === 0 ? 3 : 4);
+  const readingQueuePreview = buildArxivReadingQueuePreview(readingQueue, 3);
+  const shouldShowReadingQueueList = papers.length === 0 && isReadingQueueOpen;
   const isOfflineTranslationNotice = message.includes(OFFLINE_TRANSLATION_NOTICE_TITLE);
   const currentPage = Math.floor(start / Math.max(1, pageSize)) + 1;
   const totalPages = Math.max(1, Math.ceil(totalResults / Math.max(1, pageSize)));
@@ -1212,15 +1213,19 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           {readingQueue.length > 0 ? (
             <div
               className={`arxiv-reading-queue-mini${papers.length === 0 ? ' is-empty-results' : ''}${
-                isReadingQueueOpen ? ' is-open' : ''
+                shouldShowReadingQueueList ? ' is-open' : ''
               }`}
               style={readingQueueStyle}
             >
               <button
                 type="button"
                 className="arxiv-reading-queue-head"
-                aria-expanded={isReadingQueueOpen}
-                onClick={() => setIsReadingQueueOpen((value) => !value)}
+                aria-expanded={shouldShowReadingQueueList}
+                onClick={() => {
+                  if (papers.length === 0) {
+                    setIsReadingQueueOpen((value) => !value);
+                  }
+                }}
               >
                 <span>
                   <strong>备选论文库</strong>
@@ -1231,9 +1236,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   <span className="when-open">收起列表</span>
                 </span>
               </button>
-              {isReadingQueueOpen ? (
+              {shouldShowReadingQueueList ? (
                 <div className="arxiv-reading-queue-list" aria-label="备选论文快捷定位">
-                  {[...readingQueuePreview.visible, ...readingQueuePreview.hidden].map((item) => (
+                  {readingQueuePreview.visible.map((item) => (
                     <button
                       key={item.stableId}
                       type="button"
@@ -1248,6 +1253,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       {item.titleZh && item.titleZh !== item.title ? <small>{item.title}</small> : null}
                     </button>
                   ))}
+                  {papers.length === 0 && readingQueuePreview.hiddenCount > 0 ? (
+                    <span className="arxiv-reading-queue-overflow">+{readingQueuePreview.hiddenCount} 篇</span>
+                  ) : null}
                 </div>
               ) : null}
             </div>
