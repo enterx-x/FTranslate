@@ -52,6 +52,7 @@ import {
 } from '../shared/arxiv';
 import { ArxivService } from './arxivService';
 import { ArxivTranslationService, translateTextsWithArgosEngine } from './arxivTranslationService';
+import { scanCodeRepository } from './codeRepositoryScanner';
 import {
   formatAiErrorBody,
   parseChatCompletionContent,
@@ -80,6 +81,7 @@ import {
   translateTextsWithNllbCTranslate2,
   warmUpNllbTranslator
 } from './localTranslationService';
+import { buildRuntimeCenterSnapshot } from './runtimeCenter';
 
 interface PdfFilePayload {
   filePath: string;
@@ -340,6 +342,13 @@ const userDataDirOverride = process.env.PDF_TRANSLATION_READER_USER_DATA_DIR;
 if (userDataDirOverride) {
   // 自动视觉验收会启动真实安装版；这里允许测试进程使用隔离 userData，避免污染用户的论文库和 AI 设置。
   app.setPath('userData', userDataDirOverride);
+}
+
+interface RuntimePdfTranslationEngineView {
+  status: 'available' | 'unavailable' | 'unknown';
+  command?: string;
+  message: string;
+  installCommand?: string;
 }
 
 const shouldLoadBuiltRenderer =
@@ -1113,6 +1122,15 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 function sanitizeFileName(value: string): string {
   return value.replace(/[<>:"/\\|?*\u0000-\u001f]+/gu, '_').slice(0, 120) || 'paper';
+}
+
+function toRuntimePdfTranslationEngineView(engine: PdfTranslationEngineView): RuntimePdfTranslationEngineView {
+  return {
+    status: engine.available ? 'available' : 'unavailable',
+    command: engine.executable,
+    message: engine.message,
+    installCommand: engine.installCommand
+  };
 }
 
 let arxivService: ArxivService | null = null;
@@ -2754,6 +2772,69 @@ async function saveAiSettingsForIpc(request: AiSettingsRequest): Promise<AiSetti
   return toAiSettingsView(await saveStoredAiSettings(request));
 }
 
+async function buildSafeAiProviderRuntimeSummary(): Promise<{
+  provider: string;
+  baseURL: string;
+  model: string;
+  hasApiKey: boolean;
+}> {
+  const settings = await loadStoredAiSettings();
+  return {
+    provider: settings.provider,
+    baseURL: settings.baseURL,
+    model: settings.model,
+    hasApiKey: Boolean(settings.encryptedApiKey)
+  };
+}
+
+async function getRuntimeCenterSnapshotForIpc() {
+  return buildRuntimeCenterSnapshot({
+    now: new Date().toISOString(),
+    localTranslationStatus: getLocalTranslationStatus(),
+    pdfTranslationEngine: toRuntimePdfTranslationEngineView(checkPdfTranslationEngine()),
+    aiProvider: await buildSafeAiProviderRuntimeSummary(),
+    queue: []
+  });
+}
+
+async function checkRuntimeCenterForIpc() {
+  const localTranslationStatus = await checkLocalTranslationInstall();
+  return buildRuntimeCenterSnapshot({
+    now: new Date().toISOString(),
+    localTranslationStatus,
+    pdfTranslationEngine: toRuntimePdfTranslationEngineView(checkPdfTranslationEngine()),
+    aiProvider: await buildSafeAiProviderRuntimeSummary(),
+    queue: []
+  });
+}
+
+async function selectCodeRepositoryForIpc(): Promise<{ rootPath: string } | null> {
+  const options = {
+    title: '选择代码仓库',
+    properties: ['openDirectory' as const]
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  return { rootPath: result.filePaths[0] };
+}
+
+async function scanCodeRepositoryForIpc(request: unknown) {
+  if (!isRecord(request) || typeof request.rootPath !== 'string' || !request.rootPath.trim()) {
+    throw new Error('Invalid code repository scan request.');
+  }
+
+  return scanCodeRepository({
+    rootPath: request.rootPath,
+    now: new Date().toISOString()
+  });
+}
+
 function handlePdfTranslationIpcError(request: PdfTranslationRequest, error: unknown): void {
   sendPdfTranslationProgress({
     paperId: request.paperId,
@@ -3111,6 +3192,14 @@ function registerIpcHandlers(): void {
       translateArxivPaper: translateArxivPaperForIpc,
       translateArxivPapers: translateArxivPapersForIpc,
       downloadArxivPdf: downloadArxivPdfForIpc
+    },
+    runtime: {
+      getRuntimeCenterSnapshot: getRuntimeCenterSnapshotForIpc,
+      checkRuntimeCenter: checkRuntimeCenterForIpc
+    },
+    codeRepository: {
+      selectCodeRepository: selectCodeRepositoryForIpc,
+      scanCodeRepository: scanCodeRepositoryForIpc
     }
   });
 }

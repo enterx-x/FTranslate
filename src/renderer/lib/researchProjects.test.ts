@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDefaultResearchProject,
   buildProjectWorkspaceSnapshot,
+  linkCodeRepositoryPath,
   parseResearchProjects,
   serializeResearchProjects
 } from './researchProjects';
@@ -79,5 +80,17 @@ describe('research project workspace model', () => {
     expect(parseResearchProjects(serialized)).toEqual(projects);
     expect(parseResearchProjects('{"bad":true}')).toEqual([]);
     expect(parseResearchProjects(JSON.stringify([{ id: '', name: 'bad' }]))).toEqual([]);
+  });
+
+  it('merges code repository paths into the active project without duplicates', () => {
+    const project = buildDefaultResearchProject([], Date.parse('2026-07-01T00:00:00.000Z'));
+    const next = linkCodeRepositoryPath(project, 'D:\\repo', '2026-07-01T00:30:00.000Z');
+
+    expect(next.codeRepositoryPaths).toEqual(['D:\\repo']);
+    expect(next.updatedAt).toBe('2026-07-01T00:30:00.000Z');
+    expect(linkCodeRepositoryPath(next, 'D:\\repo', '2026-07-01T01:00:00.000Z').codeRepositoryPaths).toEqual([
+      'D:\\repo'
+    ]);
+    expect(linkCodeRepositoryPath(next, '   ', '2026-07-01T01:00:00.000Z')).toBe(next);
   });
 });

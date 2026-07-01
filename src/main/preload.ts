@@ -81,6 +81,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getLocalTranslationStatus: () => ipcRenderer.invoke('local-translation:status'),
   checkLocalTranslationInstall: () => ipcRenderer.invoke('local-translation:install-check'),
   warmUpLocalTranslation: () => ipcRenderer.invoke('local-translation:warmup'),
+  getRuntimeCenterSnapshot: () => ipcRenderer.invoke('runtime-center:snapshot'),
+  checkRuntimeCenter: () => ipcRenderer.invoke('runtime-center:check'),
   translateLocalBatch: (request: {
     texts: string[];
     forceEngine?: 'nllb-ct2' | 'argos';
@@ -129,6 +131,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   }>) => ipcRenderer.invoke('arxiv:translate-title-abstract-batch', request),
   downloadArxivPdf: (request: { pdfUrl: string; defaultFileName: string }) =>
     ipcRenderer.invoke('arxiv:download-pdf', request),
+  selectCodeRepository: () => ipcRenderer.invoke('code-repository:select'),
+  scanCodeRepository: (request: { rootPath: string }) =>
+    ipcRenderer.invoke('code-repository:scan', request),
   exportPdf: (request: { sourcePath: string; defaultFileName: string }) =>
     ipcRenderer.invoke('file:export-pdf', request),
   exportResearchWorkbookExcel: (request: { workbook: unknown }) =>

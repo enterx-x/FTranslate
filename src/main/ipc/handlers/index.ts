@@ -1,8 +1,10 @@
 import { registerAiIpcHandlers, type AiIpcHandlerDependencies } from './ai';
 import { registerArxivIpcHandlers, type ArxivIpcHandlerDependencies } from './arxiv';
+import { registerCodeRepositoryIpcHandlers, type CodeRepositoryIpcHandlerDependencies } from './codeRepository';
 import { registerFileIpcHandlers, type FileIpcHandlerDependencies } from './file';
 import { registerPdfIpcHandlers, type PdfIpcHandlerDependencies } from './pdf';
 import { registerProjectIpcHandlers, type ProjectIpcHandlerDependencies } from './project';
+import { registerRuntimeIpcHandlers, type RuntimeIpcHandlerDependencies } from './runtime';
 import type { IpcMainLike } from './types';
 
 export interface AppIpcHandlerDependencies {
@@ -11,6 +13,8 @@ export interface AppIpcHandlerDependencies {
   arxiv: ArxivIpcHandlerDependencies;
   file: FileIpcHandlerDependencies;
   project: ProjectIpcHandlerDependencies;
+  runtime: RuntimeIpcHandlerDependencies;
+  codeRepository: CodeRepositoryIpcHandlerDependencies;
 }
 
 export function registerAppIpcHandlers(
@@ -22,4 +26,6 @@ export function registerAppIpcHandlers(
   registerProjectIpcHandlers(ipcMain, deps.project);
   registerFileIpcHandlers(ipcMain, deps.file);
   registerArxivIpcHandlers(ipcMain, deps.arxiv);
+  registerRuntimeIpcHandlers(ipcMain, deps.runtime);
+  registerCodeRepositoryIpcHandlers(ipcMain, deps.codeRepository);
 }

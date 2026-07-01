@@ -124,6 +124,68 @@ export interface LocalTranslateBatchResult {
   fallbackReason?: string;
 }
 
+export type RuntimeCapabilityStatus = 'ready' | 'degraded' | 'unavailable' | 'unknown';
+
+export interface RuntimeCenterSnapshot {
+  generatedAt: string;
+  overallStatus: RuntimeCapabilityStatus;
+  capabilities: Array<{
+    id: 'nllb' | 'argos' | 'pdf2zh' | 'ai-provider';
+    label: string;
+    status: RuntimeCapabilityStatus;
+    message: string;
+    details: Record<string, string | number | boolean | string[]>;
+  }>;
+  queue: {
+    items: Array<{
+      id: string;
+      kind: 'local-translation' | 'pdf-translation' | 'ai-provider' | 'cache';
+      status: 'idle' | 'running' | 'queued' | 'failed';
+      label: string;
+      message?: string;
+    }>;
+    pendingCount: number;
+    runningCount: number;
+    failedCount: number;
+  };
+  actions: string[];
+}
+
+export interface CodeRepositoryScanResult {
+  id: string;
+  rootPath: string;
+  scannedAt: string;
+  files: Array<{
+    filePath: string;
+    fileName: string;
+    extension: string;
+    bytes: number;
+    role: 'readme' | 'manifest' | 'entry' | 'config' | 'script' | 'source' | 'other';
+    excerpt: string;
+  }>;
+  manifests: Array<{
+    filePath: string;
+    fileName: string;
+    kind: string;
+    dependencies: string[];
+  }>;
+  entryPoints: Array<{
+    filePath: string;
+    kind: string;
+    commandCandidate: string;
+    reason: string;
+  }>;
+  configFiles: Array<{
+    filePath: string;
+    fileName: string;
+    extension: string;
+    bytes: number;
+    role: 'readme' | 'manifest' | 'entry' | 'config' | 'script' | 'source' | 'other';
+    excerpt: string;
+  }>;
+  risks: string[];
+}
+
 export interface AiFillSheetCellResult {
   text: string;
   provider: AiProviderId;
@@ -251,6 +313,8 @@ export interface ElectronApi {
   getLocalTranslationStatus: () => Promise<LocalTranslationStatus>;
   checkLocalTranslationInstall: () => Promise<LocalTranslationStatus>;
   warmUpLocalTranslation: () => Promise<LocalTranslationStatus>;
+  getRuntimeCenterSnapshot: () => Promise<RuntimeCenterSnapshot>;
+  checkRuntimeCenter: () => Promise<RuntimeCenterSnapshot>;
   translateLocalBatch: (request: {
     texts: string[];
     forceEngine?: 'nllb-ct2' | 'argos';
@@ -291,6 +355,8 @@ export interface ElectronApi {
     pdfUrl: string;
     defaultFileName: string;
   }) => Promise<PdfFilePayload | null>;
+  selectCodeRepository: () => Promise<{ rootPath: string } | null>;
+  scanCodeRepository: (request: { rootPath: string }) => Promise<CodeRepositoryScanResult>;
   exportPdf: (request: {
     sourcePath: string;
     defaultFileName: string;

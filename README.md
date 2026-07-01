@@ -71,7 +71,25 @@ demo-output/research-loop/
 - `experiment-matrix.md`：可读 Markdown 实验矩阵；
 - `local-storage-seed.json`：可供 UI 或后续自动化使用的 localStorage seed 数据。
 
-后续两个阶段已有实施计划：
+运行无 UI 的代码仓库扫描与 Paper-to-Code 映射 demo：
+
+```bash
+npm run demo:code-repo
+```
+
+该 demo 不打开 Electron UI，也不会执行样例仓库代码。它会创建一个安全强化学习导航代码仓库 fixture，执行只读扫描，把 manifest、训练入口、配置文件和方法卡字段映射为代码证据，并输出到：
+
+```text
+demo-output/code-repository/
+```
+
+输出文件包括：
+
+- `repository-scan.json`：仓库文件、manifest、入口脚本、配置文件和风险摘要；
+- `repository-summary.md`：可读的仓库扫描与方法到代码映射说明；
+- `paper-to-code-mapping.json`：方法卡字段到代码证据路径的结构化映射。
+
+阶段 4/5 已先完成数据层与 headless 闭环，UI 由后续代理接入：
 
 - Runtime Center MVP：`docs/superpowers/plans/2026-07-01-runtime-center-mvp.md`，先实现本地 AI 运行时快照、IPC、renderer helper 和 hook，再由 UI 代理接入。
 - Paper-to-Code Mapping MVP：`docs/superpowers/plans/2026-07-01-paper-to-code-mapping-mvp.md`，先实现只读代码仓库扫描、入口识别、项目链接和方法卡到代码证据映射，严禁自动执行用户仓库代码。
@@ -518,6 +536,8 @@ npm run visual:check
 - `src/renderer/hooks/`：承载 PDF 会话、论文库、研究表格、AI 设置、AI 翻译、双语 PDF 生成、状态队列、阅读器侧栏和视图切换等状态逻辑；
 - `src/renderer/contexts/`：提供 PDF 会话、论文库、AI 翻译和 UI 状态的 Context 边界，减少跨页面 prop drilling；
 - `src/main/ipc/handlers/`：按 AI、arXiv、PDF、文件导出和项目加载拆分 IPC handler 注册入口；
+- `src/main/runtimeCenter.ts`：生成本地 AI runtime 快照、能力状态、任务队列和可复制 next actions，不暴露 API key、完整 prompt 或缓存内容；
+- `src/main/codeRepositoryScanner.ts`：只读扫描本地代码仓库，识别 manifest、入口脚本、配置文件和风险，不自动执行用户仓库代码；
 - `src/main/aiResponseParsing.ts`、`src/main/ipcSafety.ts`、`src/main/excelExportSafety.ts`：集中处理 AI JSON 解析、IPC 输入安全和 Excel 导出安全检查；
 - `scripts/visual-check.mjs`：作为 UI 回归质量门，不只是截图脚本，失败时会保留定位截图。
 
@@ -561,6 +581,8 @@ src/
       usePaperLibrary.ts    论文库 CRUD 和 localStorage 同步
       useExperimentMatrix.ts 实验矩阵项目级持久化和行状态更新
       useMethodCards.ts    方法卡本地持久化读取和项目过滤
+      useRuntimeCenter.ts  Runtime Center 快照读取、环境检测和刷新状态
+      useCodeRepositories.ts 代码仓库扫描结果的项目级本地持久化
       useResearchWorkbook.ts 研究表格、绑定和导入导出状态
       useAiTranslation.ts   段落翻译、AI cache 和批量翻译状态
       usePdfTranslation.ts  双语 PDF 生成进度和 sidecar 状态
@@ -576,6 +598,9 @@ src/
       methodCards.ts         Paper-to-Method 方法卡、证据抽取和本地序列化
       experimentMatrix.ts    从方法卡派生 baseline / proposed / ablation 实验矩阵
       experimentMatrixBridge.ts 方法卡到当前项目实验矩阵的桥接摘要和候选行生成
+      runtimeCenter.ts      Runtime Center renderer 类型、摘要和高风险能力过滤
+      codeRepositories.ts   代码仓库记录序列化和技术栈摘要
+      paperToCodeMapping.ts 方法卡字段到代码证据路径的确定性映射
       researchLoopDemo.ts    无 UI 的论文证据到实验矩阵 demo 闭环
       experimentMatrixView.ts 实验矩阵筛选、摘要和选中行视图逻辑
       markdownDocument.ts   安全文档渲染

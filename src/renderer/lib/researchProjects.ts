@@ -131,6 +131,23 @@ export function serializeResearchProjects(projects: ResearchProject[]): string {
   return JSON.stringify(projects);
 }
 
+export function linkCodeRepositoryPath(
+  project: ResearchProject,
+  rootPath: string,
+  now = new Date().toISOString()
+): ResearchProject {
+  const normalizedPath = rootPath.trim();
+  if (!normalizedPath || project.codeRepositoryPaths.includes(normalizedPath)) {
+    return project;
+  }
+
+  return {
+    ...project,
+    codeRepositoryPaths: [...project.codeRepositoryPaths, normalizedPath],
+    updatedAt: now
+  };
+}
+
 function normalizeResearchProject(value: unknown): ResearchProject | null {
   if (!isRecord(value)) {
     return null;

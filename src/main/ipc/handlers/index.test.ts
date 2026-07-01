@@ -54,6 +54,14 @@ describe('registerAppIpcHandlers', () => {
       },
       project: {
         loadProject: noop
+      },
+      runtime: {
+        getRuntimeCenterSnapshot: noop,
+        checkRuntimeCenter: noop
+      },
+      codeRepository: {
+        selectCodeRepository: noop,
+        scanCodeRepository: noop
       }
     };
 
@@ -92,7 +100,11 @@ describe('registerAppIpcHandlers', () => {
       'arxiv:search',
       'arxiv:translate-title-abstract',
       'arxiv:translate-title-abstract-batch',
-      'arxiv:download-pdf'
+      'arxiv:download-pdf',
+      'runtime-center:snapshot',
+      'runtime-center:check',
+      'code-repository:select',
+      'code-repository:scan'
     ]);
   });
 });
