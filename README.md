@@ -51,6 +51,26 @@ npm run dev
 npm run build
 ```
 
+运行可持续 headless 研发闭环 demo：
+
+```bash
+npm run demo:research-loop
+```
+
+该 demo 不打开 Electron UI，也不调用外部 AI API。它会使用内置安全强化学习导航样例，把 PDF 文本块、Figure / Table caption 和阅读笔记编译为方法卡，再派生 baseline / proposed / ablation 实验矩阵，并输出到：
+
+```text
+demo-output/research-loop/
+```
+
+输出文件包括：
+
+- `README.md`：demo 运行说明和质量门；
+- `research-loop-summary.json`：项目、论文、证据、方法卡和实验行摘要；
+- `method-card.json`：字段级证据绑定方法卡；
+- `experiment-matrix.md`：可读 Markdown 实验矩阵；
+- `local-storage-seed.json`：可供 UI 或后续自动化使用的 localStorage seed 数据。
+
 生成 Windows 安装包：
 
 ```bash
@@ -94,6 +114,8 @@ Paper-to-Method 是阶段 2 的核心研发对象，不是参赛材料生成器�
 - 方法卡可进一步派生实验矩阵行，把论文中的 baseline、proposed method、constraints、environment、metrics 和 evidence 转成可执行实验设计。
 
 当前阶段已完成数据核心、项目级本地读取和实验矩阵桥接；尚未接入三栏方法卡审查 UI 或研究表格写回入口。
+
+无需 UI 的演示闭环可通过 `npm run demo:research-loop` 运行。该命令会反复生成同一套方法卡、实验矩阵、Markdown 和 localStorage seed，用于评审演示、其他代理接 UI 和后续回归。
 
 ### 实验矩阵
 
@@ -549,6 +571,7 @@ src/
       methodCards.ts         Paper-to-Method 方法卡、证据抽取和本地序列化
       experimentMatrix.ts    从方法卡派生 baseline / proposed / ablation 实验矩阵
       experimentMatrixBridge.ts 方法卡到当前项目实验矩阵的桥接摘要和候选行生成
+      researchLoopDemo.ts    无 UI 的论文证据到实验矩阵 demo 闭环
       experimentMatrixView.ts 实验矩阵筛选、摘要和选中行视图逻辑
       markdownDocument.ts   安全文档渲染
       paperTutor.ts         论文导师上下文、证据和追问逻辑

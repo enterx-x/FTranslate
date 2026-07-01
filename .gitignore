@@ -5,6 +5,7 @@ dist-electron/
 
 .tmp*/
 .tmp-*/
+demo-output/
 ftranslate_cool_icon_pack/
 ftranslate_ui_reference_images_only/
 *.log

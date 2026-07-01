@@ -12,6 +12,7 @@
     "build:electron": "tsc -p tsconfig.electron.json",
     "build": "npm run test && npm run typecheck && npm run build:renderer && npm run build:electron",
     "dist": "npm run build && set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/&& electron-builder",
+    "demo:research-loop": "tsc -p tsconfig.demo.json && node .tmp-demo-build/scripts/research-loop-demo.js",
     "visual:check": "node scripts/visual-check.mjs"
   },
   "dependencies": {
