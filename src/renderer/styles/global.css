@@ -18670,3 +18670,490 @@ input[type='checkbox'] {
   border-radius: 999px;
   background: #aeb6c2;
 }
+
+/* Muted research accents: add orientation color without returning to saturated blue/green/yellow. */
+:root {
+  --ft-accent-blue: #526d8f;
+  --ft-accent-blue-soft: #e9eef5;
+  --ft-accent-blue-border: #c8d2df;
+  --ft-accent-sage: #5f7568;
+  --ft-accent-sage-soft: #edf3ef;
+  --ft-accent-sage-border: #ccd8cf;
+  --ft-accent-amber: #8a6f43;
+  --ft-accent-amber-soft: #f3eee4;
+  --ft-accent-amber-border: #ded2bb;
+  --ft-accent-rose: #8b6157;
+  --ft-accent-rose-soft: #f5ece8;
+  --ft-accent-rose-border: #dec9c2;
+  --ft-accent-plum: #6f667d;
+  --ft-accent-plum-soft: #f0edf4;
+  --ft-accent-plum-border: #d5cedf;
+  --ft-action-blue-ink: #25364a;
+  --ft-action-sage-ink: #354f4d;
+  --ft-action-amber-ink: #5e4e36;
+  --ft-action-plum-ink: #4f3f50;
+  --research-ready-ink: #354f4d;
+  --research-ready-bg: var(--ft-accent-sage-soft);
+  --research-ready-border: var(--ft-accent-sage-border);
+  --research-planned-ink: #5e4e36;
+  --research-planned-bg: var(--ft-accent-amber-soft);
+  --research-planned-border: var(--ft-accent-amber-border);
+  --research-draft-ink: #3b485f;
+  --research-draft-bg: var(--ft-accent-blue-soft);
+  --research-draft-border: var(--ft-accent-blue-border);
+}
+
+input[type='checkbox'] {
+  accent-color: var(--ft-accent-blue);
+}
+
+.settings-page {
+  --workspace-accent: var(--ft-accent-amber);
+  --workspace-accent-soft: var(--ft-accent-amber-soft);
+  --workspace-accent-border: var(--ft-accent-amber-border);
+  --workspace-action: var(--ft-action-amber-ink);
+  --workspace-action-hover: #6c593d;
+}
+
+.ai-assistant-page {
+  --workspace-accent: var(--ft-accent-plum);
+  --workspace-accent-soft: var(--ft-accent-plum-soft);
+  --workspace-accent-border: var(--ft-accent-plum-border);
+  --workspace-action: var(--ft-action-plum-ink);
+  --workspace-action-hover: #5e4d60;
+}
+
+.paper-tutor-page,
+.knowledge-graph-page {
+  --workspace-accent: var(--ft-accent-sage);
+  --workspace-accent-soft: var(--ft-accent-sage-soft);
+  --workspace-accent-border: var(--ft-accent-sage-border);
+  --workspace-action: var(--ft-action-sage-ink);
+  --workspace-action-hover: #41605d;
+}
+
+.presentation-page {
+  --workspace-accent: var(--ft-accent-amber);
+  --workspace-accent-soft: var(--ft-accent-amber-soft);
+  --workspace-accent-border: var(--ft-accent-amber-border);
+  --workspace-action: var(--ft-action-amber-ink);
+  --workspace-action-hover: #6c593d;
+}
+
+.arxiv-page,
+.home-page.research-workbench-page,
+.experiment-matrix-page {
+  --workspace-accent: var(--ft-accent-blue);
+  --workspace-accent-soft: var(--ft-accent-blue-soft);
+  --workspace-accent-border: var(--ft-accent-blue-border);
+  --workspace-action: var(--ft-action-blue-ink);
+  --workspace-action-hover: #2d4054;
+}
+
+.settings-page input[type='checkbox'] {
+  accent-color: var(--ft-accent-amber);
+}
+
+.app-sidebar-link.active {
+  border-color: rgba(82, 109, 143, 0.42);
+  background: #192331;
+  box-shadow: inset 3px 0 0 var(--ft-accent-blue);
+}
+
+.app-sidebar-link.active[data-sidebar-section='experimentMatrix'],
+.app-sidebar-link.active[data-sidebar-section='presentation'] {
+  box-shadow: inset 3px 0 0 var(--ft-accent-amber);
+}
+
+.app-sidebar-link.active[data-sidebar-section='paperTutor'],
+.app-sidebar-link.active[data-sidebar-section='knowledgeGraph'] {
+  box-shadow: inset 3px 0 0 var(--ft-accent-sage);
+}
+
+.app-sidebar-link.active[data-sidebar-section='aiAssistant'] {
+  box-shadow: inset 3px 0 0 var(--ft-accent-plum);
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  .eyebrow {
+  border-color: var(--workspace-accent-border);
+  background: var(--workspace-accent-soft);
+  color: var(--workspace-accent);
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  .eyebrow::before {
+  background: var(--workspace-accent);
+  box-shadow: 0 0 0 4px var(--workspace-accent-soft);
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  .primary-button {
+  border-color: var(--workspace-action);
+  background: var(--workspace-action);
+  color: #ffffff;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.12) inset,
+    0 12px 24px rgba(37, 54, 74, 0.13);
+}
+
+:is(.settings-page, .ai-assistant-page, .paper-tutor-page, .presentation-page, .arxiv-page, .knowledge-graph-page)
+  .primary-button:hover:not(:disabled) {
+  border-color: var(--workspace-action-hover);
+  background: var(--workspace-action-hover);
+}
+
+.settings-page .settings-nav button.active {
+  border-color: var(--ft-accent-amber-border);
+  background: #5e4e36;
+  color: #ffffff;
+  box-shadow:
+    inset 3px 0 0 var(--ft-accent-amber),
+    0 8px 18px rgba(94, 78, 54, 0.13);
+}
+
+.settings-page .settings-nav button.active span {
+  color: rgba(255, 255, 255, 0.76);
+}
+
+.settings-page .settings-nav button:not(.active):hover {
+  background: var(--ft-accent-amber-soft);
+  color: var(--ft-action-amber-ink);
+}
+
+.settings-header,
+.ai-assistant-header,
+.paper-tutor-topbar,
+.presentation-header,
+.arxiv-header,
+.arxiv-page-header,
+.knowledge-graph-header {
+  border-top: 3px solid var(--workspace-accent);
+  box-shadow:
+    0 8px 20px rgba(15, 23, 42, 0.045),
+    inset 0 -1px 0 var(--workspace-accent-soft);
+}
+
+.ai-work-card,
+.settings-content,
+.settings-nav,
+.paper-tutor-rail,
+.paper-tutor-chat-shell,
+.presentation-outline,
+.presentation-stage,
+.presentation-editor,
+.arxiv-search-card,
+.arxiv-results-panel,
+.arxiv-detail-panel,
+.knowledge-filter-panel,
+.knowledge-canvas-card,
+.knowledge-detail-panel {
+  border-color: var(--workspace-accent-border, #dfe5ee);
+  box-shadow:
+    0 8px 20px rgba(15, 23, 42, 0.045),
+    inset 0 2px 0 var(--workspace-accent-soft, #eef1f4);
+}
+
+.home-page.research-workbench-page .research-workbench-header {
+  box-shadow: inset 0 -3px 0 var(--ft-accent-blue-soft);
+}
+
+.home-page.research-workbench-page .eyebrow,
+.research-workflow-board-meta em {
+  border-color: var(--ft-accent-blue-border);
+  background: var(--ft-accent-blue-soft);
+  color: var(--ft-accent-blue);
+}
+
+.research-workbench-actions .primary-button,
+.research-panel .primary-button,
+.experiment-matrix-actions .primary-button {
+  border-color: var(--ft-action-blue-ink);
+  background: var(--ft-action-blue-ink);
+  color: #ffffff;
+}
+
+.research-workbench-actions .primary-button:hover:not(:disabled),
+.research-panel .primary-button:hover:not(:disabled),
+.experiment-matrix-actions .primary-button:hover:not(:disabled) {
+  border-color: #2d4054;
+  background: #2d4054;
+}
+
+.status-ready em,
+.status-cached em,
+.status-draftable em {
+  background: var(--ft-accent-sage-soft);
+  color: var(--ft-action-sage-ink);
+}
+
+.status-planned em,
+.status-setup-needed em,
+.status-needs-paper em,
+.status-needs-evidence em {
+  background: var(--ft-accent-amber-soft);
+  color: var(--ft-action-amber-ink);
+}
+
+.status-evidence-missing em {
+  background: var(--ft-accent-blue-soft);
+  color: #3b485f;
+}
+
+.research-workflow-column.status-ready::before {
+  background: var(--ft-accent-sage);
+}
+
+.research-workflow-column.status-planned::before {
+  background: var(--ft-accent-amber);
+}
+
+.research-workflow-column.status-draftable::before {
+  background: var(--ft-accent-blue);
+}
+
+.research-workflow-column.status-ready .research-workflow-step {
+  border-color: var(--ft-accent-sage-border);
+  background: var(--ft-accent-sage-soft);
+  color: var(--ft-action-sage-ink);
+}
+
+.research-workflow-column.status-planned .research-workflow-step {
+  border-color: var(--ft-accent-amber-border);
+  background: var(--ft-accent-amber-soft);
+  color: var(--ft-action-amber-ink);
+}
+
+.research-workflow-column.status-draftable .research-workflow-step {
+  border-color: var(--ft-accent-blue-border);
+  background: var(--ft-accent-blue-soft);
+  color: #3b485f;
+}
+
+.research-workflow-card {
+  border-left-width: 3px;
+}
+
+.research-workflow-column.status-ready .research-workflow-card {
+  border-left-color: var(--ft-accent-sage-border);
+}
+
+.research-workflow-column.status-planned .research-workflow-card {
+  border-left-color: var(--ft-accent-amber-border);
+}
+
+.research-workflow-column.status-draftable .research-workflow-card {
+  border-left-color: var(--ft-accent-blue-border);
+}
+
+.research-workflow-card:hover {
+  border-color: var(--ft-accent-blue-border);
+  background: #fbfcfe;
+}
+
+.experiment-matrix-header {
+  border-bottom: 1px solid var(--ft-accent-blue-border);
+}
+
+.experiment-matrix-page .eyebrow,
+.experiment-matrix-source-strip {
+  border-color: var(--ft-accent-blue-border);
+  background: var(--ft-accent-blue-soft);
+  color: var(--ft-accent-blue);
+}
+
+.experiment-matrix-source-strip {
+  border-left: 4px solid var(--ft-accent-blue);
+}
+
+.experiment-matrix-summary div:nth-child(1),
+.experiment-matrix-summary div:nth-child(4) {
+  box-shadow: inset 0 2px 0 var(--ft-accent-blue-soft);
+}
+
+.experiment-matrix-summary div:nth-child(2),
+.experiment-matrix-summary div:nth-child(5) {
+  box-shadow: inset 0 2px 0 var(--ft-accent-sage-soft);
+}
+
+.experiment-matrix-summary div:nth-child(3) {
+  box-shadow: inset 0 2px 0 var(--ft-accent-amber-soft);
+}
+
+.experiment-matrix-table tbody tr.is-selected {
+  background: #f7f9fb;
+  box-shadow: inset 3px 0 0 var(--ft-accent-blue);
+}
+
+.experiment-badge.group-proposed,
+.experiment-badge.status-running {
+  border-color: var(--ft-accent-blue-border);
+  background: var(--ft-accent-blue-soft);
+  color: #3b485f;
+}
+
+.experiment-badge.group-ablation,
+.experiment-badge.status-planned {
+  border-color: var(--ft-accent-amber-border);
+  background: var(--ft-accent-amber-soft);
+  color: var(--ft-action-amber-ink);
+}
+
+.experiment-badge.status-done {
+  border-color: var(--ft-accent-sage-border);
+  background: var(--ft-accent-sage-soft);
+  color: var(--ft-action-sage-ink);
+}
+
+.experiment-badge.status-blocked {
+  border-color: var(--ft-accent-rose-border);
+  background: var(--ft-accent-rose-soft);
+  color: var(--ft-accent-rose);
+}
+
+.paper-tutor-session-item.active,
+.paper-tutor-paper-item:has(input:checked) {
+  border-color: var(--ft-accent-sage-border);
+  background: var(--ft-accent-sage-soft);
+  box-shadow: inset 3px 0 0 var(--ft-accent-sage);
+}
+
+.paper-tutor-suggestions button:nth-child(odd) {
+  border-color: var(--ft-accent-sage-border);
+  background: var(--ft-accent-sage-soft);
+  color: var(--ft-action-sage-ink);
+}
+
+.paper-tutor-suggestions button:nth-child(even) {
+  border-color: var(--ft-accent-blue-border);
+  background: var(--ft-accent-blue-soft);
+  color: #3b485f;
+}
+
+.presentation-preview-tabs button.active,
+.pdf-view-toggle button.active {
+  border-color: var(--ft-action-amber-ink);
+  background: var(--ft-action-amber-ink);
+  color: #ffffff;
+}
+
+.presentation-quality-pass {
+  border-color: var(--ft-accent-sage-border);
+  background: var(--ft-accent-sage-soft);
+  color: var(--ft-action-sage-ink);
+}
+
+.ppt-export-preview::before {
+  background: linear-gradient(180deg, #5e4e36, #8a6f43);
+}
+
+.ppt-export-claim {
+  border-left-color: var(--ft-accent-amber);
+}
+
+.ppt-export-bullets li::before {
+  background: var(--ft-accent-amber);
+}
+
+.arxiv-page.page-workspace {
+  --arxiv-accent: var(--ft-accent-blue);
+  --arxiv-accent-strong: var(--ft-action-blue-ink);
+  --arxiv-accent-soft: var(--ft-accent-blue-soft);
+}
+
+.arxiv-page .arxiv-search-primary-row .primary-button,
+.arxiv-page .arxiv-query-row .primary-button,
+.arxiv-page .arxiv-layout-toggle button.active,
+.arxiv-page .arxiv-view-switch .segmented-active,
+.arxiv-page .arxiv-layout-switch .segmented-active,
+.arxiv-page .arxiv-results-pagination button[aria-current='page'],
+.arxiv-page .arxiv-page-chip {
+  border-color: var(--ft-action-blue-ink);
+  background: var(--ft-action-blue-ink);
+  color: #ffffff;
+}
+
+.arxiv-api-status,
+.arxiv-page .accent-badge,
+.arxiv-page .accent-pill-tag,
+.arxiv-reading-queue-overflow,
+.arxiv-page .arxiv-empty-card::before {
+  border-color: var(--ft-accent-blue-border);
+  background: var(--ft-accent-blue-soft);
+  color: var(--ft-accent-blue);
+}
+
+.arxiv-page .success-badge,
+.arxiv-page .priority-low {
+  border-color: var(--ft-accent-sage-border);
+  background: var(--ft-accent-sage-soft);
+  color: var(--ft-action-sage-ink);
+}
+
+.arxiv-page .priority-high {
+  border-color: var(--ft-accent-amber-border);
+  background: var(--ft-accent-amber-soft);
+  color: var(--ft-action-amber-ink);
+}
+
+.arxiv-page .priority-medium,
+.arxiv-page .arxiv-topic-chip {
+  border-color: var(--ft-accent-blue-border);
+  background: var(--ft-accent-blue-soft);
+  color: #3b485f;
+}
+
+.arxiv-page .arxiv-empty-card {
+  border-color: var(--ft-accent-blue-border);
+  border-left: 4px solid var(--ft-accent-blue);
+  background: #fbfcfe;
+}
+
+.arxiv-page .arxiv-paper-card:hover,
+.arxiv-page .arxiv-paper-card.is-selected {
+  border-color: var(--ft-accent-blue-border);
+  box-shadow:
+    0 12px 26px rgba(15, 23, 42, 0.08),
+    inset 3px 0 0 var(--ft-accent-blue);
+}
+
+.arxiv-page .arxiv-favorite-button {
+  border-color: var(--ft-accent-amber-border);
+  background: var(--ft-accent-amber-soft);
+  color: var(--ft-accent-amber);
+}
+
+.arxiv-page .arxiv-reading-queue-paper:hover {
+  border-color: var(--ft-accent-blue-border);
+  background: var(--ft-accent-blue-soft);
+  color: #25364a;
+}
+
+.knowledge-graph-page .node-type-filter button.active {
+  border-color: var(--ft-accent-sage-border);
+  background: var(--ft-accent-sage-soft);
+  color: var(--ft-action-sage-ink);
+}
+
+.knowledge-graph-page .graph-edge {
+  stroke: rgba(82, 109, 143, 0.28);
+}
+
+.knowledge-graph-page .graph-edge.is-active {
+  stroke: rgba(37, 54, 74, 0.58);
+}
+
+.knowledge-graph-page .knowledge-node:hover circle,
+.knowledge-graph-page .knowledge-node.is-selected circle {
+  stroke: var(--ft-action-blue-ink);
+}
+
+.knowledge-graph-page .graph-cluster-halo {
+  opacity: 0.14;
+  fill-opacity: 0.1;
+  stroke: var(--ft-accent-blue-border);
+}
+
+.knowledge-graph-page .graph-cluster-label {
+  fill: var(--ft-accent-blue);
+}

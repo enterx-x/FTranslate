@@ -41,6 +41,18 @@ const CLUSTER_META: Record<string, { title: string; color: string; x: number; y:
   limits: { title: '局限与方向', color: '#ef6c73', x: 0.52, y: 0.88, rx: 0.18, ry: 0.1 }
 };
 
+const MUTED_CLUSTER_COLORS: Record<string, string> = {
+  papers: '#526d8f',
+  methods: '#5f7568',
+  keywords: '#6f667d',
+  scenes: '#5f7568',
+  metrics: '#8a6f43',
+  timeline: '#667085',
+  venues: '#526d8f',
+  authors: '#64748b',
+  limits: '#8b6157'
+};
+
 export function getKnowledgeGraphClusterRegions(
   width: number,
   height: number,
@@ -52,7 +64,7 @@ export function getKnowledgeGraphClusterRegions(
     .map(([id, meta]) => ({
       id,
       title: meta.title,
-      color: meta.color,
+      color: MUTED_CLUSTER_COLORS[id] ?? meta.color,
       x: meta.x * width,
       y: meta.y * height,
       rx: meta.rx * width,

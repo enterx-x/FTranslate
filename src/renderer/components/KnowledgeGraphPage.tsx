@@ -77,15 +77,15 @@ const GRAPH_KIND_TYPES: Record<GraphKind, KnowledgeGraphNodeType[]> = {
 };
 
 const NODE_STYLE: Record<KnowledgeGraphNodeType, { color: string; soft: string }> = {
-  paper: { color: '#6f5cff', soft: '#f0edff' },
-  method: { color: '#3366ff', soft: '#eef3ff' },
-  keyword: { color: '#a855f7', soft: '#f7efff' },
-  scene: { color: '#16a085', soft: '#ecfdf7' },
-  metric: { color: '#f59e0b', soft: '#fff7e6' },
+  paper: { color: '#526d8f', soft: '#e9eef5' },
+  method: { color: '#5f7568', soft: '#edf3ef' },
+  keyword: { color: '#6f667d', soft: '#f0edf4' },
+  scene: { color: '#5f7568', soft: '#edf3ef' },
+  metric: { color: '#8a6f43', soft: '#f3eee4' },
   year: { color: '#667085', soft: '#f3f5f8' },
-  venue: { color: '#4f46e5', soft: '#eef2ff' },
+  venue: { color: '#526d8f', soft: '#e9eef5' },
   author: { color: '#64748b', soft: '#f1f5f9' },
-  limitation: { color: '#ef6c73', soft: '#fff1f2' }
+  limitation: { color: '#8b6157', soft: '#f5ece8' }
 };
 
 const DEFAULT_TRANSFORM: GraphTransform = { scale: 1, x: 0, y: 0 };

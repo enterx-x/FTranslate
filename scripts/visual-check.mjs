@@ -2353,6 +2353,119 @@ async function runPaperTutorScenario(client) {
   return { before, afterSuggestion };
 }
 
+async function runKnowledgeGraphScenario(client) {
+  await clickSidebarSection(client, 'knowledgeGraph');
+  await waitForAppReady(client);
+
+  let snapshot = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    snapshot = await evaluateJson(client, `() => {
+      const page = document.querySelector('.knowledge-graph-page');
+      const layout = document.querySelector('.knowledge-graph-layout');
+      const filterPanel = document.querySelector('.knowledge-filter-panel');
+      const canvas = document.querySelector('.knowledge-canvas-card');
+      const detailPanel = document.querySelector('.knowledge-detail-panel');
+      const svg = document.querySelector('.knowledge-graph-svg');
+      const nodes = [...document.querySelectorAll('.knowledge-node')];
+      const mainNodeCircles = nodes
+        .map((node) => [...node.querySelectorAll('circle')][1])
+        .filter(Boolean);
+      const channelDelta = (value) => {
+        const matches = [...String(value).matchAll(/rgba?\\(([^)]+)\\)/g)];
+        const deltas = matches.map((match) => {
+          const channels = match[1].match(/\\d+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+          return Math.max(...channels) - Math.min(...channels);
+        });
+        if (deltas.length > 0) return Math.max(...deltas);
+
+        const hex = String(value).trim();
+        if (/^#[0-9a-f]{6}$/i.test(hex)) {
+          const red = Number.parseInt(hex.slice(1, 3), 16);
+          const green = Number.parseInt(hex.slice(3, 5), 16);
+          const blue = Number.parseInt(hex.slice(5, 7), 16);
+          return Math.max(red, green, blue) - Math.min(red, green, blue);
+        }
+
+        return 0;
+      };
+      const accentValues = [
+        ...mainNodeCircles.map((circle) => circle.getAttribute('fill') ?? ''),
+        ...[...document.querySelectorAll('.graph-legend i')].map((item) => getComputedStyle(item).backgroundColor),
+        getComputedStyle(document.querySelector('.node-type-filter button.active') ?? document.body).backgroundColor,
+        getComputedStyle(document.querySelector('.node-type-filter button.active') ?? document.body).color,
+        getComputedStyle(document.querySelector('.graph-edge') ?? document.body).stroke,
+        getComputedStyle(document.querySelector('.graph-cluster-label') ?? document.body).fill
+      ];
+      const rect = (item) => {
+        const box = item?.getBoundingClientRect();
+        return box
+          ? {
+              width: Math.round(box.width),
+              height: Math.round(box.height),
+              left: Math.round(box.left),
+              right: Math.round(box.right),
+              top: Math.round(box.top),
+              bottom: Math.round(box.bottom)
+            }
+          : null;
+      };
+      return {
+        hasPage: Boolean(page),
+        activeSidebar: document.querySelector('.app-sidebar-link.active')?.getAttribute('data-sidebar-section') ?? '',
+        hasLayout: Boolean(layout && filterPanel && canvas && detailPanel),
+        hasSvg: Boolean(svg),
+        nodeCount: nodes.length,
+        edgeCount: document.querySelectorAll('.graph-edge').length,
+        clusterCount: document.querySelectorAll('.graph-cluster').length,
+        legendCount: document.querySelectorAll('.graph-legend span').length,
+        detailHasNode: Boolean(document.querySelector('.knowledge-node-detail')),
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+        layoutRect: rect(layout),
+        filterRect: rect(filterPanel),
+        canvasRect: rect(canvas),
+        detailRect: rect(detailPanel),
+        accentMaxChannelDelta: accentValues.reduce((max, value) => Math.max(max, channelDelta(value)), 0),
+        accentValues
+      };
+    }`);
+
+    if (snapshot.hasPage && snapshot.hasSvg && snapshot.nodeCount > 0) {
+      break;
+    }
+    await wait(250);
+  }
+
+  if (
+    !snapshot.hasPage ||
+    snapshot.activeSidebar !== 'knowledgeGraph' ||
+    !snapshot.hasLayout ||
+    !snapshot.hasSvg ||
+    snapshot.nodeCount < 3 ||
+    snapshot.edgeCount < 2 ||
+    snapshot.legendCount < 4 ||
+    !snapshot.detailHasNode ||
+    snapshot.hasHorizontalOverflow ||
+    (snapshot.canvasRect?.width ?? 0) < 420
+  ) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'knowledge-graph-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`knowledgeGraph: expected scan-ready graph workspace, got ${JSON.stringify(snapshot)}`);
+  }
+  if (snapshot.accentMaxChannelDelta > 80) {
+    throw new Error(`knowledgeGraph: high-saturation legacy graph accent found, got ${JSON.stringify(snapshot)}`);
+  }
+  if (snapshot.accentMaxChannelDelta < 35) {
+    throw new Error(`knowledgeGraph: graph accents have collapsed back to grayscale, got ${JSON.stringify(snapshot)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'knowledge-graph.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  return snapshot;
+}
+
 async function runArxivSearchScenario(client) {
   await client.send('Runtime.evaluate', {
     expression: `
@@ -2458,6 +2571,7 @@ async function runArxivSearchScenario(client) {
     snapshot.queueButtonCount !== 3 ||
     !/^\+1/.test(snapshot.queueOverflowText) ||
     snapshot.emptyCardAccentMaxChannelDelta > 80 ||
+    snapshot.emptyCardAccentMaxChannelDelta < 35 ||
     snapshot.queueFirstRowCount !== 1 ||
     snapshot.queueUsesLegacyPills ||
     snapshot.hasHorizontalOverflow
@@ -2655,7 +2769,8 @@ async function runArxivSearchScenario(client) {
       !resultsSnapshot.hasTopPageFilters ||
       compressedCard ||
       resultsSnapshot.hasHorizontalOverflow ||
-      resultsSnapshot.legacyAccentMaxChannelDelta > 80
+      resultsSnapshot.legacyAccentMaxChannelDelta > 80 ||
+      resultsSnapshot.legacyAccentMaxChannelDelta < 35
     ) {
       await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
         writeFile(path.join(outputDir, 'arxiv-search-results-failed.png'), Buffer.from(shot.data, 'base64'))
@@ -2804,6 +2919,9 @@ async function runSettingsScenario(client) {
       getComputedStyle(document.querySelector('.settings-page .settings-header') ?? document.body).backgroundColor,
       getComputedStyle(document.querySelector('.settings-page .settings-header') ?? document.body).backgroundImage
     ];
+    const activeNavBackground = getComputedStyle(
+      document.querySelector('.settings-nav button.active') ?? document.body
+    ).backgroundColor;
     return {
       hasPage: Boolean(page && layout && nav && content),
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
@@ -2819,6 +2937,8 @@ async function runSettingsScenario(client) {
         .filter((button) => button.disabled || /TODO/.test(button.getAttribute('title') ?? '')).length,
       oldAccentValues,
       oldAccentMaxChannelDelta: oldAccentValues.reduce((max, value) => Math.max(max, channelDelta(value)), 0),
+      activeNavBackground,
+      activeNavMaxChannelDelta: channelDelta(activeNavBackground),
       headerBackgroundImage: getComputedStyle(document.querySelector('.settings-page .settings-header') ?? document.body)
         .backgroundImage,
       headerIconFilter: getComputedStyle(
@@ -2842,6 +2962,12 @@ async function runSettingsScenario(client) {
   }
   if (snapshot.oldAccentMaxChannelDelta > 80) {
     throw new Error(`settings: high-saturation legacy accent found, got ${JSON.stringify(snapshot)}`);
+  }
+  if (snapshot.oldAccentMaxChannelDelta < 35) {
+    throw new Error(`settings: page accents have collapsed back to grayscale, got ${JSON.stringify(snapshot)}`);
+  }
+  if (snapshot.activeNavMaxChannelDelta < 25 || snapshot.activeNavMaxChannelDelta > 80) {
+    throw new Error(`settings: active nav still reads as grayscale or high-saturation accent, got ${JSON.stringify(snapshot)}`);
   }
   if (snapshot.headerBackgroundImage !== 'none' || snapshot.headerIconFilter === 'none') {
     throw new Error(`settings: legacy header gradient or unfiltered icon found, got ${JSON.stringify(snapshot)}`);
@@ -2941,12 +3067,13 @@ async function main() {
     const presentation = await runPresentationScenario(client);
     const aiAssistant = await runAiAssistantScenario(client);
     const paperTutor = await runPaperTutorScenario(client);
+    const knowledgeGraph = await runKnowledgeGraphScenario(client);
     const arxivSearch = await runArxivSearchScenario(client);
     const settings = await runSettingsScenario(client);
     client.close();
     console.log(
       JSON.stringify(
-        { pdfPath, home, experimentMatrix, researchSheet, wholePdfReader, presentation, aiAssistant, paperTutor, arxivSearch, settings, outputDir },
+        { pdfPath, home, experimentMatrix, researchSheet, wholePdfReader, presentation, aiAssistant, paperTutor, knowledgeGraph, arxivSearch, settings, outputDir },
         null,
         2
       )

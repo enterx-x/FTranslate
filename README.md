@@ -625,6 +625,8 @@ assets/
 
 已覆盖页面包括设置、AI 助手、论文导师问答、组会 PPT、知识图谱和 arXiv 检索。arXiv 检索结果态的备选论文库现在只保留摘要条，不再展开成列表压住论文卡片；空结果状态保留候选论文快捷定位，但去掉紫色渐变和光晕。
 
+为避免界面从“塑料蓝绿黄”退到“全灰黑单调”，全局样式新增低饱和研究色相：蓝灰、鼠尾草绿、暖琥珀、陶土红和灰紫只用于页面方向、状态线、badge、图谱节点和 active 状态。设置页内部导航、知识图谱节点和 arXiv / 实验矩阵状态色都已纳入 `visual:check` 的高饱和与灰度坍缩断言。
+
 验证方式：
 
 ```powershell
@@ -634,4 +636,4 @@ npm run dist
 $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 ```
 
-关键截图输出在 `.tmp-visual-check/`，建议优先查看 `arxiv-search-empty.png`、`arxiv-search-results.png`、`settings-page.png`、`paper-tutor-page.png` 和 `presentation-page.png`。
+关键截图输出在 `.tmp-visual-check/`，建议优先查看 `home.png`、`experiment-matrix.png`、`knowledge-graph.png`、`arxiv-search-results.png`、`settings-page.png`、`paper-tutor-page.png` 和 `presentation-page.png`。

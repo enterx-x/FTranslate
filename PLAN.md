@@ -327,18 +327,15 @@ AI 科创团队的真实瓶颈：
 
 - 本轮不再争论“完全去卡片”或“全卡片”，而是采用克制工作台方案：顶层 pane 和真实对象卡片可以保留，但指标、状态、辅助队列和空状态不再拆成装饰卡片堆叠。
 - 旧页面统一采用中性灰白画布、深石墨主按钮、低饱和 badge、灰蓝边框和克制阴影，避免蓝/绿/黄/紫塑料感回潮。
+- 针对“全灰黑太单调”的问题，新增蓝灰、鼠尾草绿、暖琥珀、陶土红和灰紫作为低饱和研究色相；这些颜色只承担页面方向、状态线、图谱节点、active 状态和轻量提示，不再做大面积塑料色块。
 - arXiv 检索结果态的备选论文库改为摘要条，不展开列表，不遮挡结果卡片；空状态保留 3 条候选和 `+1 篇` 汇总，但去掉紫色渐变光晕。
 
 ### 视觉对抗式审查
 
-- 自动检查：`npm run build` 已通过，67 个测试文件、433 个测试通过；`npm run visual:check` 已通过，并刷新 `.tmp-visual-check/`。
-- 人工截图审查：已查看 `.tmp-visual-check/arxiv-search-empty.png`、`arxiv-search-results.png`、`settings-page.png`、`paper-tutor-page.png`、`presentation-page.png`。
-- 审查结论：未发现关键页面明显重叠、遮挡、横向溢出或高饱和蓝绿黄紫状态色回潮；arXiv 结果态队列未遮挡卡片，空状态已变为中性灰白。
-- 剩余风险：组会 PPT 和论文导师仍有较多面板与列表结构，后续可继续做组件级统一；Vite 大 chunk 警告仍为既有构建风险，不在本轮 UI 收口内解决。
-
-### 待完成验证
-
-- 本轮代码任务仍需继续执行 `npm run dist` 重建 Windows 安装包，并运行 `$env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check` 确认安装包内 UI。
+- 自动检查：`npm run build` 已通过，74 个测试文件、447 个测试通过；`npm run visual:check` 已通过，并刷新 `.tmp-visual-check/`。
+- 人工截图审查：已查看 `.tmp-visual-check/home.png`、`experiment-matrix.png`、`knowledge-graph.png`、`arxiv-search-results.png`、`settings-page.png`。
+- 审查结论：未发现关键页面明显重叠、遮挡、横向溢出或高饱和蓝绿黄紫状态色回潮；知识图谱已刷新为低饱和节点色，设置页内部 active 导航不再是纯黑块，arXiv 结果态队列未遮挡卡片。
+- 剩余风险：组会 PPT、论文导师和 PDF 阅读仍有较多面板与列表结构，后续可继续做组件级统一；Vite 大 chunk 警告仍为既有构建风险，不在本轮 UI 收口内解决。
 
 ### 安装包验证结果
 
