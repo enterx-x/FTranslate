@@ -77,7 +77,7 @@ demo-output/research-loop/
 npm run demo:code-repo
 ```
 
-该 demo 不打开 Electron UI，也不会执行样例仓库代码。它会创建一个安全强化学习导航代码仓库 fixture，执行只读扫描，把 manifest、训练入口、配置文件和方法卡字段映射为代码证据，并输出到：
+该 demo 不打开 Electron UI，也不会执行样例仓库代码。它会创建一个安全强化学习导航代码仓库 fixture，执行只读扫描，把 manifest、训练入口、配置文件、方法卡字段和一段失败日志映射为可追踪代码证据与复现诊断，并输出到：
 
 ```text
 demo-output/code-repository/
@@ -87,7 +87,8 @@ demo-output/code-repository/
 
 - `repository-scan.json`：仓库文件、manifest、入口脚本、配置文件和风险摘要；
 - `repository-summary.md`：可读的仓库扫描与方法到代码映射说明；
-- `paper-to-code-mapping.json`：方法卡字段到代码证据路径的结构化映射。
+- `paper-to-code-mapping.json`：方法卡字段到代码证据路径的结构化映射；
+- `reproduction-diagnosis.json`：复现失败日志到依赖清单、入口文件、证据行和下一步动作的结构化诊断。
 
 阶段 4/5 已先完成数据层与 headless 闭环，UI 由后续代理接入：
 

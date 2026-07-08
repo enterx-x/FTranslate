@@ -17,6 +17,7 @@
     "src/main/codeRepositoryScanner.ts",
     "src/renderer/lib/codeRepositories.ts",
     "src/renderer/lib/paperToCodeMapping.ts",
+    "src/renderer/lib/reproductionLogDiagnostics.ts",
     "src/renderer/lib/researchLoopDemo.ts",
     "src/renderer/lib/methodCards.ts",
     "src/renderer/lib/experimentMatrix.ts",

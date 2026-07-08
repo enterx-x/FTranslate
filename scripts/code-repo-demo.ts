@@ -4,6 +4,7 @@ import process from 'node:process';
 import { scanCodeRepository } from '../src/main/codeRepositoryScanner';
 import { buildCodeRepositoryRecord } from '../src/renderer/lib/codeRepositories';
 import { buildPaperToCodeMapping } from '../src/renderer/lib/paperToCodeMapping';
+import { diagnoseReproductionLog } from '../src/renderer/lib/reproductionLogDiagnostics';
 import type { MethodCard } from '../src/renderer/lib/methodCards';
 import { buildDefaultResearchProject, linkCodeRepositoryPath } from '../src/renderer/lib/researchProjects';
 
@@ -25,6 +26,11 @@ async function main(): Promise<void> {
     methodCard: createDemoMethodCard(),
     repository
   });
+  const reproductionDiagnosis = diagnoseReproductionLog({
+    repository,
+    now,
+    logText: createDemoFailureLog()
+  });
 
   const artifacts = {
     'repository-scan.json': `${JSON.stringify(scan, null, 2)}\n`,
@@ -32,9 +38,11 @@ async function main(): Promise<void> {
       project,
       repository,
       scan,
-      mapping
+      mapping,
+      reproductionDiagnosis
     })}\n`,
-    'paper-to-code-mapping.json': `${JSON.stringify(mapping, null, 2)}\n`
+    'paper-to-code-mapping.json': `${JSON.stringify(mapping, null, 2)}\n`,
+    'reproduction-diagnosis.json': `${JSON.stringify(reproductionDiagnosis, null, 2)}\n`
   };
 
   await fs.mkdir(outputDir, { recursive: true });
@@ -53,14 +61,16 @@ async function main(): Promise<void> {
         entryPointCount: repository.entryPoints.length,
         configFileCount: repository.configFiles.length,
         mappedConceptCount: mapping.coverage.mappedConceptCount,
-        qualityPassed: evaluateDemo(repository, mapping)
+        diagnosisIssueCount: reproductionDiagnosis.issues.length,
+        diagnosisStatus: reproductionDiagnosis.status,
+        qualityPassed: evaluateDemo(repository, mapping, reproductionDiagnosis)
       },
       null,
       2
     )
   );
 
-  if (!evaluateDemo(repository, mapping)) {
+  if (!evaluateDemo(repository, mapping, reproductionDiagnosis)) {
     process.exitCode = 1;
   }
 }
@@ -116,6 +126,15 @@ async function createFixtureRepository(): Promise<void> {
   await fs.writeFile(path.join(fixtureDir, 'node_modules', 'ignored.js'), 'ignored', 'utf8');
 }
 
+function createDemoFailureLog(): string {
+  return [
+    'Traceback (most recent call last):',
+    '  File "D:/demo/safe-rl/train_ppo.py", line 1, in <module>',
+    '    import gymnasium',
+    "ModuleNotFoundError: No module named 'gymnasium'"
+  ].join('\n');
+}
+
 function createDemoMethodCard(): MethodCard {
   return {
     id: 'method-card-safe-rl-demo',
@@ -161,6 +180,7 @@ function buildRepositorySummary(input: {
   repository: ReturnType<typeof buildCodeRepositoryRecord>;
   scan: Awaited<ReturnType<typeof scanCodeRepository>>;
   mapping: ReturnType<typeof buildPaperToCodeMapping>;
+  reproductionDiagnosis: ReturnType<typeof diagnoseReproductionLog>;
 }): string {
   return [
     '# FTranslate Paper-to-Code Demo',
@@ -187,9 +207,21 @@ function buildRepositorySummary(input: {
       (row) => `- ${row.methodFieldKey}: ${row.concept} -> ${row.codeEvidencePath} (${row.evidenceType}, ${row.confidence})`
     ),
     '',
+    '## Reproduction Failure Diagnosis',
+    '',
+    `- Status: ${input.reproductionDiagnosis.status}`,
+    `- Issues: ${input.reproductionDiagnosis.issues.length}`,
+    ...input.reproductionDiagnosis.issues.map(
+      (issue) =>
+        `- ${issue.kind}: ${issue.title}; evidence line ${issue.evidenceLines
+          .map((line) => line.lineNumber)
+          .join(', ')}; files ${issue.relatedFiles.join(', ') || 'none'}`
+    ),
+    '',
     '## Safety',
     '',
     '- The demo only reads text files from a generated fixture repository.',
+    '- The diagnosis consumes a static sample log and only returns structured suggestions.',
     '- It does not run python, pip, conda, npm, shell scripts or notebooks.',
     ''
   ].join('\n');
@@ -197,13 +229,16 @@ function buildRepositorySummary(input: {
 
 function evaluateDemo(
   repository: ReturnType<typeof buildCodeRepositoryRecord>,
-  mapping: ReturnType<typeof buildPaperToCodeMapping>
+  mapping: ReturnType<typeof buildPaperToCodeMapping>,
+  reproductionDiagnosis: ReturnType<typeof diagnoseReproductionLog>
 ): boolean {
   return (
     repository.manifests.length >= 1 &&
     repository.entryPoints.length >= 1 &&
     repository.configFiles.length >= 1 &&
-    mapping.coverage.mappedConceptCount >= 2
+    mapping.coverage.mappedConceptCount >= 2 &&
+    reproductionDiagnosis.status === 'blocked' &&
+    reproductionDiagnosis.issues.length >= 1
   );
 }
 
