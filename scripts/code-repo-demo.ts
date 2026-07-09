@@ -5,6 +5,7 @@ import { scanCodeRepository } from '../src/main/codeRepositoryScanner';
 import { buildCodeRepositoryRecord } from '../src/renderer/lib/codeRepositories';
 import { buildPaperToCodeMapping } from '../src/renderer/lib/paperToCodeMapping';
 import { diagnoseReproductionLog } from '../src/renderer/lib/reproductionLogDiagnostics';
+import { buildReproductionRunPlan, renderReproductionRunPlanMarkdown } from '../src/renderer/lib/reproductionRunPlan';
 import type { MethodCard } from '../src/renderer/lib/methodCards';
 import { buildDefaultResearchProject, linkCodeRepositoryPath } from '../src/renderer/lib/researchProjects';
 
@@ -31,6 +32,11 @@ async function main(): Promise<void> {
     now,
     logText: createDemoFailureLog()
   });
+  const reproductionRunPlan = buildReproductionRunPlan({
+    repository,
+    diagnosis: reproductionDiagnosis,
+    now
+  });
 
   const artifacts = {
     'repository-scan.json': `${JSON.stringify(scan, null, 2)}\n`,
@@ -39,10 +45,13 @@ async function main(): Promise<void> {
       repository,
       scan,
       mapping,
-      reproductionDiagnosis
+      reproductionDiagnosis,
+      reproductionRunPlan
     })}\n`,
     'paper-to-code-mapping.json': `${JSON.stringify(mapping, null, 2)}\n`,
-    'reproduction-diagnosis.json': `${JSON.stringify(reproductionDiagnosis, null, 2)}\n`
+    'reproduction-diagnosis.json': `${JSON.stringify(reproductionDiagnosis, null, 2)}\n`,
+    'reproduction-run-plan.json': `${JSON.stringify(reproductionRunPlan, null, 2)}\n`,
+    'reproduction-run-plan.md': `${renderReproductionRunPlanMarkdown(reproductionRunPlan)}\n`
   };
 
   await fs.mkdir(outputDir, { recursive: true });
@@ -63,14 +72,16 @@ async function main(): Promise<void> {
         mappedConceptCount: mapping.coverage.mappedConceptCount,
         diagnosisIssueCount: reproductionDiagnosis.issues.length,
         diagnosisStatus: reproductionDiagnosis.status,
-        qualityPassed: evaluateDemo(repository, mapping, reproductionDiagnosis)
+        runPlanStepCount: reproductionRunPlan.steps.length,
+        runPlanStatus: reproductionRunPlan.status,
+        qualityPassed: evaluateDemo(repository, mapping, reproductionDiagnosis, reproductionRunPlan)
       },
       null,
       2
     )
   );
 
-  if (!evaluateDemo(repository, mapping, reproductionDiagnosis)) {
+  if (!evaluateDemo(repository, mapping, reproductionDiagnosis, reproductionRunPlan)) {
     process.exitCode = 1;
   }
 }
@@ -181,6 +192,7 @@ function buildRepositorySummary(input: {
   scan: Awaited<ReturnType<typeof scanCodeRepository>>;
   mapping: ReturnType<typeof buildPaperToCodeMapping>;
   reproductionDiagnosis: ReturnType<typeof diagnoseReproductionLog>;
+  reproductionRunPlan: ReturnType<typeof buildReproductionRunPlan>;
 }): string {
   return [
     '# FTranslate Paper-to-Code Demo',
@@ -218,10 +230,23 @@ function buildRepositorySummary(input: {
           .join(', ')}; files ${issue.relatedFiles.join(', ') || 'none'}`
     ),
     '',
+    '## Reproduction Run Plan',
+    '',
+    `- Status: ${input.reproductionRunPlan.status}`,
+    `- Execution policy: ${input.reproductionRunPlan.executionPolicy}`,
+    `- Steps: ${input.reproductionRunPlan.steps.length}`,
+    ...input.reproductionRunPlan.steps.map(
+      (step) =>
+        `- ${step.order}. ${step.phase}: ${step.command || 'no command'}; blocked by ${
+          step.blockedByIssueIds.join(', ') || 'none'
+        }`
+    ),
+    '',
     '## Safety',
     '',
     '- The demo only reads text files from a generated fixture repository.',
     '- The diagnosis consumes a static sample log and only returns structured suggestions.',
+    '- The run plan is manual-only and never executes generated commands.',
     '- It does not run python, pip, conda, npm, shell scripts or notebooks.',
     ''
   ].join('\n');
@@ -230,7 +255,8 @@ function buildRepositorySummary(input: {
 function evaluateDemo(
   repository: ReturnType<typeof buildCodeRepositoryRecord>,
   mapping: ReturnType<typeof buildPaperToCodeMapping>,
-  reproductionDiagnosis: ReturnType<typeof diagnoseReproductionLog>
+  reproductionDiagnosis: ReturnType<typeof diagnoseReproductionLog>,
+  reproductionRunPlan: ReturnType<typeof buildReproductionRunPlan>
 ): boolean {
   return (
     repository.manifests.length >= 1 &&
@@ -238,7 +264,10 @@ function evaluateDemo(
     repository.configFiles.length >= 1 &&
     mapping.coverage.mappedConceptCount >= 2 &&
     reproductionDiagnosis.status === 'blocked' &&
-    reproductionDiagnosis.issues.length >= 1
+    reproductionDiagnosis.issues.length >= 1 &&
+    reproductionRunPlan.status === 'blocked' &&
+    reproductionRunPlan.executionPolicy === 'manual-only' &&
+    reproductionRunPlan.steps.length >= 2
   );
 }
 
