@@ -1163,6 +1163,26 @@ async function runHomeScenario(client) {
           action: rect(button.querySelector('em'))
         }))
         .filter((item) => overlaps(item.copy, item.action));
+      const clippedNextActions = (() => {
+        const panel = document.querySelector('.research-next-actions');
+        const panelBox = panel?.getBoundingClientRect();
+        if (!panelBox) {
+          return [];
+        }
+        return [...document.querySelectorAll('.research-next-action')]
+          .map((item) => {
+            const itemBox = item.getBoundingClientRect();
+            return {
+              text: (item.textContent ?? '').trim().slice(0, 100),
+              top: Math.round(itemBox.top),
+              bottom: Math.round(itemBox.bottom),
+              height: Math.round(itemBox.height),
+              panelTop: Math.round(panelBox.top),
+              panelBottom: Math.round(panelBox.bottom)
+            };
+          })
+          .filter((item) => item.top < item.panelTop - 2 || item.bottom > item.panelBottom + 2 || item.height < 30);
+      })();
       const recentTextOverlaps = [...document.querySelectorAll('.research-recent-paper')]
         .map((button) => ({
           text: (button.textContent ?? '').trim(),
@@ -1250,6 +1270,8 @@ async function runHomeScenario(client) {
         workflowCardTextOverlaps,
         nextActionOverlapCount: nextActionOverlaps.length,
         nextActionOverlaps,
+        clippedNextActionCount: clippedNextActions.length,
+        clippedNextActions,
         recentTextOverlapCount: recentTextOverlaps.length,
         recentTextOverlaps,
         clippedRiskCount: clippedRiskItems.length,
@@ -1382,6 +1404,7 @@ async function runHomeScenario(client) {
     hub.adversarialLayout.workflowCardOverflowCount > 0 ||
     hub.adversarialLayout.workflowCardTextOverlapCount > 0 ||
     hub.adversarialLayout.nextActionOverlapCount > 0 ||
+    hub.adversarialLayout.clippedNextActionCount > 0 ||
     hub.adversarialLayout.recentTextOverlapCount > 0 ||
     hub.adversarialLayout.clippedRiskCount > 0 ||
     hub.adversarialLayout.detailEscapesShell ||
