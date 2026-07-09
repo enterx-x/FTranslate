@@ -26,6 +26,12 @@ interface ArxivTranslationServiceOptions {
   timeoutMs?: number;
 }
 
+export type ArxivTranslationPriority = 'foreground' | 'preview' | 'background';
+
+export interface ArxivTranslationOptions {
+  priority?: ArxivTranslationPriority;
+}
+
 interface CachedTranslationRow {
   source_title: string;
   source_summary: string;
@@ -36,7 +42,27 @@ interface CachedTranslationRow {
 }
 
 const DEFAULT_TRANSLATION_TIMEOUT_MS = 90_000;
+const TRANSLATION_PRIORITY_ORDER: readonly ArxivTranslationPriority[] = [
+  'foreground',
+  'preview',
+  'background'
+];
 let argosPythonRuntime: ArgosPythonRuntime | null = null;
+
+interface QueuedTranslationJob {
+  run: () => Promise<void>;
+}
+
+function normalizeTranslationPriority(priority?: ArxivTranslationPriority): ArxivTranslationPriority {
+  switch (priority) {
+    case 'preview':
+    case 'background':
+      return priority;
+    case 'foreground':
+    default:
+      return 'foreground';
+  }
+}
 
 export class ArxivTranslationService {
   private readonly db: DatabaseSync;
@@ -44,7 +70,12 @@ export class ArxivTranslationService {
   private readonly fallbackTranslateTextsWithEngine?: (texts: string[]) => Promise<LocalTranslateBatchResult>;
   private readonly now: () => number;
   private readonly timeoutMs: number;
-  private translationTail: Promise<unknown> = Promise.resolve();
+  private readonly translationQueues: Record<ArxivTranslationPriority, QueuedTranslationJob[]> = {
+    foreground: [],
+    preview: [],
+    background: []
+  };
+  private translationRunning = false;
 
   constructor(options: ArxivTranslationServiceOptions) {
     this.db = new DatabaseSync(options.dbPath);
@@ -82,14 +113,16 @@ export class ArxivTranslationService {
   }
 
   async translatePaper(
-    request: ArxivTitleAbstractTranslationRequest
+    request: ArxivTitleAbstractTranslationRequest,
+    options?: ArxivTranslationOptions
   ): Promise<ArxivTitleAbstractTranslationResult> {
-    const [result] = await this.translatePapers([request]);
+    const [result] = await this.translatePapers([request], options);
     return result;
   }
 
   async translatePapers(
-    requests: ArxivTitleAbstractTranslationRequest[]
+    requests: ArxivTitleAbstractTranslationRequest[],
+    options?: ArxivTranslationOptions
   ): Promise<ArxivTitleAbstractTranslationResult[]> {
     const results = new Array<ArxivTitleAbstractTranslationResult>(requests.length);
     const missing: Array<{
@@ -228,7 +261,7 @@ export class ArxivTranslationService {
         });
       }
       return results;
-    });
+    }, options?.priority);
   }
 
   private initDatabase(): void {
@@ -246,10 +279,42 @@ export class ArxivTranslationService {
     `);
   }
 
-  private async enqueue<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.translationTail.then(task);
-    this.translationTail = run.catch(() => undefined);
-    return run;
+  private enqueue<T>(task: () => Promise<T>, priority?: ArxivTranslationPriority): Promise<T> {
+    const queue = this.translationQueues[normalizeTranslationPriority(priority)];
+    return new Promise<T>((resolve, reject) => {
+      queue.push({
+        run: async () => {
+          try {
+            resolve(await task());
+          } catch (error) {
+            reject(error);
+          }
+        }
+      });
+      this.runNextTranslationJob();
+    });
+  }
+
+  private runNextTranslationJob(): void {
+    if (this.translationRunning) {
+      return;
+    }
+    let job: QueuedTranslationJob | undefined;
+    for (const priority of TRANSLATION_PRIORITY_ORDER) {
+      const candidate = this.translationQueues[priority].shift();
+      if (candidate) {
+        job = candidate;
+        break;
+      }
+    }
+    if (!job) {
+      return;
+    }
+    this.translationRunning = true;
+    void job.run().finally(() => {
+      this.translationRunning = false;
+      this.runNextTranslationJob();
+    });
   }
 
   private readCache(cacheKey: string): CachedTranslationRow | null {

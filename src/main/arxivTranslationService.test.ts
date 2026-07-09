@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ArxivTranslationService,
+  type ArxivTranslationPriority,
   buildArgosCombinedPayload,
   decodeArgosCliOutput,
   resolveArgosChildEnv,
@@ -158,6 +159,71 @@ describe('ArxivTranslationService', () => {
           requests[1].summary
         ]
       ]);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('runs a queued foreground translation before an earlier queued background translation', async () => {
+    const starts: string[] = [];
+    let releasePreview!: () => void;
+    let markPreviewStarted!: () => void;
+    const previewReleased = new Promise<void>((resolve) => {
+      releasePreview = resolve;
+    });
+    const previewStarted = new Promise<void>((resolve) => {
+      markPreviewStarted = resolve;
+    });
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) => {
+        starts.push(texts[0]);
+        if (texts[0] === 'Preview title') {
+          markPreviewStarted();
+          await previewReleased;
+        }
+        return texts.map(() => '这是可用的中文翻译结果，用于机器人学习研究。');
+      }
+    });
+    const invokeWithPriority = (
+      request: { stableId: string; title: string; summary: string },
+      priority: ArxivTranslationPriority
+    ) => service.translatePaper(request, { priority });
+
+    try {
+      const preview = invokeWithPriority(
+        {
+          stableId: 'preview-paper',
+          title: 'Preview title',
+          summary: 'Preview summary for the controlled running translation.'
+        },
+        'preview'
+      );
+      await previewStarted;
+
+      const background = invokeWithPriority(
+        {
+          stableId: 'background-paper',
+          title: 'Background title',
+          summary: 'Background summary queued while preview translation is running.'
+        },
+        'background'
+      );
+      const foreground = invokeWithPriority(
+        {
+          stableId: 'foreground-paper',
+          title: 'Foreground title',
+          summary: 'Foreground summary queued while preview translation is running.'
+        },
+        'foreground'
+      );
+
+      expect(starts).toEqual(['Preview title']);
+
+      releasePreview();
+      await Promise.all([preview, foreground, background]);
+
+      expect(starts).toEqual(['Preview title', 'Foreground title', 'Background title']);
     } finally {
       service.close();
     }
