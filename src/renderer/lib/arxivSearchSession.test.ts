@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createArxivSearchSessionController } from './arxivSearchSession';
+import { createArxivSearchSessionController, tryBeginArxivSearchSession } from './arxivSearchSession';
 
 describe('createArxivSearchSessionController', () => {
   it('issues monotonically increasing sessions and only accepts the current session', () => {
@@ -15,5 +15,14 @@ describe('createArxivSearchSessionController', () => {
     expect(controller.current()).toBe(secondSession);
     expect(controller.isCurrent(firstSession)).toBe(false);
     expect(controller.isCurrent(secondSession)).toBe(true);
+  });
+
+  it('leaves a current request active when an invalid search is rejected', () => {
+    const controller = createArxivSearchSessionController();
+    const activeSession = controller.begin();
+
+    expect(tryBeginArxivSearchSession(controller, false)).toBeNull();
+    expect(controller.current()).toBe(activeSession);
+    expect(controller.isCurrent(activeSession)).toBe(true);
   });
 });

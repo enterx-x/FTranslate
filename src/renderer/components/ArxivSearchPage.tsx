@@ -32,7 +32,7 @@ import saveIcon from '../assets/icons/duotone/save.svg';
 import type { LocalTranslationStatus, PdfFilePayload } from '../types/electron';
 import { repairAcademicTranslation } from '../../shared/academicTranslationQuality';
 import { clampPanelRatio, getRightPanelRatioFromPointer } from '../lib/responsiveLayout';
-import { createArxivSearchSessionController } from '../lib/arxivSearchSession';
+import { createArxivSearchSessionController, tryBeginArxivSearchSession } from '../lib/arxivSearchSession';
 import { MathText } from './MathText';
 
 interface ArxivSearchPageProps {
@@ -487,9 +487,12 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     nextStart = 0,
     options: { forceRefresh?: boolean; resetFilters?: boolean; latest?: boolean; maxResults?: number } = {}
   ): Promise<void> {
-    const searchSessionId = searchSessionController.begin();
     const searchQuery = query.trim();
-    if (!searchQuery && !options.latest) {
+    const searchSessionId = tryBeginArxivSearchSession(
+      searchSessionController,
+      Boolean(searchQuery) || Boolean(options.latest)
+    );
+    if (searchSessionId === null) {
       setMessage('请输入关键词后再搜索。');
       setStatus('error');
       return;

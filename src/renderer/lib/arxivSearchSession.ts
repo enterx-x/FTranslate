@@ -17,3 +17,10 @@ export function createArxivSearchSessionController(): ArxivSearchSessionControll
     isCurrent: (sessionId) => currentSessionId === sessionId
   };
 }
+
+export function tryBeginArxivSearchSession(
+  controller: ArxivSearchSessionController,
+  isSearchAllowed: boolean
+): number | null {
+  return isSearchAllowed ? controller.begin() : null;
+}
