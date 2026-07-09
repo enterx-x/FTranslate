@@ -141,6 +141,48 @@ describe('buildReproductionTaskPackage', () => {
       'manual-run-plan',
       'experiment-matrix'
     ]);
+    expect(taskPackage.readinessAudit).toMatchObject({
+      overall: 'blocked',
+      manualBurden: {
+        confirmationCount: 2,
+        environmentMutatingCommandCount: 1,
+        repoExecutionCommandCount: 1,
+        blockedStepCount: 2
+      }
+    });
+    expect(taskPackage.readinessAudit.stages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'method-card',
+          status: 'assumption',
+          reason: expect.stringContaining('unconfirmed')
+        }),
+        expect.objectContaining({
+          id: 'manual-run-plan',
+          status: 'blocked',
+          reason: expect.stringContaining('blocked issue')
+        }),
+        expect.objectContaining({
+          id: 'experiment-matrix',
+          status: 'assumption'
+        })
+      ])
+    );
+    expect(taskPackage.readinessAudit.failureModes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'missing-dependency:gymnasium',
+          severity: 'blocking',
+          mitigation: expect.stringContaining('python -m pip install -r requirements.txt')
+        })
+      ])
+    );
+    expect(taskPackage.readinessAudit.acceptanceCriteria).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Resolve all blocked run-plan steps'),
+        expect.stringContaining('Run the smoke-test command manually')
+      ])
+    );
     expect(taskPackage.nextAction).toMatchObject({
       command: 'python -m pip install -r requirements.txt',
       commandKind: 'environment-mutating',
@@ -205,6 +247,8 @@ describe('buildReproductionTaskPackage', () => {
     expect(markdown).toContain('Manual only');
     expect(markdown).toContain('Paper-to-Code');
     expect(markdown).toContain('Experiment Matrix');
+    expect(markdown).toContain('Readiness Audit');
+    expect(markdown).toContain('Acceptance Criteria');
     expect(markdown).toContain('FTranslate does not run repository code or package managers');
   });
 });

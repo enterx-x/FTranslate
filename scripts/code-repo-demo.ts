@@ -92,6 +92,8 @@ async function main(): Promise<void> {
         runPlanStatus: reproductionRunPlan.status,
         taskPackageStatus: reproductionTaskPackage.status,
         taskPackageQualityPassed: reproductionTaskPackage.qualityGate.passed,
+        taskPackageReadiness: reproductionTaskPackage.readinessAudit.overall,
+        taskPackageBlockedSteps: reproductionTaskPackage.readinessAudit.manualBurden.blockedStepCount,
         taskPackageChecklistCount: reproductionTaskPackage.handoffChecklist.length,
         qualityPassed: evaluateDemo(repository, mapping, reproductionDiagnosis, reproductionRunPlan, reproductionTaskPackage)
       },
@@ -267,9 +269,15 @@ function buildRepositorySummary(input: {
     `- Status: ${input.reproductionTaskPackage.status}`,
     `- Timebox: ${input.reproductionTaskPackage.timeboxMinutes} minutes`,
     `- Quality gate: ${input.reproductionTaskPackage.qualityGate.passed ? 'passed' : 'failed'}`,
+    `- Readiness: ${input.reproductionTaskPackage.readinessAudit.overall}`,
+    `- Manual confirmations: ${input.reproductionTaskPackage.readinessAudit.manualBurden.confirmationCount}`,
+    `- Blocked run-plan steps: ${input.reproductionTaskPackage.readinessAudit.manualBurden.blockedStepCount}`,
     `- Next action: ${input.reproductionTaskPackage.nextAction.label}`,
     `- Next command kind: ${input.reproductionTaskPackage.nextAction.commandKind}`,
     `- Linked experiment rows: ${input.reproductionTaskPackage.linkedExperimentRows.length}`,
+    ...input.reproductionTaskPackage.readinessAudit.stages.map(
+      (stage) => `- ${stage.label}: ${stage.status}; ${stage.reason}`
+    ),
     ...input.reproductionTaskPackage.linkedExperimentRows.map(
       (row) => `- ${row.experimentRowId}: ${row.group}; status ${row.status}; evidence ${row.evidence.join(', ')}`
     ),
@@ -305,6 +313,9 @@ function evaluateDemo(
     reproductionTaskPackage.status === 'blocked' &&
     reproductionTaskPackage.executionPolicy === 'manual-only' &&
     reproductionTaskPackage.qualityGate.passed &&
+    reproductionTaskPackage.readinessAudit.overall === 'blocked' &&
+    reproductionTaskPackage.readinessAudit.manualBurden.blockedStepCount >= 1 &&
+    reproductionTaskPackage.readinessAudit.stages.some((stage) => stage.id === 'method-card' && stage.status === 'assumption') &&
     reproductionTaskPackage.linkedExperimentRows.length >= 2 &&
     reproductionTaskPackage.nextAction.requiresUserConfirmation
   );

@@ -91,8 +91,8 @@ demo-output/code-repository/
 - `reproduction-diagnosis.json`：复现失败日志到依赖清单、入口文件、证据行和下一步动作的结构化诊断；
 - `reproduction-run-plan.json`：把诊断 issue、入口脚本和配置文件组合成 manual-only 的结构化复现运行计划；
 - `reproduction-run-plan.md`：可读的手动复现运行计划，明确哪些命令会修改环境或执行仓库代码，默认不自动运行；
-- `reproduction-task-package.json`：把方法卡、Paper-to-Code 映射、日志诊断、运行计划和实验矩阵行合并成可交接任务包，包含质量门、下一步动作和被阻塞实验行；
-- `reproduction-task-package.md`：可读的 15 分钟复现任务包，默认 manual-only，用来告诉用户先修什么、证据在哪、哪些实验暂时不能运行。
+- `reproduction-task-package.json`：把方法卡、Paper-to-Code 映射、日志诊断、运行计划和实验矩阵行合并成可交接任务包，包含质量门、下一步动作、readiness audit、失败模式、验收标准和被阻塞实验行；
+- `reproduction-task-package.md`：可读的 15 分钟复现任务包，默认 manual-only，用来告诉用户先修什么、证据在哪、哪些环节只是假设、哪些实验暂时不能运行。
 
 阶段 4/5 已先完成数据层与 headless 闭环，UI 由后续代理接入：
 
@@ -103,6 +103,12 @@ demo-output/code-repository/
 
 ```bash
 npm run dist
+```
+
+如果 Windows 上在 Vite renderer build 阶段出现 `node.exe : memory allocation ... failed`，可临时提高 Node heap 后重试：
+
+```powershell
+$env:NODE_OPTIONS='--max-old-space-size=4096'; npm run dist
 ```
 
 安装包输出在 `dist/`，例如：

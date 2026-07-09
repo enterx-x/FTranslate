@@ -20,6 +20,7 @@ export interface ReproductionTaskPackage {
   handoffChecklist: ReproductionTaskChecklistItem[];
   nextAction: ReproductionTaskNextAction;
   linkedExperimentRows: ReproductionTaskExperimentRow[];
+  readinessAudit: ReproductionTaskReadinessAudit;
 }
 
 export interface ReproductionTaskQualityGate {
@@ -53,6 +54,39 @@ export interface ReproductionTaskExperimentRow {
   evidence: string[];
 }
 
+export interface ReproductionTaskReadinessAudit {
+  overall: 'ready' | 'blocked' | 'incomplete' | 'needs-review';
+  manualBurden: {
+    confirmationCount: number;
+    environmentMutatingCommandCount: number;
+    repoExecutionCommandCount: number;
+    readOnlyCommandCount: number;
+    blockedStepCount: number;
+    estimatedMinutes: number;
+  };
+  stages: ReproductionTaskAuditStage[];
+  assumptions: string[];
+  failureModes: ReproductionTaskFailureMode[];
+  acceptanceCriteria: string[];
+}
+
+export interface ReproductionTaskAuditStage {
+  id: ReproductionTaskEvidenceKey;
+  label: string;
+  status: 'verified' | 'assumption' | 'blocked' | 'missing';
+  reason: string;
+  evidence: string[];
+  requiredAction: string;
+}
+
+export interface ReproductionTaskFailureMode {
+  id: string;
+  severity: 'blocking' | 'warning';
+  description: string;
+  evidence: string[];
+  mitigation: string;
+}
+
 type ReproductionTaskEvidenceKey =
   | 'method-card'
   | 'paper-to-code-mapping'
@@ -82,6 +116,7 @@ export function buildReproductionTaskPackage(input: {
 }): ReproductionTaskPackage {
   const qualityGate = buildQualityGate(input);
   const linkedExperimentRows = buildLinkedExperimentRows(input);
+  const readinessAudit = buildReadinessAudit(input, qualityGate);
 
   return {
     id: `${input.projectId}:reproduction-task:${hashString(
@@ -100,7 +135,8 @@ export function buildReproductionTaskPackage(input: {
     qualityGate,
     handoffChecklist: buildChecklist(input),
     nextAction: buildNextAction(input.runPlan),
-    linkedExperimentRows
+    linkedExperimentRows,
+    readinessAudit
   };
 }
 
@@ -145,6 +181,38 @@ export function renderReproductionTaskPackageMarkdown(taskPackage: ReproductionT
     '',
     `- Required evidence: ${taskPackage.qualityGate.requiredEvidence.join(', ')}`,
     `- Missing evidence: ${taskPackage.qualityGate.missingEvidence.join(', ') || 'none'}`,
+    '',
+    '## Readiness Audit',
+    '',
+    `- Overall: ${taskPackage.readinessAudit.overall}`,
+    `- Manual confirmations: ${taskPackage.readinessAudit.manualBurden.confirmationCount}`,
+    `- Environment-mutating commands: ${taskPackage.readinessAudit.manualBurden.environmentMutatingCommandCount}`,
+    `- Repository execution commands: ${taskPackage.readinessAudit.manualBurden.repoExecutionCommandCount}`,
+    `- Blocked steps: ${taskPackage.readinessAudit.manualBurden.blockedStepCount}`,
+    `- Estimated manual minutes: ${taskPackage.readinessAudit.manualBurden.estimatedMinutes}`,
+    '',
+    ...taskPackage.readinessAudit.stages.map(
+      (stage) => `- ${stage.id}: ${stage.status}; ${stage.reason}; action ${stage.requiredAction}; evidence ${stage.evidence.join(', ') || 'none'}`
+    ),
+    '',
+    '## Assumptions',
+    '',
+    ...(taskPackage.readinessAudit.assumptions.length > 0
+      ? taskPackage.readinessAudit.assumptions.map((assumption) => `- ${assumption}`)
+      : ['- none']),
+    '',
+    '## Failure Modes',
+    '',
+    ...(taskPackage.readinessAudit.failureModes.length > 0
+      ? taskPackage.readinessAudit.failureModes.map(
+          (failure) =>
+            `- ${failure.id}: ${failure.severity}; ${failure.description}; mitigation ${failure.mitigation}; evidence ${failure.evidence.join(', ') || 'none'}`
+        )
+      : ['- none']),
+    '',
+    '## Acceptance Criteria',
+    '',
+    ...taskPackage.readinessAudit.acceptanceCriteria.map((criterion) => `- ${criterion}`),
     '',
     '## Safety',
     '',
@@ -236,6 +304,233 @@ function buildChecklist(input: {
   ];
 
   return items.map((item) => ({ ...item, evidence: uniqueStrings(item.evidence) }));
+}
+
+function buildReadinessAudit(
+  input: {
+    methodCard: MethodCard;
+    experimentRows: ExperimentMatrixRow[];
+    mapping: PaperToCodeMappingResult;
+    diagnosis: ReproductionLogDiagnosis;
+    runPlan: ReproductionRunPlan;
+  },
+  qualityGate: ReproductionTaskQualityGate
+): ReproductionTaskReadinessAudit {
+  const stages = buildAuditStages(input, qualityGate);
+  const failureModes = input.diagnosis.issues.map((issue): ReproductionTaskFailureMode => ({
+    id: issue.id,
+    severity: issue.severity === 'blocked' ? 'blocking' : 'warning',
+    description: issue.summary,
+    evidence: uniqueStrings([
+      ...issue.relatedFiles,
+      ...issue.relatedManifests,
+      ...issue.evidenceLines.map((line) => `log:${line.lineNumber}`)
+    ]),
+    mitigation: issue.commandCandidates[0] || issue.nextActions[0] || 'Review the issue evidence before running the next step.'
+  }));
+  const manualBurden = buildManualBurden(input.runPlan);
+  const assumptions = stages
+    .filter((stage) => stage.status === 'assumption')
+    .map((stage) => `${stage.label}: ${stage.reason}`);
+  const overall = readAuditOverall(qualityGate, stages, failureModes);
+
+  return {
+    overall,
+    manualBurden,
+    stages,
+    assumptions,
+    failureModes,
+    acceptanceCriteria: buildAcceptanceCriteria(input.runPlan, qualityGate)
+  };
+}
+
+function buildAuditStages(
+  input: {
+    methodCard: MethodCard;
+    experimentRows: ExperimentMatrixRow[];
+    mapping: PaperToCodeMappingResult;
+    diagnosis: ReproductionLogDiagnosis;
+    runPlan: ReproductionRunPlan;
+  },
+  qualityGate: ReproductionTaskQualityGate
+): ReproductionTaskAuditStage[] {
+  const groundedFields = input.methodCard.fields.filter(isGroundedField);
+  const unconfirmedFields = groundedFields.filter((field) => field.reviewState !== 'accepted');
+  const linkedRows = input.experimentRows.filter((row) => row.methodCardId === input.methodCard.id);
+  const blockedSteps = input.runPlan.steps.filter((step) => step.blockedByIssueIds.length > 0);
+
+  const stages = [
+    {
+      id: 'method-card',
+      label: 'Method card',
+      status: readMethodCardAuditStatus(input.methodCard, groundedFields, unconfirmedFields),
+      reason:
+        groundedFields.length === 0
+          ? 'No grounded method-card fields were found.'
+          : unconfirmedFields.length > 0 || input.methodCard.status !== 'verified'
+            ? `${unconfirmedFields.length || groundedFields.length} grounded field(s) remain unconfirmed.`
+            : 'Grounded method-card fields have been accepted.',
+      evidence: groundedFields.map((field) => `${field.key}:${field.evidenceSourceIds.join('|')}`),
+      requiredAction:
+        unconfirmedFields.length > 0 || input.methodCard.status !== 'verified'
+          ? 'Review and accept the method-card fields before treating claims as final.'
+          : 'No action required.'
+    },
+    {
+      id: 'paper-to-code-mapping',
+      label: 'Paper-to-Code mapping',
+      status: readMappingAuditStatus(input.mapping, qualityGate),
+      reason:
+        input.mapping.rows.length === 0
+          ? 'No method concepts were mapped to code evidence.'
+          : input.mapping.coverage.mappedConceptCount < input.mapping.coverage.methodConceptCount
+            ? `${input.mapping.coverage.mappedConceptCount}/${input.mapping.coverage.methodConceptCount} method concept(s) mapped.`
+            : 'All grounded method concepts are mapped to code evidence.',
+      evidence: input.mapping.rows.map((row) => row.codeEvidencePath),
+      requiredAction:
+        input.mapping.coverage.mappedConceptCount < input.mapping.coverage.methodConceptCount
+          ? 'Inspect unmapped method fields and add code evidence before running full experiments.'
+          : 'No action required.'
+    },
+    {
+      id: 'reproduction-diagnosis',
+      label: 'Reproduction diagnosis',
+      status: input.diagnosis.id ? 'verified' : 'missing',
+      reason:
+        input.diagnosis.issues.length > 0
+          ? `${input.diagnosis.issues.length} issue(s) were diagnosed from the latest log.`
+          : 'No blocker was detected in the latest log.',
+      evidence: input.diagnosis.issues.flatMap((issue) => issue.evidenceLines.map((line) => `log:${line.lineNumber}`)),
+      requiredAction:
+        input.diagnosis.issues.length > 0
+          ? 'Resolve diagnosed issues before marking the reproduction task runnable.'
+          : 'Keep the clean log with the task package as evidence.'
+    },
+    {
+      id: 'manual-run-plan',
+      label: 'Manual run plan',
+      status:
+        input.runPlan.steps.length === 0
+          ? 'missing'
+          : blockedSteps.length > 0
+            ? 'blocked'
+            : input.runPlan.executionPolicy === 'manual-only'
+              ? 'verified'
+              : 'assumption',
+      reason:
+        blockedSteps.length > 0
+          ? `${blockedSteps.length} step(s) are tied to a blocked issue.`
+          : input.runPlan.steps.length > 0
+            ? 'Run-plan steps are generated with manual confirmation requirements.'
+            : 'No run-plan steps were generated.',
+      evidence: uniqueStrings(input.runPlan.steps.flatMap((step) => step.evidence)),
+      requiredAction:
+        blockedSteps.length > 0
+          ? 'Resolve blocked issue(s) before running repository execution commands.'
+          : 'Review command flags and environment before manual execution.'
+    },
+    {
+      id: 'experiment-matrix',
+      label: 'Experiment matrix',
+      status:
+        linkedRows.length === 0
+          ? 'missing'
+          : input.runPlan.status === 'blocked' || linkedRows.some((row) => row.status === 'planned')
+            ? 'assumption'
+            : 'verified',
+      reason:
+        linkedRows.length === 0
+          ? 'No experiment rows are linked to this method card.'
+          : input.runPlan.status === 'blocked'
+            ? 'Experiment rows exist but are not runnable until the reproduction blocker is resolved.'
+            : 'Experiment rows are linked and can be reviewed for execution.',
+      evidence: linkedRows.flatMap((row) => [row.id, ...row.evidenceLocators]),
+      requiredAction:
+        linkedRows.length === 0
+          ? 'Generate or attach experiment rows before running the task.'
+          : 'Keep rows blocked until the smoke-test evidence is collected.'
+    }
+  ] satisfies ReproductionTaskAuditStage[];
+
+  return stages.map((stage) => ({ ...stage, evidence: uniqueStrings(stage.evidence) }));
+}
+
+function buildManualBurden(runPlan: ReproductionRunPlan): ReproductionTaskReadinessAudit['manualBurden'] {
+  const confirmationCount = runPlan.steps.filter((step) => step.requiresUserConfirmation).length;
+  const environmentMutatingCommandCount = runPlan.steps.filter((step) => step.commandKind === 'environment-mutating').length;
+  const repoExecutionCommandCount = runPlan.steps.filter((step) => step.commandKind === 'repo-execution').length;
+  const readOnlyCommandCount = runPlan.steps.filter((step) => step.commandKind === 'read-only').length;
+  const blockedStepCount = runPlan.steps.filter((step) => step.blockedByIssueIds.length > 0).length;
+
+  return {
+    confirmationCount,
+    environmentMutatingCommandCount,
+    repoExecutionCommandCount,
+    readOnlyCommandCount,
+    blockedStepCount,
+    estimatedMinutes: 5 + confirmationCount * 3 + environmentMutatingCommandCount * 4 + repoExecutionCommandCount * 6
+  };
+}
+
+function readAuditOverall(
+  qualityGate: ReproductionTaskQualityGate,
+  stages: ReproductionTaskAuditStage[],
+  failureModes: ReproductionTaskFailureMode[]
+): ReproductionTaskReadinessAudit['overall'] {
+  if (!qualityGate.passed || stages.some((stage) => stage.status === 'missing')) {
+    return 'incomplete';
+  }
+  if (stages.some((stage) => stage.status === 'blocked') || failureModes.some((failure) => failure.severity === 'blocking')) {
+    return 'blocked';
+  }
+  if (stages.some((stage) => stage.status === 'assumption')) {
+    return 'needs-review';
+  }
+  return 'ready';
+}
+
+function readMethodCardAuditStatus(
+  methodCard: MethodCard,
+  groundedFields: MethodCardField[],
+  unconfirmedFields: MethodCardField[]
+): ReproductionTaskAuditStage['status'] {
+  if (groundedFields.length === 0) {
+    return 'missing';
+  }
+  if (unconfirmedFields.length > 0 || methodCard.status !== 'verified') {
+    return 'assumption';
+  }
+  return 'verified';
+}
+
+function readMappingAuditStatus(
+  mapping: PaperToCodeMappingResult,
+  qualityGate: ReproductionTaskQualityGate
+): ReproductionTaskAuditStage['status'] {
+  if (qualityGate.missingEvidence.includes('paper-to-code-mapping')) {
+    return 'missing';
+  }
+  return mapping.coverage.mappedConceptCount >= mapping.coverage.methodConceptCount ? 'verified' : 'assumption';
+}
+
+function buildAcceptanceCriteria(
+  runPlan: ReproductionRunPlan,
+  qualityGate: ReproductionTaskQualityGate
+): string[] {
+  const criteria = [
+    'Resolve all blocked run-plan steps before treating linked experiment rows as runnable.',
+    'Run the smoke-test command manually only after environment-mutating steps are reviewed.',
+    'Attach the resulting command output or failure log back to the task package.'
+  ];
+
+  if (!qualityGate.passed) {
+    criteria.unshift(`Fill missing evidence before execution: ${qualityGate.missingEvidence.join(', ')}.`);
+  }
+  if (runPlan.executionPolicy !== 'manual-only') {
+    criteria.unshift('Reset execution policy to manual-only before exposing commands to users.');
+  }
+
+  return criteria;
 }
 
 function buildNextAction(runPlan: ReproductionRunPlan): ReproductionTaskNextAction {
