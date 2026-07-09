@@ -3,6 +3,7 @@ import {
   collapseLocalRepeatedFragments,
   collapseRepeatedTranslationTail,
   extractProtectedAcademicTerms,
+  prepareAcademicTranslation,
   repairAcademicTranslation
 } from './academicTranslationQuality';
 import { applyAiTranslationResult, type AiProviderSettings, type AiTranslationItem } from './aiTranslation';
@@ -133,5 +134,47 @@ describe('academic translation quality repair', () => {
     expect(collapseLocalRepeatedFragments('以以Egocentric Vision 为为视角，方法方法有效。')).toBe(
       '以Egocentric Vision 为视角，方法有效。'
     );
+  });
+
+  it('round-trips protected academic spans through opaque placeholders', () => {
+    const source =
+      'OmniAgent uses $x^2 + y^2$ and $$\\mathcal{L}=\\lambda \\|x\\|$$ with `policy.step()`, https://example.org/paper, doi:10.48550/arXiv.2607.01234, arXiv:2607.01234, and [1-3, 5] for Sim-to-Real CBF-MPC.';
+    const prepared = prepareAcademicTranslation(source);
+
+    expect(prepared.segments).toHaveLength(1);
+    expect(prepared.segments[0]).not.toContain('OmniAgent');
+    expect(prepared.segments[0]).not.toContain('$x^2 + y^2$');
+
+    const restored = prepared.restore([`这是译文：${prepared.segments[0]}`]);
+
+    expect(restored.ok).toBe(true);
+    expect(restored.text).toContain('OmniAgent');
+    expect(restored.text).toContain('$x^2 + y^2$');
+    expect(restored.text).toContain('$$\\mathcal{L}=\\lambda \\|x\\|$$');
+    expect(restored.text).toContain('`policy.step()`');
+    expect(restored.text).toContain('https://example.org/paper');
+    expect(restored.text).toContain('doi:10.48550/arXiv.2607.01234');
+    expect(restored.text).toContain('arXiv:2607.01234');
+    expect(restored.text).toContain('[1-3, 5]');
+    expect(restored.text).toContain('Sim-to-Real');
+    expect(restored.text).toContain('CBF-MPC');
+  });
+
+  it('splits long abstracts at sentence boundaries and restores all segments in order', () => {
+    const source = Array.from(
+      { length: 18 },
+      (_, index) => `Sentence-${String(index).padStart(2, '0')} describes a reproducible experiment with ${'details '.repeat(9)}.`
+    ).join(' ');
+    const prepared = prepareAcademicTranslation(source);
+
+    expect(prepared.segments.length).toBeGreaterThan(1);
+    expect(prepared.segments.every((segment) => segment.length <= 900)).toBe(true);
+
+    const restored = prepared.restore(prepared.segments.map((segment, index) => `第${index}段：${segment}`));
+
+    expect(restored.ok).toBe(true);
+    expect(restored.text).toContain('Sentence-00');
+    expect(restored.text).toContain('Sentence-17');
+    expect(restored.text.indexOf('Sentence-00')).toBeLessThan(restored.text.indexOf('Sentence-17'));
   });
 });

@@ -8,7 +8,14 @@ import type {
   ArxivTitleAbstractTranslationResult
 } from '../shared/arxiv';
 import { isMojibakeTranslationText } from '../shared/arxiv';
-import { collapseRepeatedTranslationTail, repairAcademicTranslation } from '../shared/academicTranslationQuality';
+import {
+  collapseRepeatedTranslationTail,
+  hasSevereAcademicTranslationLengthLoss,
+  prepareAcademicTranslation,
+  repairAcademicTranslation,
+  type PreparedAcademicTranslation,
+  type PreparedAcademicTranslationRestoreResult
+} from '../shared/academicTranslationQuality';
 import {
   type LocalTranslateBatchResult,
   type LocalTranslateDirectionOptions,
@@ -51,6 +58,23 @@ let argosPythonRuntime: ArgosPythonRuntime | null = null;
 
 interface QueuedTranslationJob {
   run: () => Promise<void>;
+}
+
+interface PreparedTranslationBatchItem {
+  sourceTitle: string;
+  sourceAbstract: string;
+  title: PreparedAcademicTranslation;
+  abstract: PreparedAcademicTranslation;
+}
+
+interface EvaluatedTranslationBatchItem {
+  title: PreparedAcademicTranslationRestoreResult;
+  abstract: PreparedAcademicTranslationRestoreResult;
+  titleZh: string;
+  abstractZh: string;
+  titleUsable: boolean;
+  abstractUsable: boolean;
+  hasSevereAbstractLengthLoss: boolean;
 }
 
 function normalizeTranslationPriority(priority?: ArxivTranslationPriority): ArxivTranslationPriority {
@@ -176,27 +200,36 @@ export class ArxivTranslationService {
       }
 
       try {
-        const texts = remaining.flatMap((item) => [item.title, item.summary]);
+        const preparedItems = remaining.map((item) => ({
+          sourceTitle: item.title,
+          sourceAbstract: item.summary,
+          title: prepareAcademicTranslation(item.title),
+          abstract: prepareAcademicTranslation(item.summary)
+        }));
+        const texts = preparedItems.flatMap((item) => [...item.title.segments, ...item.abstract.segments]);
         const uniqueBatch = buildUniqueTranslationBatch(texts);
         let translationResult = await this.translateTextsWithFallback(uniqueBatch.texts);
         let translatedTexts = uniqueBatch.indexes.map((index) => translationResult.texts[index] ?? '');
-        const suspiciousPrimaryAbstracts = countSuspiciousRepeatedAbstractTails(
-          remaining,
-          translatedTexts,
-          translationResult.engine
-        );
-        if (suspiciousPrimaryAbstracts > 0 && this.fallbackTranslateTextsWithEngine) {
+        let evaluatedTranslations = evaluatePreparedTranslations(preparedItems, translatedTexts);
+        const primaryQualityProblems = countTranslationQualityProblems(evaluatedTranslations, translationResult.engine);
+        const shouldTryFallback =
+          translationResult.engine.toLowerCase().includes('nllb') &&
+          evaluatedTranslations.some(
+            (item) => item.hasSevereAbstractLengthLoss || hasSuspiciousRepeatedTranslationTail(item.abstract.text)
+          );
+        if (shouldTryFallback && primaryQualityProblems > 0 && this.fallbackTranslateTextsWithEngine) {
           try {
             const fallbackResult = await this.fallbackTranslateTextsWithEngine(uniqueBatch.texts);
             const fallbackTranslatedTexts = uniqueBatch.indexes.map((index) => fallbackResult.texts[index] ?? '');
-            const suspiciousFallbackAbstracts = countSuspiciousRepeatedAbstractTails(
-              remaining,
-              fallbackTranslatedTexts,
+            const fallbackEvaluatedTranslations = evaluatePreparedTranslations(preparedItems, fallbackTranslatedTexts);
+            const fallbackQualityProblems = countTranslationQualityProblems(
+              fallbackEvaluatedTranslations,
               fallbackResult.engine
             );
-            if (suspiciousFallbackAbstracts < suspiciousPrimaryAbstracts) {
+            if (fallbackQualityProblems < primaryQualityProblems) {
               translationResult = fallbackResult;
               translatedTexts = fallbackTranslatedTexts;
+              evaluatedTranslations = fallbackEvaluatedTranslations;
             }
           } catch {
             // Keep the primary result; the repair layer below still prevents repeated tails from being cached.
@@ -205,18 +238,17 @@ export class ArxivTranslationService {
         const translatedAt = new Date(this.now()).toISOString();
 
         remaining.forEach((item, itemIndex) => {
-          const rawTitleZh = repairAcademicTranslation(
-            item.title,
-            normalizeTranslatedText(translatedTexts[itemIndex * 2] ?? ''),
-            { mode: 'title' }
-          );
-          const rawAbstractZh = repairAcademicTranslation(
-            item.summary,
-            normalizeTranslatedText(translatedTexts[itemIndex * 2 + 1] ?? ''),
-            { mode: 'abstract' }
-          );
-          const titleZh = isUsableTranslatedText(rawTitleZh, item.title) ? rawTitleZh : '';
-          const abstractZh = isUsableTranslatedText(rawAbstractZh, item.summary) ? rawAbstractZh : '';
+          const evaluated = evaluatedTranslations[itemIndex];
+          if (!evaluated.title.ok || !evaluated.abstract.ok || evaluated.hasSevereAbstractLengthLoss) {
+            results[item.index] = buildFailedTranslationResult(
+              item.stableId,
+              '本地翻译损坏了学术公式、代码、引用或术语占位符，或严重截断摘要，已丢弃结果且未写入缓存。'
+            );
+            return;
+          }
+
+          const titleZh = evaluated.titleUsable ? evaluated.titleZh : '';
+          const abstractZh = evaluated.abstractUsable ? evaluated.abstractZh : '';
           if (!titleZh && !abstractZh) {
             results[item.index] = buildFailedTranslationResult(
               item.stableId,
@@ -425,12 +457,48 @@ function buildUniqueTranslationBatch(texts: string[]): { texts: string[]; indexe
   return { texts: uniqueTexts, indexes };
 }
 
+function evaluatePreparedTranslations(
+  preparedItems: PreparedTranslationBatchItem[],
+  translatedTexts: string[]
+): EvaluatedTranslationBatchItem[] {
+  let cursor = 0;
+  return preparedItems.map((item) => {
+    const titleSegments = translatedTexts.slice(cursor, cursor + item.title.segments.length);
+    cursor += item.title.segments.length;
+    const abstractSegments = translatedTexts.slice(cursor, cursor + item.abstract.segments.length);
+    cursor += item.abstract.segments.length;
+    const title = item.title.restore(titleSegments);
+    const abstract = item.abstract.restore(abstractSegments);
+    const titleZh = title.ok
+      ? repairAcademicTranslation(item.sourceTitle, normalizeTranslatedText(title.text), { mode: 'title' })
+      : '';
+    const abstractZh = abstract.ok
+      ? repairAcademicTranslation(item.sourceAbstract, normalizeTranslatedText(abstract.text), { mode: 'abstract' })
+      : '';
+    const hasSevereAbstractLengthLoss =
+      abstract.ok && hasSevereAcademicTranslationLengthLoss(item.sourceAbstract, abstractZh);
+
+    return {
+      title,
+      abstract,
+      titleZh,
+      abstractZh,
+      titleUsable: title.ok && isUsableTranslatedText(titleZh, item.sourceTitle),
+      abstractUsable:
+        abstract.ok &&
+        !hasSevereAbstractLengthLoss &&
+        isUsableTranslatedText(abstractZh, item.sourceAbstract),
+      hasSevereAbstractLengthLoss
+    };
+  });
+}
+
 function buildTranslationCacheKey(input: { stableId: string; title: string; summary: string }): string {
   return crypto
     .createHash('sha256')
     .update(
       JSON.stringify({
-        version: 2,
+         version: 3,
         target: 'zh',
         stableId: input.stableId,
         title: input.title,
@@ -453,18 +521,15 @@ function isUsableTranslatedText(value: string, source = ''): boolean {
   );
 }
 
-function countSuspiciousRepeatedAbstractTails(
-  items: Array<{ summary: string }>,
-  translatedTexts: string[],
+function countTranslationQualityProblems(
+  items: EvaluatedTranslationBatchItem[],
   engine: string
 ): number {
-  if (!engine.toLowerCase().includes('nllb')) {
-    return 0;
-  }
-
-  return items.reduce((count, _item, itemIndex) => {
-    const abstractText = translatedTexts[itemIndex * 2 + 1] ?? '';
-    return count + (hasSuspiciousRepeatedTranslationTail(abstractText) ? 1 : 0);
+  return items.reduce((count, item) => {
+    const hasInvalidProtectedSpan = !item.title.ok || !item.abstract.ok;
+    const hasUnusableOutput = !item.titleUsable && !item.abstractUsable;
+    const hasRepeatedTail = engine.toLowerCase().includes('nllb') && hasSuspiciousRepeatedTranslationTail(item.abstract.text);
+    return count + Number(hasInvalidProtectedSpan || item.hasSevereAbstractLengthLoss || hasUnusableOutput || hasRepeatedTail);
   }, 0);
 }
 

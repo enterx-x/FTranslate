@@ -31,6 +31,197 @@ const COMMON_ACADEMIC_WORDS = new Set([
 ]);
 
 const MAX_TERM_LENGTH = 72;
+const DEFAULT_TRANSLATION_SEGMENT_LENGTH = 900;
+const PROTECTED_PLACEHOLDER_PREFIX = '[[FTR_PROTECTED_';
+const PROTECTED_PLACEHOLDER_SUFFIX = ']]';
+
+interface ProtectedAcademicSpan {
+  start: number;
+  end: number;
+  marker: string;
+  value: string;
+}
+
+export interface PreparedAcademicTranslation {
+  segments: string[];
+  restore: (translatedSegments: string[]) => PreparedAcademicTranslationRestoreResult;
+}
+
+export interface PreparedAcademicTranslationRestoreResult {
+  ok: boolean;
+  text: string;
+  reason?: 'segment-count-mismatch' | 'missing-or-damaged-placeholder';
+}
+
+/**
+ * Keeps non-linguistic academic spans opaque to the local translation engines,
+ * then splits only at sentence or word boundaries so long abstracts do not
+ * overwhelm an individual inference request.
+ */
+export function prepareAcademicTranslation(
+  source: string,
+  maxSegmentLength = DEFAULT_TRANSLATION_SEGMENT_LENGTH
+): PreparedAcademicTranslation {
+  const protectedSpans = collectProtectedAcademicSpans(source);
+  const protectedText = applyProtectedAcademicSpans(source, protectedSpans);
+  const segments = splitAcademicTranslationSegments(protectedText, maxSegmentLength);
+
+  return {
+    segments,
+    restore: (translatedSegments) => restorePreparedAcademicTranslation(protectedSpans, segments, translatedSegments)
+  };
+}
+
+export function hasSevereAcademicTranslationLengthLoss(source: string, translated: string): boolean {
+  const sourceLength = countMeaningfulTranslationCharacters(source);
+  if (sourceLength < 180) {
+    return false;
+  }
+
+  const translatedLength = countMeaningfulTranslationCharacters(translated);
+  return translatedLength < Math.max(24, Math.floor(sourceLength * 0.12));
+}
+
+function collectProtectedAcademicSpans(source: string): ProtectedAcademicSpan[] {
+  const candidates: Array<{ start: number; end: number; value: string }> = [];
+  const addMatches = (pattern: RegExp): void => {
+    for (const match of source.matchAll(pattern)) {
+      const value = match[0] ?? '';
+      const start = match.index ?? -1;
+      if (!value || start < 0) {
+        continue;
+      }
+      candidates.push({ start, end: start + value.length, value });
+    }
+  };
+
+  // The order is deliberate: broad academic-term matches must never replace
+  // text nested inside formulas, code, URLs, identifiers, or citations.
+  addMatches(/\$\$[\s\S]+?\$\$/gu);
+  addMatches(/(?<!\$)\$(?!\$)(?:\\.|[^$\n])+\$(?!\$)/gu);
+  addMatches(/`[^`\n]+`/gu);
+  addMatches(/\bhttps?:\/\/[^\s<>()\]]+/giu);
+  addMatches(/\b(?:doi:\s*)?10\.\d{4,9}\/[\w.()/:;-]+/giu);
+  addMatches(/\barXiv:\s*\d{4}\.\d{4,5}(?:v\d+)?\b/giu);
+  addMatches(/\[(?:\s*\d+\s*(?:[-–]\s*\d+)?\s*)(?:,\s*\d+\s*(?:[-–]\s*\d+)?\s*)*\]/gu);
+
+  extractProtectedAcademicTerms(source).forEach((term) => {
+    let start = source.indexOf(term);
+    while (start >= 0) {
+      candidates.push({ start, end: start + term.length, value: term });
+      start = source.indexOf(term, start + term.length);
+    }
+  });
+
+  const selected: Array<{ start: number; end: number; value: string }> = [];
+  candidates
+    .sort((left, right) => left.start - right.start || right.end - right.start - (left.end - left.start))
+    .forEach((candidate) => {
+      if (selected.some((item) => candidate.start < item.end && candidate.end > item.start)) {
+        return;
+      }
+      selected.push(candidate);
+    });
+
+  return selected.map((candidate, index) => ({
+    start: candidate.start,
+    end: candidate.end,
+    marker: `${PROTECTED_PLACEHOLDER_PREFIX}${index}${PROTECTED_PLACEHOLDER_SUFFIX}`,
+    value: candidate.value
+  }));
+}
+
+function applyProtectedAcademicSpans(source: string, protectedSpans: ProtectedAcademicSpan[]): string {
+  if (protectedSpans.length === 0) {
+    return source;
+  }
+
+  let cursor = 0;
+  let result = '';
+  protectedSpans.forEach((span) => {
+    result += `${source.slice(cursor, span.start)}${span.marker}`;
+    cursor = span.end;
+  });
+  return `${result}${source.slice(cursor)}`;
+}
+
+function restorePreparedAcademicTranslation(
+  protectedSpans: ProtectedAcademicSpan[],
+  sourceSegments: string[],
+  translatedSegments: string[]
+): PreparedAcademicTranslationRestoreResult {
+  if (translatedSegments.length !== sourceSegments.length) {
+    return { ok: false, text: '', reason: 'segment-count-mismatch' };
+  }
+
+  let text = translatedSegments.map((segment) => segment.trim()).join(' ').trim();
+  for (const span of protectedSpans) {
+    const markerCount = text.split(span.marker).length - 1;
+    if (markerCount !== 1) {
+      return { ok: false, text: '', reason: 'missing-or-damaged-placeholder' };
+    }
+    text = text.replace(span.marker, () => span.value);
+  }
+
+  if (/\[\[FTR_PROTECTED_\d+\]\]/gu.test(text)) {
+    return { ok: false, text: '', reason: 'missing-or-damaged-placeholder' };
+  }
+  return { ok: true, text };
+}
+
+function splitAcademicTranslationSegments(value: string, maxSegmentLength: number): string[] {
+  const limit = Math.max(1, Math.floor(maxSegmentLength));
+  const normalized = value.trim();
+  if (!normalized || normalized.length <= limit) {
+    return [normalized];
+  }
+
+  const sentences = normalized.split(/(?<=[.!?。！？])\s+/u).filter(Boolean);
+  const segments: string[] = [];
+  let current = '';
+  sentences.forEach((sentence) => {
+    const pieces = splitOversizedAcademicSegment(sentence.trim(), limit);
+    pieces.forEach((piece) => {
+      if (!current) {
+        current = piece;
+        return;
+      }
+      if (current.length + 1 + piece.length <= limit) {
+        current = `${current} ${piece}`;
+        return;
+      }
+      segments.push(current);
+      current = piece;
+    });
+  });
+  if (current) {
+    segments.push(current);
+  }
+  return segments;
+}
+
+function splitOversizedAcademicSegment(value: string, limit: number): string[] {
+  if (value.length <= limit) {
+    return [value];
+  }
+
+  const pieces: string[] = [];
+  let remaining = value;
+  while (remaining.length > limit) {
+    const boundary = remaining.lastIndexOf(' ', limit);
+    const splitAt = boundary > Math.floor(limit / 2) ? boundary : limit;
+    pieces.push(remaining.slice(0, splitAt).trim());
+    remaining = remaining.slice(splitAt).trim();
+  }
+  if (remaining) {
+    pieces.push(remaining);
+  }
+  return pieces;
+}
+
+function countMeaningfulTranslationCharacters(value: string): number {
+  return (value.match(/[A-Za-z0-9\u3400-\u9fff]/gu) ?? []).length;
+}
 
 export function repairAcademicTranslation(
   source: string,

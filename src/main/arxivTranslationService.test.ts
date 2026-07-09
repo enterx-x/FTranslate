@@ -13,6 +13,11 @@ import {
   splitArgosCombinedOutput
 } from './arxivTranslationService';
 
+function preserveProtectedAcademicMarkers(source: string, translated: string): string {
+  const markers = source.match(/\[\[FTR_PROTECTED_\d+\]\]/gu) ?? [];
+  return `${markers.join('')}${translated}`;
+}
+
 describe('ArxivTranslationService', () => {
   let tempDir: string;
 
@@ -85,7 +90,10 @@ describe('ArxivTranslationService', () => {
       dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
       translateText: async (text) => {
         calls.push(text);
-        return text.startsWith('PILOT') ? 'PILOT：感知集成低层控制器' : '该摘要介绍了机器人导航中的强化学习方法。';
+        return preserveProtectedAcademicMarkers(
+          text,
+          text.includes('A Perceptive') ? '：感知集成低层控制器' : '该摘要介绍了机器人导航中的强化学习方法。'
+        );
       },
       now: () => 1_764_000_000_000
     });
@@ -101,12 +109,13 @@ describe('ArxivTranslationService', () => {
 
       expect(first).toMatchObject({
         stableId: '2601.17440',
-        titleZh: 'PILOT：感知集成低层控制器',
         abstractZh: '该摘要介绍了机器人导航中的强化学习方法。',
         engine: 'argos',
         status: 'completed',
         cacheHit: false
       });
+      expect(first.titleZh).toContain('PILOT');
+      expect(first.titleZh).toContain('Low-level');
       expect(second).toMatchObject({
         titleZh: first.titleZh,
         abstractZh: first.abstractZh,
@@ -126,7 +135,7 @@ describe('ArxivTranslationService', () => {
       dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
       translateTexts: async (texts) => {
         batches.push(texts);
-        return texts.map((text) => `ZH:${text.slice(0, 18)}`);
+        return texts.map((text) => preserveProtectedAcademicMarkers(text, '这是可用的中文译文。'));
       },
       now: () => 1_764_000_000_000
     });
@@ -151,14 +160,12 @@ describe('ArxivTranslationService', () => {
       expect(first).toHaveLength(2);
       expect(first.every((item) => item.status === 'completed')).toBe(true);
       expect(second.every((item) => item.status === 'cached')).toBe(true);
-      expect(batches).toEqual([
-        [
-          requests[0].title,
-          requests[0].summary,
-          requests[1].title,
-          requests[1].summary
-        ]
-      ]);
+      expect(batches).toHaveLength(1);
+      expect(batches[0]).toHaveLength(4);
+      expect(batches[0]).toContain(requests[0].title);
+      expect(batches[0]).toContain(requests[0].summary);
+      expect(batches[0].some((text) => text.includes('The policy learns'))).toBe(true);
+      expect(batches[0].some((text) => text.includes('[[FTR_PROTECTED_'))).toBe(true);
     } finally {
       service.close();
     }
@@ -266,6 +273,91 @@ describe('ArxivTranslationService', () => {
         ]
       ]);
       expect(results[0].abstractZh).toBe(results[1].abstractZh);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('splits a long abstract for translation and restores every sentence in order', async () => {
+    const batches: string[][] = [];
+    const summary = Array.from(
+      { length: 18 },
+      (_, index) => `Sentence-${String(index).padStart(2, '0')} describes a reproducible experiment with ${'details '.repeat(9)}.`
+    ).join(' ');
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) => {
+        batches.push(texts);
+        return texts.map((text) => `这是足够中文的译文：${text}`);
+      }
+    });
+
+    try {
+      const result = await service.translatePaper({
+        stableId: 'long-abstract',
+        title: 'Long translation title',
+        summary
+      });
+      expect(result.status).toBe('completed');
+      expect(batches).toHaveLength(1);
+      expect(batches[0].length).toBeGreaterThan(2);
+      expect(result.abstractZh).toContain('Sentence-00');
+      expect(result.abstractZh).toContain('Sentence-17');
+      expect(result.abstractZh.indexOf('Sentence-00')).toBeLessThan(result.abstractZh.indexOf('Sentence-17'));
+    } finally {
+      service.close();
+    }
+  });
+
+  it('rejects a translation with missing protected placeholders without caching it', async () => {
+    const batches: string[][] = [];
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) => {
+        batches.push(texts);
+        return texts.map(() => '这是看似可用但丢失保护对象的中文译文。');
+      }
+    });
+    const request = {
+      stableId: 'missing-protected-placeholder',
+      title: 'PILOT: Safety-Critical Navigation',
+      summary: 'We minimize $x^2$ with the CBF-MPC controller [1-3].'
+    };
+
+    try {
+      const first = await service.translatePaper(request);
+      const second = await service.translatePaper(request);
+
+      expect(first.status).toBe('failed');
+      expect(second.status).toBe('failed');
+      expect(first.cacheHit).toBe(false);
+      expect(second.cacheHit).toBe(false);
+      expect(batches).toHaveLength(2);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('rejects severe abstract length loss instead of caching a truncated result', async () => {
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) =>
+        texts.map((_, index) => (index === 0 ? '这是标题的完整中文译文。' : '摘要过短。'))
+    });
+    const request = {
+      stableId: 'truncated-abstract',
+      title: 'Navigation study',
+      summary: Array.from(
+        { length: 16 },
+        () => `This sentence explains a controlled reproducibility result with ${'important details '.repeat(14)}.`
+      ).join(' ')
+    };
+
+    try {
+      const result = await service.translatePaper(request);
+
+      expect(result.status).toBe('failed');
+      expect(result.cacheHit).toBe(false);
     } finally {
       service.close();
     }
@@ -484,7 +576,7 @@ describe('ArxivTranslationService', () => {
     try {
       const request = {
         stableId: 'repeated-nllb-tail',
-        title: 'Tactile Robot Control',
+        title: 'Robot control study',
         summary: 'We propose a tactile robot control method that improves control stability.'
       };
       const result = await service.translatePaper(request);
@@ -582,10 +674,13 @@ describe('ArxivTranslationService', () => {
   it('repairs protected academic terms and repeated tails before caching arXiv translations', async () => {
     const service = new ArxivTranslationService({
       dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
-      translateTexts: async () => [
-        '奥姆尼代理：用于全模态理解的主动感知',
-        '我们提出一种用于机器人主动感知的代理。代理代理代理代理'
-      ]
+      translateTexts: async (texts) =>
+        texts.map((text, index) =>
+          preserveProtectedAcademicMarkers(
+            text,
+            index === 0 ? '：用于全模态理解的主动感知' : '我们提出一种用于机器人主动感知的代理。代理代理代理代理'
+          )
+        )
     });
 
     try {
@@ -598,7 +693,8 @@ describe('ArxivTranslationService', () => {
       const cached = await service.translatePaper(request);
 
       expect(first.status).toBe('completed');
-      expect(first.titleZh).toBe('OmniAgent：用于全模态理解的主动感知');
+      expect(first.titleZh).toContain('OmniAgent');
+      expect(first.titleZh).toContain('Omni-Modal');
       expect(first.abstractZh).toContain('OmniAgent');
       expect(first.abstractZh).toContain('Sim-to-Real');
       expect(first.abstractZh.endsWith('代理代理代理代理')).toBe(false);
@@ -640,7 +736,11 @@ describe('ArxivTranslationService', () => {
     };
     const bootstrap = new ArxivTranslationService({
       dbPath,
-      translateText: async (text) => (text.startsWith('MSVIPER') ? 'MSVIPER：改进策略蒸馏' : '提出机器人导航策略蒸馏方法。')
+      translateText: async (text) =>
+        preserveProtectedAcademicMarkers(
+          text,
+          text.includes('Improved Policy') ? '：改进策略蒸馏' : '提出机器人导航策略蒸馏方法。'
+        )
     });
     await bootstrap.translatePaper(request);
     bootstrap.close();
@@ -660,7 +760,10 @@ describe('ArxivTranslationService', () => {
       dbPath,
       translateText: async (text) => {
         calls.push(text);
-        return text.startsWith('MSVIPER') ? 'MSVIPER：改进策略蒸馏' : '提出机器人导航策略蒸馏方法。';
+        return preserveProtectedAcademicMarkers(
+          text,
+          text.includes('Improved Policy') ? '：改进策略蒸馏' : '提出机器人导航策略蒸馏方法。'
+        );
       }
     });
 
@@ -669,7 +772,8 @@ describe('ArxivTranslationService', () => {
 
       expect(result.status).toBe('completed');
       expect(result.cacheHit).toBe(false);
-      expect(result.titleZh).toBe('MSVIPER：改进策略蒸馏');
+      expect(result.titleZh).toContain('MSVIPER');
+      expect(result.titleZh).toContain('Learning-Based Robot Navigation');
       expect(calls).toHaveLength(2);
     } finally {
       service.close();
