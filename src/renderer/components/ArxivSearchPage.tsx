@@ -912,7 +912,11 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     papers.length > 0 ? formatArxivResultRange(start, papers.length, totalResults || papers.length) : '暂无结果';
 
   return (
-    <main className="arxiv-page page-workspace">
+    <main
+      className={`arxiv-page page-workspace${isSearching ? ' is-searching' : ''}${
+        isDetailPanelCollapsed ? ' is-detail-collapsed' : ''
+      }`}
+    >
       <header className="page-header compact-page-header arxiv-page-header">
         <div>
           <span className="eyebrow">Official arXiv API</span>
@@ -1164,7 +1168,11 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         }`}
         style={workbenchStyle}
       >
-        <section className={`content-card arxiv-results-panel ${resultDensity.className}`} style={resultPanelStyle}>
+        <section
+          className={`content-card arxiv-results-panel ${resultDensity.className}`}
+          style={resultPanelStyle}
+          aria-busy={isSearching}
+        >
           <div className="panel-title-row arxiv-results-toolbar">
             <div>
               <span className="eyebrow">Results</span>
@@ -1273,7 +1281,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             </article>
           ) : (
             <div className="arxiv-results-list">
-              {filteredPapers.map((paper) => {
+              {filteredPapers.map((paper, index) => {
               const meta = getPaperMeta(paper, metaById);
               const insight = meta.insight ?? buildArxivPaperInsight(paper, query);
               const isSelected = selectedPaper?.id === paper.id;
@@ -1288,7 +1296,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               return (
                 <article
                   key={paper.id}
-                  className={`arxiv-paper-card ${isSelected ? 'is-selected' : ''}`}
+                  className={`arxiv-paper-card ${isSelected ? 'is-selected' : ''}${
+                    isTranslatingMetadata ? ' is-translating' : ''
+                  }`}
+                  style={{ '--arxiv-card-delay': `${Math.min(index, 18) * 18}ms` } as CSSProperties}
                   onClick={() => setSelectedPaperId(paper.id)}
                 >
                   <div className="arxiv-paper-card-top">

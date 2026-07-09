@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FTranslate UI Motion Comparison</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --canvas: #eef1f5;
+        --surface: #ffffff;
+        --surface-muted: #f6f7f9;
+        --ink: #111827;
+        --muted: #586273;
+        --subtle: #7a8494;
+        --border: #d9dee7;
+        --blue: #526d8f;
+        --blue-soft: #e9eef5;
+        --blue-border: #c8d2df;
+        --sage: #5f7568;
+        --sage-soft: #edf3ef;
+        --sage-border: #ccd8cf;
+        --amber: #8a6f43;
+        --amber-soft: #f3eee4;
+        --amber-border: #ded2bb;
+        --shadow: 0 14px 34px rgba(15, 23, 42, 0.1);
+        --motion: cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(238, 241, 245, 0.9)),
+          var(--canvas);
+        color: var(--ink);
+        font-family:
+          "Microsoft YaHei UI",
+          "Microsoft YaHei",
+          "Segoe UI",
+          system-ui,
+          sans-serif;
+      }
+
+      .page {
+        display: grid;
+        gap: 18px;
+        min-height: 100vh;
+        padding: 22px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 24px;
+        letter-spacing: 0;
+      }
+
+      .subtitle {
+        margin-top: 6px;
+        max-width: 760px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .mode-note {
+        border: 1px solid var(--blue-border);
+        border-radius: 8px;
+        padding: 8px 10px;
+        background: var(--blue-soft);
+        color: #34465d;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .comparison {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .frame {
+        overflow: hidden;
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .frame-header {
+        display: grid;
+        gap: 4px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border);
+        background: linear-gradient(180deg, #ffffff, #f8fafc);
+      }
+
+      .frame-header small {
+        color: var(--blue);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .frame-header h2 {
+        font-size: 17px;
+      }
+
+      .app {
+        display: grid;
+        grid-template-columns: 92px minmax(0, 1fr);
+        min-height: 560px;
+        background: #f6f7f9;
+      }
+
+      .sidebar {
+        display: grid;
+        align-content: start;
+        gap: 8px;
+        padding: 16px 10px;
+        background: #0f1723;
+      }
+
+      .brand {
+        width: 34px;
+        height: 34px;
+        margin: 0 auto 10px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 9px;
+        background: #172132;
+      }
+
+      .nav {
+        height: 34px;
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .nav.active {
+        border: 1px solid rgba(82, 109, 143, 0.42);
+        background: #192331;
+        box-shadow: inset 3px 0 0 var(--blue);
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        min-width: 0;
+      }
+
+      .hero {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--border);
+        background: #ffffff;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        width: max-content;
+        margin-bottom: 6px;
+        border: 1px solid var(--blue-border);
+        border-radius: 6px;
+        padding: 3px 7px;
+        background: var(--blue-soft);
+        color: var(--blue);
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .hero h3 {
+        font-size: 21px;
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      button {
+        height: 34px;
+        border: 1px solid #cfd6e2;
+        border-radius: 7px;
+        padding: 0 12px;
+        background: #ffffff;
+        color: #172033;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      button.primary {
+        border-color: #25364a;
+        background: #25364a;
+        color: #ffffff;
+      }
+
+      .content {
+        display: grid;
+        grid-template-columns: minmax(170px, 0.7fr) minmax(0, 1.5fr) minmax(230px, 0.8fr);
+        gap: 12px;
+        min-height: 0;
+        padding: 12px;
+      }
+
+      .pane,
+      .board,
+      .inspector {
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--surface);
+      }
+
+      .pane {
+        display: grid;
+        gap: 10px;
+        align-content: start;
+        padding: 14px;
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .metric {
+        border: 1px solid #e3e8f0;
+        border-radius: 8px;
+        padding: 10px;
+        background: #fafbfc;
+      }
+
+      .metric span,
+      .step small,
+      .action small {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 5px;
+        font-size: 22px;
+      }
+
+      .board {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        overflow: hidden;
+      }
+
+      .board-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--border);
+        background: #fbfcfd;
+      }
+
+      .board-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .step {
+        display: grid;
+        gap: 7px;
+        min-height: 126px;
+        border: 1px solid #dde4ed;
+        border-left-width: 3px;
+        border-radius: 8px;
+        padding: 12px;
+        background: #ffffff;
+      }
+
+      .step.ready {
+        border-left-color: var(--sage-border);
+      }
+
+      .step.planned {
+        border-left-color: var(--amber-border);
+      }
+
+      .badge {
+        display: inline-flex;
+        width: max-content;
+        border: 1px solid var(--sage-border);
+        border-radius: 999px;
+        padding: 3px 8px;
+        background: var(--sage-soft);
+        color: #354f4d;
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .planned .badge {
+        border-color: var(--amber-border);
+        background: var(--amber-soft);
+        color: #5e4e36;
+      }
+
+      .inspector {
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr);
+        overflow: hidden;
+      }
+
+      .inspector section {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .action {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        min-height: 42px;
+        border-bottom: 1px solid #edf1f6;
+        padding: 8px 0;
+      }
+
+      .graph {
+        display: grid;
+        place-items: center;
+        height: 170px;
+        border: 1px solid #dfe6ee;
+        border-radius: 10px;
+        background: #f9fafb;
+      }
+
+      svg {
+        width: 100%;
+        max-width: 260px;
+        height: 140px;
+      }
+
+      .edge {
+        fill: none;
+        stroke: rgba(82, 109, 143, 0.28);
+        stroke-width: 1.4;
+      }
+
+      .node-halo {
+        fill: var(--sage-soft);
+      }
+
+      .node-core {
+        fill: var(--sage);
+      }
+
+      .node-core.blue {
+        fill: var(--blue);
+      }
+
+      .node-core.amber {
+        fill: var(--amber);
+      }
+
+      .old .workspace,
+      .old button,
+      .old .step,
+      .old .action,
+      .old .badge,
+      .old .edge,
+      .old circle {
+        transition: none;
+        animation: none;
+      }
+
+      .new .workspace {
+        animation: view-enter 280ms var(--motion) both;
+      }
+
+      .new .pane,
+      .new .board,
+      .new .inspector {
+        animation: panel-enter 320ms var(--motion) both;
+      }
+
+      .new .board {
+        animation-delay: 45ms;
+      }
+
+      .new .inspector {
+        animation-delay: 80ms;
+      }
+
+      .new button,
+      .new .step,
+      .new .action,
+      .new .nav,
+      .new .edge,
+      .new .badge {
+        transition:
+          transform 180ms var(--motion),
+          border-color 180ms ease,
+          background 180ms ease,
+          box-shadow 180ms ease,
+          opacity 180ms ease,
+          stroke 180ms ease;
+      }
+
+      .new button:hover,
+      .new .step:hover,
+      .new .action:hover {
+        transform: translateY(-1px);
+        border-color: var(--blue-border);
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+      }
+
+      .new .badge {
+        position: relative;
+        overflow: hidden;
+      }
+
+      .new .badge::after {
+        content: "";
+        position: absolute;
+        inset: -1px;
+        background: linear-gradient(110deg, transparent 0%, rgba(255, 255, 255, 0.72) 45%, transparent 70%);
+        opacity: 0;
+        transform: translateX(-120%);
+      }
+
+      .new .step:hover .badge::after,
+      .new .action:hover .badge::after {
+        animation: badge-sheen 900ms ease-out 1;
+      }
+
+      .new .node {
+        animation: node-pop 360ms var(--motion) both;
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+
+      .new .node:nth-of-type(2) {
+        animation-delay: 60ms;
+      }
+
+      .new .node:nth-of-type(3) {
+        animation-delay: 110ms;
+      }
+
+      .new .selected-halo {
+        animation: graph-halo 1900ms ease-in-out infinite;
+      }
+
+      .new .edge.active {
+        stroke: rgba(37, 54, 74, 0.58);
+      }
+
+      @keyframes view-enter {
+        from {
+          opacity: 0.68;
+          transform: translateY(8px) scale(0.995);
+          filter: saturate(0.96);
+        }
+
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+          filter: saturate(1);
+        }
+      }
+
+      @keyframes panel-enter {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes badge-sheen {
+        0% {
+          opacity: 0;
+          transform: translateX(-120%);
+        }
+
+        35% {
+          opacity: 0.82;
+        }
+
+        100% {
+          opacity: 0;
+          transform: translateX(120%);
+        }
+      }
+
+      @keyframes node-pop {
+        from {
+          opacity: 0.2;
+          transform: scale(0.92);
+        }
+
+        to {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+
+      @keyframes graph-halo {
+        0%,
+        100% {
+          opacity: 0.5;
+          transform: scale(1);
+        }
+
+        50% {
+          opacity: 0.88;
+          transform: scale(1.08);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.001ms !important;
+          animation-iteration-count: 1 !important;
+          scroll-behavior: auto !important;
+          transition-duration: 0.001ms !important;
+        }
+      }
+
+      @media (max-width: 1180px) {
+        .comparison {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="topbar">
+        <div>
+          <h1>FTranslate UI 动效对比稿</h1>
+          <p class="subtitle">
+            对比目标不是做炫技动画，而是让科研工作台在视图切换、面板层级、按钮反馈、状态表达和知识图谱上更有生命感。
+            右侧方案只使用 CSS transition / keyframes，不引入 GSAP，并支持 reduced motion 降级。
+          </p>
+        </div>
+        <div class="mode-note">Hover 右侧流程卡、按钮、状态条和图谱节点查看差异</div>
+      </header>
+
+      <section class="comparison" aria-label="UI motion comparison">
+        <article class="frame old">
+          <div class="frame-header">
+            <small>Before</small>
+            <h2>当前静态/弱反馈版本</h2>
+          </div>
+          <div class="app">
+            <nav class="sidebar" aria-label="old sidebar">
+              <div class="brand"></div>
+              <div class="nav active"></div>
+              <div class="nav"></div>
+              <div class="nav"></div>
+              <div class="nav"></div>
+            </nav>
+            <section class="workspace">
+              <header class="hero">
+                <div>
+                  <span class="eyebrow">LOCAL AI R&D WORKSPACE</span>
+                  <h3>AI 科创项目空间</h3>
+                  <p class="subtitle">页面切换、面板进入和状态变化基本静态，交互反馈偏弱。</p>
+                </div>
+                <div class="actions">
+                  <button class="primary">导入论文</button>
+                  <button>实验矩阵</button>
+                </div>
+              </header>
+              <div class="content">
+                <aside class="pane">
+                  <h3>项目概览</h3>
+                  <div class="metric-grid">
+                    <div class="metric"><span>论文</span><strong>5</strong></div>
+                    <div class="metric"><span>证据</span><strong>160</strong></div>
+                    <div class="metric"><span>笔记</span><strong>2</strong></div>
+                    <div class="metric"><span>PDF</span><strong>5</strong></div>
+                  </div>
+                </aside>
+                <section class="board">
+                  <div class="board-head">
+                    <h3>论文到实验闭环</h3>
+                    <span class="badge">Local only</span>
+                  </div>
+                  <div class="board-grid">
+                    <div class="step ready">
+                      <span class="badge">Ready</span>
+                      <h3>Paper-to-Method</h3>
+                      <small>从论文和笔记抽取方法卡</small>
+                    </div>
+                    <div class="step planned">
+                      <span class="badge">Planned</span>
+                      <h3>Paper-to-Code</h3>
+                      <small>复现路径映射仍待接入</small>
+                    </div>
+                    <div class="step ready">
+                      <span class="badge">Draftable</span>
+                      <h3>实验矩阵</h3>
+                      <small>baseline / ablation 可转化</small>
+                    </div>
+                    <div class="step planned">
+                      <span class="badge">Planned</span>
+                      <h3>Runtime Center</h3>
+                      <small>状态分散在多个页面</small>
+                    </div>
+                  </div>
+                </section>
+                <aside class="inspector">
+                  <section>
+                    <h3>下一步</h3>
+                    <div class="action">
+                      <div><strong>继续最近论文</strong><small>WT-UMI: Tactile-based Whole...</small></div>
+                      <span class="badge">继续阅读</span>
+                    </div>
+                    <div class="action">
+                      <div><strong>补全方法字段</strong><small>problem、method 仍需确认</small></div>
+                      <span class="badge">打开表格</span>
+                    </div>
+                  </section>
+                  <section>
+                    <h3>证据图谱</h3>
+                    <div class="graph">
+                      <svg viewBox="0 0 260 140" role="img" aria-label="old graph">
+                        <path class="edge active" d="M70 70 C120 20 140 20 190 70" />
+                        <path class="edge" d="M70 70 C120 120 140 120 190 70" />
+                        <g class="node" transform="translate(70 70)">
+                          <circle class="node-halo" r="28" />
+                          <circle class="node-core blue" r="18" />
+                        </g>
+                        <g class="node" transform="translate(190 70)">
+                          <circle class="node-halo" r="30" />
+                          <circle class="node-core" r="20" />
+                        </g>
+                        <g class="node" transform="translate(130 112)">
+                          <circle class="node-halo" r="22" />
+                          <circle class="node-core amber" r="14" />
+                        </g>
+                      </svg>
+                    </div>
+                  </section>
+                </aside>
+              </div>
+            </section>
+          </div>
+        </article>
+
+        <article class="frame new">
+          <div class="frame-header">
+            <small>After</small>
+            <h2>更明显但克制的高级微动效</h2>
+          </div>
+          <div class="app">
+            <nav class="sidebar" aria-label="new sidebar">
+              <div class="brand"></div>
+              <div class="nav active"></div>
+              <div class="nav"></div>
+              <div class="nav"></div>
+              <div class="nav"></div>
+            </nav>
+            <section class="workspace">
+              <header class="hero">
+                <div>
+                  <span class="eyebrow">LOCAL AI R&D WORKSPACE</span>
+                  <h3>AI 科创项目空间</h3>
+                  <p class="subtitle">视图切换有轻量 fade + translate，面板进入有 45-80ms stagger，反馈更清楚但不干扰阅读。</p>
+                </div>
+                <div class="actions">
+                  <button class="primary">导入论文</button>
+                  <button>实验矩阵</button>
+                </div>
+              </header>
+              <div class="content">
+                <aside class="pane">
+                  <h3>项目概览</h3>
+                  <div class="metric-grid">
+                    <div class="metric"><span>论文</span><strong>5</strong></div>
+                    <div class="metric"><span>证据</span><strong>160</strong></div>
+                    <div class="metric"><span>笔记</span><strong>2</strong></div>
+                    <div class="metric"><span>PDF</span><strong>5</strong></div>
+                  </div>
+                </aside>
+                <section class="board">
+                  <div class="board-head">
+                    <h3>论文到实验闭环</h3>
+                    <span class="badge">Local only</span>
+                  </div>
+                  <div class="board-grid">
+                    <div class="step ready">
+                      <span class="badge">Ready</span>
+                      <h3>Paper-to-Method</h3>
+                      <small>hover 时 1px 上浮、低饱和边框和状态 sheen</small>
+                    </div>
+                    <div class="step planned">
+                      <span class="badge">Planned</span>
+                      <h3>Paper-to-Code</h3>
+                      <small>状态变化明显，但不会持续闪烁</small>
+                    </div>
+                    <div class="step ready">
+                      <span class="badge">Draftable</span>
+                      <h3>实验矩阵</h3>
+                      <small>选中行使用细线和轻阴影表达层级</small>
+                    </div>
+                    <div class="step planned">
+                      <span class="badge">Planned</span>
+                      <h3>Runtime Center</h3>
+                      <small>详情面板进入统一节奏</small>
+                    </div>
+                  </div>
+                </section>
+                <aside class="inspector">
+                  <section>
+                    <h3>下一步</h3>
+                    <div class="action">
+                      <div><strong>继续最近论文</strong><small>WT-UMI: Tactile-based Whole...</small></div>
+                      <span class="badge">继续阅读</span>
+                    </div>
+                    <div class="action">
+                      <div><strong>补全方法字段</strong><small>problem、method 仍需确认</small></div>
+                      <span class="badge">打开表格</span>
+                    </div>
+                  </section>
+                  <section>
+                    <h3>证据图谱</h3>
+                    <div class="graph">
+                      <svg viewBox="0 0 260 140" role="img" aria-label="new graph">
+                        <path class="edge active" d="M70 70 C120 20 140 20 190 70" />
+                        <path class="edge" d="M70 70 C120 120 140 120 190 70" />
+                        <g class="node" transform="translate(70 70)">
+                          <circle class="node-halo" r="28" />
+                          <circle class="node-core blue" r="18" />
+                        </g>
+                        <g class="node" transform="translate(190 70)">
+                          <circle class="node-halo selected-halo" r="30" />
+                          <circle class="node-core" r="20" />
+                        </g>
+                        <g class="node" transform="translate(130 112)">
+                          <circle class="node-halo" r="22" />
+                          <circle class="node-core amber" r="14" />
+                        </g>
+                      </svg>
+                    </div>
+                  </section>
+                </aside>
+              </div>
+            </section>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

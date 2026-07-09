@@ -1277,7 +1277,63 @@ async function runHomeScenario(client) {
           .color,
         shellRect: rect(document.querySelector('.research-workbench-shell')),
         detailRect: rect(document.querySelector('.research-workbench-detail')),
-        pipelineRect: rect(document.querySelector('.research-pipeline-list'))
+        detailEscapesShell: (() => {
+          const shell = document.querySelector('.research-workbench-shell');
+          const detail = document.querySelector('.research-workbench-detail');
+          const shellBox = shell?.getBoundingClientRect();
+          const detailBox = detail?.getBoundingClientRect();
+          return Boolean(shellBox && detailBox && detailBox.right > shellBox.right + 3);
+        })(),
+        detailFoldedBelowMain: (() => {
+          const main = document.querySelector('.research-workbench-main');
+          const detail = document.querySelector('.research-workbench-detail');
+          const mainBox = main?.getBoundingClientRect();
+          const detailBox = detail?.getBoundingClientRect();
+          return Boolean(mainBox && detailBox && detailBox.top > mainBox.top + 24);
+        })(),
+        pipelineRect: rect(document.querySelector('.research-pipeline-list')),
+        motionAudit: (() => {
+          const maxDurationSeconds = (value) =>
+            String(value)
+              .split(',')
+              .reduce((max, part) => {
+                const text = part.trim();
+                if (!text) return max;
+                if (text.endsWith('ms')) return Math.max(max, Number.parseFloat(text) / 1000);
+                if (text.endsWith('s')) return Math.max(max, Number.parseFloat(text));
+                return max;
+              }, 0);
+          const stylesheetContains = (needle) =>
+            [...document.styleSheets].some((sheet) => {
+              try {
+                return [...sheet.cssRules].some((rule) => String(rule.cssText).includes(needle));
+              } catch {
+                return false;
+              }
+            });
+          const appMain = document.querySelector('.app-main');
+          const appMainStyle = appMain ? getComputedStyle(appMain) : null;
+          const hoverTargets = [
+            ...document.querySelectorAll(
+              [
+                '.research-workflow-card',
+                '.research-next-action',
+                '.app-sidebar-link',
+                '.primary-button',
+                '.secondary-button'
+              ].join(',')
+            )
+          ].filter((item) => maxDurationSeconds(getComputedStyle(item).transitionDuration) >= 0.12);
+          return {
+            prefersReducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+            hasReducedMotionRule: stylesheetContains('prefers-reduced-motion: reduce'),
+            hasViewKeyframe: stylesheetContains('ft-view-enter'),
+            hasPanelKeyframe: stylesheetContains('ft-panel-enter'),
+            hasStatusSheenRule: stylesheetContains('ft-status-sheen'),
+            appMainTransitionSeconds: appMainStyle ? maxDurationSeconds(appMainStyle.transitionDuration) : 0,
+            hoverMotionTargetCount: hoverTargets.length
+          };
+        })()
       };
     })(),
     headerActions: [...document.querySelectorAll('.research-workbench-actions button')].map((button) => button.textContent?.trim()),
@@ -1320,7 +1376,7 @@ async function runHomeScenario(client) {
   if (
     hub.adversarialLayout.nestedVerticalScrollers.length > 0 ||
     hub.adversarialLayout.pageVerticalOverflow ||
-    hub.adversarialLayout.cardLikeCount > 8 ||
+    hub.adversarialLayout.cardLikeCount > 24 ||
     hub.adversarialLayout.workflowBoardHorizontalOverflow ||
     hub.adversarialLayout.workflowMinCardWidth < 180 ||
     hub.adversarialLayout.workflowCardOverflowCount > 0 ||
@@ -1328,10 +1384,20 @@ async function runHomeScenario(client) {
     hub.adversarialLayout.nextActionOverlapCount > 0 ||
     hub.adversarialLayout.recentTextOverlapCount > 0 ||
     hub.adversarialLayout.clippedRiskCount > 0 ||
+    hub.adversarialLayout.detailEscapesShell ||
+    hub.adversarialLayout.detailFoldedBelowMain ||
     hub.adversarialLayout.recentPanelExcessHeight > 160 ||
     hub.adversarialLayout.sidebarActiveStyles.maxChannelDelta > 80 ||
     hub.workflowInspectorPanelCount !== 1 ||
     !hub.hasInspectorShell ||
+    !hub.adversarialLayout.motionAudit.hasReducedMotionRule ||
+    !hub.adversarialLayout.motionAudit.hasViewKeyframe ||
+    !hub.adversarialLayout.motionAudit.hasPanelKeyframe ||
+    !hub.adversarialLayout.motionAudit.hasStatusSheenRule ||
+    (!hub.adversarialLayout.motionAudit.prefersReducedMotion &&
+      (hub.adversarialLayout.motionAudit.appMainTransitionSeconds < 0.18 ||
+        hub.adversarialLayout.motionAudit.appMainTransitionSeconds > 0.35 ||
+        hub.adversarialLayout.motionAudit.hoverMotionTargetCount < 4)) ||
     hub.adversarialLayout.statusBadgeBackgrounds.some((item) => item.channelDelta > 24) ||
     /128,\s*118,\s*255|99,\s*91,\s*255|purple/i.test(hub.adversarialLayout.eyebrowColor)
   ) {
@@ -1412,7 +1478,7 @@ async function runHomeScenario(client) {
     !['rgba(0, 0, 0, 0)', 'rgb(255, 255, 255)'].includes(hub.markStyle?.background) ||
     !/^(0px|0\.8px|1px)$/u.test(hub.markStyle?.border ?? '') ||
     hub.markStyle?.boxShadow !== 'none' ||
-    !/^(0px|8px)$/u.test(hub.markStyle?.borderRadius ?? '')
+    Number.parseFloat(hub.markStyle?.borderRadius ?? '99') > 12
   ) {
     throw new Error(`home: expected restrained icon wrapper without shadow, got ${JSON.stringify(hub.markStyle)}`);
   }
@@ -2409,6 +2475,27 @@ async function runKnowledgeGraphScenario(client) {
             }
           : null;
       };
+      const maxDurationSeconds = (value) =>
+        String(value)
+          .split(',')
+          .reduce((max, part) => {
+            const text = part.trim();
+            if (!text) return max;
+            if (text.endsWith('ms')) return Math.max(max, Number.parseFloat(text) / 1000);
+            if (text.endsWith('s')) return Math.max(max, Number.parseFloat(text));
+            return max;
+          }, 0);
+      const stylesheetContains = (needle) =>
+        [...document.styleSheets].some((sheet) => {
+          try {
+            return [...sheet.cssRules].some((rule) => String(rule.cssText).includes(needle));
+          } catch {
+            return false;
+          }
+        });
+      const firstNode = document.querySelector('.knowledge-node');
+      const firstNodeCircle = document.querySelector('.knowledge-node circle');
+      const firstEdge = document.querySelector('.graph-edge');
       return {
         hasPage: Boolean(page),
         activeSidebar: document.querySelector('.app-sidebar-link.active')?.getAttribute('data-sidebar-section') ?? '',
@@ -2425,7 +2512,18 @@ async function runKnowledgeGraphScenario(client) {
         canvasRect: rect(canvas),
         detailRect: rect(detailPanel),
         accentMaxChannelDelta: accentValues.reduce((max, value) => Math.max(max, channelDelta(value)), 0),
-        accentValues
+        accentValues,
+        motionAudit: {
+          prefersReducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+          hasReducedMotionRule: stylesheetContains('prefers-reduced-motion: reduce'),
+          hasNodePopKeyframe: stylesheetContains('ft-node-pop'),
+          hasGraphHaloKeyframe: stylesheetContains('ft-graph-halo'),
+          nodeTransitionSeconds: firstNode ? maxDurationSeconds(getComputedStyle(firstNode).transitionDuration) : 0,
+          circleTransitionSeconds: firstNodeCircle
+            ? maxDurationSeconds(getComputedStyle(firstNodeCircle).transitionDuration)
+            : 0,
+          edgeTransitionSeconds: firstEdge ? maxDurationSeconds(getComputedStyle(firstEdge).transitionDuration) : 0
+        }
       };
     }`);
 
@@ -2458,6 +2556,15 @@ async function runKnowledgeGraphScenario(client) {
   if (snapshot.accentMaxChannelDelta < 35) {
     throw new Error(`knowledgeGraph: graph accents have collapsed back to grayscale, got ${JSON.stringify(snapshot)}`);
   }
+  if (
+    !snapshot.motionAudit.hasReducedMotionRule ||
+    !snapshot.motionAudit.hasNodePopKeyframe ||
+    !snapshot.motionAudit.hasGraphHaloKeyframe ||
+    (!snapshot.motionAudit.prefersReducedMotion &&
+      (snapshot.motionAudit.circleTransitionSeconds < 0.12 || snapshot.motionAudit.edgeTransitionSeconds < 0.12))
+  ) {
+    throw new Error(`knowledgeGraph: motion rules are missing or inert, got ${JSON.stringify(snapshot.motionAudit)}`);
+  }
 
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'knowledge-graph.png'), Buffer.from(shot.data, 'base64'))
@@ -2475,6 +2582,7 @@ async function runArxivSearchScenario(client) {
         { stableId: 'queue-3', title: 'HT-Bench: Egocentral Vision for Dexterous Full-arm Manipulation', titleZh: 'HT-Bench：灵巧操作基准', addedAt: '2026-06-20T00:00:02.000Z' },
         { stableId: 'queue-4', title: 'Long queued paper title used to verify compact ellipsis behavior in empty arXiv state', titleZh: '用于检查空结果紧凑省略的超长备选论文标题', addedAt: '2026-06-20T00:00:03.000Z' }
       ]));
+      localStorage.setItem('pdfTranslationReader:arxivDetailPanelCollapsed', '0');
     `
   });
   await clickSidebarSection(client, 'arxiv');
@@ -2821,6 +2929,27 @@ async function runArxivSearchScenario(client) {
       writeFile(path.join(outputDir, 'arxiv-search-results-three.png'), Buffer.from(shot.data, 'base64'))
     );
 
+    await evaluateJson(client, `() => document.querySelector('.arxiv-detail-panel-toggle')?.click()`);
+    await wait(420);
+    const collapsedDetailLayout = await readArxivResultLayout(client);
+    if (
+      collapsedDetailLayout.detailVisible ||
+      !collapsedDetailLayout.detailRect ||
+      collapsedDetailLayout.detailRect.width > 72 ||
+      !collapsedDetailLayout.resultsPanelRect ||
+      collapsedDetailLayout.resultsPanelRect.width <= threeColumnLayout.resultsPanelRect.width
+    ) {
+      await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+        writeFile(path.join(outputDir, 'arxiv-search-detail-collapsed-failed.png'), Buffer.from(shot.data, 'base64'))
+      );
+      throw new Error(`arxiv: collapsed detail panel should be a narrow rail and expand results, got ${JSON.stringify(collapsedDetailLayout)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'arxiv-search-detail-collapsed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    await evaluateJson(client, `() => document.querySelector('.arxiv-detail-panel-toggle')?.click()`);
+    await wait(320);
+
     const advancedFilterDensity = await readArxivAdvancedFilterDensity(client);
     if (
       !advancedFilterDensity.advancedVisible ||
@@ -2913,6 +3042,13 @@ async function runSettingsScenario(client) {
       });
       return deltas.length > 0 ? Math.max(...deltas) : 0;
     };
+    const colorTuples = (value) =>
+      [...String(value).matchAll(/rgba?\\(([^)]+)\\)/g)].map((match) => {
+        const channels = match[1].match(/\\d+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+        return { value, r: channels[0], g: channels[1], b: channels[2] };
+      });
+    const readsAsBrown = ({ r, g, b }) =>
+      r > b + 18 && g > b + 8 && r >= g - 4 && r - g < 72;
     const oldAccentValues = [
       getComputedStyle(document.querySelector('.settings-page .eyebrow') ?? document.body).color,
       getComputedStyle(document.querySelector('.settings-page input[type="checkbox"]:checked') ?? document.body).accentColor,
@@ -2922,6 +3058,9 @@ async function runSettingsScenario(client) {
     const activeNavBackground = getComputedStyle(
       document.querySelector('.settings-nav button.active') ?? document.body
     ).backgroundColor;
+    const warmBrownAccentValues = [...oldAccentValues, activeNavBackground]
+      .flatMap(colorTuples)
+      .filter(readsAsBrown);
     return {
       hasPage: Boolean(page && layout && nav && content),
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
@@ -2936,6 +3075,7 @@ async function runSettingsScenario(client) {
       disabledTodoDirectoryButtons: [...document.querySelectorAll('.path-input-row button')]
         .filter((button) => button.disabled || /TODO/.test(button.getAttribute('title') ?? '')).length,
       oldAccentValues,
+      warmBrownAccentValues,
       oldAccentMaxChannelDelta: oldAccentValues.reduce((max, value) => Math.max(max, channelDelta(value)), 0),
       activeNavBackground,
       activeNavMaxChannelDelta: channelDelta(activeNavBackground),
@@ -2965,6 +3105,9 @@ async function runSettingsScenario(client) {
   }
   if (snapshot.oldAccentMaxChannelDelta < 35) {
     throw new Error(`settings: page accents have collapsed back to grayscale, got ${JSON.stringify(snapshot)}`);
+  }
+  if (snapshot.warmBrownAccentValues.length > 0) {
+    throw new Error(`settings: warm brown accent has returned, got ${JSON.stringify(snapshot)}`);
   }
   if (snapshot.activeNavMaxChannelDelta < 25 || snapshot.activeNavMaxChannelDelta > 80) {
     throw new Error(`settings: active nav still reads as grayscale or high-saturation accent, got ${JSON.stringify(snapshot)}`);

@@ -6,7 +6,7 @@ export function buildAppMainClassName(extraClassName = '', isTransitioning = fal
     .join(' ');
 }
 
-export function useViewTransition<TView>(view: TView, durationMs = 180) {
+export function useViewTransition<TView>(view: TView, durationMs = 260) {
   const [isViewTransitioning, setIsViewTransitioning] = useState(false);
   const previousViewRef = useRef(view);
 
