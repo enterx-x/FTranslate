@@ -77,7 +77,7 @@ demo-output/research-loop/
 npm run demo:code-repo
 ```
 
-该 demo 不打开 Electron UI，也不会执行样例仓库代码。它会创建一个安全强化学习导航代码仓库 fixture，执行只读扫描，把 manifest、训练入口、配置文件、方法卡字段和一段失败日志映射为可追踪代码证据、复现诊断和手动运行计划，并输出到：
+该 demo 不打开 Electron UI，也不会执行样例仓库代码。它会创建一个安全强化学习导航代码仓库 fixture，执行只读扫描，把 manifest、训练入口、配置文件、方法卡字段和一段失败日志映射为可追踪代码证据、复现诊断、手动运行计划和 15 分钟复现任务包，并输出到：
 
 ```text
 demo-output/code-repository/
@@ -90,7 +90,9 @@ demo-output/code-repository/
 - `paper-to-code-mapping.json`：方法卡字段到代码证据路径的结构化映射；
 - `reproduction-diagnosis.json`：复现失败日志到依赖清单、入口文件、证据行和下一步动作的结构化诊断；
 - `reproduction-run-plan.json`：把诊断 issue、入口脚本和配置文件组合成 manual-only 的结构化复现运行计划；
-- `reproduction-run-plan.md`：可读的手动复现运行计划，明确哪些命令会修改环境或执行仓库代码，默认不自动运行。
+- `reproduction-run-plan.md`：可读的手动复现运行计划，明确哪些命令会修改环境或执行仓库代码，默认不自动运行；
+- `reproduction-task-package.json`：把方法卡、Paper-to-Code 映射、日志诊断、运行计划和实验矩阵行合并成可交接任务包，包含质量门、下一步动作和被阻塞实验行；
+- `reproduction-task-package.md`：可读的 15 分钟复现任务包，默认 manual-only，用来告诉用户先修什么、证据在哪、哪些实验暂时不能运行。
 
 阶段 4/5 已先完成数据层与 headless 闭环，UI 由后续代理接入：
 

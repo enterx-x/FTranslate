@@ -19,6 +19,7 @@
     "src/renderer/lib/paperToCodeMapping.ts",
     "src/renderer/lib/reproductionLogDiagnostics.ts",
     "src/renderer/lib/reproductionRunPlan.ts",
+    "src/renderer/lib/reproductionTaskPackage.ts",
     "src/renderer/lib/researchLoopDemo.ts",
     "src/renderer/lib/methodCards.ts",
     "src/renderer/lib/experimentMatrix.ts",

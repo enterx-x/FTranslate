@@ -3,9 +3,11 @@ import path from 'node:path';
 import process from 'node:process';
 import { scanCodeRepository } from '../src/main/codeRepositoryScanner';
 import { buildCodeRepositoryRecord } from '../src/renderer/lib/codeRepositories';
+import { buildExperimentMatrixRowsFromMethodCard } from '../src/renderer/lib/experimentMatrix';
 import { buildPaperToCodeMapping } from '../src/renderer/lib/paperToCodeMapping';
 import { diagnoseReproductionLog } from '../src/renderer/lib/reproductionLogDiagnostics';
 import { buildReproductionRunPlan, renderReproductionRunPlanMarkdown } from '../src/renderer/lib/reproductionRunPlan';
+import { buildReproductionTaskPackage, renderReproductionTaskPackageMarkdown } from '../src/renderer/lib/reproductionTaskPackage';
 import type { MethodCard } from '../src/renderer/lib/methodCards';
 import { buildDefaultResearchProject, linkCodeRepositoryPath } from '../src/renderer/lib/researchProjects';
 
@@ -23,8 +25,10 @@ async function main(): Promise<void> {
   const scan = await scanCodeRepository({ rootPath: fixtureDir, now });
   const repository = buildCodeRepositoryRecord({ projectId, scan });
   const project = linkCodeRepositoryPath(buildDefaultResearchProject([], Date.parse(now)), scan.rootPath, now);
+  const methodCard = createDemoMethodCard();
+  const experimentRows = buildExperimentMatrixRowsFromMethodCard(methodCard);
   const mapping = buildPaperToCodeMapping({
-    methodCard: createDemoMethodCard(),
+    methodCard,
     repository
   });
   const reproductionDiagnosis = diagnoseReproductionLog({
@@ -37,6 +41,15 @@ async function main(): Promise<void> {
     diagnosis: reproductionDiagnosis,
     now
   });
+  const reproductionTaskPackage = buildReproductionTaskPackage({
+    projectId,
+    methodCard,
+    experimentRows,
+    mapping,
+    diagnosis: reproductionDiagnosis,
+    runPlan: reproductionRunPlan,
+    now
+  });
 
   const artifacts = {
     'repository-scan.json': `${JSON.stringify(scan, null, 2)}\n`,
@@ -46,12 +59,15 @@ async function main(): Promise<void> {
       scan,
       mapping,
       reproductionDiagnosis,
-      reproductionRunPlan
+      reproductionRunPlan,
+      reproductionTaskPackage
     })}\n`,
     'paper-to-code-mapping.json': `${JSON.stringify(mapping, null, 2)}\n`,
     'reproduction-diagnosis.json': `${JSON.stringify(reproductionDiagnosis, null, 2)}\n`,
     'reproduction-run-plan.json': `${JSON.stringify(reproductionRunPlan, null, 2)}\n`,
-    'reproduction-run-plan.md': `${renderReproductionRunPlanMarkdown(reproductionRunPlan)}\n`
+    'reproduction-run-plan.md': `${renderReproductionRunPlanMarkdown(reproductionRunPlan)}\n`,
+    'reproduction-task-package.json': `${JSON.stringify(reproductionTaskPackage, null, 2)}\n`,
+    'reproduction-task-package.md': `${renderReproductionTaskPackageMarkdown(reproductionTaskPackage)}\n`
   };
 
   await fs.mkdir(outputDir, { recursive: true });
@@ -74,14 +90,17 @@ async function main(): Promise<void> {
         diagnosisStatus: reproductionDiagnosis.status,
         runPlanStepCount: reproductionRunPlan.steps.length,
         runPlanStatus: reproductionRunPlan.status,
-        qualityPassed: evaluateDemo(repository, mapping, reproductionDiagnosis, reproductionRunPlan)
+        taskPackageStatus: reproductionTaskPackage.status,
+        taskPackageQualityPassed: reproductionTaskPackage.qualityGate.passed,
+        taskPackageChecklistCount: reproductionTaskPackage.handoffChecklist.length,
+        qualityPassed: evaluateDemo(repository, mapping, reproductionDiagnosis, reproductionRunPlan, reproductionTaskPackage)
       },
       null,
       2
     )
   );
 
-  if (!evaluateDemo(repository, mapping, reproductionDiagnosis, reproductionRunPlan)) {
+  if (!evaluateDemo(repository, mapping, reproductionDiagnosis, reproductionRunPlan, reproductionTaskPackage)) {
     process.exitCode = 1;
   }
 }
@@ -193,6 +212,7 @@ function buildRepositorySummary(input: {
   mapping: ReturnType<typeof buildPaperToCodeMapping>;
   reproductionDiagnosis: ReturnType<typeof diagnoseReproductionLog>;
   reproductionRunPlan: ReturnType<typeof buildReproductionRunPlan>;
+  reproductionTaskPackage: ReturnType<typeof buildReproductionTaskPackage>;
 }): string {
   return [
     '# FTranslate Paper-to-Code Demo',
@@ -242,11 +262,24 @@ function buildRepositorySummary(input: {
         }`
     ),
     '',
+    '## Reproduction Task Package',
+    '',
+    `- Status: ${input.reproductionTaskPackage.status}`,
+    `- Timebox: ${input.reproductionTaskPackage.timeboxMinutes} minutes`,
+    `- Quality gate: ${input.reproductionTaskPackage.qualityGate.passed ? 'passed' : 'failed'}`,
+    `- Next action: ${input.reproductionTaskPackage.nextAction.label}`,
+    `- Next command kind: ${input.reproductionTaskPackage.nextAction.commandKind}`,
+    `- Linked experiment rows: ${input.reproductionTaskPackage.linkedExperimentRows.length}`,
+    ...input.reproductionTaskPackage.linkedExperimentRows.map(
+      (row) => `- ${row.experimentRowId}: ${row.group}; status ${row.status}; evidence ${row.evidence.join(', ')}`
+    ),
+    '',
     '## Safety',
     '',
     '- The demo only reads text files from a generated fixture repository.',
     '- The diagnosis consumes a static sample log and only returns structured suggestions.',
     '- The run plan is manual-only and never executes generated commands.',
+    '- The task package is a handoff object; it does not run commands or mutate the fixture repository.',
     '- It does not run python, pip, conda, npm, shell scripts or notebooks.',
     ''
   ].join('\n');
@@ -256,7 +289,8 @@ function evaluateDemo(
   repository: ReturnType<typeof buildCodeRepositoryRecord>,
   mapping: ReturnType<typeof buildPaperToCodeMapping>,
   reproductionDiagnosis: ReturnType<typeof diagnoseReproductionLog>,
-  reproductionRunPlan: ReturnType<typeof buildReproductionRunPlan>
+  reproductionRunPlan: ReturnType<typeof buildReproductionRunPlan>,
+  reproductionTaskPackage: ReturnType<typeof buildReproductionTaskPackage>
 ): boolean {
   return (
     repository.manifests.length >= 1 &&
@@ -267,7 +301,12 @@ function evaluateDemo(
     reproductionDiagnosis.issues.length >= 1 &&
     reproductionRunPlan.status === 'blocked' &&
     reproductionRunPlan.executionPolicy === 'manual-only' &&
-    reproductionRunPlan.steps.length >= 2
+    reproductionRunPlan.steps.length >= 2 &&
+    reproductionTaskPackage.status === 'blocked' &&
+    reproductionTaskPackage.executionPolicy === 'manual-only' &&
+    reproductionTaskPackage.qualityGate.passed &&
+    reproductionTaskPackage.linkedExperimentRows.length >= 2 &&
+    reproductionTaskPackage.nextAction.requiresUserConfirmation
   );
 }
 
