@@ -32,6 +32,7 @@ import saveIcon from '../assets/icons/duotone/save.svg';
 import type { LocalTranslationStatus, PdfFilePayload } from '../types/electron';
 import { repairAcademicTranslation } from '../../shared/academicTranslationQuality';
 import { clampPanelRatio, getRightPanelRatioFromPointer } from '../lib/responsiveLayout';
+import { createArxivSearchSessionController } from '../lib/arxivSearchSession';
 import { MathText } from './MathText';
 
 interface ArxivSearchPageProps {
@@ -375,6 +376,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     '点击“搜索”才会访问 arXiv；输入关键词不会自动请求，避免触发官方限流。'
   );
   const [isSearching, setIsSearching] = useState(false);
+  const [searchSessionController] = useState(createArxivSearchSessionController);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [translatingId, setTranslatingId] = useState<string | null>(null);
   const [backgroundTranslatingIds, setBackgroundTranslatingIds] = useState<Record<string, boolean>>({});
@@ -485,6 +487,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     nextStart = 0,
     options: { forceRefresh?: boolean; resetFilters?: boolean; latest?: boolean; maxResults?: number } = {}
   ): Promise<void> {
+    const searchSessionId = searchSessionController.begin();
     const searchQuery = query.trim();
     if (!searchQuery && !options.latest) {
       setMessage('请输入关键词后再搜索。');
@@ -521,6 +524,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           : '正在检索论文，关键词会同时匹配标题和摘要。'
       );
       const result = await window.electronAPI.searchArxiv(nextRequest);
+      if (!searchSessionController.isCurrent(searchSessionId)) {
+        return;
+      }
       setStart(nextStart);
       setPapers(result.papers);
       setTotalResults(result.totalResults ?? result.papers.length);
@@ -557,14 +563,22 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         setMessage(`${queryNotice}共找到 ${formatInteger(result.totalResults ?? result.papers.length)} 篇，当前显示 ${rangeText}，已按${sortText}展示。`);
       }
     } catch (error) {
+      if (!searchSessionController.isCurrent(searchSessionId)) {
+        return;
+      }
       setStatus('error');
       setMessage(`arXiv 检索失败：${formatError(error)}`);
     } finally {
-      setIsSearching(false);
+      if (searchSessionController.isCurrent(searchSessionId)) {
+        setIsSearching(false);
+      }
     }
   }
 
   function handleJumpToPage(): void {
+    if (isSearching) {
+      return;
+    }
     const page = Number(pageJump);
     if (!Number.isFinite(page)) {
       setPageJump(String(currentPage));
@@ -1462,9 +1476,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                 <input
                   value={pageJump}
                   inputMode="numeric"
+                  disabled={isSearching}
                   onChange={(event) => setPageJump(event.target.value.replace(/\D/gu, '').slice(0, 5))}
                   onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
+                    if (event.key === 'Enter' && !isSearching) {
                       handleJumpToPage();
                     }
                   }}

@@ -1,0 +1,19 @@
+import { describe, expect, it } from 'vitest';
+import { createArxivSearchSessionController } from './arxivSearchSession';
+
+describe('createArxivSearchSessionController', () => {
+  it('issues monotonically increasing sessions and only accepts the current session', () => {
+    const controller = createArxivSearchSessionController();
+
+    expect(controller.current()).toBeNull();
+
+    const firstSession = controller.begin();
+    const secondSession = controller.begin();
+
+    expect(firstSession).toBe(1);
+    expect(secondSession).toBe(2);
+    expect(controller.current()).toBe(secondSession);
+    expect(controller.isCurrent(firstSession)).toBe(false);
+    expect(controller.isCurrent(secondSession)).toBe(true);
+  });
+});
