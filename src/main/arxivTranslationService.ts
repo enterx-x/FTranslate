@@ -476,7 +476,7 @@ function evaluatePreparedTranslations(
       ? repairAcademicTranslation(item.sourceAbstract, normalizeTranslatedText(abstract.text), { mode: 'abstract' })
       : '';
     const hasSevereAbstractLengthLoss =
-      abstract.ok && hasSevereAcademicTranslationLengthLoss(item.sourceAbstract, abstractZh);
+      abstract.ok && hasSevereAcademicTranslationLengthLoss(item.sourceAbstract, abstractZh, 'abstract');
 
     return {
       title,

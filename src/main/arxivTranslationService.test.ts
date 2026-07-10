@@ -92,7 +92,9 @@ describe('ArxivTranslationService', () => {
         calls.push(text);
         return preserveProtectedAcademicMarkers(
           text,
-          text.includes('A Perceptive') ? '：感知集成低层控制器' : '该摘要介绍了机器人导航中的强化学习方法。'
+          text.includes('A Perceptive')
+            ? '：感知集成低层控制器'
+            : '该摘要完整介绍了机器人导航中的强化学习方法、实验设置与主要研究结论。'
         );
       },
       now: () => 1_764_000_000_000
@@ -109,7 +111,7 @@ describe('ArxivTranslationService', () => {
 
       expect(first).toMatchObject({
         stableId: '2601.17440',
-        abstractZh: '该摘要介绍了机器人导航中的强化学习方法。',
+        abstractZh: '该摘要完整介绍了机器人导航中的强化学习方法、实验设置与主要研究结论。',
         engine: 'argos',
         status: 'completed',
         cacheHit: false
@@ -135,7 +137,9 @@ describe('ArxivTranslationService', () => {
       dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
       translateTexts: async (texts) => {
         batches.push(texts);
-        return texts.map((text) => preserveProtectedAcademicMarkers(text, '这是可用的中文译文。'));
+        return texts.map((text) =>
+          preserveProtectedAcademicMarkers(text, '这是可用且完整的中文译文，涵盖研究方法、实验设置与主要研究结论。')
+        );
       },
       now: () => 1_764_000_000_000
     });
@@ -243,7 +247,9 @@ describe('ArxivTranslationService', () => {
       dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
       translateTexts: async (texts) => {
         batches.push(texts);
-        return texts.map((text) => `ZH:${text.slice(0, 18)}`);
+        return texts.map((text) =>
+          preserveProtectedAcademicMarkers(text, '这是完整的中文译文，涵盖研究方法、实验设置与主要研究结论。')
+        );
       },
       now: () => 1_764_000_000_000
     });
@@ -363,6 +369,87 @@ describe('ArxivTranslationService', () => {
     }
   });
 
+  it('rejects a short-but-truncated abstract instead of caching the title alone', async () => {
+    const batches: string[][] = [];
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) => {
+        batches.push(texts);
+        return texts.map((_, index) => (index === 0 ? '这是标题的完整中文译文。' : '过短。'));
+      }
+    });
+    const request = {
+      stableId: 'short-truncated-abstract',
+      title: 'Navigation study',
+      summary: `This abstract reports ${'reproducible experimental detail '.repeat(5)}.`
+    };
+
+    try {
+      const first = await service.translatePaper(request);
+      const second = await service.translatePaper(request);
+
+      expect(first.status).toBe('failed');
+      expect(second.status).toBe('failed');
+      expect(first.cacheHit).toBe(false);
+      expect(second.cacheHit).toBe(false);
+      expect(batches).toHaveLength(2);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('rejects cross-segment protected markers instead of caching a reordered abstract', async () => {
+    const batches: string[][] = [];
+    const summary =
+      `We optimize $x^2$ with ${'first-phase detail '.repeat(38)}. ` +
+      `We validate \\(${ 'E=mc^2' }\\) with ${'second-phase detail '.repeat(38)}.`;
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) => {
+        batches.push(texts);
+        const markersBySegment = texts.map((text) => text.match(/\[\[FTR_PROTECTED_\d+\]\]/gu) ?? []);
+        const markedAbstractSegments = markersBySegment
+          .map((markers, index) => ({ index, markers }))
+          .filter(({ index, markers }) => index > 0 && markers.length > 0);
+        const [firstMarkedSegment, secondMarkedSegment] = markedAbstractSegments;
+        const translated = texts.map((text) =>
+          preserveProtectedAcademicMarkers(text, '这是完整的中文译文，保留对应实验方法与验证细节。')
+        );
+
+        if (firstMarkedSegment && secondMarkedSegment) {
+          translated[firstMarkedSegment.index] = translated[firstMarkedSegment.index].replace(
+            firstMarkedSegment.markers[0],
+            secondMarkedSegment.markers[0]
+          );
+          translated[secondMarkedSegment.index] = translated[secondMarkedSegment.index].replace(
+            secondMarkedSegment.markers[0],
+            firstMarkedSegment.markers[0]
+          );
+        }
+        return translated;
+      }
+    });
+    const request = {
+      stableId: 'cross-segment-protected-marker',
+      title: 'Navigation study',
+      summary
+    };
+
+    try {
+      const first = await service.translatePaper(request);
+      const second = await service.translatePaper(request);
+
+      expect(first.status).toBe('failed');
+      expect(second.status).toBe('failed');
+      expect(first.cacheHit).toBe(false);
+      expect(second.cacheHit).toBe(false);
+      expect(batches).toHaveLength(2);
+      expect(batches[0].length).toBeGreaterThan(2);
+    } finally {
+      service.close();
+    }
+  });
+
   it('rejects untranslated English echo output instead of caching it', async () => {
     const calls: string[][] = [];
     const service = new ArxivTranslationService({
@@ -396,7 +483,9 @@ describe('ArxivTranslationService', () => {
     const service = new ArxivTranslationService({
       dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
       translateTexts: async (texts) =>
-        texts.map((text, index) => (index === 0 ? text : '本文研究机器人操作中的触觉感知方法。'))
+        texts.map((text, index) =>
+          index === 0 ? text : '本文完整研究机器人操作中的触觉感知方法，并报告实验设置、评价指标与主要结论。'
+        )
     });
 
     try {
@@ -413,7 +502,9 @@ describe('ArxivTranslationService', () => {
 
       expect(result.status).toBe('completed');
       expect(result.titleZh).toBe('');
-      expect(result.abstractZh).toBe('本文研究机器人操作中的触觉感知方法。');
+      expect(result.abstractZh).toBe(
+        '本文完整研究机器人操作中的触觉感知方法，并报告实验设置、评价指标与主要结论。'
+      );
       expect(cached.status).toBe('cached');
       expect(cached.abstractZh).toBe(result.abstractZh);
     } finally {
@@ -430,11 +521,17 @@ describe('ArxivTranslationService', () => {
     };
     const bootstrap = new ArxivTranslationService({
       dbPath,
-      translateTexts: async () => ['机器人导航与学习动力学旧译文', '旧摘要译文。']
+      translateTexts: async () => [
+        '机器人导航与学习动力学旧译文',
+        '这是用于初始化缓存的完整旧摘要译文，涵盖研究方法、实验设置与主要研究结论。'
+      ]
     });
-    const seeded = await bootstrap.translatePaper(request);
-    expect(seeded.status).toBe('completed');
-    bootstrap.close();
+    try {
+      const seeded = await bootstrap.translatePaper(request);
+      expect(seeded.status).toBe('completed');
+    } finally {
+      bootstrap.close();
+    }
 
     const db = new DatabaseSync(dbPath);
     try {
@@ -465,7 +562,10 @@ describe('ArxivTranslationService', () => {
       dbPath,
       translateTexts: async (texts) => {
         calls.push(texts);
-        return ['机器人导航与学习动力学', '本文研究学习动力学下的机器人导航。'];
+        return [
+          '机器人导航与学习动力学',
+          '本文完整研究学习动力学下的机器人导航方法，并报告实验设置、评价指标与主要结论。'
+        ];
       }
     });
 
@@ -488,7 +588,9 @@ describe('ArxivTranslationService', () => {
       translateTextsWithEngine: async (texts) => {
         batches.push(texts);
         return {
-          texts: texts.map((text) => `NLLB:${text.slice(0, 16)}`),
+          texts: texts.map((text) =>
+            preserveProtectedAcademicMarkers(text, '这是NLLB生成的完整中文译文，涵盖研究方法、实验设置与主要研究结论。')
+          ),
           engine: 'nllb-ct2-int8'
         };
       },
@@ -528,7 +630,9 @@ describe('ArxivTranslationService', () => {
         throw new Error('NLLB worker unavailable');
       },
       fallbackTranslateTextsWithEngine: async (texts) => ({
-        texts: texts.map((text) => `ARGOS:${text.slice(0, 16)}`),
+        texts: texts.map((text) =>
+          preserveProtectedAcademicMarkers(text, '这是Argos生成的完整中文译文，涵盖研究方法、实验设置与主要研究结论。')
+        ),
         engine: 'argos'
       }),
       now: () => 1_764_000_000_000

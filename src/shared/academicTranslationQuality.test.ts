@@ -3,6 +3,7 @@ import {
   collapseLocalRepeatedFragments,
   collapseRepeatedTranslationTail,
   extractProtectedAcademicTerms,
+  hasSevereAcademicTranslationLengthLoss,
   prepareAcademicTranslation,
   repairAcademicTranslation
 } from './academicTranslationQuality';
@@ -138,7 +139,7 @@ describe('academic translation quality repair', () => {
 
   it('round-trips protected academic spans through opaque placeholders', () => {
     const source =
-      'OmniAgent uses $x^2 + y^2$ and $$\\mathcal{L}=\\lambda \\|x\\|$$ with `policy.step()`, https://example.org/paper, doi:10.48550/arXiv.2607.01234, arXiv:2607.01234, and [1-3, 5] for Sim-to-Real CBF-MPC.';
+      'OmniAgent uses $x^2 + y^2$ and $$\\mathcal{L}=\\lambda \\|x\\|$$ with `policy.step()` and ``policy batch``; constraints are \\(E = mc^2\\) and \\[\\int_a^b f(x)dx\\]. See https://example.org/paper, doi:10.48550/arXiv.2607.01234, arXiv:2607.01234, arXiv:hep-th/9901001, and [1-3, 5] for Sim-to-Real CBF-MPC.';
     const prepared = prepareAcademicTranslation(source);
 
     expect(prepared.segments).toHaveLength(1);
@@ -152,9 +153,13 @@ describe('academic translation quality repair', () => {
     expect(restored.text).toContain('$x^2 + y^2$');
     expect(restored.text).toContain('$$\\mathcal{L}=\\lambda \\|x\\|$$');
     expect(restored.text).toContain('`policy.step()`');
+    expect(restored.text).toContain('``policy batch``');
+    expect(restored.text).toContain('\\(E = mc^2\\)');
+    expect(restored.text).toContain('\\[\\int_a^b f(x)dx\\]');
     expect(restored.text).toContain('https://example.org/paper');
     expect(restored.text).toContain('doi:10.48550/arXiv.2607.01234');
     expect(restored.text).toContain('arXiv:2607.01234');
+    expect(restored.text).toContain('arXiv:hep-th/9901001');
     expect(restored.text).toContain('[1-3, 5]');
     expect(restored.text).toContain('Sim-to-Real');
     expect(restored.text).toContain('CBF-MPC');
@@ -176,5 +181,45 @@ describe('academic translation quality repair', () => {
     expect(restored.text).toContain('Sentence-00');
     expect(restored.text).toContain('Sentence-17');
     expect(restored.text.indexOf('Sentence-00')).toBeLessThan(restored.text.indexOf('Sentence-17'));
+  });
+
+  it('rejects protected markers moved across or reordered within translated segments', () => {
+    const source =
+      'We use $x^2$ with `policy.step()` in the first experiment. ' +
+      `The second experiment has \\(E=mc^2\\) and ${'details '.repeat(130)}.`;
+    const prepared = prepareAcademicTranslation(source);
+    const markerGroups = prepared.segments.map((segment) => segment.match(/\[\[FTR_PROTECTED_\d+\]\]/gu) ?? []);
+    const firstSegment = markerGroups.findIndex((markers) => markers.length >= 2);
+    const secondSegment = markerGroups.findIndex((markers, index) => index !== firstSegment && markers.length > 0);
+
+    expect(firstSegment).toBeGreaterThanOrEqual(0);
+    expect(secondSegment).toBeGreaterThanOrEqual(0);
+
+    const reordered = prepared.segments.map((segment, index) => {
+      if (index !== firstSegment) {
+        return segment;
+      }
+      const [first, second] = markerGroups[index];
+      return segment.replace(first, '__FIRST__').replace(second, first).replace('__FIRST__', second);
+    });
+    const crossSegment = prepared.segments.map((segment, index) => {
+      if (index === firstSegment) {
+        return segment.replace(markerGroups[firstSegment][0], markerGroups[secondSegment][0]);
+      }
+      if (index === secondSegment) {
+        return segment.replace(markerGroups[secondSegment][0], markerGroups[firstSegment][0]);
+      }
+      return segment;
+    });
+
+    expect(prepared.restore(reordered).ok).toBe(false);
+    expect(prepared.restore(crossSegment).ok).toBe(false);
+  });
+
+  it('rejects severely truncated abstracts without applying title thresholds', () => {
+    const source = `This abstract reports ${'reproducible experimental detail '.repeat(5)}.`;
+
+    expect(hasSevereAcademicTranslationLengthLoss(source, '过短。', 'abstract')).toBe(true);
+    expect(hasSevereAcademicTranslationLengthLoss(source, '短标题', 'title')).toBe(false);
   });
 });

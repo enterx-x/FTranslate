@@ -34,6 +34,7 @@ const MAX_TERM_LENGTH = 72;
 const DEFAULT_TRANSLATION_SEGMENT_LENGTH = 900;
 const PROTECTED_PLACEHOLDER_PREFIX = '[[FTR_PROTECTED_';
 const PROTECTED_PLACEHOLDER_SUFFIX = ']]';
+const PROTECTED_PLACEHOLDER_PATTERN_SOURCE = String.raw`\[\[FTR_PROTECTED_\d+\]\]`;
 
 interface ProtectedAcademicSpan {
   start: number;
@@ -50,7 +51,7 @@ export interface PreparedAcademicTranslation {
 export interface PreparedAcademicTranslationRestoreResult {
   ok: boolean;
   text: string;
-  reason?: 'segment-count-mismatch' | 'missing-or-damaged-placeholder';
+  reason?: 'segment-count-mismatch' | 'missing-or-damaged-placeholder' | 'placeholder-sequence-mismatch';
 }
 
 /**
@@ -65,16 +66,26 @@ export function prepareAcademicTranslation(
   const protectedSpans = collectProtectedAcademicSpans(source);
   const protectedText = applyProtectedAcademicSpans(source, protectedSpans);
   const segments = splitAcademicTranslationSegments(protectedText, maxSegmentLength);
+  const expectedMarkerSequences = segments.map(extractProtectedMarkers);
 
   return {
     segments,
-    restore: (translatedSegments) => restorePreparedAcademicTranslation(protectedSpans, segments, translatedSegments)
+    restore: (translatedSegments) =>
+      restorePreparedAcademicTranslation(protectedSpans, segments, expectedMarkerSequences, translatedSegments)
   };
 }
 
-export function hasSevereAcademicTranslationLengthLoss(source: string, translated: string): boolean {
+export function hasSevereAcademicTranslationLengthLoss(
+  source: string,
+  translated: string,
+  mode: AcademicTranslationMode = 'abstract'
+): boolean {
+  if (mode === 'title') {
+    return false;
+  }
+
   const sourceLength = countMeaningfulTranslationCharacters(source);
-  if (sourceLength < 180) {
+  if (sourceLength < 48) {
     return false;
   }
 
@@ -99,10 +110,14 @@ function collectProtectedAcademicSpans(source: string): ProtectedAcademicSpan[] 
   // text nested inside formulas, code, URLs, identifiers, or citations.
   addMatches(/\$\$[\s\S]+?\$\$/gu);
   addMatches(/(?<!\$)\$(?!\$)(?:\\.|[^$\n])+\$(?!\$)/gu);
+  addMatches(/``[^`\n]+``/gu);
   addMatches(/`[^`\n]+`/gu);
+  addMatches(/\\\[[\s\S]+?\\\]/gu);
+  addMatches(/\\\([\s\S]+?\\\)/gu);
   addMatches(/\bhttps?:\/\/[^\s<>()\]]+/giu);
   addMatches(/\b(?:doi:\s*)?10\.\d{4,9}\/[\w.()/:;-]+/giu);
   addMatches(/\barXiv:\s*\d{4}\.\d{4,5}(?:v\d+)?\b/giu);
+  addMatches(/\barXiv:\s*[a-z-]+(?:\.[a-z-]+)?\/\d{7}(?:v\d+)?\b/giu);
   addMatches(/\[(?:\s*\d+\s*(?:[-–]\s*\d+)?\s*)(?:,\s*\d+\s*(?:[-–]\s*\d+)?\s*)*\]/gu);
 
   extractProtectedAcademicTerms(source).forEach((term) => {
@@ -148,10 +163,23 @@ function applyProtectedAcademicSpans(source: string, protectedSpans: ProtectedAc
 function restorePreparedAcademicTranslation(
   protectedSpans: ProtectedAcademicSpan[],
   sourceSegments: string[],
+  expectedMarkerSequences: string[][],
   translatedSegments: string[]
 ): PreparedAcademicTranslationRestoreResult {
   if (translatedSegments.length !== sourceSegments.length) {
     return { ok: false, text: '', reason: 'segment-count-mismatch' };
+  }
+
+  const hasExpectedMarkersInEverySegment = translatedSegments.every((segment, index) => {
+    const actualMarkers = extractProtectedMarkers(segment);
+    const expectedMarkers = expectedMarkerSequences[index] ?? [];
+    return (
+      actualMarkers.length === expectedMarkers.length &&
+      actualMarkers.every((marker, markerIndex) => marker === expectedMarkers[markerIndex])
+    );
+  });
+  if (!hasExpectedMarkersInEverySegment) {
+    return { ok: false, text: '', reason: 'placeholder-sequence-mismatch' };
   }
 
   let text = translatedSegments.map((segment) => segment.trim()).join(' ').trim();
@@ -163,10 +191,14 @@ function restorePreparedAcademicTranslation(
     text = text.replace(span.marker, () => span.value);
   }
 
-  if (/\[\[FTR_PROTECTED_\d+\]\]/gu.test(text)) {
+  if (new RegExp(PROTECTED_PLACEHOLDER_PATTERN_SOURCE, 'u').test(text)) {
     return { ok: false, text: '', reason: 'missing-or-damaged-placeholder' };
   }
   return { ok: true, text };
+}
+
+function extractProtectedMarkers(value: string): string[] {
+  return Array.from(value.matchAll(new RegExp(PROTECTED_PLACEHOLDER_PATTERN_SOURCE, 'gu')), (match) => match[0]);
 }
 
 function splitAcademicTranslationSegments(value: string, maxSegmentLength: number): string[] {
