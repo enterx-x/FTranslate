@@ -19609,27 +19609,7 @@ input[type='checkbox'] {
 }
 
 .arxiv-page {
-  isolation: isolate;
   overflow-x: hidden;
-}
-
-.arxiv-page .arxiv-search-card {
-  position: relative;
-  z-index: 30 !important;
-  overflow: visible;
-}
-
-.arxiv-page .arxiv-workbench,
-.arxiv-page .arxiv-results-panel,
-.arxiv-page .arxiv-detail-panel {
-  position: relative;
-  z-index: 1 !important;
-}
-
-.arxiv-page.is-searching .arxiv-search-card::after {
-  right: 0;
-  left: 0;
-  pointer-events: none;
 }
 
 .arxiv-page .arxiv-query-row {
@@ -19666,7 +19646,6 @@ input[type='checkbox'] {
 }
 
 .arxiv-query-options.is-open {
-  z-index: 40 !important;
   border-color: #d9e1eb;
   background: rgba(249, 251, 253, 0.98);
   box-shadow: 0 14px 30px rgba(15, 23, 42, 0.1);
@@ -21878,24 +21857,25 @@ input[type='checkbox'] {
 
 .arxiv-page .arxiv-search-card {
   position: relative;
-  z-index: 30 !important;
+  z-index: 30;
   overflow: visible;
 }
 
 .arxiv-page .arxiv-results-panel,
 .arxiv-page .arxiv-detail-panel {
   position: relative;
-  z-index: 1 !important;
+  z-index: 1;
 }
 
 .arxiv-page .arxiv-query-options.is-open {
   position: static;
   inset: auto;
-  z-index: 40 !important;
+  z-index: 40;
   max-height: none;
 }
 
 .arxiv-page.is-searching .arxiv-search-card::after {
   right: 0;
   left: 0;
+  pointer-events: none;
 }

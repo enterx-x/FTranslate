@@ -1236,8 +1236,16 @@ function buildVisualArxivPaper(index: number): ArxivPaper {
   };
 }
 
-function buildVisualArxivSearchResult(): ArxivSearchServiceResult {
+function buildVisualArxivSearchResult(request: ArxivSearchRequest): ArxivSearchServiceResult {
   const papers = Array.from({ length: 9 }, (_, index) => buildVisualArxivPaper(index));
+  const originalSearchQuery = request.searchQuery;
+  const normalizedSearchQuery = originalSearchQuery.trim().replace(/\s+/g, ' ');
+  const effectiveSearchQuery = [
+    'all:(reinforcement learning robot navigation autonomous mobile robot active perception)',
+    'OR all:(safe navigation dynamic obstacle avoidance local planning embodied intelligence)',
+    'OR all:(policy optimization world model control barrier function model predictive control)',
+    'OR all:(sim-to-real generalization robustness sample efficiency long-horizon evaluation)'
+  ].join(' ');
   return {
     papers,
     totalResults: 38019,
@@ -1245,7 +1253,11 @@ function buildVisualArxivSearchResult(): ArxivSearchServiceResult {
     itemsPerPage: papers.length,
     cacheHit: true,
     queueSize: 0,
-    lastRequestGapMs: -1
+    lastRequestGapMs: -1,
+    originalSearchQuery,
+    effectiveSearchQuery,
+    normalizedSearchQuery,
+    queryMode: request.queryMode ?? 'balanced'
   };
 }
 
@@ -3079,7 +3091,7 @@ async function exportPptxForIpc(request: SaveBinaryRequest): Promise<SavedFileRe
 
 async function searchArxivForIpc(request: ArxivSearchRequest): Promise<ArxivSearchServiceResult> {
   if (isVisualArxivMockEnabled()) {
-    return buildVisualArxivSearchResult();
+    return buildVisualArxivSearchResult(request);
   }
   return getArxivService().search(request, 'renderer:arxiv-search');
 }

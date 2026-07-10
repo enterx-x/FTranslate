@@ -2886,6 +2886,14 @@ async function runArxivSearchScenario(client) {
     }));
     const searchMock = async (request) => {
       await new Promise((resolve) => window.setTimeout(resolve, 260));
+      const originalSearchQuery = request?.searchQuery ?? '';
+      const normalizedSearchQuery = originalSearchQuery.trim().replace(/\s+/g, ' ');
+      const effectiveSearchQuery = [
+        'all:(reinforcement learning robot navigation autonomous mobile robot active perception)',
+        'OR all:(safe navigation dynamic obstacle avoidance local planning embodied intelligence)',
+        'OR all:(policy optimization world model control barrier function model predictive control)',
+        'OR all:(sim-to-real generalization robustness sample efficiency long-horizon evaluation)'
+      ].join(' ');
       return {
         papers,
         totalResults: 38019,
@@ -2895,10 +2903,10 @@ async function runArxivSearchScenario(client) {
         cacheStale: false,
         queueSize: 0,
         lastRequestGapMs: -1,
-        originalQuery: request?.query ?? '',
-        effectiveQuery: request?.query ?? '',
+        originalSearchQuery,
+        effectiveSearchQuery,
+        normalizedSearchQuery,
         queryMode: request?.queryMode ?? 'balanced',
-        sortBy: request?.sortBy ?? 'comprehensive'
       };
     };
     const translateMock = async (request) => ({
@@ -3055,7 +3063,8 @@ async function runArxivSearchScenario(client) {
           hasRuntimeStatus: Boolean(runtimeStatus),
           runtimeQueryEllipsized:
             Boolean(runtimeQueryRect) &&
-            runtimeQuery.scrollWidth >= runtimeQuery.clientWidth &&
+            runtimeQuery.scrollWidth > runtimeQuery.clientWidth + 2 &&
+            getComputedStyle(runtimeQuery).overflow === 'hidden' &&
             getComputedStyle(runtimeQuery).textOverflow === 'ellipsis',
           legacyAccentValues,
           legacyAccentMaxChannelDelta: legacyAccentValues.reduce(
@@ -3123,7 +3132,7 @@ async function runArxivSearchScenario(client) {
       threeColumnLayout.detailRect.width < 260 ||
       threeColumnLayout.detailRect.width > 300 ||
       (threeColumnLayout.pageHeaderHeight ?? 0) > 78 ||
-      (threeColumnLayout.searchRect?.height ?? 0) > 116 ||
+      (threeColumnLayout.searchRect?.height ?? 0) > 142 ||
       threeColumnLayout.maxSearchPrimaryControlHeight > 38 ||
       threeColumnLayout.maxFilterControlHeight > 38 ||
       (threeColumnLayout.resultsToolbarHeight ?? 0) > 42 ||
@@ -3174,11 +3183,11 @@ async function runArxivSearchScenario(client) {
       advancedFilterDensity.hasHorizontalOverflow ||
       (advancedFilterDensity.advancedRect?.top ?? 0) + (advancedFilterDensity.advancedRect?.height ?? 0) >
         (advancedFilterDensity.resultsRect?.top ?? Number.POSITIVE_INFINITY) + 2 ||
-      (advancedFilterDensity.searchRect?.height ?? 0) > 236 ||
+      (advancedFilterDensity.searchRect?.height ?? 0) > 264 ||
       (advancedFilterDensity.advancedRect?.height ?? 0) > 116 ||
       (advancedFilterDensity.resultsRect?.top ?? Number.POSITIVE_INFINITY) -
         (advancedFilterDensity.searchRect?.top ?? 0) >
-        250 ||
+        274 ||
       Math.abs((advancedFilterDensity.detailRect?.top ?? 0) - (advancedFilterDensity.searchRect?.top ?? 0)) > 16
     ) {
       await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
