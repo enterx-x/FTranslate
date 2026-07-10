@@ -13,6 +13,7 @@ import {
   buildArxivTranslationBatches,
   buildArxivTranslationBatchRequest,
   buildArxivTranslationMetaPatch,
+  buildArxivTranslationUiApplication,
   canStartArxivManualTranslation,
   describeLocalTranslationStatus,
   getArxivCardPreviewText,
@@ -395,10 +396,33 @@ describe('ArxivSearchPage result display', () => {
     };
 
     expect(buildArxivTranslationMetaPatch(completed, 6, 7)).toBeNull();
+    expect(buildArxivTranslationUiApplication(completed, 6, 7)).toBeNull();
     expect(buildArxivTranslationMetaPatch(completed, 7, 7)).toMatchObject({
       titleZh: '中文标题',
       abstractZh: '中文摘要'
     });
+    expect(buildArxivTranslationUiApplication(completed, 7, 7)).toMatchObject({
+      shouldShowChinese: true,
+      message: '完成',
+      patch: {
+        titleZh: '中文标题',
+        abstractZh: '中文摘要'
+      }
+    });
+  });
+
+  it('drops stale failed results before they can update metadata, view mode, or message', () => {
+    const failed = {
+      stableId: paper.stableId,
+      titleZh: '',
+      abstractZh: '',
+      engine: 'unavailable' as const,
+      status: 'failed' as const,
+      cacheHit: false,
+      message: '质量门禁未通过'
+    };
+
+    expect(buildArxivTranslationUiApplication(failed, 8, 9)).toBeNull();
   });
 
   it('keeps only read, translate, and reading-queue actions primary on result cards', () => {

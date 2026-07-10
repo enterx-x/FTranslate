@@ -391,6 +391,28 @@ export function buildArxivTranslationMetaPatch(
   };
 }
 
+export interface ArxivTranslationUiApplication {
+  patch: Partial<ArxivPaperMeta>;
+  shouldShowChinese: boolean;
+  message: string;
+}
+
+export function buildArxivTranslationUiApplication(
+  result: ArxivTitleAbstractTranslationResult,
+  resultSessionId: number,
+  currentSessionId: number | null
+): ArxivTranslationUiApplication | null {
+  const patch = buildArxivTranslationMetaPatch(result, resultSessionId, currentSessionId);
+  if (!patch) {
+    return null;
+  }
+  return {
+    patch,
+    shouldShowChinese: result.status === 'completed' || result.status === 'cached',
+    message: result.message
+  };
+}
+
 export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [query, setQuery] = useState(DEFAULT_ARXIV_SEARCH_QUERY);
   const [queryMode, setQueryMode] = useState<ArxivQueryMode>('balanced');
@@ -910,22 +932,23 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     translationSessionId: number,
     silent = false
   ): boolean {
-    const patch = buildArxivTranslationMetaPatch(
+    const application = buildArxivTranslationUiApplication(
       result,
       translationSessionId,
       searchSessionController.current()
     );
-    if (patch) {
-      patchMeta(paper, patch);
+    if (!application) {
+      return false;
     }
-    if (result.status === 'completed' || result.status === 'cached') {
+    patchMeta(paper, application.patch);
+    if (application.shouldShowChinese) {
       if (!silent) {
         setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
       }
       return true;
     }
     if (!silent) {
-      setMessage(result.message);
+      setMessage(application.message);
     }
     return false;
   }
