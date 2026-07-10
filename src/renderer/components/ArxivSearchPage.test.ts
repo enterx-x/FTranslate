@@ -13,6 +13,7 @@ import {
   buildArxivTranslationBatches,
   buildArxivTranslationBatchRequest,
   buildArxivTranslationMetaPatch,
+  canStartArxivManualTranslation,
   describeLocalTranslationStatus,
   getArxivCardPreviewText,
   getArxivResultDensityConfig,
@@ -350,6 +351,25 @@ describe('ArxivSearchPage result display', () => {
     }));
 
     expect(buildArxivPreviewTranslationBatches(papers)).toEqual([papers.slice(0, 6)]);
+  });
+
+  it('never expands preview translation beyond the first six results when those are cached', () => {
+    const papers = Array.from({ length: 20 }, (_, index) => ({
+      ...paper,
+      id: `${paper.id}-${index}`,
+      stableId: `2601.${String(index).padStart(5, '0')}`
+    }));
+
+    expect(buildArxivPreviewTranslationBatches(papers, (_, index) => index >= 6)).toEqual([]);
+    expect(buildArxivPreviewTranslationBatches(papers, (_, index) => index === 5)).toEqual([
+      [papers[5]]
+    ]);
+  });
+
+  it('blocks manual page and single-paper translations while a search owns the session', () => {
+    expect(canStartArxivManualTranslation(true, 7)).toBe(false);
+    expect(canStartArxivManualTranslation(false, null)).toBe(false);
+    expect(canStartArxivManualTranslation(false, 7)).toBe(true);
   });
 
   it('builds explicit preview, page, and foreground IPC request shapes', () => {

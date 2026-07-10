@@ -10,6 +10,8 @@ import {
   formatArxivResultRange,
   getArxivApiDateTooltip,
   getArxivRankingScopeLabel,
+  getArxivTranslationQualityLabel,
+  getArxivWaitStateLabel,
   parseArxivTitleAbstractTranslation
 } from './arxivUi';
 
@@ -33,6 +35,22 @@ describe('arxivUi helpers', () => {
   it('labels comprehensive ranking as page-local instead of implying global relevance', () => {
     expect(getArxivRankingScopeLabel('comprehensive')).toBe('本页相关排序');
     expect(getArxivRankingScopeLabel('relevance')).toBe('arXiv 全局相关性');
+  });
+
+  it('distinguishes ready, queued, and cooldown arXiv wait states', () => {
+    expect(getArxivWaitStateLabel(null, false)).toBe('arXiv 待命');
+    expect(getArxivWaitStateLabel(null, true)).toBe('arXiv 请求中');
+    expect(getArxivWaitStateLabel({ queueSize: 0, lastRequestGapMs: 3200 })).toBe('arXiv 就绪');
+    expect(getArxivWaitStateLabel({ queueSize: 2, lastRequestGapMs: 3200 })).toBe('arXiv 排队 2');
+    expect(getArxivWaitStateLabel({ queueSize: 0, lastRequestGapMs: 1000, cooldownRemainingMs: 65000 }))
+      .toBe('arXiv 冷却 2 分钟');
+  });
+
+  it('reports translation quality gate state without claiming unchecked output passed', () => {
+    expect(getArxivTranslationQualityLabel({})).toBe('质量门禁：待检查');
+    expect(getArxivTranslationQualityLabel({ translationStatus: 'completed' })).toBe('质量门禁：通过');
+    expect(getArxivTranslationQualityLabel({ translationStatus: 'failed' })).toBe('质量门禁：未通过');
+    expect(getArxivTranslationQualityLabel({ translationStatus: 'unavailable' })).toBe('质量门禁：不可用');
   });
   it('builds explainable scores from paper metadata without calling arXiv or AI', () => {
     const insight = buildArxivPaperInsight(robotPaper, 'reinforcement learning robot navigation');

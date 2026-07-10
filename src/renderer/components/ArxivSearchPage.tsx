@@ -26,7 +26,9 @@ import {
   formatArxivApiDate,
   formatArxivResultRange,
   getArxivApiDateTooltip,
-  getArxivRankingScopeLabel
+  getArxivRankingScopeLabel,
+  getArxivTranslationQualityLabel,
+  getArxivWaitStateLabel
 } from '../lib/arxivUi';
 import searchIcon from '../assets/icons/duotone/search.svg';
 import downloadIcon from '../assets/icons/duotone/download.svg';
@@ -331,9 +333,19 @@ export function shouldQueueArxivMetadataTranslation(meta: ArxivPaperMeta): boole
   return !hasUsableArxivChineseMetadata(meta);
 }
 
-export function buildArxivPreviewTranslationBatches(papers: ArxivPaper[]): ArxivPaper[][] {
-  const preview = papers.slice(0, ARXIV_PREVIEW_TRANSLATION_LIMIT);
+export function buildArxivPreviewTranslationBatches(
+  papers: ArxivPaper[],
+  shouldTranslate: (paper: ArxivPaper, index: number) => boolean = () => true
+): ArxivPaper[][] {
+  const preview = papers.slice(0, ARXIV_PREVIEW_TRANSLATION_LIMIT).filter(shouldTranslate);
   return preview.length > 0 ? [preview] : [];
+}
+
+export function canStartArxivManualTranslation(
+  isSearching: boolean,
+  currentSessionId: number | null
+): currentSessionId is number {
+  return !isSearching && currentSessionId !== null;
 }
 
 export function buildArxivTranslationBatchRequest(
@@ -359,12 +371,20 @@ export function buildArxivTranslationMetaPatch(
   currentSessionId: number | null
 ): Partial<ArxivPaperMeta> | null {
   if (
-    resultSessionId !== currentSessionId ||
-    (result.status !== 'completed' && result.status !== 'cached')
+    resultSessionId !== currentSessionId
   ) {
     return null;
   }
+  const translationState: Partial<ArxivPaperMeta> = {
+    translationStatus: result.status,
+    translationMessage: result.message,
+    translationEngine: result.engine
+  };
+  if (result.status !== 'completed' && result.status !== 'cached') {
+    return translationState;
+  }
   return {
+    ...translationState,
     titleZh: result.titleZh,
     abstractZh: result.abstractZh,
     translatedAt: result.translatedAt ?? new Date().toISOString()
@@ -429,6 +449,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     normalizedQuery: string;
     queryMode: ArxivQueryMode;
     sortBy: ArxivSortBy;
+    queueSize: number;
+    lastRequestGapMs: number;
+    cooldownRemainingMs?: number;
   } | null>(null);
   const [translationQueue, setTranslationQueue] = useState<{
     kind: 'preview' | 'page';
@@ -598,7 +621,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         normalizedQuery:
           result.normalizedSearchQuery ?? result.effectiveSearchQuery ?? nextRequest.searchQuery,
         queryMode: result.queryMode ?? nextRequest.queryMode ?? 'balanced',
-        sortBy: nextRequest.sortBy
+        sortBy: nextRequest.sortBy,
+        queueSize: result.queueSize,
+        lastRequestGapMs: result.lastRequestGapMs,
+        cooldownRemainingMs: result.cooldownRemainingMs
       });
       if (searchQuery) {
         setHistory((previous) => saveStringList(ARXIV_HISTORY_STORAGE_KEY, [searchQuery, ...previous]));
@@ -741,6 +767,11 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   }
 
   async function handleTranslateAbstract(paper: ArxivPaper): Promise<void> {
+    const translationSessionId = searchSessionController.current();
+    if (!canStartArxivManualTranslation(isSearching, translationSessionId)) {
+      setMessage(isSearching ? '搜索进行中，完成后再翻译当前论文。' : '请先完成一次搜索，再翻译论文。');
+      return;
+    }
     const currentMeta = getPaperMeta(paper, metaById);
     if (hasUsableArxivChineseMetadata(currentMeta)) {
       setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
@@ -748,11 +779,6 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       return;
     }
 
-    const translationSessionId = searchSessionController.current();
-    if (translationSessionId === null) {
-      setMessage('请先完成一次搜索，再翻译论文。');
-      return;
-    }
     try {
       setTranslatingId(paper.id);
       setMessage('正在使用本地离线引擎翻译标题和摘要，并写入 SQLite 缓存；优先 NLLB，失败回退 Argos，不会调用 AI API。');
@@ -780,18 +806,17 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     nextPapers: ArxivPaper[],
     translationSessionId: number
   ): Promise<void> {
-    const missing = nextPapers.filter((paper) => {
+    const batches = buildArxivPreviewTranslationBatches(nextPapers, (paper) => {
       const meta = getPaperMeta(paper, metaById);
       return shouldQueueArxivMetadataTranslation(meta);
     });
-    const batches = buildArxivPreviewTranslationBatches(missing);
     await queueTranslationBatches(batches, 'preview', translationSessionId, 'preview');
   }
 
   async function handleTranslatePage(): Promise<void> {
     const translationSessionId = searchSessionController.current();
-    if (translationSessionId === null) {
-      setMessage('请先完成一次搜索，再翻译当前页。');
+    if (!canStartArxivManualTranslation(isSearching, translationSessionId)) {
+      setMessage(isSearching ? '搜索进行中，完成后再翻译当前页。' : '请先完成一次搜索，再翻译当前页。');
       return;
     }
     const missing = papers.filter((paper) =>
@@ -892,6 +917,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     );
     if (patch) {
       patchMeta(paper, patch);
+    }
+    if (result.status === 'completed' || result.status === 'cached') {
       if (!silent) {
         setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
       }
@@ -1278,7 +1305,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               <button
                 type="button"
                 className="pill-button"
-                disabled={!selectedPaper || translatingId === selectedPaper.id}
+                disabled={isSearching || !selectedPaper || translatingId === selectedPaper.id}
                 onClick={() => selectedPaper && void handleTranslateAbstract(selectedPaper)}
               >
                 稍后重试
@@ -1322,6 +1349,16 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           </span>
           <span className="badge">模式：{translateArxivQueryMode(searchMetadata?.queryMode ?? queryMode)}</span>
           <span className="badge">排序：{getArxivRankingScopeLabel(searchMetadata?.sortBy ?? sortBy)}</span>
+          <span
+            className="badge"
+            title={
+              searchMetadata
+                ? `最近请求间隔 ${searchMetadata.lastRequestGapMs} ms；队列 ${searchMetadata.queueSize}`
+                : '尚未发起 arXiv 请求'
+            }
+          >
+            {getArxivWaitStateLabel(searchMetadata, isSearching)}
+          </span>
           <span className="badge arxiv-runtime-query" title={searchMetadata?.normalizedQuery || query.trim()}>
             规范化：{searchMetadata?.normalizedQuery || query.trim() || '—'}
           </span>
@@ -1334,6 +1371,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             翻译：{translationQueue
               ? `${translationQueue.kind === 'preview' ? '预览' : '本页'} ${translationQueue.completed}/${translationQueue.total}`
               : '空闲'} · {describeLocalTranslationStatus(localTranslationStatus)}
+          </span>
+          <span className="badge" title={selectedMeta.translationMessage || '尚无当前论文的质量门禁结果'}>
+            {getArxivTranslationQualityLabel(selectedMeta)}
           </span>
         </div>
       </section>
@@ -1365,6 +1405,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                 className="secondary-button arxiv-translate-page-button"
                 disabled={
                   papers.length === 0 ||
+                  isSearching ||
                   Boolean(translationQueue && translationQueue.completed < translationQueue.total)
                 }
                 onClick={() => void handleTranslatePage()}
@@ -1543,7 +1584,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                     <button
                       type="button"
                       className="secondary-button"
-                      disabled={isTranslatingMetadata}
+                      disabled={isSearching || isTranslatingMetadata}
                       onClick={(event) => {
                         event.stopPropagation();
                         void handleTranslateAbstract(paper);
@@ -1821,7 +1862,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   <button
                     type="button"
                     className="secondary-button button-with-icon"
-                    disabled={selectedIsTranslating}
+                    disabled={isSearching || selectedIsTranslating}
                     onClick={() => void handleTranslateAbstract(selectedPaper)}
                   >
                     <img className="button-icon" src={translateIcon} alt="" />

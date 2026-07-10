@@ -1,4 +1,11 @@
-import { normalizeArxivSearchQuery, type ArxivPaper, type ArxivSortBy } from './arxivClient';
+import {
+  normalizeArxivSearchQuery,
+  type ArxivPaper,
+  type ArxivSearchServiceResult,
+  type ArxivSortBy,
+  type ArxivTitleAbstractTranslationEngine,
+  type ArxivTitleAbstractTranslationStatus
+} from './arxivClient';
 
 export type ArxivReadingPriority = 'high' | 'medium' | 'low';
 
@@ -39,6 +46,9 @@ export interface ArxivPaperMeta {
   insight?: ArxivPaperInsight;
   translatedAt?: string;
   scoredAt?: string;
+  translationStatus?: ArxivTitleAbstractTranslationStatus;
+  translationMessage?: string;
+  translationEngine?: ArxivTitleAbstractTranslationEngine;
 }
 
 export function getArxivRankingScopeLabel(sortBy: ArxivSortBy): string {
@@ -51,6 +61,39 @@ export function getArxivRankingScopeLabel(sortBy: ArxivSortBy): string {
       return 'arXiv 提交时间';
     case 'lastUpdatedDate':
       return 'arXiv 更新时间';
+  }
+}
+
+export function getArxivWaitStateLabel(
+  state: Pick<ArxivSearchServiceResult, 'queueSize' | 'lastRequestGapMs' | 'cooldownRemainingMs'> | null,
+  isSearching = false
+): string {
+  if (!state) {
+    return isSearching ? 'arXiv 请求中' : 'arXiv 待命';
+  }
+  if ((state.cooldownRemainingMs ?? 0) > 0) {
+    return `arXiv 冷却 ${Math.max(1, Math.ceil((state.cooldownRemainingMs ?? 0) / 60_000))} 分钟`;
+  }
+  if (state.queueSize > 0) {
+    return `arXiv 排队 ${state.queueSize}`;
+  }
+  if (isSearching) {
+    return 'arXiv 请求中';
+  }
+  return 'arXiv 就绪';
+}
+
+export function getArxivTranslationQualityLabel(meta: ArxivPaperMeta): string {
+  switch (meta.translationStatus) {
+    case 'completed':
+    case 'cached':
+      return '质量门禁：通过';
+    case 'failed':
+      return '质量门禁：未通过';
+    case 'unavailable':
+      return '质量门禁：不可用';
+    default:
+      return '质量门禁：待检查';
   }
 }
 
