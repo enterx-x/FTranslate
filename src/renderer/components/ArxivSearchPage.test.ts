@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ArxivPaper } from '../lib/arxivClient';
-import type { ArxivPaperMeta } from '../lib/arxivUi';
+import { buildArxivPaperInsight, type ArxivPaperMeta } from '../lib/arxivUi';
 import {
   DEFAULT_ARXIV_SEARCH_QUERY,
   ARXIV_CARD_PRIMARY_ACTIONS,
@@ -14,6 +14,7 @@ import {
   buildArxivTranslationBatchRequest,
   buildArxivTranslationMetaPatch,
   buildArxivTranslationUiApplication,
+  advanceArxivTranslationQueue,
   canStartArxivManualTranslation,
   describeLocalTranslationStatus,
   getArxivCardPreviewText,
@@ -22,6 +23,8 @@ import {
   hasUsableArxivChineseMetadata,
   normalizeArxivResultColumnMode,
   resolveSelectedArxivPaper,
+  resolveArxivExecutedQuerySnapshot,
+  resolveArxivPaperInsightForExecutedQuery,
   runArxivTranslationBatches,
   shouldQueueArxivMetadataTranslation,
   upsertArxivQueuedPaper
@@ -354,6 +357,37 @@ describe('ArxivSearchPage result display', () => {
     expect(buildArxivPreviewTranslationBatches(papers)).toEqual([papers.slice(0, 6)]);
   });
 
+  it('binds result helpers to the last executed query instead of an edited input draft', () => {
+    const snapshot = resolveArxivExecutedQuerySnapshot({
+      originalQuery: '机器人导航',
+      effectiveQuery: 'robot navigation robotic navigation',
+      queryMode: 'balanced'
+    });
+
+    expect(snapshot).toEqual({
+      query: 'robot navigation robotic navigation',
+      mode: 'balanced'
+    });
+    expect(snapshot.query).not.toBe('unsubmitted draft');
+  });
+
+  it('reuses persisted scoring only when its executed query and mode match', () => {
+    const strictInsight = {
+      ...buildArxivPaperInsight(paper, 'robot navigation', 'strict'),
+      totalScore: 1
+    };
+    const meta: ArxivPaperMeta = {
+      insight: strictInsight,
+      insightQuery: 'robot navigation',
+      insightQueryMode: 'strict'
+    };
+
+    expect(resolveArxivPaperInsightForExecutedQuery(paper, meta, 'robot navigation', 'strict'))
+      .toBe(strictInsight);
+    expect(resolveArxivPaperInsightForExecutedQuery(paper, meta, 'robot navigation', 'explore'))
+      .not.toBe(strictInsight);
+  });
+
   it('never expands preview translation beyond the first six results when those are cached', () => {
     const papers = Array.from({ length: 20 }, (_, index) => ({
       ...paper,
@@ -467,5 +501,15 @@ describe('ArxivSearchPage result display', () => {
     expect(started).toEqual([1, 2, 3, 4]);
     expect(completed).toEqual([1, 2, 3, 4]);
     expect(maxActive).toBe(2);
+  });
+
+  it('returns the active translation queue to idle after completion or failure accounting', () => {
+    expect(advanceArxivTranslationQueue({ kind: 'preview', completed: 0, total: 6 }, 2)).toEqual({
+      kind: 'preview',
+      completed: 2,
+      total: 6
+    });
+    expect(advanceArxivTranslationQueue({ kind: 'preview', completed: 2, total: 6 }, 4)).toBeNull();
+    expect(advanceArxivTranslationQueue({ kind: 'page', completed: 0, total: 1 }, 1)).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import {
   normalizeArxivSearchQuery,
   type ArxivPaper,
+  type ArxivQueryMode,
   type ArxivSearchServiceResult,
   type ArxivSortBy,
   type ArxivTitleAbstractTranslationEngine,
@@ -49,6 +50,8 @@ export interface ArxivPaperMeta {
   translationStatus?: ArxivTitleAbstractTranslationStatus;
   translationMessage?: string;
   translationEngine?: ArxivTitleAbstractTranslationEngine;
+  insightQuery?: string;
+  insightQueryMode?: ArxivQueryMode;
 }
 
 export function getArxivRankingScopeLabel(sortBy: ArxivSortBy): string {
@@ -181,12 +184,19 @@ const MATCH_REASON_STOP_WORDS = new Set([
   'learning'
 ]);
 
-export function buildArxivPaperInsight(paper: ArxivPaper, query: string): ArxivPaperInsight {
+export function buildArxivPaperInsight(
+  paper: ArxivPaper,
+  query: string,
+  queryMode: ArxivQueryMode = 'balanced'
+): ArxivPaperInsight {
   const haystack = normalizeText([paper.title, paper.summary, paper.categories.join(' '), paper.primaryCategory].join(' '));
-  const queryTerms = normalizeText(normalizeArxivSearchQuery(query))
-    .split(/\s+/u)
-    .filter((term) => term.length >= 3);
-  const queryHits = queryTerms.filter((term) => haystack.includes(term)).length;
+  const normalizedQuery = normalizeText(normalizeArxivSearchQuery(query, queryMode));
+  const queryTerms = queryMode === 'strict' && normalizedQuery.includes(' ')
+    ? [normalizedQuery]
+    : normalizedQuery.split(/\s+/u).filter((term) => term.length >= 3);
+  const queryHits = queryTerms.filter((term) =>
+    queryMode === 'strict' ? keywordMatches(haystack, term) : haystack.includes(term)
+  ).length;
   const queryScore = queryTerms.length === 0 ? 4 : clampScore(Math.round((queryHits / queryTerms.length) * 10));
 
   const topicMatch = Object.fromEntries(
@@ -232,8 +242,12 @@ export function buildArxivPaperInsight(paper: ArxivPaper, query: string): ArxivP
   };
 }
 
-export function buildArxivTopicCards(insight: ArxivPaperInsight, query = ''): ArxivTopicCard[] {
-  const queryTopics = new Set(detectQueryTopicKeys(query));
+export function buildArxivTopicCards(
+  insight: ArxivPaperInsight,
+  query = '',
+  queryMode: ArxivQueryMode = 'balanced'
+): ArxivTopicCard[] {
+  const queryTopics = new Set(detectQueryTopicKeys(query, queryMode));
   return (Object.entries(TOPIC_KEYWORDS) as Array<[keyof ArxivTopicMatch, { label: string; keywords: string[] }]>)
     .map(([key, config]) => ({
       key,
@@ -249,8 +263,13 @@ export function buildArxivTopicCards(insight: ArxivPaperInsight, query = ''): Ar
     .slice(0, 6);
 }
 
-export function buildArxivMatchReasons(paper: ArxivPaper, query: string, limit = 5): string[] {
-  const normalizedQuery = normalizeText(normalizeArxivSearchQuery(query));
+export function buildArxivMatchReasons(
+  paper: ArxivPaper,
+  query: string,
+  queryMode: ArxivQueryMode = 'balanced',
+  limit = 5
+): string[] {
+  const normalizedQuery = normalizeText(normalizeArxivSearchQuery(query, queryMode));
   const haystack = normalizeText([paper.title, paper.summary, paper.categories.join(' '), paper.primaryCategory].join(' '));
   if (!normalizedQuery || !haystack) {
     return [];
@@ -404,8 +423,11 @@ function scoreByKeywords(haystack: string, keywords: string[]): number {
   return clampScore(5 + hits * 2);
 }
 
-function detectQueryTopicKeys(query: string): Array<keyof ArxivTopicMatch> {
-  const normalizedQuery = normalizeText(normalizeArxivSearchQuery(query));
+function detectQueryTopicKeys(
+  query: string,
+  queryMode: ArxivQueryMode
+): Array<keyof ArxivTopicMatch> {
+  const normalizedQuery = normalizeText(normalizeArxivSearchQuery(query, queryMode));
   return (Object.entries(TOPIC_KEYWORDS) as Array<[keyof ArxivTopicMatch, { label: string; keywords: string[] }]>)
     .filter(([, config]) => config.keywords.some((keyword) => keywordMatches(normalizedQuery, keyword)))
     .map(([key]) => key);

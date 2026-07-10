@@ -150,7 +150,10 @@ describe('arxivClient', () => {
     expect(searchQuery).toContain('abs:tactile');
     expect(searchQuery).toContain('tactile sensing');
     expect(searchQuery).toContain('robot');
-    expect(cacheKey).toContain('title-abstract-v4');
+    expect(JSON.parse(cacheKey)).toMatchObject({
+      query_version: 'title-abstract-v5',
+      query_mode: 'balanced'
+    });
   });
 
   it('detects common mojibake translation text without rejecting normal Chinese', () => {

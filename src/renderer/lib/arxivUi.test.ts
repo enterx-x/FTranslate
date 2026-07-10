@@ -123,6 +123,23 @@ describe('arxivUi helpers', () => {
     expect(unrelated).toEqual([]);
   });
 
+  it('uses the executed query mode consistently for strict and explore renderer matching', () => {
+    const autonomousPaper: ArxivPaper = {
+      ...robotPaper,
+      title: 'Autonomous Navigation for Mobile Robotics',
+      summary: 'We study autonomous navigation in unknown environments.'
+    };
+
+    const strictReasons = buildArxivMatchReasons(autonomousPaper, 'robot navigation', 'strict');
+    const exploreReasons = buildArxivMatchReasons(autonomousPaper, 'robot navigation', 'explore');
+    const strictInsight = buildArxivPaperInsight(autonomousPaper, 'robot navigation', 'strict');
+    const exploreInsight = buildArxivPaperInsight(autonomousPaper, 'robot navigation', 'explore');
+
+    expect(strictReasons).not.toContain('autonomous');
+    expect(exploreReasons).toContain('autonomous');
+    expect(strictInsight).not.toEqual(exploreInsight);
+  });
+
   it('exports a selected arXiv paper as readable Markdown with optional Chinese abstract', () => {
     const markdown = buildArxivExportMarkdown(robotPaper, {
       abstractZh: '类人机器人需要感知、强化学习和安全控制。',

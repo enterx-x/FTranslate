@@ -314,6 +314,8 @@ export function buildAvailableArxivTags(
   const tags = new Set<string>();
   papers.forEach((paper) => {
     const meta = getPaperMeta(paper, metaById);
+    // Topic tags describe the paper itself, so keep legacy/persisted tags available
+    // even when no query snapshot exists yet. Query-sensitive scoring is resolved below.
     const insight = meta.insight ?? buildArxivPaperInsight(paper, '');
     insight.tags.forEach((tag) => tags.add(tag));
   });
@@ -346,6 +348,50 @@ export function canStartArxivManualTranslation(
   currentSessionId: number | null
 ): currentSessionId is number {
   return !isSearching && currentSessionId !== null;
+}
+
+export interface ArxivExecutedQuerySnapshotSource {
+  originalQuery: string;
+  effectiveQuery: string;
+  queryMode: ArxivQueryMode;
+}
+
+export function resolveArxivExecutedQuerySnapshot(
+  metadata: ArxivExecutedQuerySnapshotSource | null
+): { query: string; mode: ArxivQueryMode } {
+  return metadata
+    ? { query: metadata.effectiveQuery, mode: metadata.queryMode }
+    : { query: '', mode: 'balanced' };
+}
+
+export function resolveArxivPaperInsightForExecutedQuery(
+  paper: ArxivPaper,
+  meta: ArxivPaperMeta,
+  executedQuery: string,
+  executedQueryMode: ArxivQueryMode
+) {
+  if (
+    meta.insight &&
+    meta.insightQuery === executedQuery &&
+    meta.insightQueryMode === executedQueryMode
+  ) {
+    return meta.insight;
+  }
+  return buildArxivPaperInsight(paper, executedQuery, executedQueryMode);
+}
+
+export interface ArxivTranslationQueueState {
+  kind: 'preview' | 'page';
+  completed: number;
+  total: number;
+}
+
+export function advanceArxivTranslationQueue(
+  queue: ArxivTranslationQueueState,
+  completedCount: number
+): ArxivTranslationQueueState | null {
+  const completed = Math.min(queue.total, queue.completed + Math.max(0, completedCount));
+  return completed >= queue.total ? null : { ...queue, completed };
 }
 
 export function buildArxivTranslationBatchRequest(
@@ -468,18 +514,14 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     cacheHit: boolean;
     cacheStale: boolean;
     originalQuery: string;
-    normalizedQuery: string;
+    effectiveQuery: string;
     queryMode: ArxivQueryMode;
     sortBy: ArxivSortBy;
     queueSize: number;
     lastRequestGapMs: number;
     cooldownRemainingMs?: number;
   } | null>(null);
-  const [translationQueue, setTranslationQueue] = useState<{
-    kind: 'preview' | 'page';
-    completed: number;
-    total: number;
-  } | null>(null);
+  const [translationQueue, setTranslationQueue] = useState<ArxivTranslationQueueState | null>(null);
 
   useEffect(() => {
     setPageJump(String(Math.floor(start / Math.max(1, pageSize)) + 1));
@@ -544,13 +586,28 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     return years.sort((a, b) => Number(b) - Number(a));
   }, [papers]);
 
-  const availableTags = useMemo(() => buildAvailableArxivTags(papers, metaById), [metaById, papers]);
+  const executedQuerySnapshot = useMemo(
+    () => resolveArxivExecutedQuerySnapshot(searchMetadata),
+    [searchMetadata]
+  );
+  const executedQuery = executedQuerySnapshot.query;
+  const executedQueryMode = executedQuerySnapshot.mode;
+
+  const availableTags = useMemo(
+    () => buildAvailableArxivTags(papers, metaById),
+    [metaById, papers]
+  );
 
   const filteredPapers = useMemo(
     () =>
       papers.filter((paper) => {
         const meta = getPaperMeta(paper, metaById);
-        const insight = meta.insight ?? buildArxivPaperInsight(paper, query);
+        const insight = resolveArxivPaperInsightForExecutedQuery(
+          paper,
+          meta,
+          executedQuery,
+          executedQueryMode
+        );
         const isQueuedForReading = readingQueue.some((item) => item.stableId === paper.stableId);
         const year = getYear(paper.publishedAt || paper.published);
         if (yearFilter !== 'all' && year !== yearFilter) {
@@ -573,7 +630,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         }
         return true;
       }),
-    [favoriteOnly, metaById, papers, query, queuedOnly, readingQueue, scoredOnly, tagFilter, translatedOnly, yearFilter]
+    [executedQuery, executedQueryMode, favoriteOnly, metaById, papers, queuedOnly, readingQueue, scoredOnly, tagFilter, translatedOnly, yearFilter]
   );
 
   const selectedPaper = useMemo(
@@ -601,7 +658,6 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
 
     try {
       setIsSearching(true);
-      setSearchMetadata(null);
       setTranslationQueue(null);
       setTranslatingId(null);
       setBackgroundTranslatingIds({});
@@ -640,8 +696,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         cacheHit: result.cacheHit,
         cacheStale: Boolean(result.cacheStale),
         originalQuery: result.originalSearchQuery ?? searchQuery,
-        normalizedQuery:
-          result.normalizedSearchQuery ?? result.effectiveSearchQuery ?? nextRequest.searchQuery,
+        effectiveQuery:
+          result.effectiveSearchQuery ?? result.normalizedSearchQuery ?? nextRequest.searchQuery,
         queryMode: result.queryMode ?? nextRequest.queryMode ?? 'balanced',
         sortBy: nextRequest.sortBy,
         queueSize: result.queueSize,
@@ -911,9 +967,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           return;
         }
         setTranslationQueue((previous) =>
-          previous?.kind === kind
-            ? { ...previous, completed: Math.min(previous.total, previous.completed + batch.length) }
-            : previous
+          previous?.kind === kind ? advanceArxivTranslationQueue(previous, batch.length) : previous
         );
         setBackgroundTranslatingIds((previous) => {
           const next = { ...previous };
@@ -971,10 +1025,12 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   }
 
   function handleScorePaper(paper: ArxivPaper): void {
-    const insight = buildArxivPaperInsight(paper, query);
+    const insight = buildArxivPaperInsight(paper, executedQuery, executedQueryMode);
     updateMeta(paper, {
       ...getPaperMeta(paper, metaById),
       insight,
+      insightQuery: executedQuery,
+      insightQueryMode: executedQueryMode,
       scoredAt: new Date().toISOString()
     });
     setMessage(`已完成本地启发式评分：${insight.totalScore}/100，优先级 ${translatePriority(insight.readingPriority)}。`);
@@ -1066,9 +1122,16 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
 
   const selectedMeta = selectedPaper ? getPaperMeta(selectedPaper, metaById) : {};
   const selectedInsight = selectedPaper
-    ? selectedMeta.insight ?? buildArxivPaperInsight(selectedPaper, query)
+    ? resolveArxivPaperInsightForExecutedQuery(
+        selectedPaper,
+        selectedMeta,
+        executedQuery,
+        executedQueryMode
+      )
     : null;
-  const selectedTopicCards = selectedInsight ? buildArxivTopicCards(selectedInsight, query) : [];
+  const selectedTopicCards = selectedInsight
+    ? buildArxivTopicCards(selectedInsight, executedQuery, executedQueryMode)
+    : [];
   const selectedAbstractMode = selectedPaper
     ? abstractModes[selectedPaper.id] ?? (hasUsableArxivChineseMetadata(selectedMeta) ? 'zh' : 'en')
     : 'en';
@@ -1089,7 +1152,11 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     : false;
   const selectedTagItems =
     selectedPaper && selectedInsight
-      ? buildVisibleArxivCardTags(buildArxivMatchReasons(selectedPaper, query), selectedInsight.tags, 8)
+      ? buildVisibleArxivCardTags(
+          buildArxivMatchReasons(selectedPaper, executedQuery, executedQueryMode),
+          selectedInsight.tags,
+          8
+        )
       : { visible: [], hiddenCount: 0 };
   const readingQueuePreview = buildArxivReadingQueuePreview(readingQueue, 3);
   const shouldShowReadingQueueList = papers.length === 0 && isReadingQueueOpen;
@@ -1382,8 +1449,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           >
             {getArxivWaitStateLabel(searchMetadata, isSearching)}
           </span>
-          <span className="badge arxiv-runtime-query" title={searchMetadata?.normalizedQuery || query.trim()}>
-            规范化：{searchMetadata?.normalizedQuery || query.trim() || '—'}
+          <span className="badge arxiv-runtime-query" title={searchMetadata?.effectiveQuery || '尚无已执行查询'}>
+            规范化：{searchMetadata?.effectiveQuery || '—'}
           </span>
           {searchMetadata?.originalQuery ? (
             <span className="badge arxiv-runtime-query" title={searchMetadata.originalQuery}>
@@ -1536,13 +1603,22 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             <div className="arxiv-results-list">
               {filteredPapers.map((paper, index) => {
               const meta = getPaperMeta(paper, metaById);
-              const insight = meta.insight ?? buildArxivPaperInsight(paper, query);
+              const insight = resolveArxivPaperInsightForExecutedQuery(
+                paper,
+                meta,
+                executedQuery,
+                executedQueryMode
+              );
               const isSelected = selectedPaper?.id === paper.id;
               const isQueuedForReading =
                 Boolean(meta.queuedAt) || readingQueue.some((item) => item.stableId === paper.stableId);
               const abstractMode = abstractModes[paper.id] ?? (hasUsableArxivChineseMetadata(meta) ? 'zh' : 'en');
               const display = getArxivResultDisplay(paper, meta, abstractMode);
-              const matchReasons = buildArxivMatchReasons(paper, query);
+              const matchReasons = buildArxivMatchReasons(
+                paper,
+                executedQuery,
+                executedQueryMode
+              );
               const isTranslatingMetadata = translatingId === paper.id || backgroundTranslatingIds[paper.id];
               const tagItems = buildVisibleArxivCardTags(matchReasons, insight.tags);
               return (
