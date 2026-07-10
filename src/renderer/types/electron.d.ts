@@ -2,7 +2,8 @@ import type {
   ArxivSearchRequest,
   ArxivSearchServiceResult,
   ArxivTitleAbstractTranslationRequest,
-  ArxivTitleAbstractTranslationResult
+  ArxivTitleAbstractTranslationResult,
+  ArxivTranslationBatchRequest
 } from '../../shared/arxiv';
 
 export interface PdfFilePayload {
@@ -349,7 +350,7 @@ export interface ElectronApi {
     request: ArxivTitleAbstractTranslationRequest
   ) => Promise<ArxivTitleAbstractTranslationResult>;
   translateArxivTitleAbstractBatch: (
-    request: ArxivTitleAbstractTranslationRequest[]
+    request: ArxivTranslationBatchRequest | ArxivTitleAbstractTranslationRequest[]
   ) => Promise<ArxivTitleAbstractTranslationResult[]>;
   downloadArxivPdf: (request: {
     pdfUrl: string;

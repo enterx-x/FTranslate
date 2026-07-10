@@ -53,6 +53,14 @@ export interface ArxivTitleAbstractTranslationRequest {
   targetLanguage?: 'zh';
 }
 
+export type ArxivTranslationPriority = 'foreground' | 'preview' | 'background';
+
+export interface ArxivTranslationBatchRequest {
+  papers: ArxivTitleAbstractTranslationRequest[];
+  priority?: ArxivTranslationPriority;
+  sessionId?: number;
+}
+
 export type ArxivTitleAbstractTranslationEngine = 'nllb-ct2-int8' | 'argos' | 'cache' | 'unavailable';
 export type ArxivTitleAbstractTranslationStatus = 'completed' | 'cached' | 'unavailable' | 'failed';
 

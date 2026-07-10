@@ -1,4 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type {
+  ArxivTitleAbstractTranslationRequest,
+  ArxivTranslationBatchRequest
+} from '../shared/arxiv';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   openPdf: () => ipcRenderer.invoke('dialog:open-pdf'),
@@ -123,12 +127,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     summary: string;
     targetLanguage?: 'zh';
   }) => ipcRenderer.invoke('arxiv:translate-title-abstract', request),
-  translateArxivTitleAbstractBatch: (request: Array<{
-    stableId: string;
-    title: string;
-    summary: string;
-    targetLanguage?: 'zh';
-  }>) => ipcRenderer.invoke('arxiv:translate-title-abstract-batch', request),
+  translateArxivTitleAbstractBatch: (
+    request: ArxivTranslationBatchRequest | ArxivTitleAbstractTranslationRequest[]
+  ) => ipcRenderer.invoke('arxiv:translate-title-abstract-batch', request),
   downloadArxivPdf: (request: { pdfUrl: string; defaultFileName: string }) =>
     ipcRenderer.invoke('arxiv:download-pdf', request),
   selectCodeRepository: () => ipcRenderer.invoke('code-repository:select'),

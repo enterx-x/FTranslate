@@ -48,7 +48,8 @@ import {
   type ArxivSearchRequest,
   type ArxivSearchServiceResult,
   type ArxivTitleAbstractTranslationRequest,
-  type ArxivTitleAbstractTranslationResult
+  type ArxivTitleAbstractTranslationResult,
+  type ArxivTranslationBatchRequest
 } from '../shared/arxiv';
 import { ArxivService } from './arxivService';
 import { ArxivTranslationService, translateTextsWithArgosEngine } from './arxivTranslationService';
@@ -3093,13 +3094,15 @@ async function translateArxivPaperForIpc(
 }
 
 async function translateArxivPapersForIpc(
-  request: ArxivTitleAbstractTranslationRequest[]
+  request: ArxivTranslationBatchRequest
 ): Promise<ArxivTitleAbstractTranslationResult[]> {
-  const safeRequest = Array.isArray(request) ? request.slice(0, 100) : [];
+  const safeRequest = Array.isArray(request.papers) ? request.papers.slice(0, 100) : [];
   if (isVisualArxivMockEnabled()) {
     return safeRequest.map((item) => buildVisualArxivTranslationResult(item));
   }
-  return getArxivTranslationService().translatePapers(safeRequest);
+  return getArxivTranslationService().translatePapers(safeRequest, {
+    priority: request.priority
+  });
 }
 
 async function downloadArxivPdfForIpc(request: ArxivDownloadPdfRequest): Promise<PdfFilePayload | null> {
