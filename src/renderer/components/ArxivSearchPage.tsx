@@ -1202,6 +1202,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           <button
             type="button"
             className="primary-button button-with-icon"
+            data-search-session-guard="true"
             disabled={isSearching}
             onClick={() => void handleSearch(0, { resetFilters: true })}
           >
@@ -1268,6 +1269,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             type="button"
             className="secondary-button arxiv-advanced-toggle"
             aria-expanded={showAdvancedFilters}
+            aria-controls="arxiv-advanced-filters"
             onClick={() => setShowAdvancedFilters((value) => !value)}
           >
             高级筛选
@@ -1295,7 +1297,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           </button>
         </div>
 
-        <div className={`arxiv-query-options ${showAdvancedFilters ? 'is-open' : ''}`}>
+        <div id="arxiv-advanced-filters" className={`arxiv-query-options ${showAdvancedFilters ? 'is-open' : ''}`}>
           <label>
             <span>起始年份</span>
             <input
@@ -1452,7 +1454,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           <span className="badge arxiv-runtime-query" title={searchMetadata?.effectiveQuery || '尚无已执行查询'}>
             规范化：{searchMetadata?.effectiveQuery || '—'}
           </span>
-          {searchMetadata?.originalQuery ? (
+          {searchMetadata?.originalQuery && searchMetadata.originalQuery !== searchMetadata.effectiveQuery ? (
             <span className="badge arxiv-runtime-query" title={searchMetadata.originalQuery}>
               原始：{searchMetadata.originalQuery}
             </span>
@@ -1493,6 +1495,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               <button
                 type="button"
                 className="secondary-button arxiv-translate-page-button"
+                data-search-session-guard="true"
                 disabled={
                   papers.length === 0 ||
                   isSearching ||
@@ -1683,6 +1686,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                     <button
                       type="button"
                       className="secondary-button"
+                      data-search-session-guard="true"
                       disabled={isSearching || isTranslatingMetadata}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -1735,6 +1739,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                 <input
                   value={pageJump}
                   inputMode="numeric"
+                  data-search-session-guard="true"
                   disabled={isSearching}
                   onChange={(event) => setPageJump(event.target.value.replace(/\D/gu, '').slice(0, 5))}
                   onKeyDown={(event) => {

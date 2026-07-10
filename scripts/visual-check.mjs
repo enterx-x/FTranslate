@@ -621,6 +621,129 @@ async function waitForArxivResultLayout(client, expectedFirstRowCount, label) {
   throw new Error(`arxiv: ${label} layout did not match expected first row count ${expectedFirstRowCount}: ${JSON.stringify(snapshot)}`);
 }
 
+async function captureArxivResponsiveWidths(client) {
+  const snapshots = {};
+  try {
+    for (const width of [1366, 1440, 1920]) {
+      await client.send('Emulation.setDeviceMetricsOverride', {
+        width,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: false
+      });
+      await wait(320);
+      const snapshot = await evaluateJson(client, `() => {
+        const rects = [...document.querySelectorAll('.arxiv-query-row select, .arxiv-query-row button')]
+          .filter((item) => getComputedStyle(item).display !== 'none')
+          .map((item) => {
+            const rect = item.getBoundingClientRect();
+            return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+          });
+        const overlaps = rects.some((rect, index) => rects.slice(index + 1).some((other) =>
+          rect.left < other.right - 2 && rect.right > other.left + 2 &&
+          rect.top < other.bottom - 2 && rect.bottom > other.top + 2
+        ));
+        const cards = [...document.querySelectorAll('.arxiv-results-list > .arxiv-paper-card')];
+        const firstTop = Math.min(...cards.map((card) => card.getBoundingClientRect().top));
+        const firstRowCount = cards.filter((card) => Math.abs(card.getBoundingClientRect().top - firstTop) <= 8).length;
+        const clippedCardActionCount = [...document.querySelectorAll('.arxiv-card-actions--primary button')]
+          .filter((button) => button.scrollWidth > button.clientWidth + 2).length;
+        const runtimeStatus = document.querySelector('.arxiv-runtime-status');
+        return {
+          viewportWidth: window.innerWidth,
+          firstRowCount,
+          queryControlsOverlap: overlaps,
+          clippedCardActionCount,
+          runtimeStatusOverflow: Boolean(runtimeStatus && runtimeStatus.scrollWidth > runtimeStatus.clientWidth + 3),
+          hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+        };
+      }`);
+      snapshots[width] = snapshot;
+      if (
+        snapshot.viewportWidth !== width ||
+        snapshot.firstRowCount !== 3 ||
+        snapshot.queryControlsOverlap ||
+        snapshot.clippedCardActionCount > 0 ||
+        snapshot.runtimeStatusOverflow ||
+        snapshot.hasHorizontalOverflow
+      ) {
+        throw new Error(`arxiv: ${width}px responsive audit failed: ${JSON.stringify(snapshot)}`);
+      }
+      await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+        writeFile(path.join(outputDir, `arxiv-search-results-${width}.png`), Buffer.from(shot.data, 'base64'))
+      );
+    }
+  } finally {
+    await client.send('Emulation.clearDeviceMetricsOverride');
+    await wait(320);
+  }
+  return snapshots;
+}
+
+async function assertArxivSearchingControlGuards(client, canDelaySearch) {
+  if (!canDelaySearch) {
+    const declarativeGuards = await evaluateJson(client, `() => {
+      const selectors = [
+        '.arxiv-search-primary-row .primary-button',
+        '.arxiv-page-jump input',
+        '.arxiv-translate-page-button',
+        '.arxiv-card-actions--primary button[data-search-session-guard="true"]'
+      ];
+      return selectors.map((selector) => ({
+        selector,
+        exists: Boolean(document.querySelector(selector)),
+        guarded: document.querySelector(selector)?.getAttribute('data-search-session-guard') === 'true'
+      }));
+    }`);
+    if (declarativeGuards.some((guard) => !guard.exists || !guard.guarded)) {
+      throw new Error(`arxiv: declarative search-session guards are incomplete: ${JSON.stringify(declarativeGuards)}`);
+    }
+    return { declarativeGuards };
+  }
+  await evaluateJson(client, `() => {
+    document.querySelector('.arxiv-search-primary-row .primary-button')?.click();
+    return true;
+  }`);
+
+  let snapshot = null;
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    snapshot = await evaluateJson(client, `() => {
+      const resultsPanel = document.querySelector('.arxiv-results-panel');
+      const cardTranslate = [...document.querySelectorAll('.arxiv-card-actions--primary button')]
+        .find((button) => /翻译/.test(button.textContent ?? ''));
+      return {
+        isBusy: resultsPanel?.getAttribute('aria-busy') === 'true',
+        searchDisabled: Boolean(document.querySelector('.arxiv-search-primary-row .primary-button')?.disabled),
+        pageJumpDisabled: Boolean(document.querySelector('.arxiv-page-jump input')?.disabled),
+        translatePageDisabled: Boolean(document.querySelector('.arxiv-translate-page-button')?.disabled),
+        cardTranslateDisabled: Boolean(cardTranslate?.disabled)
+      };
+    }`);
+    if (snapshot.isBusy) break;
+    await wait(20);
+  }
+
+  if (
+    !snapshot?.isBusy ||
+    !snapshot.searchDisabled ||
+    !snapshot.pageJumpDisabled ||
+    !snapshot.translatePageDisabled ||
+    !snapshot.cardTranslateDisabled
+  ) {
+    throw new Error(`arxiv: search session controls were not guarded while busy: ${JSON.stringify(snapshot)}`);
+  }
+
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const isBusy = await evaluateJson(
+      client,
+      `() => document.querySelector('.arxiv-results-panel')?.getAttribute('aria-busy') === 'true'`
+    );
+    if (!isBusy) return snapshot;
+    await wait(50);
+  }
+  throw new Error('arxiv: delayed visual search mock did not settle');
+}
+
 async function readArxivAdvancedFilterDensity(client) {
   return evaluateJson(client, `() => {
     const toggle = document.querySelector('.arxiv-advanced-toggle');
@@ -641,6 +764,13 @@ async function readArxivAdvancedFilterDensity(client) {
     toggle?.click();
     return new Promise((resolve) => {
       window.setTimeout(() => {
+        const advancedBox = advancedFilters?.getBoundingClientRect();
+        const probe = advancedBox
+          ? document.elementFromPoint(
+              Math.round(advancedBox.left + advancedBox.width / 2),
+              Math.round(advancedBox.top + Math.min(18, advancedBox.height / 2))
+            )
+          : null;
         const snapshot = {
           searchRect: rect(searchCard),
           advancedRect: rect(advancedFilters),
@@ -650,6 +780,9 @@ async function readArxivAdvancedFilterDensity(client) {
             Boolean(advancedFilters) &&
             getComputedStyle(advancedFilters).display !== 'none' &&
             (advancedFilters?.getBoundingClientRect().height ?? 0) > 20,
+          advancedOccluded: Boolean(advancedFilters && probe && !advancedFilters.contains(probe)),
+          advancedProbeClass: probe?.className ?? '',
+          advancedProbeText: probe?.textContent?.trim().slice(0, 80) ?? '',
           hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
         };
         resolve(snapshot);
@@ -2665,6 +2798,10 @@ async function runArxivSearchScenario(client) {
       ? queueButtonRects.filter((rect) => Math.abs(rect.top - firstQueueTop) <= 4).length
       : 0;
     const activeSidebar = document.querySelector('.app-sidebar-link.active');
+    const queryModeSelect = [...document.querySelectorAll('.arxiv-query-row select')]
+      .find((select) => [...select.options].some((option) => option.value === 'explore'));
+    const advancedToggle = document.querySelector('.arxiv-advanced-toggle');
+    const advancedFilters = document.querySelector('.arxiv-query-options');
     return {
       hasPage: Boolean(page),
       hasSearchCard: Boolean(searchCard),
@@ -2683,6 +2820,14 @@ async function runArxivSearchScenario(client) {
       emptyCardAccentValues,
       emptyCardAccentMaxChannelDelta: emptyCardAccentValues.reduce((max, value) => Math.max(max, channelDelta(value)), 0),
       queueUsesLegacyPills: document.querySelectorAll('.arxiv-reading-queue-items .pill-button').length > 0,
+      hasRankingScopeLabel: /本页相关排序/.test(text),
+      queryModeLabels: queryModeSelect ? [...queryModeSelect.options].map((option) => option.textContent?.trim() ?? '') : [],
+      advancedCollapsed:
+        advancedToggle?.getAttribute('aria-expanded') === 'false' &&
+        Boolean(advancedFilters) &&
+        getComputedStyle(advancedFilters).display === 'none',
+      advancedControlsLinked: advancedToggle?.getAttribute('aria-controls') === advancedFilters?.id,
+      hasRuntimeStatus: Boolean(document.querySelector('.arxiv-runtime-status')),
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
       inputs,
       searchText: text.slice(0, 1200)
@@ -2705,6 +2850,11 @@ async function runArxivSearchScenario(client) {
     snapshot.emptyCardAccentMaxChannelDelta < 35 ||
     snapshot.queueFirstRowCount !== 1 ||
     snapshot.queueUsesLegacyPills ||
+    !snapshot.hasRankingScopeLabel ||
+    !['严格', '均衡', '探索'].every((label) => snapshot.queryModeLabels.includes(label)) ||
+    !snapshot.advancedCollapsed ||
+    !snapshot.advancedControlsLinked ||
+    !snapshot.hasRuntimeStatus ||
     snapshot.hasHorizontalOverflow
   ) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
@@ -2734,15 +2884,23 @@ async function runArxivSearchScenario(client) {
       abstractUrl: 'https://arxiv.org/abs/2601.1744' + index,
       pdfUrl: 'https://arxiv.org/pdf/2601.1744' + index + '.pdf'
     }));
-    const searchMock = async () => ({
-      papers,
-      totalResults: 38019,
-      startIndex: 0,
-      itemsPerPage: papers.length,
-      cacheHit: true,
-      queueSize: 0,
-      lastRequestGapMs: -1
-    });
+    const searchMock = async (request) => {
+      await new Promise((resolve) => window.setTimeout(resolve, 260));
+      return {
+        papers,
+        totalResults: 38019,
+        startIndex: 0,
+        itemsPerPage: papers.length,
+        cacheHit: true,
+        cacheStale: false,
+        queueSize: 0,
+        lastRequestGapMs: -1,
+        originalQuery: request?.query ?? '',
+        effectiveQuery: request?.query ?? '',
+        queryMode: request?.queryMode ?? 'balanced',
+        sortBy: request?.sortBy ?? 'comprehensive'
+      };
+    };
     const translateMock = async (request) => ({
       stableId: request.stableId,
       titleZh: '强化学习机器人导航：' + request.stableId,
@@ -2764,8 +2922,8 @@ async function runArxivSearchScenario(client) {
       message: 'visual mock cached',
       translatedAt: '2026-05-30T00:00:00.000Z'
     });
-    const translateBatchMock = async (requests) =>
-      Promise.all((requests || []).map((request) => translateMockClean(request)));
+    const translateBatchMock = async (request) =>
+      Promise.all((request?.papers || request || []).map((paper) => translateMockClean(paper)));
     try {
       window.electronAPI.searchArxiv = searchMock;
       window.electronAPI.translateArxivTitleAbstract = translateMockClean;
@@ -2846,6 +3004,15 @@ async function runArxivSearchScenario(client) {
         const headerEyebrow = document.querySelector('.arxiv-page-header .eyebrow');
         const headerEyebrowStyle = getComputedStyle(headerEyebrow ?? document.body);
         const headerEyebrowBeforeStyle = getComputedStyle(headerEyebrow ?? document.body, '::before');
+        const pageText = document.querySelector('.arxiv-page')?.textContent ?? '';
+        const cardActionGroups = [...document.querySelectorAll('.arxiv-card-actions--primary')];
+        const cardActionTexts = cardActionGroups.map((group) => group.textContent?.trim() ?? '');
+        const detailActionText = [
+          ...document.querySelectorAll('.arxiv-detail-actions, .arxiv-detail-secondary-actions')
+        ].map((group) => group.textContent ?? '').join(' ');
+        const runtimeStatus = document.querySelector('.arxiv-runtime-status');
+        const runtimeQuery = document.querySelector('.arxiv-runtime-query');
+        const runtimeQueryRect = runtimeQuery?.getBoundingClientRect();
         const legacyAccentValues = [
           ...readStyles('.arxiv-search-primary-row .primary-button'),
           ...readStyles('.arxiv-page-header .eyebrow'),
@@ -2878,6 +3045,18 @@ async function runArxivSearchScenario(client) {
               advancedFilters.querySelectorAll('input[type="checkbox"]').length >= 4;
           })(),
           hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+          hasRankingScopeLabel: /本页相关排序/.test(pageText),
+          hasTranslatePage: /翻译本页/.test(document.querySelector('.arxiv-translate-page-button')?.textContent ?? ''),
+          hasSinglePaperTranslate: cardActionTexts.some((text) => /翻译/.test(text)),
+          cardActionCounts: cardActionGroups.map((group) => group.querySelectorAll('button').length),
+          cardHasSecondaryLeak: cardActionTexts.some((text) => /加入\s*PPT|更多|导出/.test(text)),
+          detailHasPpt: /PPT/.test(detailActionText),
+          detailHasExport: /导出/.test(detailActionText),
+          hasRuntimeStatus: Boolean(runtimeStatus),
+          runtimeQueryEllipsized:
+            Boolean(runtimeQueryRect) &&
+            runtimeQuery.scrollWidth >= runtimeQuery.clientWidth &&
+            getComputedStyle(runtimeQuery).textOverflow === 'ellipsis',
           legacyAccentValues,
           legacyAccentMaxChannelDelta: legacyAccentValues.reduce(
             (max, value) => Math.max(max, channelDelta(value)),
@@ -2900,6 +3079,15 @@ async function runArxivSearchScenario(client) {
       !resultsSnapshot.hasTopPageFilters ||
       compressedCard ||
       resultsSnapshot.hasHorizontalOverflow ||
+      !resultsSnapshot.hasRankingScopeLabel ||
+      !resultsSnapshot.hasTranslatePage ||
+      !resultsSnapshot.hasSinglePaperTranslate ||
+      resultsSnapshot.cardActionCounts.some((count) => count !== 3) ||
+      resultsSnapshot.cardHasSecondaryLeak ||
+      !resultsSnapshot.detailHasPpt ||
+      !resultsSnapshot.detailHasExport ||
+      !resultsSnapshot.hasRuntimeStatus ||
+      !resultsSnapshot.runtimeQueryEllipsized ||
       resultsSnapshot.legacyAccentMaxChannelDelta > 80 ||
       resultsSnapshot.legacyAccentMaxChannelDelta < 35
     ) {
@@ -2911,6 +3099,11 @@ async function runArxivSearchScenario(client) {
 
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'arxiv-search-results.png'), Buffer.from(shot.data, 'base64'))
+    );
+
+    await assertArxivSearchingControlGuards(client, mockInstalled);
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'arxiv-search-results-after-guard.png'), Buffer.from(shot.data, 'base64'))
     );
 
     threeColumnLayout = await waitForArxivResultLayout(client, 3, 'default three-column');
@@ -2930,7 +3123,7 @@ async function runArxivSearchScenario(client) {
       threeColumnLayout.detailRect.width < 260 ||
       threeColumnLayout.detailRect.width > 300 ||
       (threeColumnLayout.pageHeaderHeight ?? 0) > 78 ||
-      (threeColumnLayout.searchRect?.height ?? 0) > 102 ||
+      (threeColumnLayout.searchRect?.height ?? 0) > 116 ||
       threeColumnLayout.maxSearchPrimaryControlHeight > 38 ||
       threeColumnLayout.maxFilterControlHeight > 38 ||
       (threeColumnLayout.resultsToolbarHeight ?? 0) > 42 ||
@@ -2951,6 +3144,7 @@ async function runArxivSearchScenario(client) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'arxiv-search-results-three.png'), Buffer.from(shot.data, 'base64'))
     );
+    await captureArxivResponsiveWidths(client);
 
     await evaluateJson(client, `() => document.querySelector('.arxiv-detail-panel-toggle')?.click()`);
     await wait(420);
@@ -2976,12 +3170,15 @@ async function runArxivSearchScenario(client) {
     const advancedFilterDensity = await readArxivAdvancedFilterDensity(client);
     if (
       !advancedFilterDensity.advancedVisible ||
+      advancedFilterDensity.advancedOccluded ||
       advancedFilterDensity.hasHorizontalOverflow ||
-      (advancedFilterDensity.searchRect?.height ?? 0) > 104 ||
+      (advancedFilterDensity.advancedRect?.top ?? 0) + (advancedFilterDensity.advancedRect?.height ?? 0) >
+        (advancedFilterDensity.resultsRect?.top ?? Number.POSITIVE_INFINITY) + 2 ||
+      (advancedFilterDensity.searchRect?.height ?? 0) > 236 ||
       (advancedFilterDensity.advancedRect?.height ?? 0) > 116 ||
       (advancedFilterDensity.resultsRect?.top ?? Number.POSITIVE_INFINITY) -
         (advancedFilterDensity.searchRect?.top ?? 0) >
-        118 ||
+        250 ||
       Math.abs((advancedFilterDensity.detailRect?.top ?? 0) - (advancedFilterDensity.searchRect?.top ?? 0)) > 16
     ) {
       await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
