@@ -14,6 +14,51 @@ export interface ArxivIpcHandlerDependencies {
 
 const ARXIV_TRANSLATION_BATCH_LIMIT = 100;
 
+function parseArxivTranslationPaper(
+  value: unknown
+): ArxivTitleAbstractTranslationRequest | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return null;
+    }
+    const candidate = value as Record<string, unknown>;
+    if (
+      typeof candidate.stableId !== 'string' ||
+      typeof candidate.title !== 'string' ||
+      typeof candidate.summary !== 'string'
+    ) {
+      return null;
+    }
+    return {
+      stableId: candidate.stableId,
+      title: candidate.title,
+      summary: candidate.summary,
+      ...(candidate.targetLanguage === 'zh' ? { targetLanguage: 'zh' as const } : {})
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseArxivTranslationPapers(values: unknown[]): ArxivTitleAbstractTranslationRequest[] {
+  const papers: ArxivTitleAbstractTranslationRequest[] = [];
+  for (const value of values) {
+    const paper = parseArxivTranslationPaper(value);
+    if (!paper) {
+      continue;
+    }
+    papers.push(paper);
+    if (papers.length === ARXIV_TRANSLATION_BATCH_LIMIT) {
+      break;
+    }
+  }
+  return papers;
+}
+
 function normalizeArxivTranslationPriority(value: unknown): ArxivTranslationPriority {
   switch (value) {
     case 'foreground':
@@ -34,7 +79,7 @@ export function parseArxivTranslationBatchRequest(
       ? (request as { papers: unknown[] }).papers
       : [];
   const parsed: ArxivTranslationBatchRequest = {
-    papers: rawPapers.slice(0, ARXIV_TRANSLATION_BATCH_LIMIT) as ArxivTitleAbstractTranslationRequest[],
+    papers: parseArxivTranslationPapers(rawPapers),
     priority: normalizeArxivTranslationPriority(
       Array.isArray(request) || !request || typeof request !== 'object'
         ? undefined

@@ -37,6 +37,30 @@ describe('parseArxivTranslationBatchRequest', () => {
   });
 
   it.each([
+    ['object request', (papers: unknown[]) => ({ papers })],
+    ['legacy array', (papers: unknown[]) => papers]
+  ])('filters invalid paper entries from a mixed %s without throwing', (_label, buildRequest) => {
+    const request = buildRequest([null, 1, {}, [], paper]);
+
+    expect(() => parseArxivTranslationBatchRequest(request)).not.toThrow();
+    expect(parseArxivTranslationBatchRequest(request).papers).toEqual([paper]);
+  });
+
+  it('collects at most the first 100 valid papers instead of letting invalid entries consume the limit', () => {
+    const validPapers = Array.from({ length: 105 }, (_, index) => ({
+      ...paper,
+      stableId: `valid-${index}`
+    }));
+    const parsed = parseArxivTranslationBatchRequest({
+      papers: [...Array.from({ length: 120 }, () => null), ...validPapers]
+    });
+
+    expect(parsed.papers).toHaveLength(100);
+    expect(parsed.papers[0]?.stableId).toBe('valid-0');
+    expect(parsed.papers[99]?.stableId).toBe('valid-99');
+  });
+
+  it.each([
     null,
     undefined,
     'papers',

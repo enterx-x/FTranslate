@@ -5,9 +5,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { TextDecoder } from 'node:util';
 import type {
   ArxivTitleAbstractTranslationRequest,
-  ArxivTitleAbstractTranslationResult
+  ArxivTitleAbstractTranslationResult,
+  ArxivTranslationPriority
 } from '../shared/arxiv';
 import { isMojibakeTranslationText } from '../shared/arxiv';
+export type { ArxivTranslationPriority } from '../shared/arxiv';
 import {
   collapseRepeatedTranslationTail,
   hasSevereAcademicTranslationLengthLoss,
@@ -32,8 +34,6 @@ interface ArxivTranslationServiceOptions {
   now?: () => number;
   timeoutMs?: number;
 }
-
-export type ArxivTranslationPriority = 'foreground' | 'preview' | 'background';
 
 export interface ArxivTranslationOptions {
   priority?: ArxivTranslationPriority;
