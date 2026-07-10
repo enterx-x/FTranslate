@@ -3,13 +3,16 @@ import type { ArxivPaper } from '../lib/arxivClient';
 import type { ArxivPaperMeta } from '../lib/arxivUi';
 import {
   DEFAULT_ARXIV_SEARCH_QUERY,
+  ARXIV_CARD_PRIMARY_ACTIONS,
+  buildArxivPreviewTranslationBatches,
   buildArxivQueuedPaper,
   buildAvailableArxivTags,
   buildArxivReadingQueuePreview,
   buildArxivSearchRequestForUi,
-  buildArxivPriorityTranslationBatches,
   buildLatestArxivSearchRequest,
   buildArxivTranslationBatches,
+  buildArxivTranslationBatchRequest,
+  buildArxivTranslationMetaPatch,
   describeLocalTranslationStatus,
   getArxivCardPreviewText,
   getArxivResultDensityConfig,
@@ -339,20 +342,49 @@ describe('ArxivSearchPage result display', () => {
     expect(preview.hiddenCount).toBe(2);
   });
 
-  it('prioritizes the first visible arXiv papers before translating the rest in the background', () => {
-    const papers = Array.from({ length: 50 }, (_, index) => ({
+  it('automatically previews only the first six papers in one bounded batch', () => {
+    const papers = Array.from({ length: 20 }, (_, index) => ({
       ...paper,
       id: `${paper.id}-${index}`,
       stableId: `2601.${String(index).padStart(5, '0')}`
     }));
 
-    const batches = buildArxivPriorityTranslationBatches(papers, 12, 24);
+    expect(buildArxivPreviewTranslationBatches(papers)).toEqual([papers.slice(0, 6)]);
+  });
 
-    expect(batches).toHaveLength(3);
-    expect(batches[0]).toHaveLength(12);
-    expect(batches[0][0].stableId).toBe('2601.00000');
-    expect(batches[1]).toHaveLength(24);
-    expect(batches[2]).toHaveLength(14);
+  it('builds explicit preview, page, and foreground IPC request shapes', () => {
+    expect(buildArxivTranslationBatchRequest([paper], 'preview', 7)).toMatchObject({
+      papers: [expect.objectContaining({ stableId: paper.stableId })],
+      priority: 'preview',
+      sessionId: 7
+    });
+    expect(buildArxivTranslationBatchRequest([paper], 'background', 7).priority).toBe('background');
+    expect(buildArxivTranslationBatchRequest([paper], 'foreground', 7).priority).toBe('foreground');
+  });
+
+  it('does not produce a metadata patch for a stale search translation session', () => {
+    const completed = {
+      stableId: paper.stableId,
+      titleZh: '中文标题',
+      abstractZh: '中文摘要',
+      engine: 'nllb-ct2-int8' as const,
+      status: 'completed' as const,
+      cacheHit: false,
+      message: '完成',
+      translatedAt: '2026-07-10T00:00:00.000Z'
+    };
+
+    expect(buildArxivTranslationMetaPatch(completed, 6, 7)).toBeNull();
+    expect(buildArxivTranslationMetaPatch(completed, 7, 7)).toMatchObject({
+      titleZh: '中文标题',
+      abstractZh: '中文摘要'
+    });
+  });
+
+  it('keeps only read, translate, and reading-queue actions primary on result cards', () => {
+    expect(ARXIV_CARD_PRIMARY_ACTIONS).toEqual(['阅读', '翻译', '加入阅读队列']);
+    expect(ARXIV_CARD_PRIMARY_ACTIONS).not.toContain('加入 PPT');
+    expect(ARXIV_CARD_PRIMARY_ACTIONS).not.toContain('导出 Markdown');
   });
 
   it('can still split translation work into fixed-size batches', () => {

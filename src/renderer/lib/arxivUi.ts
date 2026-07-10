@@ -1,4 +1,4 @@
-import { normalizeArxivSearchQuery, type ArxivPaper } from './arxivClient';
+import { normalizeArxivSearchQuery, type ArxivPaper, type ArxivSortBy } from './arxivClient';
 
 export type ArxivReadingPriority = 'high' | 'medium' | 'low';
 
@@ -39,6 +39,19 @@ export interface ArxivPaperMeta {
   insight?: ArxivPaperInsight;
   translatedAt?: string;
   scoredAt?: string;
+}
+
+export function getArxivRankingScopeLabel(sortBy: ArxivSortBy): string {
+  switch (sortBy) {
+    case 'comprehensive':
+      return '本页相关排序';
+    case 'relevance':
+      return 'arXiv 全局相关性';
+    case 'submittedDate':
+      return 'arXiv 提交时间';
+    case 'lastUpdatedDate':
+      return 'arXiv 更新时间';
+  }
 }
 
 const TOPIC_KEYWORDS: Record<keyof ArxivTopicMatch, { label: string; keywords: string[] }> = {

@@ -7,10 +7,13 @@ import {
 } from 'react';
 import {
   type ArxivPaper,
+  type ArxivQueryMode,
   type ArxivSearchRequest,
   type ArxivSortBy,
   type ArxivSortOrder,
   type ArxivTitleAbstractTranslationResult,
+  type ArxivTranslationBatchRequest,
+  type ArxivTranslationPriority,
   isMojibakeTranslationText
 } from '../lib/arxivClient';
 import {
@@ -22,7 +25,8 @@ import {
   buildArxivTopicCards,
   formatArxivApiDate,
   formatArxivResultRange,
-  getArxivApiDateTooltip
+  getArxivApiDateTooltip,
+  getArxivRankingScopeLabel
 } from '../lib/arxivUi';
 import searchIcon from '../assets/icons/duotone/search.svg';
 import downloadIcon from '../assets/icons/duotone/download.svg';
@@ -91,9 +95,9 @@ const OFFLINE_TRANSLATION_NOTICE_TITLE = '离线翻译未配置';
 export const DEFAULT_ARXIV_SEARCH_QUERY = '';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
-const OFFLINE_TRANSLATION_PRIORITY_COUNT = 12;
 const OFFLINE_TRANSLATION_BATCH_SIZE = 24;
 const OFFLINE_TRANSLATION_BATCH_CONCURRENCY = 2;
+const ARXIV_PREVIEW_TRANSLATION_LIMIT = 6;
 
 const CATEGORY_OPTIONS = [
   { value: '', label: '全部分类' },
@@ -105,11 +109,19 @@ const CATEGORY_OPTIONS = [
 ];
 
 const SORT_OPTIONS: Array<{ value: ArxivSortBy; label: string }> = [
-  { value: 'comprehensive', label: '综合排序' },
+  { value: 'comprehensive', label: '本页相关排序' },
   { value: 'relevance', label: '相关性' },
   { value: 'submittedDate', label: '提交时间' },
   { value: 'lastUpdatedDate', label: '更新时间' }
 ];
+
+const QUERY_MODE_OPTIONS: Array<{ value: ArxivQueryMode; label: string }> = [
+  { value: 'strict', label: '严格' },
+  { value: 'balanced', label: '均衡' },
+  { value: 'explore', label: '探索' }
+];
+
+export const ARXIV_CARD_PRIMARY_ACTIONS = ['阅读', '翻译', '加入阅读队列'] as const;
 
 const SORT_ORDER_OPTIONS: Array<{ value: ArxivSortOrder; label: string }> = [
   { value: 'descending', label: '降序' },
@@ -255,20 +267,6 @@ export function buildArxivTranslationBatches<T>(items: T[], batchSize = OFFLINE_
   return batches;
 }
 
-export function buildArxivPriorityTranslationBatches<T>(
-  items: T[],
-  priorityCount = OFFLINE_TRANSLATION_PRIORITY_COUNT,
-  batchSize = OFFLINE_TRANSLATION_BATCH_SIZE
-): T[][] {
-  const safePriorityCount = Math.max(0, Math.floor(priorityCount));
-  const priority = items.slice(0, safePriorityCount);
-  const rest = items.slice(safePriorityCount);
-  return [
-    ...(priority.length > 0 ? [priority] : []),
-    ...buildArxivTranslationBatches(rest, batchSize)
-  ];
-}
-
 export async function runArxivTranslationBatches<T>(
   batches: T[][],
   worker: (batch: T[], index: number) => Promise<void>,
@@ -333,8 +331,49 @@ export function shouldQueueArxivMetadataTranslation(meta: ArxivPaperMeta): boole
   return !hasUsableArxivChineseMetadata(meta);
 }
 
+export function buildArxivPreviewTranslationBatches(papers: ArxivPaper[]): ArxivPaper[][] {
+  const preview = papers.slice(0, ARXIV_PREVIEW_TRANSLATION_LIMIT);
+  return preview.length > 0 ? [preview] : [];
+}
+
+export function buildArxivTranslationBatchRequest(
+  papers: ArxivPaper[],
+  priority: ArxivTranslationPriority,
+  sessionId: number
+): ArxivTranslationBatchRequest {
+  return {
+    papers: papers.map((paper) => ({
+      stableId: paper.stableId,
+      title: paper.title,
+      summary: paper.summary,
+      targetLanguage: 'zh'
+    })),
+    priority,
+    sessionId
+  };
+}
+
+export function buildArxivTranslationMetaPatch(
+  result: ArxivTitleAbstractTranslationResult,
+  resultSessionId: number,
+  currentSessionId: number | null
+): Partial<ArxivPaperMeta> | null {
+  if (
+    resultSessionId !== currentSessionId ||
+    (result.status !== 'completed' && result.status !== 'cached')
+  ) {
+    return null;
+  }
+  return {
+    titleZh: result.titleZh,
+    abstractZh: result.abstractZh,
+    translatedAt: result.translatedAt ?? new Date().toISOString()
+  };
+}
+
 export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [query, setQuery] = useState(DEFAULT_ARXIV_SEARCH_QUERY);
+  const [queryMode, setQueryMode] = useState<ArxivQueryMode>('balanced');
   const [category, setCategory] = useState('');
   const [sortBy, setSortBy] = useState<ArxivSortBy>('comprehensive');
   const [sortOrder, setSortOrder] = useState<ArxivSortOrder>('descending');
@@ -383,6 +422,19 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [showOfflineTranslationHelp, setShowOfflineTranslationHelp] = useState(false);
   const [localTranslationStatus, setLocalTranslationStatus] = useState<LocalTranslationStatus | null>(null);
+  const [searchMetadata, setSearchMetadata] = useState<{
+    cacheHit: boolean;
+    cacheStale: boolean;
+    originalQuery: string;
+    normalizedQuery: string;
+    queryMode: ArxivQueryMode;
+    sortBy: ArxivSortBy;
+  } | null>(null);
+  const [translationQueue, setTranslationQueue] = useState<{
+    kind: 'preview' | 'page';
+    completed: number;
+    total: number;
+  } | null>(null);
 
   useEffect(() => {
     setPageJump(String(Math.floor(start / Math.max(1, pageSize)) + 1));
@@ -428,6 +480,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const request = useMemo<ArxivSearchRequest>(
     () => ({
       searchQuery: query.trim(),
+      queryMode,
       category,
       start,
       maxResults: pageSize,
@@ -436,7 +489,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       yearFrom,
       yearTo
     }),
-    [category, pageSize, query, sortBy, sortOrder, start, yearFrom, yearTo]
+    [category, pageSize, query, queryMode, sortBy, sortOrder, start, yearFrom, yearTo]
   );
 
   const availableYears = useMemo(() => {
@@ -503,6 +556,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
 
     try {
       setIsSearching(true);
+      setSearchMetadata(null);
+      setTranslationQueue(null);
+      setTranslatingId(null);
+      setBackgroundTranslatingIds({});
       setStatus('loading');
       if (options.resetFilters) {
         setYearFilter('all');
@@ -534,6 +591,15 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       setPapers(result.papers);
       setTotalResults(result.totalResults ?? result.papers.length);
       setSelectedPaperId(result.papers[0]?.id ?? null);
+      setSearchMetadata({
+        cacheHit: result.cacheHit,
+        cacheStale: Boolean(result.cacheStale),
+        originalQuery: result.originalSearchQuery ?? searchQuery,
+        normalizedQuery:
+          result.normalizedSearchQuery ?? result.effectiveSearchQuery ?? nextRequest.searchQuery,
+        queryMode: result.queryMode ?? nextRequest.queryMode ?? 'balanced',
+        sortBy: nextRequest.sortBy
+      });
       if (searchQuery) {
         setHistory((previous) => saveStringList(ARXIV_HISTORY_STORAGE_KEY, [searchQuery, ...previous]));
       }
@@ -545,7 +611,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       setStatus('success');
       const rangeText = formatArxivResultRange(nextStart, result.papers.length, result.totalResults ?? result.papers.length);
       const queryNotice = result.queryNotice ? `${result.queryNotice}。` : '';
-      void queueOfflineTranslations(result.papers);
+      void queuePreviewTranslations(result.papers, searchSessionId);
       if (result.warning) {
         setMessage(`${queryNotice}${result.warning} 当前显示：${rangeText}。`);
       } else if (result.cacheHit) {
@@ -562,7 +628,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               ? '更新时间'
               : nextRequest.sortBy === 'relevance'
               ? '相关性'
-                : '综合排序';
+                : '本页相关排序';
         setMessage(`${queryNotice}共找到 ${formatInteger(result.totalResults ?? result.papers.length)} 篇，当前显示 ${rangeText}，已按${sortText}展示。`);
       }
     } catch (error) {
@@ -682,10 +748,18 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       return;
     }
 
+    const translationSessionId = searchSessionController.current();
+    if (translationSessionId === null) {
+      setMessage('请先完成一次搜索，再翻译论文。');
+      return;
+    }
     try {
       setTranslatingId(paper.id);
       setMessage('正在使用本地离线引擎翻译标题和摘要，并写入 SQLite 缓存；优先 NLLB，失败回退 Argos，不会调用 AI API。');
-      const result = await translatePaperMetadata(paper);
+      const result = await translatePaperMetadata(paper, false, translationSessionId);
+      if (!searchSessionController.isCurrent(translationSessionId)) {
+        return;
+      }
       if (result?.status === 'completed' || result?.status === 'cached') {
         setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
         setMessage(result.message);
@@ -696,43 +770,74 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     } catch (error) {
       setMessage(`标题/摘要本地翻译失败，已保留英文：${formatError(error)}`);
     } finally {
-      setTranslatingId(null);
+      if (searchSessionController.isCurrent(translationSessionId)) {
+        setTranslatingId(null);
+      }
     }
   }
 
-  async function queueOfflineTranslations(nextPapers: ArxivPaper[]): Promise<void> {
+  async function queuePreviewTranslations(
+    nextPapers: ArxivPaper[],
+    translationSessionId: number
+  ): Promise<void> {
     const missing = nextPapers.filter((paper) => {
       const meta = getPaperMeta(paper, metaById);
       return shouldQueueArxivMetadataTranslation(meta);
     });
-    if (missing.length === 0) {
+    const batches = buildArxivPreviewTranslationBatches(missing);
+    await queueTranslationBatches(batches, 'preview', translationSessionId, 'preview');
+  }
+
+  async function handleTranslatePage(): Promise<void> {
+    const translationSessionId = searchSessionController.current();
+    if (translationSessionId === null) {
+      setMessage('请先完成一次搜索，再翻译当前页。');
       return;
     }
-
-    const batches = buildArxivPriorityTranslationBatches(
-      missing,
-      OFFLINE_TRANSLATION_PRIORITY_COUNT,
-      OFFLINE_TRANSLATION_BATCH_SIZE
+    const missing = papers.filter((paper) =>
+      shouldQueueArxivMetadataTranslation(getPaperMeta(paper, metaById)) &&
+      !backgroundTranslatingIds[paper.id]
     );
+    if (missing.length === 0) {
+      setMessage('当前页标题和摘要已有可用中文缓存。');
+      return;
+    }
+    const batches = buildArxivTranslationBatches(missing, OFFLINE_TRANSLATION_BATCH_SIZE);
+    setMessage(`已将当前页 ${missing.length} 篇待翻译论文加入后台队列。`);
+    await queueTranslationBatches(batches, 'background', translationSessionId, 'page');
+  }
+
+  async function queueTranslationBatches(
+    batches: ArxivPaper[][],
+    priority: ArxivTranslationPriority,
+    translationSessionId: number,
+    kind: 'preview' | 'page'
+  ): Promise<void> {
+    if (batches.length === 0 || !searchSessionController.isCurrent(translationSessionId)) {
+      return;
+    }
+    const total = batches.reduce((count, batch) => count + batch.length, 0);
+    setTranslationQueue({ kind, completed: 0, total });
     await runArxivTranslationBatches(batches, async (batch) => {
+      if (!searchSessionController.isCurrent(translationSessionId)) {
+        return;
+      }
       setBackgroundTranslatingIds((previous) => ({
         ...previous,
         ...Object.fromEntries(batch.map((paper) => [paper.id, true]))
       }));
       try {
         const results = await window.electronAPI.translateArxivTitleAbstractBatch(
-          batch.map((paper) => ({
-            stableId: paper.stableId,
-            title: paper.title,
-            summary: paper.summary,
-            targetLanguage: 'zh'
-          }))
+          buildArxivTranslationBatchRequest(batch, priority, translationSessionId)
         );
+        if (!searchSessionController.isCurrent(translationSessionId)) {
+          return;
+        }
         let unavailableMessage = '';
         let failedMessage = '';
         results.forEach((result, index) => {
           const paper = batch[index];
-          if (!paper || applyTranslationResult(paper, result, true)) {
+          if (!paper || applyTranslationResult(paper, result, translationSessionId, true)) {
             return;
           }
           if (result.status === 'unavailable') {
@@ -751,8 +856,18 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           setMessage(failedMessage);
         }
       } catch (error) {
-        setMessage(`后台离线翻译失败，已保留英文：${formatError(error)}`);
+        if (searchSessionController.isCurrent(translationSessionId)) {
+          setMessage(`后台离线翻译失败，已保留英文：${formatError(error)}`);
+        }
       } finally {
+        if (!searchSessionController.isCurrent(translationSessionId)) {
+          return;
+        }
+        setTranslationQueue((previous) =>
+          previous?.kind === kind
+            ? { ...previous, completed: Math.min(previous.total, previous.completed + batch.length) }
+            : previous
+        );
         setBackgroundTranslatingIds((previous) => {
           const next = { ...previous };
           batch.forEach((paper) => {
@@ -761,20 +876,22 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           return next;
         });
       }
-    });
+    }, kind === 'preview' ? 1 : OFFLINE_TRANSLATION_BATCH_CONCURRENCY);
   }
 
   function applyTranslationResult(
     paper: ArxivPaper,
     result: ArxivTitleAbstractTranslationResult,
+    translationSessionId: number,
     silent = false
   ): boolean {
-    if (result.status === 'completed' || result.status === 'cached') {
-      patchMeta(paper, {
-        titleZh: result.titleZh,
-        abstractZh: result.abstractZh,
-        translatedAt: result.translatedAt ?? new Date().toISOString()
-      });
+    const patch = buildArxivTranslationMetaPatch(
+      result,
+      translationSessionId,
+      searchSessionController.current()
+    );
+    if (patch) {
+      patchMeta(paper, patch);
       if (!silent) {
         setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
       }
@@ -786,14 +903,18 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     return false;
   }
 
-  async function translatePaperMetadata(paper: ArxivPaper, silent = false) {
-    const result = await window.electronAPI.translateArxivTitleAbstract({
-      stableId: paper.stableId,
-      title: paper.title,
-      summary: paper.summary,
-      targetLanguage: 'zh'
-    });
-    if (applyTranslationResult(paper, result, silent)) {
+  async function translatePaperMetadata(
+    paper: ArxivPaper,
+    silent: boolean,
+    translationSessionId: number
+  ) {
+    const [result] = await window.electronAPI.translateArxivTitleAbstractBatch(
+      buildArxivTranslationBatchRequest([paper], 'foreground', translationSessionId)
+    );
+    if (!result) {
+      return undefined;
+    }
+    if (applyTranslationResult(paper, result, translationSessionId, silent)) {
       return result;
     }
     return result;
@@ -997,6 +1118,16 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             </select>
           </label>
           <label>
+            <span>查询模式</span>
+            <select value={queryMode} onChange={(event) => setQueryMode(event.target.value as ArxivQueryMode)}>
+              {QUERY_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             <span>排序</span>
             <select value={sortBy} onChange={(event) => setSortBy(event.target.value as ArxivSortBy)}>
               {SORT_OPTIONS.map((option) => (
@@ -1019,6 +1150,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           <button
             type="button"
             className="secondary-button arxiv-advanced-toggle"
+            aria-expanded={showAdvancedFilters}
             onClick={() => setShowAdvancedFilters((value) => !value)}
           >
             高级筛选
@@ -1030,6 +1162,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               setYearFrom('');
               setYearTo('');
               setCategory('');
+              setQueryMode('balanced');
               setSortBy('comprehensive');
               setSortOrder('descending');
               setPageSize(50);
@@ -1177,6 +1310,32 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             </div>
           ) : null}
         </div>
+        <div className="arxiv-runtime-status" aria-label="arXiv 当前检索与翻译状态">
+          <span className="badge">
+            {searchMetadata
+              ? searchMetadata.cacheHit
+                ? searchMetadata.cacheStale
+                  ? '过期缓存'
+                  : '本地缓存'
+                : 'arXiv 新请求'
+              : '等待搜索'}
+          </span>
+          <span className="badge">模式：{translateArxivQueryMode(searchMetadata?.queryMode ?? queryMode)}</span>
+          <span className="badge">排序：{getArxivRankingScopeLabel(searchMetadata?.sortBy ?? sortBy)}</span>
+          <span className="badge arxiv-runtime-query" title={searchMetadata?.normalizedQuery || query.trim()}>
+            规范化：{searchMetadata?.normalizedQuery || query.trim() || '—'}
+          </span>
+          {searchMetadata?.originalQuery ? (
+            <span className="badge arxiv-runtime-query" title={searchMetadata.originalQuery}>
+              原始：{searchMetadata.originalQuery}
+            </span>
+          ) : null}
+          <span className="badge">
+            翻译：{translationQueue
+              ? `${translationQueue.kind === 'preview' ? '预览' : '本页'} ${translationQueue.completed}/${translationQueue.total}`
+              : '空闲'} · {describeLocalTranslationStatus(localTranslationStatus)}
+          </span>
+        </div>
       </section>
 
       <section
@@ -1201,6 +1360,19 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               </p>
             </div>
             <div className="arxiv-results-controls">
+              <button
+                type="button"
+                className="secondary-button arxiv-translate-page-button"
+                disabled={
+                  papers.length === 0 ||
+                  Boolean(translationQueue && translationQueue.completed < translationQueue.total)
+                }
+                onClick={() => void handleTranslatePage()}
+              >
+                {translationQueue?.kind === 'page'
+                  ? `翻译本页 ${translationQueue.completed}/${translationQueue.total}`
+                  : '翻译本页'}
+              </button>
               <div className="arxiv-view-switch" aria-label="论文卡片列数">
                 {RESULT_COLUMN_OPTIONS.map((option) => (
                   <button
@@ -1302,7 +1474,6 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               const meta = getPaperMeta(paper, metaById);
               const insight = meta.insight ?? buildArxivPaperInsight(paper, query);
               const isSelected = selectedPaper?.id === paper.id;
-              const isQueued = pptQueue.includes(paper.stableId);
               const isQueuedForReading =
                 Boolean(meta.queuedAt) || readingQueue.some((item) => item.stableId === paper.stableId);
               const abstractMode = abstractModes[paper.id] ?? (hasUsableArxivChineseMetadata(meta) ? 'zh' : 'en');
@@ -1330,17 +1501,6 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       {isTranslatingMetadata ? <span className="badge accent-badge">翻译中</span> : null}
                       {hasUsableArxivChineseMetadata(meta) ? <span className="badge success-badge">中文摘要</span> : null}
                       {isQueuedForReading ? <span className="badge success-badge">备选</span> : null}
-                      <button
-                        type="button"
-                        className="icon-button arxiv-favorite-button"
-                        title={meta.favorite ? '取消收藏' : '收藏'}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleToggleFavorite(paper);
-                        }}
-                      >
-                        {meta.favorite ? '★' : '☆'}
-                      </button>
                     </div>
                   </div>
 
@@ -1368,20 +1528,17 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                     {tagItems.hiddenCount > 0 ? <span className="pill-tag">+{tagItems.hiddenCount}</span> : null}
                   </div>
 
-                  <footer className="arxiv-card-actions">
+                  <footer className="arxiv-card-actions arxiv-card-actions--primary">
                     <button
                       type="button"
                       className="secondary-button"
                       onClick={(event) => {
                         event.stopPropagation();
-                        setAbstractModes((previous) => ({
-                          ...previous,
-                          [paper.id]: abstractMode === 'zh' ? 'en' : 'zh'
-                        }));
+                        setSelectedPaperId(paper.id);
+                        setIsDetailPanelCollapsed(false);
                       }}
-                      disabled={!hasUsableArxivChineseMetadata(meta)}
                     >
-                      {abstractMode === 'zh' ? '查看英文' : '查看中文'}
+                      {ARXIV_CARD_PRIMARY_ACTIONS[0]}
                     </button>
                     <button
                       type="button"
@@ -1393,59 +1550,18 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       }}
                     >
                       <img className="button-icon" src={translateIcon} alt="" />
-                      {isTranslatingMetadata ? '翻译中' : '本地翻译'}
+                      {isTranslatingMetadata ? '翻译中' : ARXIV_CARD_PRIMARY_ACTIONS[1]}
                     </button>
                     <button
                       type="button"
-                      className="secondary-button"
+                      className={isQueuedForReading ? 'primary-button' : 'secondary-button'}
                       onClick={(event) => {
                         event.stopPropagation();
-                        handleScorePaper(paper);
+                        handleToggleReadingQueue(paper);
                       }}
                     >
-                      <img className="button-icon" src={analysisIcon} alt="" />
-                      评分
+                      {isQueuedForReading ? '移出阅读队列' : ARXIV_CARD_PRIMARY_ACTIONS[2]}
                     </button>
-                    <button
-                      type="button"
-                      className={isQueued ? 'primary-button' : 'secondary-button'}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleTogglePptQueue(paper);
-                      }}
-                    >
-                      {isQueued ? '已入 PPT' : '加入 PPT'}
-                    </button>
-                    <details className="arxiv-more-actions" onClick={(event) => event.stopPropagation()}>
-                      <summary>更多</summary>
-                      <div className="arxiv-more-menu">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleReadingQueue(paper)}
-                        >
-                          {isQueuedForReading ? '移出备选' : '加入备选'}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={downloadingId === paper.id}
-                          onClick={() => void handleDownload(paper)}
-                        >
-                          {downloadingId === paper.id ? '下载中' : '下载 PDF 入库'}
-                        </button>
-                        <button type="button" onClick={() => void handleCopy(buildArxivBibTeX(paper), 'BibTeX')}>
-                          复制 BibTeX
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleOpenExternalUrl(paper.abstractUrl);
-                          }}
-                        >
-                          打开 arXiv
-                        </button>
-                      </div>
-                    </details>
                   </footer>
                 </article>
               );
@@ -1685,6 +1801,14 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   >
                     {selectedMeta.favorite ? '取消收藏' : '收藏论文'}
                   </button>
+                  <button
+                    type="button"
+                    className="secondary-button button-with-icon"
+                    onClick={() => handleScorePaper(selectedPaper)}
+                  >
+                    <img className="button-icon" src={analysisIcon} alt="" />
+                    更新本地评分
+                  </button>
                 </div>
                 <div className="arxiv-detail-secondary-actions">
                   <button
@@ -1879,6 +2003,10 @@ function sanitizeFileStem(value: string): string {
 
 function normalizeYearInput(value: string): string {
   return value.replace(/\D/gu, '').slice(0, 4);
+}
+
+function translateArxivQueryMode(mode: ArxivQueryMode): string {
+  return mode === 'strict' ? '严格' : mode === 'explore' ? '探索' : '均衡';
 }
 
 function formatError(error: unknown): string {

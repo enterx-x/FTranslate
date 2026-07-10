@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   type ArxivPaper,
   type ArxivParsedSearchResult,
+  type ArxivQueryMode,
   type ArxivSearchRequest,
   type ArxivSearchServiceResult,
   buildArxivApiUrl,
@@ -10,7 +11,8 @@ import {
   isMojibakeTranslationText,
   normalizeArxivWhitespace,
   normalizeArxivSearchQuery,
-  parseArxivSearchResult
+  parseArxivSearchResult,
+  resolveArxivQueryMode
 } from '../shared/arxiv';
 
 interface ArxivServiceOptions {
@@ -46,6 +48,8 @@ interface ArxivSearchMetadata {
   translatedQuery?: string;
   expandedQueryTerms?: string[];
   queryNotice?: string;
+  queryMode?: ArxivQueryMode;
+  normalizedSearchQuery?: string;
 }
 
 const DEFAULT_MIN_REQUEST_GAP_MS = 3200;
@@ -231,27 +235,30 @@ export class ArxivService {
 
   private async resolveSearchRequest(request: ArxivSearchRequest): Promise<ResolvedSearchRequest> {
     const searchQuery = request.searchQuery.trim();
+    const queryMode = resolveArxivQueryMode(request.queryMode);
+    const normalizedSearchQuery = normalizeArxivSearchQuery(searchQuery, queryMode);
     if (!hasCjkText(searchQuery)) {
       return {
-        request,
-        metadata: searchQuery
-          ? {
-              effectiveSearchQuery: normalizeArxivSearchQuery(searchQuery)
-            }
-          : {}
+        request: { ...request, queryMode },
+        metadata: {
+          originalSearchQuery: searchQuery,
+          effectiveSearchQuery: normalizedSearchQuery,
+          normalizedSearchQuery,
+          queryMode
+        }
       };
     }
 
-    const cacheKey = searchQuery;
+    const cacheKey = `${queryMode}:${searchQuery}`;
     const cached = this.translatedQueryCache.get(cacheKey);
     if (cached !== undefined) {
       const { searchQuery: cachedSearchQuery, ...metadata } = cached;
-      return { request: { ...request, searchQuery: cachedSearchQuery }, metadata };
+      return { request: { ...request, queryMode, searchQuery: cachedSearchQuery }, metadata };
     }
 
-    const deterministicQuery = normalizeArxivSearchQuery(searchQuery);
+    const deterministicQuery = normalizedSearchQuery;
     let translatedQuery = '';
-    if (this.translateSearchQueryToEnglish) {
+    if (queryMode !== 'strict' && this.translateSearchQueryToEnglish) {
       try {
         translatedQuery = sanitizeTranslatedSearchQuery(await this.translateSearchQueryToEnglish(searchQuery));
       } catch {
@@ -259,7 +266,11 @@ export class ArxivService {
       }
     }
 
-    const expandedQuery = mergeSearchQuerySegments([searchQuery, deterministicQuery, translatedQuery]);
+    const expandedQuery = mergeSearchQuerySegments(
+      queryMode === 'strict'
+        ? [deterministicQuery]
+        : [searchQuery, deterministicQuery, translatedQuery]
+    );
     const expandedQueryTerms = buildExpandedQueryTerms(deterministicQuery, translatedQuery);
     const metadata: ArxivSearchMetadata & { searchQuery: string } = {
       searchQuery: expandedQuery,
@@ -267,10 +278,12 @@ export class ArxivService {
       effectiveSearchQuery: expandedQuery,
       translatedQuery: translatedQuery || undefined,
       expandedQueryTerms,
-      queryNotice: buildChineseSearchQueryNotice(searchQuery, expandedQueryTerms)
+      queryNotice: buildChineseSearchQueryNotice(searchQuery, expandedQueryTerms),
+      queryMode,
+      normalizedSearchQuery
     };
     this.translatedQueryCache.set(cacheKey, metadata);
-    return { request: { ...request, searchQuery: expandedQuery }, metadata };
+    return { request: { ...request, queryMode, searchQuery: expandedQuery }, metadata };
   }
 
   async downloadPdf(pdfUrl: string, source = 'renderer:arxiv-download'): Promise<Buffer> {
@@ -683,8 +696,10 @@ function applyLocalArxivSort(result: ArxivParsedSearchResult, request: ArxivSear
   if (request.sortBy !== 'comprehensive' || result.papers.length <= 1) {
     return result;
   }
-  const queryTerms = tokenizeLocalRankingQuery(normalizeArxivSearchQuery(request.searchQuery));
-  const requiredTermGroups = buildRequiredLocalTermGroups(request.searchQuery);
+  const queryTerms = tokenizeLocalRankingQuery(
+    normalizeArxivSearchQuery(request.searchQuery, request.queryMode)
+  );
+  const requiredTermGroups = buildRequiredLocalTermGroups(request.searchQuery, request.queryMode);
   const scored = result.papers
     .map((paper) => ({ paper, score: scoreComprehensivePaper(paper, queryTerms, request.category) }))
     .filter((entry) => entry.score.textHits > 0 && matchesRequiredTermGroups(entry.paper, requiredTermGroups));
@@ -703,8 +718,8 @@ function applyLocalArxivSort(result: ArxivParsedSearchResult, request: ArxivSear
   };
 }
 
-function buildRequiredLocalTermGroups(searchQuery: string): string[][] {
-  const normalized = normalizeArxivSearchQuery(searchQuery).toLowerCase();
+function buildRequiredLocalTermGroups(searchQuery: string, queryMode?: ArxivQueryMode): string[][] {
+  const normalized = normalizeArxivSearchQuery(searchQuery, queryMode).toLowerCase();
   const normalizedTokens = tokenizeLocalRankingQuery(normalized);
   const tactileFocusedTokens = new Set([
     'tactile',

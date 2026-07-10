@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { buildArxivApiUrl, isMojibakeTranslationText, normalizeArxivSearchQuery, type ArxivSearchRequest } from './arxiv';
+import {
+  buildArxivApiUrl,
+  buildArxivCacheKey,
+  isMojibakeTranslationText,
+  normalizeArxivSearchQuery,
+  type ArxivQueryMode,
+  type ArxivSearchRequest
+} from './arxiv';
 
-function getSearchExpression(searchQuery: string): string {
+function getSearchExpression(searchQuery: string, queryMode?: ArxivQueryMode): string {
   const request: ArxivSearchRequest = {
     searchQuery,
+    queryMode,
     category: '',
     start: 0,
     maxResults: 50,
@@ -14,6 +22,39 @@ function getSearchExpression(searchQuery: string): string {
 }
 
 describe('arXiv query builder', () => {
+  it('uses balanced mode by default while strict and explore build distinct expressions', () => {
+    const defaultExpression = getSearchExpression('robot navigation');
+    const balancedExpression = getSearchExpression('robot navigation', 'balanced');
+    const strictExpression = getSearchExpression('robot navigation', 'strict');
+    const exploreExpression = getSearchExpression('robot navigation', 'explore');
+
+    expect(defaultExpression).toBe(balancedExpression);
+    expect(strictExpression).toContain('ti:"robot navigation"');
+    expect(strictExpression).not.toContain('robotic navigation');
+    expect(balancedExpression).toContain('robotic navigation');
+    expect(exploreExpression).toContain('autonomous navigation');
+    expect(new Set([strictExpression, balancedExpression, exploreExpression]).size).toBe(3);
+  });
+
+  it('keeps query-mode cache entries isolated even when the visible query is identical', () => {
+    const request: ArxivSearchRequest = {
+      searchQuery: '机器人导航',
+      category: 'cs.RO',
+      start: 0,
+      maxResults: 50,
+      sortBy: 'comprehensive',
+      sortOrder: 'descending'
+    };
+
+    const strictKey = buildArxivCacheKey({ ...request, queryMode: 'strict' });
+    const balancedKey = buildArxivCacheKey({ ...request, queryMode: 'balanced' });
+    const exploreKey = buildArxivCacheKey({ ...request, queryMode: 'explore' });
+
+    expect(new Set([strictKey, balancedKey, exploreKey]).size).toBe(3);
+    expect(normalizeArxivSearchQuery('机器人导航', 'strict')).not.toBe(
+      normalizeArxivSearchQuery('机器人导航', 'explore')
+    );
+  });
   it('does not mix search history or fixed latent robot keywords into a single Chinese tactile search', () => {
     const expression = getSearchExpression('触觉');
 

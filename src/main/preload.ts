@@ -112,6 +112,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('file:export-pptx', request),
   searchArxiv: (request: {
     searchQuery: string;
+    queryMode?: 'strict' | 'balanced' | 'explore';
     category: string;
     start: number;
     maxResults: number;

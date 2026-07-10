@@ -9,6 +9,7 @@ import {
   formatArxivApiDate,
   formatArxivResultRange,
   getArxivApiDateTooltip,
+  getArxivRankingScopeLabel,
   parseArxivTitleAbstractTranslation
 } from './arxivUi';
 
@@ -29,6 +30,10 @@ const robotPaper: ArxivPaper = {
 };
 
 describe('arxivUi helpers', () => {
+  it('labels comprehensive ranking as page-local instead of implying global relevance', () => {
+    expect(getArxivRankingScopeLabel('comprehensive')).toBe('本页相关排序');
+    expect(getArxivRankingScopeLabel('relevance')).toBe('arXiv 全局相关性');
+  });
   it('builds explainable scores from paper metadata without calling arXiv or AI', () => {
     const insight = buildArxivPaperInsight(robotPaper, 'reinforcement learning robot navigation');
 

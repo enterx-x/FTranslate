@@ -134,6 +134,39 @@ describe('ArxivService', () => {
     }
   });
 
+  it('isolates cache and result metadata across strict, balanced, and explore query modes', async () => {
+    let fetchCount = 0;
+    const service = new ArxivService({
+      dbPath: path.join(tempDir, 'arxiv.sqlite'),
+      minRequestGapMs: 0,
+      fetchImpl: async () => {
+        fetchCount += 1;
+        return new Response(sampleFeed, { status: 200 });
+      }
+    });
+
+    try {
+      const strict = await service.search({ ...request, queryMode: 'strict' }, 'strict-mode');
+      const balanced = await service.search({ ...request, queryMode: 'balanced' }, 'balanced-mode');
+      const explore = await service.search({ ...request, queryMode: 'explore' }, 'explore-mode');
+      const balancedCached = await service.search({ ...request, queryMode: 'balanced' }, 'balanced-cache');
+
+      expect(fetchCount).toBe(3);
+      expect(strict).toMatchObject({
+        queryMode: 'strict',
+        originalSearchQuery: request.searchQuery
+      });
+      expect(balanced).toMatchObject({
+        queryMode: 'balanced',
+        normalizedSearchQuery: expect.any(String)
+      });
+      expect(explore.queryMode).toBe('explore');
+      expect(balancedCached.cacheHit).toBe(true);
+    } finally {
+      service.close();
+    }
+  });
+
   it('deduplicates identical in-flight searches before they hit arXiv', async () => {
     let fetchCount = 0;
     let releaseFetch!: () => void;

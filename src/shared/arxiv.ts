@@ -1,8 +1,10 @@
 export type ArxivSortBy = 'comprehensive' | 'relevance' | 'lastUpdatedDate' | 'submittedDate';
 export type ArxivSortOrder = 'ascending' | 'descending';
+export type ArxivQueryMode = 'strict' | 'balanced' | 'explore';
 
 export interface ArxivSearchRequest {
   searchQuery: string;
+  queryMode?: ArxivQueryMode;
   category: string;
   start: number;
   maxResults: number;
@@ -44,6 +46,8 @@ export interface ArxivSearchServiceResult {
   translatedQuery?: string;
   expandedQueryTerms?: string[];
   queryNotice?: string;
+  queryMode?: ArxivQueryMode;
+  normalizedSearchQuery?: string;
 }
 
 export interface ArxivTitleAbstractTranslationRequest {
@@ -221,6 +225,15 @@ const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
   [/因果推断|因果学习/gu, 'causal inference causal learning']
 ];
 
+const EXPLORE_QUERY_SYNONYMS: Array<[string[], string]> = [
+  [['robot navigation', 'robotic navigation', 'mobile robot navigation'], 'autonomous navigation mobile robotics'],
+  [['reinforcement learning'], 'policy learning sequential decision making'],
+  [['path planning', 'motion planning', 'trajectory planning'], 'route planning trajectory generation'],
+  [['tactile', 'haptic', 'visuotactile'], 'touch somatosensory'],
+  [['control barrier function', 'cbf'], 'safety filter safe control'],
+  [['model predictive control', 'mpc'], 'receding horizon control']
+];
+
 const KNOWN_ARXIV_QUERY_PHRASES = [
   'reinforcement learning',
   'safe reinforcement learning',
@@ -238,6 +251,8 @@ const KNOWN_ARXIV_QUERY_PHRASES = [
   'large language model',
   'robot navigation',
   'robotic navigation',
+  'autonomous navigation',
+  'mobile robotics',
   'mobile robot',
   'soft robot',
   'soft robotics',
@@ -345,22 +360,43 @@ export function normalizeArxivWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
-export function normalizeArxivSearchQuery(value: string): string {
+export function resolveArxivQueryMode(value?: ArxivQueryMode): ArxivQueryMode {
+  return value === 'strict' || value === 'explore' ? value : 'balanced';
+}
+
+export function normalizeArxivSearchQuery(
+  value: string,
+  mode: ArxivQueryMode = 'balanced'
+): string {
   const cleanValue = normalizeArxivWhitespace(value);
+  const queryMode = resolveArxivQueryMode(mode);
   const expansions = CHINESE_QUERY_EXPANSIONS.flatMap(([pattern, expansion]) => {
     pattern.lastIndex = 0;
-    return pattern.test(cleanValue) ? [expansion] : [];
+    if (!pattern.test(cleanValue)) {
+      return [];
+    }
+    return [queryMode === 'strict' ? toStrictQueryExpansion(expansion) : expansion];
   });
+  const modeExpansions = queryMode === 'strict' ? removeContainedQueryExpansions(expansions) : expansions;
   const latinRemainder = normalizeArxivWhitespace(
     cleanValue
       .replace(/[\u3400-\u9fff]+/gu, ' ')
       .replace(/[，。；、：？！]/gu, ' ')
   );
-  return normalizeArxivWhitespace([latinRemainder, ...expansions].join(' ')) || cleanValue;
+  const balanced = normalizeArxivWhitespace([latinRemainder, ...modeExpansions].join(' ')) || cleanValue;
+  if (queryMode !== 'explore') {
+    return balanced;
+  }
+  const normalized = balanced.toLowerCase();
+  const exploreExpansions = EXPLORE_QUERY_SYNONYMS.flatMap(([needles, expansion]) =>
+    needles.some((needle) => normalized.includes(needle)) ? [expansion] : []
+  );
+  return normalizeArxivWhitespace([balanced, ...exploreExpansions].join(' '));
 }
 
 export function buildArxivApiUrl(request: ArxivSearchRequest): string {
-  const cleanQuery = normalizeArxivSearchQuery(request.searchQuery);
+  const queryMode = resolveArxivQueryMode(request.queryMode);
+  const cleanQuery = normalizeArxivSearchQuery(request.searchQuery, queryMode);
   const query = buildArxivSearchExpression(cleanQuery, request);
   const url = new URL(ARXIV_ENDPOINT);
   url.searchParams.set('search_query', query);
@@ -372,9 +408,11 @@ export function buildArxivApiUrl(request: ArxivSearchRequest): string {
 }
 
 export function buildArxivCacheKey(request: ArxivSearchRequest): string {
+  const queryMode = resolveArxivQueryMode(request.queryMode);
   return JSON.stringify({
-    query_version: 'title-abstract-v4',
-    search_query: `${request.category || 'all'}:${normalizeArxivSearchQuery(request.searchQuery).toLowerCase()}`,
+    query_version: 'title-abstract-v5',
+    query_mode: queryMode,
+    search_query: `${request.category || 'all'}:${normalizeArxivSearchQuery(request.searchQuery, queryMode).toLowerCase()}`,
     yearFrom: normalizeArxivYear(request.yearFrom),
     yearTo: normalizeArxivYear(request.yearTo),
     start: request.start,
@@ -390,9 +428,9 @@ export function toArxivApiSortBy(sortBy: ArxivSortBy): Exclude<ArxivSortBy, 'com
 
 export function buildArxivSearchExpression(
   cleanQuery: string,
-  request: Pick<ArxivSearchRequest, 'category' | 'yearFrom' | 'yearTo'>
+  request: Pick<ArxivSearchRequest, 'category' | 'yearFrom' | 'yearTo' | 'queryMode'>
 ): string {
-  const queryParts = [buildTitleAbstractExpression(cleanQuery)];
+  const queryParts = [buildTitleAbstractExpression(cleanQuery, resolveArxivQueryMode(request.queryMode))];
   const dateRange = buildSubmittedDateRange(request.yearFrom, request.yearTo);
   if (dateRange) {
     queryParts.push(dateRange);
@@ -401,13 +439,36 @@ export function buildArxivSearchExpression(
   return request.category ? `cat:${request.category} AND ${scopedQuery}` : scopedQuery;
 }
 
-function buildTitleAbstractExpression(cleanQuery: string): string {
+function buildTitleAbstractExpression(cleanQuery: string, queryMode: ArxivQueryMode): string {
+  if (queryMode === 'strict') {
+    return buildFieldPairClause(cleanQuery, cleanQuery.includes(' '));
+  }
   const normalized = normalizeArxivWhitespace(cleanQuery.toLowerCase());
   const groups = buildSemanticTitleAbstractGroups(normalized);
   if (groups.length === 0) {
     return `all:${escapeArxivTerm(cleanQuery, cleanQuery.includes(' '))}`;
   }
   return `(${groups.map((group) => `(${group})`).join(' OR ')})`;
+}
+
+function toStrictQueryExpansion(expansion: string): string {
+  const normalized = normalizeArxivWhitespace(expansion.toLowerCase());
+  const phrase = KNOWN_ARXIV_QUERY_PHRASES
+    .filter((candidate) => normalized === candidate || normalized.startsWith(`${candidate} `))
+    .sort((left, right) => right.length - left.length)[0];
+  return phrase ?? normalized.split(' ')[0] ?? normalized;
+}
+
+function removeContainedQueryExpansions(expansions: string[]): string[] {
+  const unique = Array.from(new Set(expansions));
+  return unique.filter(
+    (candidate) =>
+      !unique.some(
+        (other) =>
+          other !== candidate &&
+          (` ${other} `).includes(` ${candidate} `)
+      )
+  );
 }
 
 function buildFieldPairClause(value: string, phrase: boolean): string {
