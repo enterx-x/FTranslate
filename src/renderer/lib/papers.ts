@@ -61,6 +61,17 @@ export interface PaperRecord extends PdfTranslationRecordFields {
   sheetCells?: PaperSheetCells;
   lastOpenedAt: string;
   lastPage: number;
+  tags: string[];
+  isPinned: boolean;
+  importedAt: string;
+  updatedAt: string;
+  totalPages?: number;
+  completedAt?: string;
+}
+
+export interface PaperLibraryParseResult {
+  papers: PaperRecord[];
+  error?: string;
 }
 
 interface BuildPaperRecordInput {
@@ -76,6 +87,7 @@ interface BuildPaperRecordInput {
 export function buildPaperRecord(input: BuildPaperRecordInput): PaperRecord {
   const firstTranslation = getFirstTranslationText(input.document);
   const metadata = input.document.metadata ?? {};
+  const now = input.now ?? new Date().toISOString();
 
   return {
     id: createPaperId(input.pdfPath, input.translationPath),
@@ -101,8 +113,12 @@ export function buildPaperRecord(input: BuildPaperRecordInput): PaperRecord {
     authors: metadata.authors || '',
     year: metadata.year || '',
     notes: '',
-    lastOpenedAt: input.now ?? new Date().toISOString(),
-    lastPage: input.lastPage ?? 1
+    lastOpenedAt: now,
+    lastPage: input.lastPage ?? 1,
+    tags: [],
+    isPinned: false,
+    importedAt: now,
+    updatedAt: now
   };
 }
 
@@ -141,7 +157,13 @@ export function upsertPaperRecord(library: PaperRecord[], incoming: PaperRecord)
     translatedModel: existing.translatedModel ?? incoming.translatedModel,
     notes: existing.notes ?? incoming.notes,
     sheetCells: existing.sheetCells ?? incoming.sheetCells,
-    lastPage: existing.lastPage ?? incoming.lastPage
+    lastPage: existing.lastPage ?? incoming.lastPage,
+    tags: existing.tags ?? incoming.tags,
+    isPinned: existing.isPinned ?? incoming.isPinned,
+    importedAt: existing.importedAt || incoming.importedAt,
+    updatedAt: existing.updatedAt || incoming.updatedAt,
+    totalPages: existing.totalPages ?? incoming.totalPages,
+    completedAt: existing.completedAt ?? incoming.completedAt
   };
 
   return [merged, ...library.filter((_, index) => index !== existingIndex)];
@@ -178,14 +200,57 @@ export function updatePaperRecord(
       | 'notes'
       | 'lastOpenedAt'
       | 'lastPage'
+      | 'tags'
+      | 'isPinned'
+      | 'importedAt'
+      | 'updatedAt'
+      | 'totalPages'
+      | 'completedAt'
     >
-  >
+  >,
+  now = new Date().toISOString()
 ): PaperRecord {
+  const totalPages = normalizePositiveInteger(updates.totalPages ?? record.totalPages);
+  const lastPage = Math.min(
+    totalPages ?? Number.POSITIVE_INFINITY,
+    normalizePositiveInteger(updates.lastPage ?? record.lastPage) ?? 1
+  );
+  const hasOrganizationChange = Object.keys(updates).some(
+    (key) => !READING_ACTIVITY_FIELDS.has(key) && key !== 'updatedAt' && key !== 'importedAt'
+  );
+  const completedAtValue = Object.prototype.hasOwnProperty.call(updates, 'completedAt')
+    ? updates.completedAt
+    : record.completedAt;
+
   return {
     ...record,
     ...updates,
-    lastPage: Math.max(1, Number(updates.lastPage ?? record.lastPage) || 1)
+    tags: normalizePaperTags(updates.tags ?? record.tags ?? []),
+    importedAt: normalizeIsoDate(updates.importedAt, record.importedAt),
+    updatedAt: normalizeIsoDate(
+      updates.updatedAt,
+      hasOrganizationChange ? normalizeIsoDate(now, record.updatedAt) : record.updatedAt
+    ),
+    lastPage,
+    ...(totalPages ? { totalPages } : { totalPages: undefined }),
+    completedAt: normalizeOptionalIsoDate(completedAtValue)
   };
+}
+
+const READING_ACTIVITY_FIELDS = new Set(['lastOpenedAt', 'lastPage', 'totalPages']);
+
+export function normalizePaperTags(tags: readonly string[]): string[] {
+  const seen = new Set<string>();
+
+  return tags.reduce<string[]>((result, tag) => {
+    const display = tag.trim().replace(/\s+/gu, ' ').slice(0, 32);
+    const key = display.toLocaleLowerCase();
+    if (display && !seen.has(key)) {
+      seen.add(key);
+      result.push(display);
+    }
+    return result;
+  }, []);
 }
 
 export function getPaperSheetCell(
@@ -210,21 +275,33 @@ export function updatePaperSheetCell(
 }
 
 export function parsePaperLibrary(value: string | null): PaperRecord[] {
+  return parsePaperLibraryResult(value).papers;
+}
+
+export function parsePaperLibraryResult(value: string | null): PaperLibraryParseResult {
   if (!value) {
-    return [];
+    return { papers: [] };
   }
 
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) {
-      return [];
+      return {
+        papers: [],
+        error: '论文库本地数据无法解析，已保留原始内容。'
+      };
     }
 
-    return parsed
-      .map((item) => normalizePaperRecord(item))
-      .filter((item): item is PaperRecord => Boolean(item));
+    return {
+      papers: parsed
+        .map((item) => normalizePaperRecord(item))
+        .filter((item): item is PaperRecord => Boolean(item))
+    };
   } catch {
-    return [];
+    return {
+      papers: [],
+      error: '论文库本地数据无法解析，已保留原始内容。'
+    };
   }
 }
 
@@ -245,6 +322,14 @@ function normalizePaperRecord(value: unknown): PaperRecord | null {
   if (!pdfPath) {
     return null;
   }
+
+  const fallbackTimestamp = normalizeIsoDate(record.lastOpenedAt, new Date().toISOString());
+  const totalPages = normalizePositiveInteger(record.totalPages);
+  const lastPage = Math.min(
+    totalPages ?? Number.POSITIVE_INFINITY,
+    normalizePositiveInteger(record.lastPage) ?? 1
+  );
+  const completedAt = normalizeOptionalIsoDate(record.completedAt);
 
   return {
     id: toText(record.id) || createPaperId(pdfPath, translationPath),
@@ -272,8 +357,14 @@ function normalizePaperRecord(value: unknown): PaperRecord | null {
     year: toText(record.year),
     notes: toText(record.notes),
     ...(Object.keys(sheetCells).length > 0 ? { sheetCells } : {}),
-    lastOpenedAt: toText(record.lastOpenedAt) || new Date().toISOString(),
-    lastPage: Math.max(1, Number(record.lastPage) || 1)
+    lastOpenedAt: fallbackTimestamp,
+    lastPage,
+    tags: normalizePaperTags(readStringArray(record.tags)),
+    isPinned: record.isPinned === true,
+    importedAt: normalizeIsoDate(record.importedAt, fallbackTimestamp),
+    updatedAt: normalizeIsoDate(record.updatedAt, fallbackTimestamp),
+    ...(totalPages ? { totalPages } : {}),
+    ...(completedAt ? { completedAt } : {})
   };
 }
 
@@ -337,4 +428,23 @@ function truncateText(value: string, maxLength: number): string {
 
 function toText(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function normalizePositiveInteger(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
+}
+
+function normalizeIsoDate(value: unknown, fallback: string): string {
+  const text = toText(value);
+  return text && Number.isFinite(Date.parse(text)) ? text : fallback;
+}
+
+function normalizeOptionalIsoDate(value: unknown): string | undefined {
+  const text = toText(value);
+  return text && Number.isFinite(Date.parse(text)) ? text : undefined;
 }

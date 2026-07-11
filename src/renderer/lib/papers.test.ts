@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPaperRecord,
   parsePaperLibrary,
+  parsePaperLibraryResult,
   updatePaperRecord,
   upsertPaperRecord,
   type PaperRecord
@@ -385,6 +386,166 @@ describe('paper library metadata', () => {
       year: '',
       notes: '',
       lastPage: 1
+    });
+  });
+
+  it('normalizes legacy management fields without dropping the paper', () => {
+    const [paper] = parsePaperLibrary(
+      JSON.stringify([
+        {
+          id: 'legacy',
+          pdfPath: 'D:/legacy.pdf',
+          pdfName: 'legacy.pdf',
+          translationPath: '',
+          translationName: '',
+          chineseTitle: '',
+          englishTitle: 'Legacy',
+          journal: '',
+          authors: '',
+          year: '',
+          notes: '',
+          lastOpenedAt: '2026-01-02T00:00:00.000Z',
+          lastPage: 3
+        }
+      ])
+    );
+
+    expect(paper).toMatchObject({
+      tags: [],
+      isPinned: false,
+      importedAt: '2026-01-02T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z'
+    });
+    expect(paper.totalPages).toBeUndefined();
+    expect(paper.completedAt).toBeUndefined();
+  });
+
+  it('normalizes tags, page counts, completion, and organization timestamps', () => {
+    const document = parseTranslationFile('译文。', 'translation.md', 'D:/translation.md');
+    const paper = buildPaperRecord({
+      pdfPath: 'D:/paper.pdf',
+      pdfName: 'paper.pdf',
+      translationPath: '',
+      translationName: '',
+      document,
+      now: '2026-01-01T00:00:00.000Z'
+    });
+    const updated = updatePaperRecord(
+      paper,
+      {
+        tags: [' CBF ', 'cbf', 'Safe   RL'],
+        totalPages: 20,
+        lastPage: 8,
+        completedAt: '2026-01-03T00:00:00.000Z'
+      },
+      '2026-01-04T00:00:00.000Z'
+    );
+
+    expect(updated.tags).toEqual(['CBF', 'Safe RL']);
+    expect(updated.totalPages).toBe(20);
+    expect(updated.lastPage).toBe(8);
+    expect(updated.completedAt).toBe('2026-01-03T00:00:00.000Z');
+    expect(updated.updatedAt).toBe('2026-01-04T00:00:00.000Z');
+  });
+
+  it('keeps organization timestamps stable for reading-only updates', () => {
+    const document = parseTranslationFile('译文。', 'translation.md', 'D:/translation.md');
+    const paper = buildPaperRecord({
+      pdfPath: 'D:/paper.pdf',
+      pdfName: 'paper.pdf',
+      translationPath: '',
+      translationName: '',
+      document,
+      now: '2026-01-01T00:00:00.000Z'
+    });
+    const updated = updatePaperRecord(
+      paper,
+      {
+        lastOpenedAt: '2026-02-01T00:00:00.000Z',
+        lastPage: 6,
+        totalPages: 18
+      },
+      '2026-02-02T00:00:00.000Z'
+    );
+
+    expect(updated.updatedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(updated.lastOpenedAt).toBe('2026-02-01T00:00:00.000Z');
+    expect(updated.lastPage).toBe(6);
+    expect(updated.totalPages).toBe(18);
+  });
+
+  it('clears completion explicitly when a paper returns to reading', () => {
+    const document = parseTranslationFile('译文。', 'translation.md', 'D:/translation.md');
+    const paper = updatePaperRecord(
+      buildPaperRecord({
+        pdfPath: 'D:/paper.pdf',
+        pdfName: 'paper.pdf',
+        translationPath: '',
+        translationName: '',
+        document,
+        now: '2026-01-01T00:00:00.000Z'
+      }),
+      { completedAt: '2026-01-02T00:00:00.000Z' },
+      '2026-01-02T00:00:00.000Z'
+    );
+
+    const reopened = updatePaperRecord(
+      paper,
+      { completedAt: undefined },
+      '2026-01-03T00:00:00.000Z'
+    );
+
+    expect(reopened.completedAt).toBeUndefined();
+    expect(reopened.updatedAt).toBe('2026-01-03T00:00:00.000Z');
+  });
+
+  it('reports malformed storage without inventing a valid empty snapshot', () => {
+    expect(parsePaperLibraryResult('{broken')).toEqual({
+      papers: [],
+      error: '论文库本地数据无法解析，已保留原始内容。'
+    });
+    expect(parsePaperLibraryResult(null)).toEqual({ papers: [] });
+  });
+
+  it('preserves organization and progress fields when a paper is re-imported', () => {
+    const document = parseTranslationFile('译文。', 'translation.md', 'D:/translation.md');
+    const existing = updatePaperRecord(
+      buildPaperRecord({
+        pdfPath: 'D:/paper.pdf',
+        pdfName: 'paper.pdf',
+        translationPath: '',
+        translationName: '',
+        document,
+        now: '2026-01-01T00:00:00.000Z'
+      }),
+      {
+        tags: ['CBF'],
+        isPinned: true,
+        lastPage: 9,
+        totalPages: 20,
+        completedAt: '2026-01-05T00:00:00.000Z'
+      },
+      '2026-01-05T00:00:00.000Z'
+    );
+    const incoming = buildPaperRecord({
+      pdfPath: 'D:/paper.pdf',
+      pdfName: 'paper.pdf',
+      translationPath: 'D:/paper.zh.md',
+      translationName: 'paper.zh.md',
+      document,
+      now: '2026-02-01T00:00:00.000Z'
+    });
+
+    const [merged] = upsertPaperRecord([existing], incoming);
+
+    expect(merged).toMatchObject({
+      tags: ['CBF'],
+      isPinned: true,
+      importedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-05T00:00:00.000Z',
+      lastPage: 9,
+      totalPages: 20,
+      completedAt: '2026-01-05T00:00:00.000Z'
     });
   });
 });
