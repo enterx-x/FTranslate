@@ -462,3 +462,40 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - `$env:NODE_OPTIONS='--max-old-space-size=4096'; npm run dist`：通过，77 个测试文件 / 454 个测试通过，安装包输出 `dist/PDF Translation Reader Setup 0.1.12.exe`。
 - `$env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check`：通过；打包产物内首页 `clippedNextActionCount=0`、`nextActionOverlapCount=0`、`clippedRiskCount=0`，人工查看 `.tmp-visual-check/home.png` 确认左右三栏未折叠成上下堆叠，三条下一步和三条风险均在首屏可见。
 - 仍有既有 Vite large chunk、`package.json` author 缺失、electron-builder duplicate dependency references 和 Node DEP0190 警告；本轮只记录，不在主界面精修中治理。
+
+## 16. 2026-07-11 arXiv 泛化检索、翻译效率与 UI 收口
+
+### 第一性原理与范围
+
+- 用户需要的是面向不同学科的论文发现与中文预读闭环，不是固定 RL / 机器人关键词的演示页。因此检索扩展、评分、缓存和 UI 状态都必须绑定用户实际执行的查询与查询模式。
+- arXiv 官方请求仍保持缓存优先和至少 3.2 秒串行间隔；效率优化不通过提高上游并发实现，而通过缓存命中、只预翻译首 6 篇、显式翻译本页、单篇前台优先级、本地 worker 复用和翻译去重实现。
+- 本轮不重构整个工作台，只收口 arXiv 搜索会话、翻译服务、IPC 边界、结果卡片、详情 Inspector 和视觉检查。
+
+### 已实现
+
+- 搜索使用单调递增 session；旧搜索响应、旧翻译元数据、摘要语言切换和提示消息都不能覆盖新会话。搜索进行中禁用分页跳转和所有手动翻译入口，并在处理函数内再次 guard。
+- 查询新增严格 / 均衡 / 探索三种模式，模式进入 URL 构建、查询翻译缓存和 arXiv 结果缓存键；结果评分、匹配理由、标签和手动评分持久化绑定最后成功执行的 effective query + mode，不受输入框草稿影响。
+- “综合排序”用户文案改为“本页相关排序”，明确只重排 arXiv 已返回的当前页；其他 arXiv 全局排序语义保持不变。
+- 自动翻译严格限制在当前页首 6 篇中的缺失项；“翻译本页”使用 background，预览使用 preview，单篇使用 foreground。主进程用非抢占式单引擎优先队列调度，已运行任务不被中断，同优先级保持 FIFO。
+- IPC 批量请求兼容旧数组和新对象形状，最多接收前 100 个有效论文对象，过滤 `null`、数字、数组和字段不完整项；非法 priority 回退 preview，非法 sessionId 被移除。
+- 学术翻译保护公式、LaTeX、双反引号代码、URL、DOI、新旧 arXiv ID、引用和术语占位符；长摘要按句子边界分段。逐段占位符数量和顺序、严重长度损失、乱码、英文回声和重复尾巴不通过时不写 SQLite 缓存。
+- 翻译结果显式记录 engine、cacheHit、`qualityStatus` 和 `elapsedMs`；缓存命中与通过质量门的结果标记 passed，质量拒绝标记 failed，引擎不可用或尚未执行质量检查标记 not-checked。旧 localStorage 元数据继续通过 renderer fallback 显示。
+- 结果卡片只保留阅读 / 翻译 / 加入阅读队列三个主操作；PPT、BibTeX、Markdown、评分和收藏集中在详情 Inspector。状态行显示缓存、查询模式、排序范围、arXiv 排队/冷却、实际 effective query、翻译队列、引擎、质量门禁和耗时。
+- 高级筛选默认折叠，展开后进入文档流，不覆盖“翻译本页”、结果工具栏或阅读队列；1366 / 1440 / 1920 均保持三列可扫描布局，无横向溢出和三按钮截断。
+
+### 视觉对抗式审查
+
+- `visual:check` 已增加真实 IPC 查询元数据、超长 effective query 省略、查询模式、本页排序、预览 / 单篇 / 整页翻译入口、搜索中禁用态、卡片无 PPT / 更多 / 导出、详情含 PPT / 导出、高级筛选无遮挡以及 1366 / 1440 / 1920 几何断言。
+- 人工已查看 `.tmp-visual-check/arxiv-search-results-1366.png`、`arxiv-search-results-1440.png`、`arxiv-search-results-1920.png`、`arxiv-search-advanced.png`、`arxiv-search-detail-collapsed.png`、单列 / 双列 / 三列和空状态截图。曾发现高级筛选虽然 aria-expanded 但被结果 toolbar 遮挡；根因是后置 `overflow: hidden` 与兄弟 grid paint order，最终改为文档流展开并加入 `elementFromPoint` 与 panel/results 几何双重断言。
+
+### 最终验证结果
+
+- TDD 红绿证据：搜索会话、优先队列、学术质量门、IPC、查询模式、预览边界、旧会话 UI 污染、查询快照、视觉真实元数据和翻译质量耗时均先出现目标失败，再修复转绿；最终 arXiv 质量 / UI 聚焦测试 72/72 通过。
+- `npm test`：通过，79 个测试文件 / 506 个测试全部通过。
+- `npm run typecheck`：通过，renderer 与 Electron 两套 TypeScript 配置均为 0 错误。
+- `npm run build`：通过；renderer Vite build 与 Electron tsc 均完成。仍有既有 Vite 大 chunk 警告，最大 Univer chunk 约 10.65 MB，未在本轮 arXiv 收口中做高风险拆包。
+- `npm run visual:check`：通过；源码构建产物覆盖首页、实验矩阵、表格、PDF、PPT、AI、图谱、arXiv 和设置页，arXiv 1366 / 1440 / 1920、单 / 双 / 三列、高级筛选、搜索保护和长查询省略断言全部通过。
+- `$env:NODE_OPTIONS='--max-old-space-size=4096'; npm run dist`：通过；0.1.13 安装包输出为 `dist/PDF Translation Reader Setup 0.1.13.exe`，大小 144,173,121 bytes（137.49 MB），SHA256 为 `4AB50BBC0EF5A621E17621C0C10C38131EBD89A014242F06573A898D41941C06`。
+- `$env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check`：通过；视觉脚本直接启动 `dist/win-unpacked/PDF Translation Reader.exe`，打包产物与源码构建的 arXiv 状态条、质量耗时、高级筛选和响应式布局一致。
+- 打包仍报告既有 warning：Vite 大 chunk、`package.json` author 缺失、electron-builder duplicate dependency references 与 Node DEP0190。它们未导致测试、构建或打包失败，但应在后续依赖治理 / 安全升级任务中单独处理。
+- 外部约束：arXiv API 可用性、网络抖动、本机 NLLB CUDA/CPU 吞吐和首次模型加载时间无法由静态测试保证；UI 会如实显示缓存、等待、引擎、质量和耗时，不以成功文案掩盖不可用状态。

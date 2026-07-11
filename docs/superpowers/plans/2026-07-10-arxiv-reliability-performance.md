@@ -8,6 +8,13 @@
 
 **Tech Stack:** Electron 39, React 19, TypeScript 5.9, Vitest, Node SQLite, NLLB CTranslate2, Argos fallback.
 
+## Execution status (2026-07-10)
+
+- Tasks 1-6 are implemented and independently reviewed: search-session ownership, priority translation queue, academic placeholder/length quality gates, typed IPC validation, query modes and bounded translation workflow, and compact responsive UI.
+- arXiv upstream requests remain serialized behind the existing 3.2-second minimum gap; perceived speed improvements come from cache-first retrieval, six-paper previews, explicit page translation, and foreground priority rather than non-compliant concurrency.
+- Renderer and service regression coverage includes stale search/translation results, strict/balanced/explore cache isolation, invalid IPC items, preview-first bounds, quality rejection, query snapshots, and 1366/1440/1920 visual geometry.
+- Task 7 packaging and packaged visual verification completed for version 0.1.13; `PLAN.md` records the 506-test result, source and packaged visual gates, installer path/size/hash, and remaining build warnings. Final documentation commit and branch push complete the handoff.
+
 ---
 
 ## File structure

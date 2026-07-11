@@ -21,7 +21,7 @@ The current page starts background translation for every result after every sear
 3. Results render immediately. The selected paper and a small visible preview batch are eligible for low-cost automatic translation.
 4. The user can explicitly translate the full visible page. That work is background priority and is discarded if its session is no longer current.
 5. A manual translation request has foreground priority. It runs after any already-running job but before queued preview and background jobs.
-6. Every translated record records engine, cache status, elapsed time, and quality-check result.
+6. Every translated record records engine, cache status, elapsed time, and an explicit quality-check result; older persisted metadata remains readable through renderer fallbacks.
 
 ## Data and IPC boundaries
 
@@ -57,4 +57,5 @@ Before translation, protect formulas, inline code, URLs, DOI/arXiv identifiers, 
 - Stale background results do not update the current page state.
 - Long abstracts preserve protected spans and pass sentence-batch reconstruction tests.
 - The UI labels page-local ranking truthfully and exposes explicit full-page translation.
+- The compact status row shows the actual effective arXiv query, upstream wait state, active translation queue, engine, quality result, and translation timing without exposing stale-session results.
 - Existing arXiv service, translation, UI, typecheck, build, visual regression, and packaged visual regression checks pass.
