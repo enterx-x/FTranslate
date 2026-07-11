@@ -61,17 +61,48 @@ export function ensureResearchProjects(
   now = Date.now()
 ): ResearchProject[] {
   if (projects.length > 0) {
-    return projects.map((project, index) =>
-      index === 0
-        ? {
-            ...project,
-            paperIds: mergeUniqueValues([...project.paperIds, ...papers.map((paper) => paper.id)])
-          }
-        : project
-    );
+    return projects;
   }
 
   return [buildDefaultResearchProject(papers, now)];
+}
+
+export function updateProjectPaperMembership(
+  projects: ResearchProject[],
+  projectId: string,
+  paperIds: readonly string[],
+  mode: 'add' | 'remove',
+  now = new Date().toISOString()
+): ResearchProject[] {
+  const selectedPaperIds = new Set(
+    paperIds.map((paperId) => paperId.trim()).filter(Boolean)
+  );
+
+  if (!projectId.trim() || selectedPaperIds.size === 0) {
+    return projects;
+  }
+
+  return projects.map((project) => {
+    if (project.id !== projectId) {
+      return project;
+    }
+
+    const nextPaperIds =
+      mode === 'add'
+        ? mergeUniqueValues([...project.paperIds, ...selectedPaperIds])
+        : project.paperIds.filter((paperId) => !selectedPaperIds.has(paperId));
+    const unchanged =
+      nextPaperIds.length === project.paperIds.length &&
+      nextPaperIds.every((paperId, index) => paperId === project.paperIds[index]);
+
+    return unchanged
+      ? project
+      : {
+          ...project,
+          paperIds: nextPaperIds,
+          updatedAt: now
+        };
+  });
 }
 
 export function buildProjectWorkspaceSnapshot(

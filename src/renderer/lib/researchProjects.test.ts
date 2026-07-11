@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDefaultResearchProject,
   buildProjectWorkspaceSnapshot,
+  ensureResearchProjects,
   linkCodeRepositoryPath,
   parseResearchProjects,
-  serializeResearchProjects
+  serializeResearchProjects,
+  updateProjectPaperMembership
 } from './researchProjects';
 import type { PaperRecord } from './papers';
 
@@ -23,6 +25,10 @@ function makePaper(id: string, overrides: Partial<PaperRecord> = {}): PaperRecor
     notes: '',
     lastOpenedAt: '',
     lastPage: 1,
+    tags: [],
+    isPinned: false,
+    importedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides
   };
 }
@@ -92,5 +98,66 @@ describe('research project workspace model', () => {
       'D:\\repo'
     ]);
     expect(linkCodeRepositoryPath(next, '   ', '2026-07-01T01:00:00.000Z')).toBe(next);
+  });
+
+  it('does not silently add every new paper to an existing project', () => {
+    const paperA = makePaper('paper-a');
+    const project = buildDefaultResearchProject([paperA], Date.UTC(2026, 0, 1));
+
+    const [ensured] = ensureResearchProjects(
+      [project],
+      [paperA, makePaper('paper-b')],
+      Date.UTC(2026, 0, 2)
+    );
+
+    expect(ensured).toBe(project);
+    expect(ensured.paperIds).toEqual(['paper-a']);
+  });
+
+  it('adds and removes selected papers from one project without touching other projects', () => {
+    const first = {
+      ...buildDefaultResearchProject([makePaper('paper-a')], Date.UTC(2026, 0, 1)),
+      id: 'project-a',
+      name: 'Project A'
+    };
+    const second = {
+      ...buildDefaultResearchProject([makePaper('paper-c')], Date.UTC(2026, 0, 1)),
+      id: 'project-b',
+      name: 'Project B'
+    };
+
+    const added = updateProjectPaperMembership(
+      [first, second],
+      'project-a',
+      ['paper-b', 'paper-b'],
+      'add',
+      '2026-01-02T00:00:00.000Z'
+    );
+
+    expect(added[0]).toMatchObject({
+      paperIds: ['paper-a', 'paper-b'],
+      updatedAt: '2026-01-02T00:00:00.000Z'
+    });
+    expect(added[1]).toBe(second);
+
+    const removed = updateProjectPaperMembership(
+      added,
+      'project-a',
+      ['paper-a'],
+      'remove',
+      '2026-01-03T00:00:00.000Z'
+    );
+    expect(removed[0]).toMatchObject({
+      paperIds: ['paper-b'],
+      updatedAt: '2026-01-03T00:00:00.000Z'
+    });
+  });
+
+  it('returns original project references for empty or no-op membership updates', () => {
+    const project = buildDefaultResearchProject([makePaper('paper-a')], Date.UTC(2026, 0, 1));
+
+    expect(updateProjectPaperMembership([project], 'missing', ['paper-a'], 'remove')[0]).toBe(project);
+    expect(updateProjectPaperMembership([project], project.id, [], 'add')[0]).toBe(project);
+    expect(updateProjectPaperMembership([project], project.id, ['paper-a'], 'add')[0]).toBe(project);
   });
 });
