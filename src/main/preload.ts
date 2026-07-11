@@ -95,6 +95,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     timeoutMs?: number;
   }) => ipcRenderer.invoke('local-translation:translate-batch', request),
   openExternalUrl: (url: string) => ipcRenderer.invoke('shell:open-external-url', url),
+  fileExists: (filePath: string) => ipcRenderer.invoke('file:path-exists', filePath),
   saveTextFile: (request: {
     filePath?: string;
     content: string;

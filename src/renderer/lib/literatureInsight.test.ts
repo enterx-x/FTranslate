@@ -27,7 +27,11 @@ const paper: PaperRecord = {
   year: '2026',
   notes: '关注复杂地形、低层控制、安全约束。',
   lastOpenedAt: '2026-05-28T00:00:00.000Z',
-  lastPage: 1
+  lastPage: 1,
+  tags: [],
+  isPinned: false,
+  importedAt: '2026-05-28T00:00:00.000Z',
+  updatedAt: '2026-05-28T00:00:00.000Z'
 };
 
 describe('literature gap insight prompt', () => {

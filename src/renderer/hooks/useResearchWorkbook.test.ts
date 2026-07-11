@@ -16,7 +16,11 @@ function makePaper(id: string, pdfPath = `C:/papers/${id}.pdf`): PaperRecord {
     year: '',
     notes: '',
     lastOpenedAt: '',
-    lastPage: 1
+    lastPage: 1,
+    tags: [],
+    isPinned: false,
+    importedAt: '',
+    updatedAt: ''
   };
 }
 

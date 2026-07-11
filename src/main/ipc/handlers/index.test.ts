@@ -45,6 +45,7 @@ describe('registerAppIpcHandlers', () => {
       },
       file: {
         openExternalUrl: noop,
+        fileExists: () => false,
         saveText: noop,
         saveTranslationCache: noop,
         exportMarkdown: noop,
@@ -91,6 +92,7 @@ describe('registerAppIpcHandlers', () => {
       'file:export-pdf',
       'project:load',
       'shell:open-external-url',
+      'file:path-exists',
       'file:save-text',
       'file:save-translation-cache',
       'file:export-markdown',

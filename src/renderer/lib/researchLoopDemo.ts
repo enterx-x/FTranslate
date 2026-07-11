@@ -90,9 +90,13 @@ export function createDefaultResearchLoopDemoInput(): ResearchLoopDemoInput {
     journal: 'Demo Proceedings',
     authors: 'FTranslate Demo Team',
     year: '2026',
-    notes: '复现风险：需要确认 CBF safety filter 的 QP 求解器、动态障碍密度和多 seed 评估协议。',
-    lastOpenedAt: now,
-    lastPage: 1
+      notes: '复现风险：需要确认 CBF safety filter 的 QP 求解器、动态障碍密度和多 seed 评估协议。',
+      lastOpenedAt: now,
+      lastPage: 1,
+      tags: ['Safe RL', 'CBF'],
+      isPinned: false,
+      importedAt: now,
+      updatedAt: now
   };
 
   return {

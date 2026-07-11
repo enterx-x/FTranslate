@@ -33,7 +33,11 @@ const basePaper: PaperRecord = {
   year: '2026',
   notes: '阅读笔记',
   lastOpenedAt: '2026-05-28T00:00:00.000Z',
-  lastPage: 3
+  lastPage: 3,
+  tags: [],
+  isPinned: false,
+  importedAt: '2026-05-28T00:00:00.000Z',
+  updatedAt: '2026-05-28T00:00:00.000Z'
 };
 
 describe('research workbook model', () => {

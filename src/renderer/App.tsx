@@ -176,10 +176,13 @@ export default function App() {
   const [readerMode, setReaderMode] = useState<ReaderMode>('manual');
   const {
     initialPaperLibraryRaw,
+    paperLibraryWarning,
     paperLibrary,
     setPaperLibrary,
     updatePaper: handleUpdatePaper,
-    removePaper: handleRemovePaper
+    removePaper: handleRemovePaper,
+    updatePapers: handleUpdatePapers,
+    removePapers: handleRemovePapers
   } = usePaperLibrary();
   const [researchProjects, setResearchProjects] = useState<ResearchProject[]>(() =>
     parseResearchProjects(localStorage.getItem(RESEARCH_PROJECTS_KEY))
@@ -270,6 +273,12 @@ export default function App() {
   const { statusMessage, statusMessages, setStatusMessage } = useStatusQueue(
     '请在论文库中新建或打开一个翻译项目。'
   );
+
+  useEffect(() => {
+    if (paperLibraryWarning) {
+      setStatusMessage(paperLibraryWarning);
+    }
+  }, [paperLibraryWarning, setStatusMessage]);
   const {
     aiSettings,
     aiBalance,
@@ -468,7 +477,14 @@ export default function App() {
     }
     setPageCount(nextPageCount);
     setCurrentPage((page) => Math.min(Math.max(1, page), nextPageCount));
-  }, []);
+    setPaperLibrary((library) =>
+      library.map((paper) =>
+        paper.id === activePaperId
+          ? updatePaperRecord(paper, { totalPages: nextPageCount })
+          : paper
+      )
+    );
+  }, [activePaperId, setCurrentPage, setPageCount, setPaperLibrary]);
 
   const handleSourceCurrentPageChange = useCallback((page: number) => {
     const sourcePdf = sourcePdfRef.current;
@@ -1049,7 +1065,11 @@ export default function App() {
       year: arxivPaper.publishedAt?.slice(0, 4) ?? '',
       notes: `arXiv: ${arxivPaper.stableId}\n${arxivPaper.summary}`.trim(),
       lastOpenedAt: now,
-      lastPage: 1
+      lastPage: 1,
+      tags: [],
+      isPinned: false,
+      importedAt: now,
+      updatedAt: now
     };
     const storedRecord = rememberPaper(record);
     setStatusMessage(`arXiv PDF 已加入论文库：${storedRecord.englishTitle}`);
@@ -1085,7 +1105,11 @@ export default function App() {
       year: '',
       notes: '',
       lastOpenedAt: now,
-      lastPage: currentPage || 1
+      lastPage: currentPage || 1,
+      tags: [],
+      isPinned: false,
+      importedAt: now,
+      updatedAt: now
     };
 
     return rememberPaper(record);
@@ -1148,7 +1172,11 @@ export default function App() {
         year: '',
         notes: '',
         lastOpenedAt: now,
-        lastPage: 1
+        lastPage: 1,
+        tags: [],
+        isPinned: false,
+        importedAt: now,
+        updatedAt: now
       };
       const storedRecord = rememberPaper(record);
 
@@ -2114,10 +2142,14 @@ export default function App() {
             onOpenKnowledgeGraph={openKnowledgeGraph}
             onOpenPresentationGenerator={openPresentationGenerator}
             knowledgeGraphStats={knowledgeGraphSummary}
-            projectWorkspaceSnapshot={projectWorkspaceSnapshot}
-            onUpdatePaper={handleUpdatePaper}
-            onRemovePaper={handleRemovePaper}
-          />
+              projectWorkspaceSnapshot={projectWorkspaceSnapshot}
+              onUpdatePaper={handleUpdatePaper}
+              onRemovePaper={handleRemovePaper}
+              researchProjects={researchProjects}
+              onResearchProjectsChange={setResearchProjects}
+              onUpdatePapers={handleUpdatePapers}
+              onRemovePapers={handleRemovePapers}
+            />
           <ConnectedStatusBar />
         </div>
       </div>

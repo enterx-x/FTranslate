@@ -774,9 +774,13 @@ describe('presentationPptx', () => {
           journal: 'Robotics',
           authors: 'Author A',
           year: '2026',
-          notes: '',
-          lastOpenedAt: new Date(0).toISOString(),
-          lastPage: 1
+            notes: '',
+            lastOpenedAt: new Date(0).toISOString(),
+            lastPage: 1,
+            tags: [],
+            isPinned: false,
+            importedAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString()
         }
       ],
       blocks: [

@@ -240,6 +240,7 @@ export interface ElectronApi {
   openPdf: () => Promise<PdfFilePayload | null>;
   openTranslation: () => Promise<TextFilePayload | null>;
   openTranslatedPdf: () => Promise<PdfFilePayload | null>;
+  fileExists: (filePath: string) => Promise<boolean>;
   selectDirectory: (request?: { title?: string; defaultPath?: string }) => Promise<DirectoryPayload | null>;
   loadProject: (request: {
     pdfPath?: string;

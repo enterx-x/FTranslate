@@ -42,7 +42,11 @@ function paper(partial: Partial<PaperRecord> = {}): PaperRecord {
     year: partial.year ?? '2026',
     notes: partial.notes ?? '',
     lastOpenedAt: new Date(0).toISOString(),
-    lastPage: 1
+    lastPage: 1,
+    tags: [],
+    isPinned: false,
+    importedAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString()
   };
 }
 

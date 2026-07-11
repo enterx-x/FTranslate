@@ -1,14 +1,13 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useMemo } from 'react';
 import brandMark from '../assets/brand-mark.png';
 import translateIcon from '../assets/icons/duotone/translate.svg';
 import libraryLineIcon from '../assets/icons/duotone/library.svg';
 import researchSheetIcon from '../assets/icons/duotone/research-sheet.svg';
 import graphIcon from '../assets/icons/duotone/analysis.svg';
 import pdfReaderIcon from '../assets/icons/duotone/pdf-reader.svg';
-import backIcon from '../assets/icons/duotone/back.svg';
-import deleteIcon from '../assets/icons/duotone/delete.svg';
 import type { PaperRecord } from '../lib/papers';
-import type { ProjectWorkspaceSnapshot } from '../lib/researchProjects';
+import type { ProjectWorkspaceSnapshot, ResearchProject } from '../lib/researchProjects';
+import { PaperLibraryPage } from './PaperLibraryPage';
 
 interface HomePageProps {
   papers: PaperRecord[];
@@ -28,14 +27,11 @@ interface HomePageProps {
   projectWorkspaceSnapshot: ProjectWorkspaceSnapshot;
   onUpdatePaper: (paper: PaperRecord) => void;
   onRemovePaper: (paper: PaperRecord) => void;
+  researchProjects?: ResearchProject[];
+  onResearchProjectsChange?: (projects: ResearchProject[]) => void;
+  onUpdatePapers?: (papers: PaperRecord[]) => void;
+  onRemovePapers?: (paperIds: string[]) => void;
 }
-
-type EditablePaperField =
-  | 'chineseTitle'
-  | 'englishTitle'
-  | 'journal'
-  | 'authors'
-  | 'year';
 
 type KnowledgeGraphStats = HomePageProps['knowledgeGraphStats'];
 
@@ -104,18 +100,6 @@ export interface ResearchWorkspaceOverview {
   risks: ResearchWorkspaceRisk[];
   nextActions: ResearchWorkspaceNextAction[];
 }
-
-const editableFields: Array<{
-  key: EditablePaperField;
-  label: string;
-  width: string;
-}> = [
-  { key: 'chineseTitle', label: '中文标题', width: '19%' },
-  { key: 'englishTitle', label: '英文标题', width: '22%' },
-  { key: 'journal', label: '期刊', width: '10%' },
-  { key: 'authors', label: '作者', width: '17%' },
-  { key: 'year', label: '年份', width: '7%' }
-];
 
 export function buildHomePageMetrics(papers: PaperRecord[]): {
   latestPaper: PaperRecord | undefined;
@@ -271,8 +255,6 @@ export function buildResearchWorkspaceOverview(
 }
 
 export const HomePage = memo(function HomePage(props: HomePageProps) {
-  const [editingPaperId, setEditingPaperId] = useState<string | null>(null);
-  const [draftPaper, setDraftPaper] = useState<PaperRecord | null>(null);
   const { latestPaper, notedPaperCount, dualPdfCount } = useMemo(
     () => buildHomePageMetrics(props.papers),
     [props.papers]
@@ -368,36 +350,6 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
     }
   ];
   const inspectorFocus = workflowColumns[0];
-
-  function startEdit(paper: PaperRecord): void {
-    setEditingPaperId(paper.id);
-    setDraftPaper({ ...paper });
-  }
-
-  function cancelEdit(): void {
-    setEditingPaperId(null);
-    setDraftPaper(null);
-  }
-
-  function saveEdit(): void {
-    if (!draftPaper) {
-      return;
-    }
-
-    props.onUpdatePaper(draftPaper);
-    cancelEdit();
-  }
-
-  function updateDraft(field: EditablePaperField, value: string): void {
-    setDraftPaper((paper) => (paper ? { ...paper, [field]: value } : paper));
-  }
-
-  function confirmRemovePaper(paper: PaperRecord): void {
-    const title = paper.chineseTitle || paper.englishTitle || paper.pdfName;
-    if (window.confirm(`确认从论文库移除“${title}”？本操作只移除本地记录，不会删除 PDF 文件。`)) {
-      props.onRemovePaper(paper);
-    }
-  }
 
   function runWorkspaceAction(actionKey: ResearchWorkspaceNextAction['key']): void {
     switch (actionKey) {
@@ -670,144 +622,23 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
   }
 
   return (
-    <main className="home-page paper-library-page">
-      <header className="home-hero paper-library-hero">
-        <div className="home-hero-brand">
-          <img className="home-header-mark" src={brandMark} alt="" />
-          <div>
-            <span className="eyebrow">Paper Library</span>
-            <h1>论文库</h1>
-            <p>浏览论文主要信息；复杂笔记、创新点和对照分析放到独立研究表格里整理。</p>
-          </div>
-        </div>
-        <div className="home-header-actions">
-          <button type="button" className="secondary-button button-with-icon" onClick={() => props.onSectionChange('hub')}>
-            <img className="button-icon" src={backIcon} alt="" />
-            <span>返回主页</span>
-          </button>
-          <button type="button" className="secondary-button button-with-icon" onClick={() => props.onOpenResearchSheet()}>
-            <img className="button-icon" src={researchSheetIcon} alt="" />
-            <span>研究表格</span>
-          </button>
-          <button type="button" className="primary-button button-with-icon" onClick={props.onNewProject}>
-            <img className="button-icon" src={translateIcon} alt="" />
-            <span>新建翻译项目</span>
-          </button>
-        </div>
-      </header>
-
-      {props.papers.length === 0 ? (
-        <section className="home-empty">
-          <img className="empty-state-icon" src={libraryLineIcon} alt="" />
-          <h2>还没有论文记录</h2>
-          <p>点击“新建翻译项目”选择 PDF 即可加入论文库；手动段落翻译文件可以之后再导入。</p>
-        </section>
-      ) : (
-        <section className="paper-library-list-wrap">
-          <div className="paper-grid-toolbar">
-            <span>
-              已收录 <strong>{props.papers.length}</strong> 篇论文
-            </span>
-            <span>PDF、翻译、双语 PDF、笔记和 AI 缓存状态会以标签形式展示。</span>
-          </div>
-          <div className="paper-library-list">
-            {props.papers.map((paper) => {
-              const isEditing = editingPaperId === paper.id && draftPaper;
-              const visiblePaper = isEditing ? draftPaper : paper;
-              const primaryTitle = visiblePaper.chineseTitle || visiblePaper.englishTitle || visiblePaper.pdfName;
-              const secondaryTitle =
-                visiblePaper.chineseTitle && visiblePaper.englishTitle ? visiblePaper.englishTitle : visiblePaper.pdfName;
-
-              return (
-                <article key={paper.id} className={`paper-library-row${isEditing ? ' is-editing' : ''}`}>
-                  <div className="paper-library-row-main">
-                    {isEditing ? (
-                      <div className="paper-library-edit-grid">
-                        {editableFields.map((field) => (
-                          <label key={field.key}>
-                            <span>{field.label}</span>
-                            <input
-                              value={visiblePaper[field.key]}
-                              onChange={(event) => updateDraft(field.key, event.target.value)}
-                            />
-                          </label>
-                        ))}
-                      </div>
-                    ) : (
-                      <>
-                        <div className="paper-library-title-block">
-                          <h2 title={primaryTitle}>{primaryTitle || '-'}</h2>
-                          <p title={secondaryTitle}>{secondaryTitle || '-'}</p>
-                        </div>
-                        <div className="paper-library-meta-row">
-                          <span>{visiblePaper.journal || '未知来源'}</span>
-                          <span>{visiblePaper.year || '年份未知'}</span>
-                          <span title={visiblePaper.authors}>{visiblePaper.authors || '作者未知'}</span>
-                        </div>
-                        <div className="paper-status-stack">
-                          <span className="badge">PDF</span>
-                          {paper.translationName ? <span className="badge">段落翻译</span> : null}
-                          {paper.aiCacheName ? <span className="badge">AI 缓存</span> : null}
-                          {paper.translatedPdfName ? <span className="badge">双语 PDF</span> : null}
-                          {paper.notes.trim() ? <span className="badge">笔记</span> : null}
-                        </div>
-                        <div className="path-hint" title={paper.pdfName}>{paper.pdfName}</div>
-                      </>
-                    )}
-                  </div>
-
-                  <div className="paper-library-row-side">
-                    <div className="paper-library-open-state">
-                      <span>最近打开</span>
-                      <strong>{formatDateTime(paper.lastOpenedAt)}</strong>
-                      <small>第 {paper.lastPage || 1} 页</small>
-                    </div>
-                    <div className="paper-library-actions">
-                      {isEditing ? (
-                        <>
-                          <button type="button" className="primary-button" onClick={saveEdit}>
-                            保存
-                          </button>
-                          <button type="button" className="secondary-button" onClick={cancelEdit}>
-                            取消
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button type="button" className="button-with-icon" onClick={() => props.onOpenPaper(paper)}>
-                            <img className="button-icon" src={pdfReaderIcon} alt="" />
-                            <span>打开阅读</span>
-                          </button>
-                          <button type="button" className="secondary-button" onClick={() => props.onOpenResearchSheet(paper)}>
-                            表格定位
-                          </button>
-                          {paper.notes.trim() ? (
-                            <button type="button" className="secondary-button" onClick={() => props.onOpenPaper(paper)}>
-                              查看笔记
-                            </button>
-                          ) : null}
-                          <button type="button" className="secondary-button" onClick={() => startEdit(paper)}>
-                            编辑信息
-                          </button>
-                          <button
-                            type="button"
-                            className="danger-button button-with-icon"
-                            onClick={() => confirmRemovePaper(paper)}
-                          >
-                            <img className="button-icon" src={deleteIcon} alt="" />
-                            <span>移除</span>
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-      )}
-    </main>
+    <PaperLibraryPage
+      papers={props.papers}
+      projects={props.researchProjects ?? []}
+      onBackHome={() => props.onSectionChange('hub')}
+      onNewProject={props.onNewProject}
+      onOpenPaper={props.onOpenPaper}
+      onOpenResearchSheet={props.onOpenResearchSheet}
+      onUpdatePapers={props.onUpdatePapers ?? ((papers) => papers.forEach(props.onUpdatePaper))}
+      onRemovePapers={
+        props.onRemovePapers ??
+        ((paperIds) =>
+          props.papers
+            .filter((paper) => paperIds.includes(paper.id))
+            .forEach(props.onRemovePaper))
+      }
+      onProjectsChange={props.onResearchProjectsChange ?? (() => undefined)}
+    />
   );
 });
 

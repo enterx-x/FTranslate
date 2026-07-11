@@ -1390,6 +1390,7 @@ function getRowId(workbook: ResearchWorkbook, rowIndex: number): string {
 
 function createSheetRowPaper(rowIndex: number, rowValues: Record<string, string>): PaperRecord {
   const englishTitle = rowValues['英文标题'] || rowValues['论文'] || `表格第 ${rowIndex + 1} 行`;
+  const timestamp = new Date(0).toISOString();
 
   return {
     id: `sheet-row-${rowIndex}`,
@@ -1403,8 +1404,12 @@ function createSheetRowPaper(rowIndex: number, rowValues: Record<string, string>
     authors: rowValues['作者'] || '',
     year: rowValues['年份'] || '',
     notes: rowValues['备注'] || '',
-    lastOpenedAt: new Date(0).toISOString(),
-    lastPage: 1
+    lastOpenedAt: timestamp,
+    lastPage: 1,
+    tags: [],
+    isPinned: false,
+    importedAt: timestamp,
+    updatedAt: timestamp
   };
 }
 

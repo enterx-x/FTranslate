@@ -27,7 +27,11 @@ const paperA: PaperRecord = {
   year: '2026',
   notes: '方法输入为触觉和视觉观测，输出为低层控制动作。',
   lastOpenedAt: '2026-06-19T00:00:00.000Z',
-  lastPage: 3
+  lastPage: 3,
+  tags: [],
+  isPinned: false,
+  importedAt: '2026-06-19T00:00:00.000Z',
+  updatedAt: '2026-06-19T00:00:00.000Z'
 };
 
 const paperB: PaperRecord = {

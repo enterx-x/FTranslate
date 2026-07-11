@@ -355,7 +355,11 @@ describe('paper library metadata', () => {
         year: '',
         notes: '',
         lastOpenedAt: '2026-05-26T10:00:00.000Z',
-        lastPage: 1
+        lastPage: 1,
+        tags: [],
+        isPinned: false,
+        importedAt: '2026-05-26T10:00:00.000Z',
+        updatedAt: '2026-05-26T10:00:00.000Z'
       }
     ];
     const incoming = {

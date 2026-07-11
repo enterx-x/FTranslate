@@ -20,7 +20,11 @@ const paper: PaperRecord = {
   year: '2026',
   notes: 'Focus on safety constraints and reproducibility.',
   lastOpenedAt: '2026-05-28T00:00:00.000Z',
-  lastPage: 2
+  lastPage: 2,
+  tags: [],
+  isPinned: false,
+  importedAt: '2026-05-28T00:00:00.000Z',
+  updatedAt: '2026-05-28T00:00:00.000Z'
 };
 
 describe('sheet cell AI prompt', () => {

@@ -19,7 +19,11 @@ function makePaper(id: string, overrides: Partial<PaperRecord> = {}): PaperRecor
     year: '',
     notes: '',
     lastOpenedAt: '',
-    lastPage: 1
+    lastPage: 1,
+    tags: [],
+    isPinned: false,
+    importedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
   };
   return { ...base, ...overrides };
 }
@@ -44,6 +48,18 @@ describe('buildHomePageMetrics', () => {
       notedPaperCount: 1,
       dualPdfCount: 2
     });
+  });
+
+  it('keeps the latest reading independent from library activity sorting', () => {
+    const opened = makePaper('opened', {
+      lastOpenedAt: '2026-04-01T00:00:00.000Z'
+    });
+    const edited = makePaper('edited', {
+      lastOpenedAt: '2026-03-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z'
+    });
+
+    expect(buildHomePageMetrics([edited, opened]).latestPaper?.id).toBe('opened');
   });
 });
 

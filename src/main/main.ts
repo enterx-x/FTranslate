@@ -3197,6 +3197,13 @@ function registerIpcHandlers(): void {
     },
     file: {
       openExternalUrl: openExternalUrlForIpc,
+      fileExists: async (value: unknown) => {
+        try {
+          return await pathExists(normalizeSafeFilePath(value));
+        } catch {
+          return false;
+        }
+      },
       saveText: saveTextForIpc,
       saveTranslationCache: saveTranslationCacheForIpc,
       exportMarkdown: exportMarkdownForIpc,

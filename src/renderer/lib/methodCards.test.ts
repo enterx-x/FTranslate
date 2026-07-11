@@ -24,6 +24,10 @@ function makePaper(overrides: Partial<PaperRecord> = {}): PaperRecord {
     notes: '',
     lastOpenedAt: '',
     lastPage: 1,
+    tags: [],
+    isPinned: false,
+    importedAt: '',
+    updatedAt: '',
     ...overrides
   };
 }
