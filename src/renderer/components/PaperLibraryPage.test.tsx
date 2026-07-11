@@ -80,6 +80,7 @@ describe('PaperLibraryPage', () => {
     expect(html).toContain('Control Barrier Functions');
     expect(html).toContain('data-paper-library-inspector');
     expect(html).toContain('data-paper-library-resume');
+    expect(html).toContain('data-paper-library-tag-manage="cbf"');
     expect(html).toContain('40%');
   });
 

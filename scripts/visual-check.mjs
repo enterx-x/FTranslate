@@ -1025,6 +1025,7 @@ async function dragReaderSidebarToRatio(client, ratio) {
 }
 
 async function loadPaperRecord(client, translationPath, extraPaperFields = {}) {
+  const now = new Date().toISOString();
   const paper = {
     id: 'visual-check-paper',
     pdfPath,
@@ -1037,10 +1038,88 @@ async function loadPaperRecord(client, translationPath, extraPaperFields = {}) {
     authors: 'Visual Check',
     year: '2026',
     notes: '用于检查研究表格和透明图标。',
-    lastOpenedAt: new Date().toISOString(),
-    lastPage: 1,
+    lastOpenedAt: now,
+    lastPage: 18,
+    tags: ['CBF', 'Safe RL', '控制理论'],
+    isPinned: true,
+    importedAt: '2026-07-01T08:00:00.000Z',
+    updatedAt: now,
+    totalPages: 28,
     ...extraPaperFields
   };
+  const makeVisualPaper = (id, overrides = {}) => ({
+    ...paper,
+    id,
+    pdfName: `${id}.pdf`,
+    chineseTitle: '',
+    englishTitle: `Visual Paper ${id}`,
+    authors: 'Visual Check Author',
+    notes: '',
+    tags: [],
+    isPinned: false,
+    lastPage: 1,
+    importedAt: '2026-07-01T08:00:00.000Z',
+    updatedAt: '2026-07-01T08:00:00.000Z',
+    totalPages: 24,
+    ...overrides
+  });
+  const visualPapers = [
+    {
+      ...paper,
+      chineseTitle: '控制屏障函数与安全强化学习：面向复杂动态障碍环境的移动机器人安全导航方法研究'
+    },
+    makeVisualPaper('visual-long-en', {
+      englishTitle: 'A Very Long English Paper Title for Stress Testing Dense Scientific Library Layouts Across Desktop Window Sizes',
+      authors: 'Author One, Author Two, Author Three, Author Four, Author Five',
+      tags: ['Benchmark', 'Navigation', 'Robotics']
+    }),
+    makeVisualPaper('visual-pinn', {
+      englishTitle: 'Physics-Informed Neural Networks for Partial Differential Equation Systems',
+      tags: ['PINN'],
+      lastPage: 7
+    }),
+    makeVisualPaper('visual-complete', {
+      englishTitle: 'Model Predictive Path Integral Control',
+      tags: ['MPC'],
+      completedAt: '2026-07-08T00:00:00.000Z',
+      lastPage: 24
+    }),
+    makeVisualPaper('visual-missing', {
+      englishTitle: 'Missing Local PDF Recovery',
+      pdfPath: 'Z:/missing/paper.pdf',
+      tags: ['待修复']
+    }),
+    makeVisualPaper('visual-unknown-pages', {
+      englishTitle: 'Unknown Page Count Paper',
+      totalPages: undefined,
+      lastPage: 11
+    }),
+    makeVisualPaper('visual-unread', {
+      englishTitle: 'Unread Safe Reinforcement Learning',
+      tags: ['Safe RL'],
+      lastPage: 1
+    }),
+    makeVisualPaper('visual-planning', {
+      englishTitle: 'Learning Sampling Distributions for Robot Motion Planning',
+      tags: ['路径规划'],
+      lastPage: 10
+    })
+  ];
+  const visualProjects = [
+    {
+      id: 'local-ai-rd-workspace',
+      name: '移动机器人安全导航',
+      description: '视觉回归项目',
+      status: 'active',
+      paperIds: [paper.id, 'visual-complete', 'visual-planning'],
+      codeRepositoryPaths: [],
+      experimentIds: [],
+      runtimeTaskIds: [],
+      decisionLog: [],
+      createdAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: now
+    }
+  ];
   const experimentMatrixState = [
     {
       projectId: 'local-ai-rd-workspace',
@@ -1167,7 +1246,14 @@ async function loadPaperRecord(client, translationPath, extraPaperFields = {}) {
 
   await client.send('Runtime.evaluate', {
     expression: `
-      localStorage.setItem('pdfTranslationReader:paperLibrary', ${JSON.stringify(JSON.stringify([paper]))});
+      localStorage.setItem('pdfTranslationReader:paperLibrary', ${JSON.stringify(JSON.stringify(visualPapers))});
+      localStorage.setItem('pdfTranslationReader:researchProjects', ${JSON.stringify(JSON.stringify(visualProjects))});
+      localStorage.setItem('pdfTranslationReader:paperLibraryView', ${JSON.stringify(JSON.stringify({
+        sortKey: 'recentActivity',
+        sortDirection: 'desc',
+        density: 'compact',
+        inspectorCollapsed: false
+      }))});
       localStorage.setItem('pdfTranslationReader:methodCards', ${JSON.stringify(JSON.stringify(methodCards))});
       localStorage.setItem('pdfTranslationReader:experimentMatrices', ${JSON.stringify(JSON.stringify(experimentMatrixState))});
       localStorage.removeItem('pdfTranslationReader:researchWorkbook');
@@ -1176,6 +1262,210 @@ async function loadPaperRecord(client, translationPath, extraPaperFields = {}) {
     `
   });
   await wait(1500);
+}
+
+async function capturePaperLibraryResponsiveWidths(client) {
+  const snapshots = {};
+  try {
+    for (const width of [1366, 1440, 1920]) {
+      await client.send('Emulation.setDeviceMetricsOverride', {
+        width,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: false
+      });
+      await wait(300);
+      const snapshot = await evaluateJson(client, `() => {
+        const page = document.querySelector('[data-paper-library-page]');
+        const navigator = document.querySelector('[data-paper-library-navigator]');
+        const inspector = document.querySelector('[data-paper-library-inspector]');
+        const libraryPane = page?.querySelector('[role="listbox"]')?.parentElement;
+        const rows = [...document.querySelectorAll('[data-paper-library-row]')];
+        const list = document.querySelector('[role="listbox"]');
+        const resume = document.querySelector('[data-paper-library-resume]');
+        const sort = document.querySelector('[data-paper-library-sort]');
+        const criticalButtons = [...document.querySelectorAll(
+          '[data-paper-library-page] > header button, [data-paper-library-resume], [data-paper-library-inspector] > div:last-child button'
+        )].filter((button) => button.offsetParent !== null && button.getAttribute('title') !== '清除选择');
+        const visibleRows = rows.filter((row) => {
+          const rect = row.getBoundingClientRect();
+          return rect.top >= 0 && rect.bottom <= window.innerHeight;
+        });
+        const tagDeltas = [...document.querySelectorAll('[data-paper-library-row] span')]
+          .map((tag) => getComputedStyle(tag).backgroundColor.match(/\d+/g)?.map(Number))
+          .filter((channels) => channels?.length >= 3)
+          .map((channels) => Math.max(channels[0], channels[1], channels[2]) - Math.min(channels[0], channels[1], channels[2]));
+        const rect = (item) => {
+          const box = item?.getBoundingClientRect();
+          return box ? { left: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width), height: Math.round(box.height) } : null;
+        };
+        return {
+          viewportWidth: window.innerWidth,
+          hasPage: Boolean(page),
+          hasNavigator: Boolean(navigator),
+          hasInspector: Boolean(inspector),
+          rowCount: rows.length,
+          visibleRowCount: visibleRows.length,
+          sortText: sort?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+          resumeVisible: Boolean(resume && resume.getBoundingClientRect().height > 20),
+          pageHorizontalOverflow: Boolean(page && page.scrollWidth > page.clientWidth + 3),
+          listHorizontalOverflow: Boolean(list && list.scrollWidth > list.clientWidth + 3),
+          documentHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+          clippedCriticalControls: criticalButtons.filter((button) => button.scrollWidth > button.clientWidth + 3).map((button) => button.textContent?.trim()),
+          maxTagChannelDelta: tagDeltas.length ? Math.max(...tagDeltas) : 0,
+          navigatorRect: rect(navigator),
+          inspectorRect: rect(inspector),
+          libraryRect: rect(libraryPane)
+        };
+      }`);
+
+      snapshots[width] = snapshot;
+      if (
+        snapshot.viewportWidth !== width ||
+        !snapshot.hasPage ||
+        !snapshot.hasNavigator ||
+        !snapshot.hasInspector ||
+        snapshot.rowCount < 8 ||
+        snapshot.visibleRowCount < 5 ||
+        !/最近活动/.test(snapshot.sortText) ||
+        !snapshot.resumeVisible ||
+        snapshot.pageHorizontalOverflow ||
+        snapshot.listHorizontalOverflow ||
+        snapshot.documentHorizontalOverflow ||
+        snapshot.clippedCriticalControls.length > 0 ||
+        snapshot.maxTagChannelDelta > 36 ||
+        (snapshot.navigatorRect?.width ?? 0) < 150 ||
+        (snapshot.inspectorRect?.width ?? 0) < 270 ||
+        (snapshot.libraryRect?.width ?? 0) < 400
+      ) {
+        throw new Error(`paperLibrary: ${width}px responsive audit failed: ${JSON.stringify(snapshot)}`);
+      }
+
+      await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+        writeFile(path.join(outputDir, `paper-library-${width}.png`), Buffer.from(shot.data, 'base64'))
+      );
+    }
+
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: 1440,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false
+    });
+    await wait(250);
+
+    const batchState = await evaluateJson(client, `() => {
+      const checkboxes = [...document.querySelectorAll('[data-paper-library-row] input[type="checkbox"]')].slice(0, 2);
+      checkboxes.forEach((checkbox) => checkbox.click());
+      return checkboxes.length;
+    }`);
+    await wait(250);
+    const batchSnapshot = await evaluateJson(client, `() => ({
+      selectedCount: document.querySelectorAll('[data-paper-library-row] input[type="checkbox"]:checked').length,
+      hasBulkBar: /已选择 2 篇/.test(document.body.textContent ?? ''),
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+    })`);
+    if (batchState !== 2 || batchSnapshot.selectedCount !== 2 || !batchSnapshot.hasBulkBar || batchSnapshot.hasHorizontalOverflow) {
+      throw new Error(`paperLibrary: batch selection state failed: ${JSON.stringify({ batchState, batchSnapshot })}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'paper-library-batch.png'), Buffer.from(shot.data, 'base64'))
+    );
+    await evaluateJson(client, `() => document.querySelector('button[title="清除选择"]')?.click()`);
+    await wait(180);
+
+    const tagDialogOpened = await evaluateJson(client, `() => {
+      document.querySelector('[data-paper-library-tag-manage="cbf"]')?.click();
+      return Boolean(document.querySelector('[data-paper-library-tag-manage="cbf"]'));
+    }`);
+    await wait(220);
+    const tagDialog = await evaluateJson(client, `() => {
+      const dialog = document.querySelector('[data-paper-library-tag-dialog]');
+      const input = dialog?.querySelector('input');
+      return {
+        opened: Boolean(dialog),
+        inputValue: input?.value ?? '',
+        hasAffectedCount: /1 篇论文/.test(dialog?.textContent ?? ''),
+        hasDeleteChoice: /删除这个标签/.test(dialog?.textContent ?? ''),
+        hasHorizontalOverflow: dialog ? dialog.scrollWidth > dialog.clientWidth + 3 : false
+      };
+    }`);
+    if (!tagDialogOpened || !tagDialog.opened || tagDialog.inputValue !== 'CBF' || !tagDialog.hasAffectedCount || !tagDialog.hasDeleteChoice || tagDialog.hasHorizontalOverflow) {
+      throw new Error(`paperLibrary: tag management dialog failed: ${JSON.stringify(tagDialog)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'paper-library-tag-dialog.png'), Buffer.from(shot.data, 'base64'))
+    );
+    await evaluateJson(client, `() => document.querySelector('button[aria-label="关闭标签管理"]')?.click()`);
+    await wait(180);
+
+    await evaluateJson(client, `() => {
+      const input = document.querySelector('input[placeholder^="搜索标题"]');
+      if (!input) return false;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, 'definitely-no-paper-matches');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    }`);
+    await wait(350);
+    const noResults = await evaluateJson(client, `() => ({
+      rowCount: document.querySelectorAll('[data-paper-library-row]').length,
+      hasEmptyMessage: /没有匹配的论文/.test(document.body.textContent ?? ''),
+      hasClearAction: /清除全部筛选/.test(document.body.textContent ?? '')
+    })`);
+    if (noResults.rowCount !== 0 || !noResults.hasEmptyMessage || !noResults.hasClearAction) {
+      throw new Error(`paperLibrary: no-results state failed: ${JSON.stringify(noResults)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'paper-library-no-results.png'), Buffer.from(shot.data, 'base64'))
+    );
+    await evaluateJson(client, `() => document.querySelector('button[aria-label="清空搜索"]')?.click()`);
+    await wait(350);
+
+    await evaluateJson(client, `() => {
+      const row = [...document.querySelectorAll('[data-paper-library-row]')]
+        .find((item) => /Missing Local PDF Recovery/.test(item.textContent ?? ''));
+      row?.click();
+      return Boolean(row);
+    }`);
+    await wait(350);
+    const missingPath = await evaluateJson(client, `() => {
+      const resume = document.querySelector('[data-paper-library-resume]');
+      return {
+        disabled: Boolean(resume?.disabled),
+        text: resume?.textContent?.trim() ?? '',
+        hasRecovery: /重新定位 \\/ 导入/.test(document.body.textContent ?? '')
+      };
+    }`);
+    if (!missingPath.disabled || !/路径失效/.test(missingPath.text) || !missingPath.hasRecovery) {
+      throw new Error(`paperLibrary: missing-path recovery failed: ${JSON.stringify(missingPath)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'paper-library-missing-path.png'), Buffer.from(shot.data, 'base64'))
+    );
+
+    const beforeCollapseWidth = snapshots[1440].libraryRect?.width ?? 0;
+    await evaluateJson(client, `() => document.querySelector('button[title="折叠详情"]')?.click()`);
+    await wait(250);
+    const collapsed = await evaluateJson(client, `() => {
+      const list = document.querySelector('[role="listbox"]')?.parentElement;
+      return {
+        hasInspector: Boolean(document.querySelector('[data-paper-library-inspector]')),
+        libraryWidth: Math.round(list?.getBoundingClientRect().width ?? 0),
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+      };
+    }`);
+    if (collapsed.hasInspector || collapsed.libraryWidth <= beforeCollapseWidth || collapsed.hasHorizontalOverflow) {
+      throw new Error(`paperLibrary: collapsed inspector should expand the list: ${JSON.stringify({ beforeCollapseWidth, collapsed })}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'paper-library-inspector-collapsed.png'), Buffer.from(shot.data, 'base64'))
+    );
+
+    return { snapshots, batchSnapshot, noResults, missingPath, collapsed };
+  } finally {
+    await client.send('Emulation.clearDeviceMetricsOverride');
+  }
 }
 
 async function runHomeScenario(client) {
@@ -1578,55 +1868,7 @@ async function runHomeScenario(client) {
   );
 
   await clickSidebarSection(client, 'library');
-  const library = await evaluateJson(client, `() => ({
-    hasHome: Boolean(document.querySelector('.home-page')),
-    hasAgGrid: Boolean(document.querySelector('.ag-root, .paper-grid')),
-    hasPaperTable: Boolean(document.querySelector('.paper-table')),
-    hasPaperList: Boolean(document.querySelector('.paper-library-list')),
-    rowCount: document.querySelectorAll('.paper-library-row').length,
-    actionTexts: [...document.querySelectorAll('.paper-library-actions button')].map((button) => button.textContent?.trim()),
-    hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
-    pageText: document.body.textContent ?? '',
-    headerActions: [...document.querySelectorAll('.home-header-actions button')].map((button) => button.textContent?.trim()),
-    markStyle: (() => {
-      const mark = document.querySelector('.home-header-mark');
-      if (!mark) return null;
-      const style = getComputedStyle(mark);
-      return { background: style.backgroundColor, border: style.borderTopWidth, boxShadow: style.boxShadow, borderRadius: style.borderRadius };
-    })(),
-    imageAlpha: (() => {
-      const img = document.querySelector('.home-header-mark');
-      if (!img || !img.complete) return null;
-      const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0);
-      return [
-        ctx.getImageData(0, 0, 1, 1).data[3],
-        ctx.getImageData(canvas.width - 1, 0, 1, 1).data[3],
-        ctx.getImageData(0, canvas.height - 1, 1, 1).data[3],
-        ctx.getImageData(canvas.width - 1, canvas.height - 1, 1, 1).data[3]
-      ];
-    })()
-  })`);
-
-  if (
-    !library.hasHome ||
-    library.hasPaperTable ||
-    !library.hasPaperList ||
-    library.rowCount < 1 ||
-    !library.actionTexts.some((text) => /打开阅读/.test(text ?? '')) ||
-    library.hasHorizontalOverflow
-  ) {
-    throw new Error(`home: expected responsive paper library list without horizontal overflow, got ${JSON.stringify(library)}`);
-  }
-  if (library.hasAgGrid) {
-    throw new Error(`home: paper library should not mount the research spreadsheet grid, got ${library.pageText.slice(0, 500)}`);
-  }
-  if (!library.headerActions.includes('研究表格') || !library.headerActions.includes('返回主页')) {
-    throw new Error(`home: expected research sheet and home entries, got ${JSON.stringify(library.headerActions)}`);
-  }
+  const library = await capturePaperLibraryResponsiveWidths(client);
   if (!hub.imageAlpha || hub.imageAlpha.some((alpha) => alpha !== 0)) {
     throw new Error(`home: expected transparent icon corners, got ${JSON.stringify(hub.imageAlpha)}`);
   }
@@ -1639,7 +1881,7 @@ async function runHomeScenario(client) {
     throw new Error(`home: expected restrained icon wrapper without shadow, got ${JSON.stringify(hub.markStyle)}`);
   }
 
-  await clickButtonByText(client, '返回主页');
+  await clickSidebarSection(client, 'workspace');
   return { hub, library };
 }
 
@@ -1907,7 +2149,24 @@ async function runWholePdfReaderScenario(client) {
   await clickButtonByText(client, '返回主页');
   await waitForAppReady(client);
   await clickButtonByText(client, '进入论文库');
-  await clickButtonByText(client, '打开阅读');
+  const preparedLibrarySelection = await evaluateJson(client, `() => {
+    document.querySelector('[data-paper-library-row]')?.click();
+    const expandInspector = document.querySelector('button[title="展开详情"]');
+    expandInspector?.click();
+    return Boolean(document.querySelector('[data-paper-library-row]'));
+  }`);
+  if (!preparedLibrarySelection) {
+    throw new Error('wholePdf: paper library row not found');
+  }
+  await wait(350);
+  const openedFromLibrary = await evaluateJson(client, `() => {
+    const resume = document.querySelector('[data-paper-library-resume]');
+    if (resume && !resume.disabled) resume.click();
+    return Boolean(resume && !resume.disabled);
+  }`);
+  if (!openedFromLibrary) {
+    throw new Error('wholePdf: paper library resume action not found');
+  }
   await waitForAppReady(client);
   const pdfCanvasStatus = await waitForPdfCanvas(client);
   const initialPdfCenter = await readPdfInitialCenterLayout(client, 'initial-reader');

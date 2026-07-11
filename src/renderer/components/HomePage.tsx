@@ -448,7 +448,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                 <span className="research-mini-badge">{props.papers.length}</span>
               </div>
               <div className="research-recent-stack">
-                {props.papers.slice(0, 5).map((paper) => (
+                {props.papers.slice(0, 3).map((paper) => (
                   <button
                     key={paper.id}
                     type="button"

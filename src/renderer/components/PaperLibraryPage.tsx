@@ -96,6 +96,9 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
   const [editingMetadata, setEditingMetadata] = useState(false);
   const [metadataDraft, setMetadataDraft] = useState<Partial<PaperRecord>>({});
   const [pendingRemovalIds, setPendingRemovalIds] = useState<string[] | null>(null);
+  const [managedTag, setManagedTag] = useState<{ label: string; count: number } | null>(null);
+  const [managedTagDraft, setManagedTagDraft] = useState('');
+  const [confirmTagDeletion, setConfirmTagDeletion] = useState(false);
   const [pathAvailable, setPathAvailable] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -285,18 +288,36 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
     });
   }
 
-  function renameGlobalTag(tag: string, affectedCount: number): void {
-    const nextTag = window.prompt(`重命名标签“${tag}”（影响 ${affectedCount} 篇论文）`, tag);
-    if (!nextTag || normalizeTagKey(nextTag) === normalizeTagKey(tag)) return;
-    props.onUpdatePapers(renameTagAcrossLibrary(props.papers, tag, nextTag));
+  function openTagManager(label: string, count: number): void {
+    setManagedTag({ label, count });
+    setManagedTagDraft(label);
+    setConfirmTagDeletion(false);
   }
 
-  function deleteGlobalTag(tag: string, affectedCount: number): void {
-    if (!window.confirm(`确认删除标签“${tag}”？将影响 ${affectedCount} 篇论文。`)) return;
-    props.onUpdatePapers(deleteTagAcrossLibrary(props.papers, tag));
+  function closeTagManager(): void {
+    setManagedTag(null);
+    setManagedTagDraft('');
+    setConfirmTagDeletion(false);
+  }
+
+  function renameGlobalTag(): void {
+    if (!managedTag) return;
+    const [nextTag] = normalizePaperTags([managedTagDraft]);
+    if (!nextTag || normalizeTagKey(nextTag) === normalizeTagKey(managedTag.label)) return;
+    props.onUpdatePapers(renameTagAcrossLibrary(props.papers, managedTag.label, nextTag));
+    setActiveTags((current) => current.map((tag) =>
+      normalizeTagKey(tag) === normalizeTagKey(managedTag.label) ? nextTag : tag
+    ));
+    closeTagManager();
+  }
+
+  function deleteGlobalTag(): void {
+    if (!managedTag) return;
+    props.onUpdatePapers(deleteTagAcrossLibrary(props.papers, managedTag.label));
     setActiveTags((current) =>
-      current.filter((item) => normalizeTagKey(item) !== normalizeTagKey(tag))
+      current.filter((item) => normalizeTagKey(item) !== normalizeTagKey(managedTag.label))
     );
+    closeTagManager();
   }
 
   function togglePaperProject(project: ResearchProject, paperId: string): void {
@@ -450,13 +471,8 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
                   className={styles.tagMenuButton}
                   title={`管理标签 ${tag.label}`}
                   aria-label={`管理标签 ${tag.label}`}
-                  onClick={() => {
-                    if (window.confirm(`重命名“${tag.label}”？选择“取消”可继续选择删除。`)) {
-                      renameGlobalTag(tag.label, tag.count);
-                    } else {
-                      deleteGlobalTag(tag.label, tag.count);
-                    }
-                  }}
+                  data-paper-library-tag-manage={tag.key}
+                  onClick={() => openTagManager(tag.label, tag.count)}
                 >
                   ···
                 </button>
@@ -796,6 +812,66 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
             <button type="button" className={styles.iconButton} title="清除选择" onClick={() => setBatchSelectedIds(new Set())}>×</button>
           </div>
         </section>
+      ) : null}
+
+      {managedTag ? (
+        <div className={styles.modalBackdrop} role="presentation">
+          <section
+            className={`${styles.confirmDialog} ${styles.tagDialog}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="paper-tag-manager-title"
+            data-paper-library-tag-dialog
+          >
+            <div className={styles.tagDialogHeading}>
+              <div>
+                <span>标签管理</span>
+                <h2 id="paper-tag-manager-title">{managedTag.label}</h2>
+              </div>
+              <button type="button" className={styles.iconButton} aria-label="关闭标签管理" onClick={closeTagManager}>×</button>
+            </div>
+            <p>修改会同步到使用该标签的 {managedTag.count} 篇论文，不影响 PDF 和已有研究资产。</p>
+            <form className={styles.tagDialogForm} onSubmit={(event) => {
+              event.preventDefault();
+              renameGlobalTag();
+            }}>
+              <label htmlFor="paper-tag-name">标签名称</label>
+              <input
+                id="paper-tag-name"
+                value={managedTagDraft}
+                maxLength={32}
+                autoFocus
+                onChange={(event) => {
+                  setManagedTagDraft(event.target.value);
+                  setConfirmTagDeletion(false);
+                }}
+              />
+              <div className={styles.dialogActions}>
+                <button type="button" onClick={closeTagManager}>取消</button>
+                <button
+                  type="submit"
+                  className={styles.primaryDialogAction}
+                  disabled={!managedTagDraft.trim() || normalizeTagKey(managedTagDraft) === normalizeTagKey(managedTag.label)}
+                >
+                  保存重命名
+                </button>
+              </div>
+            </form>
+            <div className={styles.tagDeleteZone}>
+              {confirmTagDeletion ? (
+                <>
+                  <p><strong>确认删除“{managedTag.label}”？</strong> 此操作只移除标签，论文仍保留在库中。</p>
+                  <div className={styles.dialogActions}>
+                    <button type="button" onClick={() => setConfirmTagDeletion(false)}>返回</button>
+                    <button type="button" className={styles.dangerPrimary} onClick={deleteGlobalTag}>确认删除标签</button>
+                  </div>
+                </>
+              ) : (
+                <button type="button" className={styles.dangerLink} onClick={() => setConfirmTagDeletion(true)}>删除这个标签…</button>
+              )}
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {pendingRemovalIds ? (

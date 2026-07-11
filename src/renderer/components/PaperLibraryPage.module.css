@@ -1010,11 +1010,11 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .bulkSummary strong {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .bulkSummary span {
@@ -1062,7 +1062,7 @@
 
 .bulkInputGroup input,
 .bulkInputGroup select {
-  width: 105px;
+  width: 118px;
   padding: 0 7px;
   border-color: #617185;
   color: #edf2f6;
@@ -1073,6 +1073,12 @@
   border-color: #617185;
   color: #edf2f6;
   background: #33445a;
+}
+
+.bulkControls button,
+.bulkControls input,
+.bulkControls select {
+  font-size: 10px;
 }
 
 .modalBackdrop {
@@ -1119,6 +1125,85 @@
   color: #687588;
   font-size: 11px;
   line-height: 1.6;
+}
+
+.tagDialog {
+  width: min(460px, 92vw);
+}
+
+.tagDialogHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.tagDialogHeading > div {
+  min-width: 0;
+}
+
+.tagDialogHeading span,
+.tagDialogForm label {
+  color: #7b8797;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.tagDialogHeading h2 {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.tagDialogForm {
+  display: grid;
+  gap: 7px;
+  padding-top: 4px;
+}
+
+.tagDialogForm input {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid #bbc6d2;
+  border-radius: 6px;
+  color: #2f3c4d;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+}
+
+.tagDeleteZone {
+  padding-top: 12px;
+  border-top: 1px solid #e2e7ec;
+}
+
+.tagDeleteZone > p {
+  padding: 10px 11px;
+  border: 1px solid #decaca;
+  border-radius: 6px;
+  background: #fbf6f6;
+}
+
+.dangerLink {
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  color: #80585c;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.primaryDialogAction {
+  border-color: #31465e !important;
+  color: #fff !important;
+  background: #2c4058 !important;
+}
+
+.primaryDialogAction:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .dialogActions {
