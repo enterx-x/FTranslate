@@ -499,3 +499,38 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - `$env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check`：通过；视觉脚本直接启动 `dist/win-unpacked/PDF Translation Reader.exe`，打包产物与源码构建的 arXiv 状态条、质量耗时、高级筛选和响应式布局一致。
 - 打包仍报告既有 warning：Vite 大 chunk、`package.json` author 缺失、electron-builder duplicate dependency references 与 Node DEP0190。它们未导致测试、构建或打包失败，但应在后续依赖治理 / 安全升级任务中单独处理。
 - 外部约束：arXiv API 可用性、网络抖动、本机 NLLB CUDA/CPU 吞吐和首次模型加载时间无法由静态测试保证；UI 会如实显示缓存、等待、引擎、质量和耗时，不以成功文案掩盖不可用状态。
+
+## 17. 2026-07-11 论文库大规模管理与阅读续接工作台
+
+### 第一性原理与设计决策
+
+- 用户的核心问题是论文数量增加后“找不到、续不上、整理不动”，而不是缺少更多入口卡片。不可压缩约束是：标签优先组织、项目显式归属、快速搜索、稳定排序、阅读进度可见和批量操作可回滚。
+- 采用用户确认的 A 布局：左侧标签 / 智能视图 / 项目导航，中间高密度列表，右侧单篇 Inspector。默认排序为“最近活动”降序，置顶论文优先，同值稳定，未知值始终在末尾。
+- `PaperRecord` 通过读取时规范化兼容旧数据，新增 `tags`、`isPinned`、`importedAt`、`updatedAt`、`totalPages` 和 `completedAt`；阅读页码变化不污染组织更新时间，重新导入不覆盖用户标签和进度。
+- 已存在的研究项目不再自动吸收所有新论文；论文与项目关系以 `ResearchProject.paperIds` 为权威，通过单篇或批量操作显式加入 / 移出。
+- 大规模库的搜索、过滤、排序、标签目录、进度和批量 reducer 集中在纯 `paperLibraryView` 模块中；1,000 条记录的派生性能测试预算为 100ms。暂不引入虚拟列表，避免在真实规模证据不足时增加滚动与可访问性复杂度。
+
+### 已实现能力
+
+- 搜索覆盖标题、作者、期刊、年份、标签、笔记与研究表格单元格，按词 AND 匹配；标签筛选同样采用 AND 语义。
+- 支持最近阅读、待整理、重点论文、已完成智能视图，以及最近活动、标题、年份、导入时间、最近阅读、进度六种排序。
+- 列表支持键盘 Enter / 双击打开、单选 Inspector、复选批量操作；批量栏支持标签、项目、置顶、完成和安全移除记录。
+- Inspector 支持阅读进度、继续阅读、标签、项目、本地资产、元数据、笔记和关联；主进程新增只返回布尔值的只读路径存在检查，失效路径禁用阅读并提示恢复。
+- 标签管理从易误操作的系统确认链改为应用内对话框：明确显示影响数量，重命名与删除分流，删除需要二次确认。
+- 视图偏好存储于 `pdfTranslationReader:paperLibraryView`；损坏的论文库存储在用户显式变更前保持保护，不会被空数组静默覆盖。
+
+### 视觉对抗式审查
+
+- 源码视觉检查已覆盖 `.tmp-visual-check/paper-library-1366.png`、`paper-library-1440.png`、`paper-library-1920.png`、`paper-library-batch.png`、`paper-library-tag-dialog.png`、`paper-library-no-results.png`、`paper-library-missing-path.png` 和 `paper-library-inspector-collapsed.png`。
+- 首轮发现首页最近论文在多记录种子下形成内部纵向滚动，已把首页摘要数量从 5 收敛为 3；发现视觉脚本仍点击旧“打开阅读”按钮，已改用稳定的论文库 resume 选择器并验证完整 PDF 阅读流程。
+- 人工复查确认三种桌面宽度无明显重叠、遮挡、横向溢出或控件截断；长中英文标题保持固定行高，Inspector 折叠后列表扩展，批量栏不覆盖末行，失效路径与无结果状态信息明确。
+- 二次人工审查发现旧标签管理取消重命名会继续进入删除确认，且批量栏字号偏小；已改为应用内标签管理对话框并提高批量控件字号 / 输入宽度，重新构建和视觉检查通过。
+
+### 当前验证证据
+
+- `npm run build`：通过，82 个测试文件 / 542 个测试全部通过；renderer 与 Electron TypeScript 检查、Vite renderer build 和 Electron build 均完成。
+- `npm run visual:check`：通过，论文库全部响应式与对抗状态断言通过，后续首页、PDF、PPT、AI、图谱、arXiv 和设置回归场景也通过。
+- `$env:NODE_OPTIONS='--max-old-space-size=4096'; npm run dist`：通过；再次确认 82 个测试文件 / 542 个测试、类型检查和生产构建全部通过，生成 `dist/PDF Translation Reader Setup 0.1.14.exe`。
+- 安装包大小 144,191,562 bytes（137.51 MB），生成时间 `2026-07-11 19:47:53`，SHA256 为 `1FE6F1A14A360BA12246A3B394C7EFD73073904099A3973B3A874E23FBF3BA4C`。
+- `$env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check`：通过；脚本直接启动 `dist/win-unpacked/PDF Translation Reader.exe`，论文库响应式、批量栏、标签管理、无结果、失效路径和折叠 Inspector 均与源码构建一致。人工复查打包产物的 1366px、标签弹窗、批量栏和失效路径截图，未见重叠、遮挡、横向溢出或样式缺失。
+- 已知非阻断风险：Vite 仍报告既有大 chunk 警告；超过 1,000 条真实论文后的列表滚动体验需要用真实数据复测，再决定是否引入虚拟化。
