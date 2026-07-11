@@ -67,6 +67,7 @@ export interface ArxivTranslationBatchRequest {
 
 export type ArxivTitleAbstractTranslationEngine = 'nllb-ct2-int8' | 'argos' | 'cache' | 'unavailable';
 export type ArxivTitleAbstractTranslationStatus = 'completed' | 'cached' | 'unavailable' | 'failed';
+export type ArxivTranslationQualityStatus = 'passed' | 'failed' | 'not-checked';
 
 export interface ArxivTitleAbstractTranslationResult {
   stableId: string;
@@ -75,6 +76,8 @@ export interface ArxivTitleAbstractTranslationResult {
   engine: ArxivTitleAbstractTranslationEngine;
   status: ArxivTitleAbstractTranslationStatus;
   cacheHit: boolean;
+  qualityStatus: ArxivTranslationQualityStatus;
+  elapsedMs: number;
   message: string;
   translatedAt?: string;
 }

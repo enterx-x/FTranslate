@@ -148,6 +148,7 @@ export class ArxivTranslationService {
     requests: ArxivTitleAbstractTranslationRequest[],
     options?: ArxivTranslationOptions
   ): Promise<ArxivTitleAbstractTranslationResult[]> {
+    const startedAt = this.now();
     const results = new Array<ArxivTitleAbstractTranslationResult>(requests.length);
     const missing: Array<{
       index: number;
@@ -181,10 +182,10 @@ export class ArxivTranslationService {
     });
 
     if (missing.length === 0) {
-      return results;
+      return finalizeTranslationResults(results, startedAt, this.now());
     }
 
-    return this.enqueue(async () => {
+    const queuedResults = await this.enqueue(async () => {
       const remaining: typeof missing = [];
       missing.forEach((item) => {
         const rechecked = this.readCache(item.cacheKey);
@@ -242,7 +243,8 @@ export class ArxivTranslationService {
           if (!evaluated.title.ok || !evaluated.abstract.ok || evaluated.hasSevereAbstractLengthLoss) {
             results[item.index] = buildFailedTranslationResult(
               item.stableId,
-              '本地翻译损坏了学术公式、代码、引用或术语占位符，或严重截断摘要，已丢弃结果且未写入缓存。'
+              '本地翻译损坏了学术公式、代码、引用或术语占位符，或严重截断摘要，已丢弃结果且未写入缓存。',
+              'failed'
             );
             return;
           }
@@ -252,7 +254,8 @@ export class ArxivTranslationService {
           if (!titleZh && !abstractZh) {
             results[item.index] = buildFailedTranslationResult(
               item.stableId,
-              '本地翻译返回了乱码或空结果，已丢弃该缓存并保留英文。'
+              '本地翻译返回了乱码或空结果，已丢弃该缓存并保留英文。',
+              'failed'
             );
             return;
           }
@@ -273,6 +276,8 @@ export class ArxivTranslationService {
             engine: translationResult.engine,
             status: 'completed',
             cacheHit: false,
+            qualityStatus: 'passed',
+            elapsedMs: 0,
             message: buildCompletedTranslationMessage(translationResult.engine),
             translatedAt
           };
@@ -288,12 +293,15 @@ export class ArxivTranslationService {
             engine: 'unavailable',
             status: isUnavailable ? 'unavailable' : 'failed',
             cacheHit: false,
+            qualityStatus: 'not-checked',
+            elapsedMs: 0,
             message
           };
         });
       }
       return results;
     }, options?.priority);
+    return finalizeTranslationResults(queuedResults, startedAt, this.now());
   }
 
   private initDatabase(): void {
@@ -621,12 +629,18 @@ function buildCachedTranslationResult(
     engine: 'cache',
     status: 'cached',
     cacheHit: true,
+    qualityStatus: 'passed',
+    elapsedMs: 0,
     message: '已命中本地 SQLite 翻译缓存。',
     translatedAt: cached.translated_at
   };
 }
 
-function buildFailedTranslationResult(stableId: string, message: string): ArxivTitleAbstractTranslationResult {
+function buildFailedTranslationResult(
+  stableId: string,
+  message: string,
+  qualityStatus: ArxivTitleAbstractTranslationResult['qualityStatus'] = 'not-checked'
+): ArxivTitleAbstractTranslationResult {
   return {
     stableId,
     titleZh: '',
@@ -634,8 +648,19 @@ function buildFailedTranslationResult(stableId: string, message: string): ArxivT
     engine: 'unavailable',
     status: 'failed',
     cacheHit: false,
+    qualityStatus,
+    elapsedMs: 0,
     message
   };
+}
+
+function finalizeTranslationResults(
+  results: ArxivTitleAbstractTranslationResult[],
+  startedAt: number,
+  finishedAt: number
+): ArxivTitleAbstractTranslationResult[] {
+  const elapsedMs = Math.max(0, Math.round(finishedAt - startedAt));
+  return results.map((result) => ({ ...result, elapsedMs }));
 }
 
 function coerceTranslationInput(value: unknown): string {

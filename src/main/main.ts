@@ -1272,6 +1272,8 @@ function buildVisualArxivTranslationResult(
     engine: 'cache',
     status: 'cached',
     cacheHit: true,
+    qualityStatus: 'passed',
+    elapsedMs: 8,
     message: 'visual mock cached',
     translatedAt: '2026-06-18T00:00:00.000Z'
   };

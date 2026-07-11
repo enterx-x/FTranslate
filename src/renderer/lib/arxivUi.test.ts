@@ -51,6 +51,12 @@ describe('arxivUi helpers', () => {
     expect(getArxivTranslationQualityLabel({ translationStatus: 'completed' })).toBe('质量门禁：通过');
     expect(getArxivTranslationQualityLabel({ translationStatus: 'failed' })).toBe('质量门禁：未通过');
     expect(getArxivTranslationQualityLabel({ translationStatus: 'unavailable' })).toBe('质量门禁：不可用');
+    expect(getArxivTranslationQualityLabel({ qualityStatus: 'passed', translationElapsedMs: 1250 }))
+      .toBe('质量门禁：通过 · 1.3s');
+    expect(getArxivTranslationQualityLabel({ qualityStatus: 'failed', translationElapsedMs: 42 }))
+      .toBe('质量门禁：未通过 · 42ms');
+    expect(getArxivTranslationQualityLabel({ qualityStatus: 'not-checked', translationElapsedMs: 0 }))
+      .toBe('质量门禁：未检查 · 0ms');
   });
   it('builds explainable scores from paper metadata without calling arXiv or AI', () => {
     const insight = buildArxivPaperInsight(robotPaper, 'reinforcement learning robot navigation');

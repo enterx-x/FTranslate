@@ -86,10 +86,12 @@ describe('ArxivTranslationService', () => {
 
   it('translates title and abstract once, then serves the same paper from SQLite cache', async () => {
     const calls: string[] = [];
+    let currentTime = 1_764_000_000_000;
     const service = new ArxivTranslationService({
       dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
       translateText: async (text) => {
         calls.push(text);
+        currentTime += 125;
         return preserveProtectedAcademicMarkers(
           text,
           text.includes('A Perceptive')
@@ -97,7 +99,7 @@ describe('ArxivTranslationService', () => {
             : '该摘要完整介绍了机器人导航中的强化学习方法、实验设置与主要研究结论。'
         );
       },
-      now: () => 1_764_000_000_000
+      now: () => currentTime
     });
 
     try {
@@ -114,7 +116,9 @@ describe('ArxivTranslationService', () => {
         abstractZh: '该摘要完整介绍了机器人导航中的强化学习方法、实验设置与主要研究结论。',
         engine: 'argos',
         status: 'completed',
-        cacheHit: false
+        cacheHit: false,
+        qualityStatus: 'passed',
+        elapsedMs: 250
       });
       expect(first.titleZh).toContain('PILOT');
       expect(first.titleZh).toContain('Low-level');
@@ -123,7 +127,9 @@ describe('ArxivTranslationService', () => {
         abstractZh: first.abstractZh,
         engine: 'cache',
         status: 'cached',
-        cacheHit: true
+        cacheHit: true,
+        qualityStatus: 'passed',
+        elapsedMs: 0
       });
       expect(calls).toHaveLength(2);
     } finally {
@@ -720,6 +726,8 @@ describe('ArxivTranslationService', () => {
       expect(result.status).toBe('failed');
       expect(result.cacheHit).toBe(false);
       expect(result.engine).toBe('unavailable');
+      expect(result.qualityStatus).toBe('failed');
+      expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
     } finally {
       service.close();
     }
@@ -745,6 +753,8 @@ describe('ArxivTranslationService', () => {
 
       expect(results).toHaveLength(2);
       expect(results.every((item) => item.status === 'failed')).toBe(true);
+      expect(results.every((item) => item.qualityStatus === 'not-checked')).toBe(true);
+      expect(results.every((item) => item.elapsedMs >= 0)).toBe(true);
       expect(results[0].message).toContain('缺少');
     } finally {
       service.close();
@@ -768,6 +778,8 @@ describe('ArxivTranslationService', () => {
 
       expect(result.status).toBe('failed');
       expect(result.cacheHit).toBe(false);
+      expect(result.qualityStatus).toBe('failed');
+      expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
       expect(result.titleZh).toBe('');
       expect(result.abstractZh).toBe('');
     } finally {
@@ -904,6 +916,8 @@ describe('ArxivTranslationService', () => {
       expect(result.status).toBe('unavailable');
       expect(result.engine).toBe('unavailable');
       expect(result.cacheHit).toBe(false);
+      expect(result.qualityStatus).toBe('not-checked');
+      expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
       expect(result.message).toContain('离线翻译未配置');
       expect(result.message).toContain('查看 README');
       expect(result.message).toContain('稍后重试');

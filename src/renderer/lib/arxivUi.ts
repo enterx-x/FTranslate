@@ -5,7 +5,8 @@ import {
   type ArxivSearchServiceResult,
   type ArxivSortBy,
   type ArxivTitleAbstractTranslationEngine,
-  type ArxivTitleAbstractTranslationStatus
+  type ArxivTitleAbstractTranslationStatus,
+  type ArxivTranslationQualityStatus
 } from './arxivClient';
 
 export type ArxivReadingPriority = 'high' | 'medium' | 'low';
@@ -50,6 +51,8 @@ export interface ArxivPaperMeta {
   translationStatus?: ArxivTitleAbstractTranslationStatus;
   translationMessage?: string;
   translationEngine?: ArxivTitleAbstractTranslationEngine;
+  qualityStatus?: ArxivTranslationQualityStatus;
+  translationElapsedMs?: number;
   insightQuery?: string;
   insightQueryMode?: ArxivQueryMode;
 }
@@ -87,7 +90,33 @@ export function getArxivWaitStateLabel(
 }
 
 export function getArxivTranslationQualityLabel(meta: ArxivPaperMeta): string {
-  switch (meta.translationStatus) {
+  let label: string;
+  switch (meta.qualityStatus) {
+    case 'passed':
+      label = '质量门禁：通过';
+      break;
+    case 'failed':
+      label = '质量门禁：未通过';
+      break;
+    case 'not-checked':
+      label = '质量门禁：未检查';
+      break;
+    default:
+      label = getLegacyArxivTranslationQualityLabel(meta.translationStatus);
+      break;
+  }
+  if (typeof meta.translationElapsedMs !== 'number' || !Number.isFinite(meta.translationElapsedMs)) {
+    return label;
+  }
+  const elapsedMs = Math.max(0, meta.translationElapsedMs);
+  const elapsedLabel = elapsedMs < 1000 ? `${Math.round(elapsedMs)}ms` : `${(elapsedMs / 1000).toFixed(1)}s`;
+  return `${label} · ${elapsedLabel}`;
+}
+
+function getLegacyArxivTranslationQualityLabel(
+  translationStatus?: ArxivTitleAbstractTranslationStatus
+): string {
+  switch (translationStatus) {
     case 'completed':
     case 'cached':
       return '质量门禁：通过';

@@ -424,7 +424,9 @@ export function buildArxivTranslationMetaPatch(
   const translationState: Partial<ArxivPaperMeta> = {
     translationStatus: result.status,
     translationMessage: result.message,
-    translationEngine: result.engine
+    translationEngine: result.engine,
+    qualityStatus: result.qualityStatus,
+    translationElapsedMs: result.elapsedMs
   };
   if (result.status !== 'completed' && result.status !== 'cached') {
     return translationState;

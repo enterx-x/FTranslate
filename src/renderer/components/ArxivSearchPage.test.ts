@@ -425,6 +425,8 @@ describe('ArxivSearchPage result display', () => {
       engine: 'nllb-ct2-int8' as const,
       status: 'completed' as const,
       cacheHit: false,
+      qualityStatus: 'passed' as const,
+      elapsedMs: 125,
       message: '完成',
       translatedAt: '2026-07-10T00:00:00.000Z'
     };
@@ -453,6 +455,8 @@ describe('ArxivSearchPage result display', () => {
       engine: 'unavailable' as const,
       status: 'failed' as const,
       cacheHit: false,
+      qualityStatus: 'failed' as const,
+      elapsedMs: 80,
       message: '质量门禁未通过'
     };
 
