@@ -63,7 +63,7 @@ const PYTHON_PACKAGES = [
   'plotly==6.2.0', 'scipy==1.16.0', 'statsmodels==0.14.5', 'openpyxl==3.1.5',
   'pillow==11.3.0', 'tifffile==2025.6.11'
 ];
-const R_PACKAGES = ['jsonlite', 'ggplot2', 'patchwork', 'ComplexHeatmap', 'ggalluvial', 'survival', 'svglite', 'ragg'];
+const R_PACKAGES = ['jsonlite', 'ggplot2', 'patchwork', 'ComplexHeatmap', 'ggalluvial', 'survival', 'svglite', 'ragg', 'plotly', 'htmlwidgets'];
 
 export class PlotRuntimeManager {
   readonly managedRoot: string;

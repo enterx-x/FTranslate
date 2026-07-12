@@ -157,6 +157,14 @@ export class ScientificPlotStore {
     return { filePath: target, sha256: sha256(bytes) };
   }
 
+  getProjectDirectory(projectId: string): string {
+    return this.projectPath(projectId);
+  }
+
+  resolveProjectFile(projectId: string, relativePath: string): string {
+    return this.resolveInsideProject(projectId, relativePath);
+  }
+
   async exportFplot(projectId: string, options: ExportFplotOptions = {}): Promise<Uint8Array> {
     const projectPath = this.projectPath(projectId);
     const files = await listFiles(projectPath);
