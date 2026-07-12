@@ -30,7 +30,7 @@ describe('AppSidebar navigation targets', () => {
   it('uses clear AI R&D workspace labels instead of generic legacy wording', () => {
     const labels = getSidebarNavigationItems().map((item) => item.label);
 
-    expect(labels.slice(0, 4)).toEqual(['项目空间', '实验矩阵', '证据图谱', '组会 PPT']);
+    expect(labels.slice(0, 4)).toEqual(['项目空间', 'arXiv 检索', '论文库', 'PDF 阅读']);
     expect(labels).toContain('项目空间');
     expect(labels).toContain('研究表格');
     expect(labels).toContain('科研绘图');

@@ -711,6 +711,12 @@ $env:VISUAL_CHECK_PACKAGED='1'; $env:VISUAL_CHECK_SCENARIO='scientific-plot'; np
 当前 Windows 安装包：
 
 ```text
-dist/PDF Translation Reader Setup 0.1.15.exe
-SHA256 C09DF062AB7FB710334C86E6500880992A48DE8CE058331F026F2E5F0F629AB0
+dist/PDF Translation Reader Setup 0.1.16.exe
+SHA256 46831CE42ED5AED75F20DD49BCB08426F56DDFDCF7BCD82836490334316D9F3E
 ```
+
+## 聚焦型 Research OS 界面
+
+首页、全局侧栏、PDF 阅读器、AI 助手与科研绘图工作台现在共享浅色优先的 Research OS 视觉语言。侧栏按科研流程分组，“科研绘图”位于“实验与运行”；关键主操作使用深石墨到蓝紫渐变，焦点检查器使用局部玻璃材质与柔和发光。
+
+AI 持续动效仅在真实生成期间运行，并支持 `prefers-reduced-motion: reduce`。视觉回归截图位于 `.tmp-visual-check/home.png`、`.tmp-visual-check/scientific-plot-page.png`、`.tmp-visual-check/whole-pdf-reader.png` 和 `.tmp-visual-check/ai-assistant.png`。

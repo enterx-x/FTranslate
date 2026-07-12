@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import brandMarkUrl from '../assets/brand-mark.png';
 import workspaceIcon from '../assets/icons/duotone/workspace.svg';
 import researchSheetIcon from '../assets/icons/duotone/research-sheet.svg';
@@ -45,6 +46,29 @@ export interface AppSidebarNavigationItem {
   label: string;
   icon: string;
   isUtility?: boolean;
+  group?: SidebarNavigationGroup;
+}
+
+type SidebarNavigationGroup = 'overview' | 'reading' | 'evidence' | 'experiments' | 'assistant' | 'outputs';
+
+const groupLabels: Record<SidebarNavigationGroup, string> = {
+  overview: '项目概览',
+  reading: '论文与阅读',
+  evidence: '方法与证据',
+  experiments: '实验与运行',
+  assistant: 'AI 研究助手',
+  outputs: '组会与导出'
+};
+
+const groupOrder: SidebarNavigationGroup[] = ['overview', 'reading', 'evidence', 'experiments', 'assistant', 'outputs'];
+
+function getSidebarGroup(section: AppSidebarSection): SidebarNavigationGroup {
+  if (section === 'workspace') return 'overview';
+  if (section === 'library' || section === 'arxiv' || section === 'reader') return 'reading';
+  if (section === 'knowledgeGraph' || section === 'researchSheet') return 'evidence';
+  if (section === 'experimentMatrix' || section === 'plot' || section === 'settings') return 'experiments';
+  if (section === 'ai' || section === 'paperTutor') return 'assistant';
+  return 'outputs';
 }
 
 const navigationItems: AppSidebarNavigationItem[] = [
@@ -63,7 +87,9 @@ const navigationItems: AppSidebarNavigationItem[] = [
 ];
 
 export function getSidebarNavigationItems(): AppSidebarNavigationItem[] {
-  return navigationItems.map((item) => ({ ...item }));
+  return navigationItems
+    .map((item) => ({ ...item, group: getSidebarGroup(item.section) }))
+    .sort((left, right) => groupOrder.indexOf(left.group) - groupOrder.indexOf(right.group));
 }
 
 export function getSidebarNavigationTarget(section: AppSidebarSection): AppSidebarSection | null {
@@ -91,6 +117,7 @@ export function createSidebarNavigationHandlers(
 
 export function AppSidebar(props: AppSidebarProps) {
   const navigationHandlers = createSidebarNavigationHandlers(props);
+  const groupedItems = getSidebarNavigationItems();
 
   function handleNavigate(section: AppSidebarSection): void {
     const target = getSidebarNavigationTarget(section);
@@ -104,9 +131,12 @@ export function AppSidebar(props: AppSidebarProps) {
         <span>FTranslate</span>
       </div>
       <nav className={styles.nav}>
-        {navigationItems.map((item) => (
-          <button
-            key={item.section}
+        {groupedItems.map((item, index) => {
+          const showGroup = index === 0 || groupedItems[index - 1]?.group !== item.group;
+          return (
+          <Fragment key={item.section}>
+            {showGroup && item.group ? <span className={styles.groupLabel}>{groupLabels[item.group]}</span> : null}
+            <button
             type="button"
             data-sidebar-section={item.section}
             className={[
@@ -125,7 +155,9 @@ export function AppSidebar(props: AppSidebarProps) {
             <img className={styles.icon} src={item.icon} alt="" />
             <span>{item.label}</span>
           </button>
-        ))}
+          </Fragment>
+          );
+        })}
       </nav>
       <div className={styles.footer}>
         <span className={styles.statusDot} />
