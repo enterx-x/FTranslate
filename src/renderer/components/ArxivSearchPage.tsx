@@ -340,7 +340,9 @@ export function buildArxivPreviewTranslationBatches(
   shouldTranslate: (paper: ArxivPaper, index: number) => boolean = () => true
 ): ArxivPaper[][] {
   const preview = papers.slice(0, ARXIV_PREVIEW_TRANSLATION_LIMIT).filter(shouldTranslate);
-  return preview.length > 0 ? [preview] : [];
+  // Keep preview work interruptible: foreground clicks can overtake pending single-paper jobs
+  // instead of waiting for an opaque six-paper batch to finish.
+  return preview.map((paper) => [paper]);
 }
 
 export function canStartArxivManualTranslation(
@@ -348,6 +350,20 @@ export function canStartArxivManualTranslation(
   currentSessionId: number | null
 ): currentSessionId is number {
   return !isSearching && currentSessionId !== null;
+}
+
+export function getArxivTranslationActionState(
+  isSearching: boolean,
+  isForegroundTranslating: boolean,
+  isBackgroundTranslating: boolean
+): { disabled: boolean; label: string; title: string } {
+  return {
+    disabled: isSearching || isForegroundTranslating,
+    label: isForegroundTranslating ? '翻译中' : isBackgroundTranslating ? '优先翻译' : '翻译',
+    title: isBackgroundTranslating
+      ? '点击后提升为前台优先翻译'
+      : '使用本地离线引擎翻译标题和摘要'
+  };
 }
 
 export interface ArxivExecutedQuerySnapshotSource {
@@ -872,6 +888,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       } else if (result?.status === 'unavailable') {
         setStatus('error');
         setShowOfflineTranslationHelp(true);
+      } else if (!result) {
+        setStatus('error');
+        setMessage('本地翻译未返回结果，请重新检测翻译环境后重试。');
       }
     } catch (error) {
       setMessage(`标题/摘要本地翻译失败，已保留英文：${formatError(error)}`);
@@ -1145,8 +1164,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     papers.length === 0 && isReadingQueueOpen
       ? ({ minHeight: 58 + Math.min(readingQueue.length, 4) * 56 } as CSSProperties)
       : undefined;
-  const selectedIsTranslating = selectedPaper
-    ? translatingId === selectedPaper.id || Boolean(backgroundTranslatingIds[selectedPaper.id])
+  const selectedIsTranslating = selectedPaper ? translatingId === selectedPaper.id : false;
+  const selectedIsBackgroundTranslating = selectedPaper
+    ? Boolean(backgroundTranslatingIds[selectedPaper.id])
     : false;
   const selectedIsInPpt = selectedPaper ? pptQueue.includes(selectedPaper.stableId) : false;
   const selectedIsQueuedForReading = selectedPaper
@@ -1624,7 +1644,14 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                 executedQuery,
                 executedQueryMode
               );
-              const isTranslatingMetadata = translatingId === paper.id || backgroundTranslatingIds[paper.id];
+              const isForegroundTranslating = translatingId === paper.id;
+              const isBackgroundTranslating = Boolean(backgroundTranslatingIds[paper.id]);
+              const isTranslatingMetadata = isForegroundTranslating || isBackgroundTranslating;
+              const translationAction = getArxivTranslationActionState(
+                isSearching,
+                isForegroundTranslating,
+                isBackgroundTranslating
+              );
               const tagItems = buildVisibleArxivCardTags(matchReasons, insight.tags);
               return (
                 <article
@@ -1643,7 +1670,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       <span className="badge accent-badge">{insight.totalScore}/100</span>
                     </div>
                     <div className="arxiv-card-icon-actions">
-                      {isTranslatingMetadata ? <span className="badge accent-badge">翻译中</span> : null}
+                      {isForegroundTranslating ? <span className="badge accent-badge">翻译中</span> : null}
+                      {!isForegroundTranslating && isBackgroundTranslating ? (
+                        <span className="badge">后台翻译中</span>
+                      ) : null}
                       {hasUsableArxivChineseMetadata(meta) ? <span className="badge success-badge">中文摘要</span> : null}
                       {isQueuedForReading ? <span className="badge success-badge">备选</span> : null}
                     </div>
@@ -1689,14 +1719,15 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       type="button"
                       className="secondary-button"
                       data-search-session-guard="true"
-                      disabled={isSearching || isTranslatingMetadata}
+                      disabled={translationAction.disabled}
+                      title={translationAction.title}
                       onClick={(event) => {
                         event.stopPropagation();
                         void handleTranslateAbstract(paper);
                       }}
                     >
                       <img className="button-icon" src={translateIcon} alt="" />
-                      {isTranslatingMetadata ? '翻译中' : ARXIV_CARD_PRIMARY_ACTIONS[1]}
+                      {translationAction.label}
                     </button>
                     <button
                       type="button"
@@ -1969,10 +2000,15 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                     type="button"
                     className="secondary-button button-with-icon"
                     disabled={isSearching || selectedIsTranslating}
+                    title={selectedIsBackgroundTranslating ? '点击后提升为前台优先翻译' : undefined}
                     onClick={() => void handleTranslateAbstract(selectedPaper)}
                   >
                     <img className="button-icon" src={translateIcon} alt="" />
-                    {selectedIsTranslating ? '本地翻译中' : '本地翻译标题/摘要'}
+                    {selectedIsTranslating
+                      ? '本地翻译中'
+                      : selectedIsBackgroundTranslating
+                        ? '提升为前台翻译'
+                        : '本地翻译标题/摘要'}
                   </button>
                   <button
                     type="button"

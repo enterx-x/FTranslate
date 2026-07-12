@@ -44,13 +44,13 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib import ticker
+from matplotlib import ticker, font_manager
 import seaborn as sns
 from scipy import stats
 
 ROOT = Path.cwd()
 SPEC = json.loads((ROOT / 'plot-spec.json').read_text(encoding='utf-8'))
-DATA = pd.read_csv(ROOT / 'data.csv')
+DATA = pd.read_csv(ROOT / 'data.csv', encoding='utf-8-sig')
 OUT = ROOT / 'output'
 OUT.mkdir(exist_ok=True)
 chart = SPEC['chart']['type']
@@ -58,12 +58,24 @@ enc = SPEC.get('encodings', {})
 theme = SPEC.get('theme', {})
 palette = theme.get('palette', ['#526f8a','#738c7a','#87768f'])
 sns.set_theme(style='whitegrid' if theme.get('grid', True) else 'white', palette=palette)
-plt.rcParams.update({'font.family': theme.get('fontFamily','Arial').split(',')[0], 'font.size': theme.get('baseFontSize',10)})
-fig = plt.figure(figsize=(max(3, theme.get('canvas',{}).get('widthMm',180)/25.4), max(2.4, theme.get('canvas',{}).get('heightMm',120)/25.4)))
+requested_fonts=[item.strip().strip('"\'') for item in theme.get('fontFamily','Microsoft YaHei, Noto Sans CJK SC, DejaVu Sans').split(',') if item.strip()]
+font_probe=json.dumps(SPEC,ensure_ascii=False)+' '+DATA.head(100).astype(str).to_string()
+if any('\u4e00' <= char <= '\u9fff' for char in font_probe): requested_fonts.sort(key=lambda name: 0 if any(token in name.casefold() for token in ('yahei','noto','simhei','simsun','songti')) else 1)
+installed_fonts={item.name.casefold():item.name for item in font_manager.fontManager.ttflist}
+resolved_fonts=[installed_fonts[item.casefold()] for item in requested_fonts if item.casefold() in installed_fonts]
+resolved_fonts.extend([name for name in ('Microsoft YaHei','Microsoft YaHei UI','Noto Sans CJK SC','SimHei','Arial Unicode MS','DejaVu Sans') if name.casefold() in installed_fonts and name not in resolved_fonts])
+plt.rcParams.update({'font.family':'sans-serif','font.sans-serif':resolved_fonts or ['DejaVu Sans'],'font.size':theme.get('baseFontSize',10),'axes.unicode_minus':False,'svg.fonttype':'none','pdf.fonttype':42})
+fig = plt.figure(figsize=(max(3, theme.get('canvas',{}).get('widthMm',180)/25.4), max(2.4, theme.get('canvas',{}).get('heightMm',120)/25.4)),facecolor=theme.get('canvas',{}).get('background','#ffffff'))
 ax = fig.add_subplot(111, projection='3d' if chart in ('scatter3d','surface3d') else None)
 x, y = enc.get('x'), enc.get('y')
 hue = enc.get('color') or enc.get('group')
 plotly_figure = None
+chart_style=SPEC.get('chart',{})
+line_styles={'solid':'-','dashed':'--','dotted':':'}
+marker_styles={'circle':'o','square':'s','diamond':'D','triangle':'^','none':None}
+line_style=line_styles.get(chart_style.get('lineStyle','solid'),'-')
+marker_style=marker_styles.get(chart_style.get('markerShape','circle'),'o') if chart_style.get('showPoints',True) else None
+plot_opacity=float(chart_style.get('opacity',1))
 
 def axis_spec(axis_id):
     return next((item for item in SPEC.get('axes', []) if item.get('id') == axis_id), {})
@@ -92,10 +104,12 @@ def apply_axis(axis_id):
     if axis.get('position')=='secondary':
         (obj.tick_top if axis_id=='x' else obj.tick_right)(); (obj.set_label_position)('top' if axis_id=='x' else 'right')
     obj.set_visible(axis.get('showLine',True) or axis.get('showTicks',True) or axis.get('showLabels',True))
-    tick_options={'axis':axis_id,'labelsize':axis.get('labelFontSize',theme.get('baseFontSize',10)),'labelrotation':axis.get('labelRotation',0),'labelcolor':axis.get('labelColor','#526172')}
+    tick_options={'axis':axis_id,'labelsize':axis.get('labelFontSize',theme.get('baseFontSize',10)),'labelrotation':axis.get('labelRotation',0),'labelcolor':axis.get('labelColor','#526172'),'color':axis.get('tickColor',axis.get('lineColor','#738193')),'length':axis.get('tickLength',5),'width':axis.get('lineWidth',1)}
     if axis_id=='x': tick_options.update({'bottom':axis.get('showTicks',True),'labelbottom':axis.get('showLabels',True)})
     else: tick_options.update({'left':axis.get('showTicks',True),'labelleft':axis.get('showLabels',True)})
     ax.tick_params(**tick_options)
+    spine=ax.spines.get('bottom' if axis_id=='x' else 'left')
+    if spine is not None: spine.set_color(axis.get('lineColor','#738193')); spine.set_linewidth(axis.get('lineWidth',1)); spine.set_visible(axis.get('showLine',True))
     if axis.get('tickInterval'):
         obj.set_major_locator(ticker.MultipleLocator(axis['tickInterval']))
     elif axis.get('tickCount'):
@@ -108,14 +122,31 @@ def apply_axis(axis_id):
     if label:
         setter=ax.set_xlabel if axis_id=='x' else ax.set_ylabel; setter(label,labelpad=axis.get('titleGap',30 if axis_id=='x' else 42),fontsize=axis.get('titleFontSize',theme.get('baseFontSize',10)),color=axis.get('titleColor','#26364a'))
 
+def apply_legend():
+    handles,labels=ax.get_legend_handles_labels(); position=theme.get('legendPosition','top')
+    existing=ax.get_legend()
+    if position=='none':
+        if existing is not None: existing.remove()
+        return
+    if not handles: return
+    orientation=theme.get('legendOrientation','auto')
+    horizontal=orientation=='horizontal' or (orientation=='auto' and position in ('top','bottom'))
+    anchors={'top':((.5,1.02),'lower center'),'bottom':((.5,-.12),'upper center'),'left':((-.02,.5),'center right'),'right':((1.02,.5),'center left')}
+    anchor,loc=anchors.get(position,anchors['top'])
+    if theme.get('legendX') is not None and theme.get('legendY') is not None:
+        anchor=(float(theme['legendX'])/100,1-float(theme['legendY'])/100); loc={'start':'upper left','center':'upper center','end':'upper right'}.get(theme.get('legendAlign','center'),'upper center')
+    legend=ax.legend(handles,labels,loc=loc,bbox_to_anchor=anchor,ncol=len(labels) if horizontal else 1,frameon=theme.get('legendBackgroundVisible',False) or theme.get('legendBorderWidth',0)>0,fontsize=theme.get('legendFontSize',theme.get('baseFontSize',10)),labelspacing=max(.1,theme.get('legendItemGap',14)/14),handlelength=max(.2,theme.get('legendSymbolWidth',24)/12),handleheight=max(.2,theme.get('legendSymbolHeight',12)/12),borderaxespad=0)
+    for text in legend.get_texts(): text.set_color(theme.get('legendColor','#26364a'))
+    frame=legend.get_frame(); frame.set_facecolor(theme.get('legendBackground','#ffffff')); frame.set_edgecolor(theme.get('legendBorderColor','#d7dee7')); frame.set_linewidth(theme.get('legendBorderWidth',0))
+
 if chart in ('line','area'):
-    sns.lineplot(data=DATA, x=x, y=y, hue=hue, marker='o' if SPEC['chart'].get('showPoints',True) else None, ax=ax)
+    sns.lineplot(data=DATA, x=x, y=y, hue=hue, marker=marker_style, linestyle=line_style, linewidth=theme.get('lineWidth',1.8), alpha=plot_opacity, ax=ax)
     if chart == 'area' and not hue:
         ax.fill_between(DATA[x], DATA[y], alpha=.2)
 elif chart == 'scatter':
-    sns.scatterplot(data=DATA, x=x, y=y, hue=hue, size=enc.get('size'), ax=ax)
+    sns.scatterplot(data=DATA, x=x, y=y, hue=hue, size=enc.get('size'), marker=marker_style or 'o', alpha=plot_opacity, ax=ax)
 elif chart == 'bar':
-    sns.barplot(data=DATA, x=x, y=y, hue=hue, ax=ax, errorbar=None)
+    sns.barplot(data=DATA, x=x, y=y, hue=hue, ax=ax, errorbar=None, alpha=plot_opacity)
 elif chart == 'histogram':
     sns.histplot(data=DATA, x=x or y, hue=hue, kde=False, ax=ax)
 elif chart == 'density':
@@ -167,15 +198,17 @@ elif chart == 'radar':
 else: raise ValueError(f'Unsupported controlled chart type: {chart}')
 
 if plotly_figure is not None:
-    plotly_figure.update_layout(title=SPEC['chart'].get('title') or SPEC.get('title'))
+    plotly_figure.update_layout(title=SPEC['chart'].get('title') or SPEC.get('title'),font={'family':','.join(resolved_fonts or requested_fonts),'size':theme.get('baseFontSize',10),'color':theme.get('legendColor','#26364a')},showlegend=theme.get('legendPosition','top')!='none',legend={'orientation':'h' if theme.get('legendOrientation','auto')=='horizontal' or theme.get('legendPosition') in ('top','bottom') else 'v','x':float(theme.get('legendX',50))/100,'y':1-float(theme.get('legendY',0))/100,'font':{'size':theme.get('legendFontSize',theme.get('baseFontSize',10))}})
     plotly_figure.write_html(OUT/'preview.html', include_plotlyjs=True, full_html=True)
     preview='preview.html'
 elif fig is not None:
-    ax.set_title(SPEC['chart'].get('title') or SPEC.get('title',''))
+    title_align=theme.get('titleAlign','left'); ax.set_title(SPEC['chart'].get('title') or SPEC.get('title',''),loc=title_align,color=theme.get('titleColor','#26364a'),fontweight=theme.get('titleFontWeight','bold'),fontsize=theme.get('titleFontSize',14))
     if x and chart not in ('radar',): ax.set_xlabel(SPEC.get('axes',[{},{}])[0].get('label') or x)
     if y and chart not in ('forest','radar'): ax.set_ylabel(next((a.get('label') for a in SPEC.get('axes',[]) if a.get('id')=='y'),None) or y)
     if chart not in ('radar',): apply_axis('x'); apply_axis('y')
-    fig.tight_layout(); fig.savefig(OUT/'preview.svg',bbox_inches='tight'); fig.savefig(OUT/'preview.png',dpi=180,bbox_inches='tight'); preview='preview.svg'
+    apply_legend()
+    padding=theme.get('plotPadding',{}); width_px=max(300,fig.get_figwidth()*100); height_px=max(240,fig.get_figheight()*100); fig.subplots_adjust(left=min(.45,max(.02,padding.get('left',54)/width_px)),right=max(.55,min(.98,1-padding.get('right',24)/width_px)),top=max(.55,min(.98,1-padding.get('top',62)/height_px)),bottom=min(.45,max(.02,padding.get('bottom',48)/height_px)))
+    fig.savefig(OUT/'preview.svg',bbox_inches='tight'); fig.savefig(OUT/'preview.png',dpi=180,bbox_inches='tight'); preview='preview.svg'
     for preset in SPEC.get('exports',[]):
         fmt=preset.get('format'); dpi=preset.get('dpi',300)
         if fmt in ('png','svg','pdf','tiff'): fig.savefig(OUT/f"export-{preset.get('id','figure')}.{fmt}",dpi=dpi,bbox_inches='tight',transparent=preset.get('transparent',False))
@@ -197,8 +230,12 @@ for analysis in SPEC.get('analysis',[]):
 const R_SCRIPT = String.raw`# Generated by FTranslate Scientific Plotting Studio.
 suppressPackageStartupMessages({library(jsonlite);library(ggplot2)})
 or_default <- function(x,y) if(is.null(x)) y else x
+options(encoding='UTF-8')
 spec <- fromJSON('plot-spec.json', simplifyVector=FALSE)
-data <- read.csv('data.csv', check.names=FALSE, stringsAsFactors=FALSE)
+csv_bytes <- readBin('data.csv','raw',n=file.info('data.csv')$size)
+if(length(csv_bytes)>=3 && identical(as.integer(csv_bytes[1:3]),c(239L,187L,191L))) csv_bytes <- csv_bytes[-(1:3)]
+csv_text <- rawToChar(csv_bytes); Encoding(csv_text) <- 'UTF-8'
+data <- read.csv(text=csv_text, check.names=FALSE, stringsAsFactors=FALSE)
 dir.create('output', showWarnings=FALSE)
 chart <- spec$chart$type; enc <- spec$encodings
 x <- enc$x; y <- enc$y; group <- if(!is.null(enc$color)) enc$color else enc$group
@@ -206,14 +243,22 @@ aes_base <- aes(x=.data[[x]], y=.data[[y]])
 axis_by_id <- function(id) { hits <- Filter(function(item) identical(item$id,id),spec$axes); if(length(hits)) hits[[1]] else list(id=id,scale='auto') }
 axis_labels <- function(axis) function(values) { places <- or_default(axis$decimalPlaces,2); mode <- or_default(axis$numberFormat,'auto'); rendered <- if(mode=='scientific') formatC(values,format='e',digits=places) else if(mode=='percent') paste0(formatC(values*100,format='f',digits=places),'%') else if(mode=='fixed') formatC(values,format='f',digits=places,big.mark=if(isFALSE(axis$thousandsSeparator)) '' else ',') else as.character(values); paste0(or_default(axis$prefix,''),rendered,or_default(axis$suffix,'')) }
 axis_breaks <- function(axis) { if(is.null(axis$tickInterval)) waiver() else function(limits) seq(ceiling(limits[1]/axis$tickInterval)*axis$tickInterval,floor(limits[2]/axis$tickInterval)*axis$tickInterval,by=axis$tickInterval) }
-axis_limits <- function(axis) if(is.null(axis$min)&&is.null(axis$max)) NULL else c(or_default(axis$min,NA),or_default(axis$max,NA))
+axis_limits <- function(axis) { minimum <- axis[['min',exact=TRUE]]; maximum <- axis[['max',exact=TRUE]]; values <- c(if(is.null(minimum)) NA_real_ else as.numeric(minimum),if(is.null(maximum)) NA_real_ else as.numeric(maximum)); if(all(is.na(values))) NULL else values }
+font_candidates <- trimws(strsplit(spec$theme$fontFamily,',')[[1]])
+contains_cjk <- grepl('[\u4e00-\u9fff]',paste(c(spec$chart$title,spec$chart$subtitle,names(data),unlist(head(data,100))),collapse=' '),perl=TRUE)
+if(contains_cjk) font_candidates <- c(font_candidates[grepl('YaHei|Noto|SimHei|SimSun|Songti',font_candidates,ignore.case=TRUE)],font_candidates[!grepl('YaHei|Noto|SimHei|SimSun|Songti',font_candidates,ignore.case=TRUE)])
+resolve_font <- function(candidates) { if(requireNamespace('systemfonts',quietly=TRUE)) for(candidate in candidates) { matched <- tryCatch(systemfonts::match_fonts(candidate)$path[[1]],error=function(e) ''); if(nzchar(matched)) return(candidate) }; 'sans' }
+plot_font <- resolve_font(c(font_candidates,'Microsoft YaHei','Noto Sans CJK SC','SimHei','Arial Unicode MS','sans'))
+line_types <- c(solid='solid',dashed='dashed',dotted='dotted'); point_shapes <- c(circle=16,square=15,diamond=18,triangle=17,none=NA)
+line_type <- or_default(line_types[[or_default(spec$chart$lineStyle,'solid')]],'solid'); point_shape <- or_default(point_shapes[[or_default(spec$chart$markerShape,'circle')]],16); plot_alpha <- or_default(spec$chart$opacity,1)
 p <- NULL
 if(chart %in% c('line','area')) {
-  p <- ggplot(data,aes_base)+geom_line(aes(color=if(!is.null(group)) .data[[group]] else NULL,group=if(!is.null(group)) .data[[group]] else 1),linewidth=spec$theme$lineWidth)+geom_point(size=spec$theme$markerSize/2)
+  p <- ggplot(data,aes_base)+geom_line(aes(color=if(!is.null(group)) .data[[group]] else NULL,group=if(!is.null(group)) .data[[group]] else 1),linewidth=spec$theme$lineWidth,linetype=line_type,alpha=plot_alpha)
+  if(isTRUE(spec$chart$showPoints)&&!is.na(point_shape)) p <- p+geom_point(aes(color=if(!is.null(group)) .data[[group]] else NULL),size=spec$theme$markerSize/2,shape=point_shape,alpha=plot_alpha)
 } else if(chart=='scatter') {
-  p <- ggplot(data,aes_base)+geom_point(aes(color=if(!is.null(group)) .data[[group]] else NULL),size=spec$theme$markerSize/2)
+  p <- ggplot(data,aes_base)+geom_point(aes(color=if(!is.null(group)) .data[[group]] else NULL),size=spec$theme$markerSize/2,shape=if(is.na(point_shape)) 16 else point_shape,alpha=plot_alpha)
 } else if(chart=='bar') {
-  p <- ggplot(data,aes_base)+geom_col(aes(fill=if(!is.null(group)) .data[[group]] else NULL),position=if(isTRUE(spec$chart$stacked)) 'stack' else 'dodge')
+  p <- ggplot(data,aes_base)+geom_col(aes(fill=if(!is.null(group)) .data[[group]] else NULL),position=if(isTRUE(spec$chart$stacked)) 'stack' else 'dodge',alpha=plot_alpha)
 } else if(chart=='histogram') {
   p <- ggplot(data,aes(x=.data[[if(!is.null(x)) x else y]],fill=if(!is.null(group)) .data[[group]] else NULL))+geom_histogram(bins=30,alpha=.7,position='identity')
 } else if(chart=='density') {
@@ -253,12 +298,18 @@ if(!is.null(p)) {
   xa <- axis_by_id('x'); ya <- axis_by_id('y')
   if(!is.null(x)&&is.numeric(data[[x]])) { if(identical(xa$scale,'log')) p<-p+scale_x_log10(limits=axis_limits(xa),breaks=axis_breaks(xa),labels=axis_labels(xa),position=if(identical(xa$position,'secondary')) 'top' else 'bottom') else if(isTRUE(xa$reverse)) p<-p+scale_x_reverse(limits=axis_limits(xa),breaks=axis_breaks(xa),labels=axis_labels(xa),position=if(identical(xa$position,'secondary')) 'top' else 'bottom') else p<-p+scale_x_continuous(limits=axis_limits(xa),breaks=axis_breaks(xa),labels=axis_labels(xa),position=if(identical(xa$position,'secondary')) 'top' else 'bottom') }
   if(!is.null(y)&&is.numeric(data[[y]])) { if(identical(ya$scale,'log')) p<-p+scale_y_log10(limits=axis_limits(ya),breaks=axis_breaks(ya),labels=axis_labels(ya),position=if(identical(ya$position,'secondary')) 'right' else 'left') else if(isTRUE(ya$reverse)) p<-p+scale_y_reverse(limits=axis_limits(ya),breaks=axis_breaks(ya),labels=axis_labels(ya),position=if(identical(ya$position,'secondary')) 'right' else 'left') else p<-p+scale_y_continuous(limits=axis_limits(ya),breaks=axis_breaks(ya),labels=axis_labels(ya),position=if(identical(ya$position,'secondary')) 'right' else 'left') }
-  p <- p+labs(title=or_default(spec$chart$title,spec$title),subtitle=spec$chart$subtitle,x=or_default(xa$label,x),y=or_default(ya$label,y))+theme_minimal(base_family=strsplit(spec$theme$fontFamily,',')[[1]][1],base_size=spec$theme$baseFontSize)+scale_color_manual(values=unlist(spec$theme$palette))+scale_fill_manual(values=unlist(spec$theme$palette))
-  p <- p+theme(axis.text.x=if(isFALSE(xa$showLabels)||isFALSE(xa$visible)) element_blank() else element_text(angle=or_default(xa$labelRotation,0),size=or_default(xa$labelFontSize,spec$theme$baseFontSize),color=or_default(xa$labelColor,'#526172'),hjust=if(or_default(xa$labelRotation,0)!=0) 1 else .5),axis.text.y=if(isFALSE(ya$showLabels)||isFALSE(ya$visible)) element_blank() else element_text(angle=or_default(ya$labelRotation,0),size=or_default(ya$labelFontSize,spec$theme$baseFontSize),color=or_default(ya$labelColor,'#526172')),axis.title.x=if(isFALSE(xa$visible)) element_blank() else element_text(size=or_default(xa$titleFontSize,spec$theme$baseFontSize),color=or_default(xa$titleColor,'#26364a'),margin=margin(t=or_default(xa$titleGap,8))),axis.title.y=if(isFALSE(ya$visible)) element_blank() else element_text(size=or_default(ya$titleFontSize,spec$theme$baseFontSize),color=or_default(ya$titleColor,'#26364a'),margin=margin(r=or_default(ya$titleGap,8))),axis.ticks.x=if(isFALSE(xa$showTicks)||isFALSE(xa$visible)) element_blank() else element_line(),axis.ticks.y=if(isFALSE(ya$showTicks)||isFALSE(ya$visible)) element_blank() else element_line(),axis.line.x=if(isFALSE(xa$showLine)||isFALSE(xa$visible)) element_blank() else element_line(),axis.line.y=if(isFALSE(ya$showLine)||isFALSE(ya$visible)) element_blank() else element_line(),panel.grid.major.x=if(isFALSE(xa$showGrid)) element_blank() else element_line(color=or_default(xa$gridColor,'#e4e8ed'),linewidth=or_default(xa$gridWidth,.8)),panel.grid.major.y=if(isFALSE(ya$showGrid)) element_blank() else element_line(color=or_default(ya$gridColor,'#e4e8ed'),linewidth=or_default(ya$gridWidth,.8)),panel.grid.minor.x=if(isTRUE(xa$showMinorGrid)) element_line(color=or_default(xa$gridColor,'#eef1f4'),linewidth=or_default(xa$gridWidth,.8)*.6) else element_blank(),panel.grid.minor.y=if(isTRUE(ya$showMinorGrid)) element_line(color=or_default(ya$gridColor,'#eef1f4'),linewidth=or_default(ya$gridWidth,.8)*.6) else element_blank())
+  p <- p+labs(title=or_default(spec$chart$title,spec$title),subtitle=spec$chart$subtitle,x=or_default(xa$label,x),y=or_default(ya$label,y),color=group,fill=group)+theme_minimal(base_family=plot_font,base_size=spec$theme$baseFontSize)+scale_color_manual(values=unlist(spec$theme$palette))+scale_fill_manual(values=unlist(spec$theme$palette))
+  legend_position <- if(identical(spec$theme$legendPosition,'none')) 'none' else if(!is.null(spec$theme$legendX)&&!is.null(spec$theme$legendY)) c(spec$theme$legendX/100,1-spec$theme$legendY/100) else spec$theme$legendPosition
+  legend_direction <- if(identical(spec$theme$legendOrientation,'auto')) if(spec$theme$legendPosition %in% c('left','right')) 'vertical' else 'horizontal' else spec$theme$legendOrientation
+  title_hjust <- c(left=0,center=.5,right=1)[[or_default(spec$theme$titleAlign,'left')]]
+  pad <- spec$theme$plotPadding
+  p <- p+theme(plot.title=element_text(hjust=title_hjust,color=spec$theme$titleColor,face=if(identical(spec$theme$titleFontWeight,'bold')) 'bold' else 'plain',size=spec$theme$titleFontSize),plot.margin=margin(t=pad$top,r=pad$right,b=pad$bottom,l=pad$left),legend.position=legend_position,legend.direction=legend_direction,legend.justification=switch(or_default(spec$theme$legendAlign,'center'),start=c(0,1),end=c(1,1),c(.5,1)),legend.text=element_text(size=spec$theme$legendFontSize,color=spec$theme$legendColor),legend.key.width=grid::unit(spec$theme$legendSymbolWidth,'pt'),legend.key.height=grid::unit(spec$theme$legendSymbolHeight,'pt'),legend.spacing.x=grid::unit(spec$theme$legendItemGap,'pt'),legend.background=if(isTRUE(spec$theme$legendBackgroundVisible)) element_rect(fill=spec$theme$legendBackground,color=spec$theme$legendBorderColor,linewidth=spec$theme$legendBorderWidth) else element_blank(),axis.text.x=if(isFALSE(xa$showLabels)||isFALSE(xa$visible)) element_blank() else element_text(angle=or_default(xa$labelRotation,0),size=or_default(xa$labelFontSize,spec$theme$baseFontSize),color=or_default(xa$labelColor,'#526172'),hjust=if(or_default(xa$labelRotation,0)!=0) 1 else .5),axis.text.y=if(isFALSE(ya$showLabels)||isFALSE(ya$visible)) element_blank() else element_text(angle=or_default(ya$labelRotation,0),size=or_default(ya$labelFontSize,spec$theme$baseFontSize),color=or_default(ya$labelColor,'#526172')),axis.title.x=if(isFALSE(xa$visible)) element_blank() else element_text(size=or_default(xa$titleFontSize,spec$theme$baseFontSize),color=or_default(xa$titleColor,'#26364a'),margin=margin(t=or_default(xa$titleGap,8))),axis.title.y=if(isFALSE(ya$visible)) element_blank() else element_text(size=or_default(ya$titleFontSize,spec$theme$baseFontSize),color=or_default(ya$titleColor,'#26364a'),margin=margin(r=or_default(ya$titleGap,8))),axis.ticks.x=if(isFALSE(xa$showTicks)||isFALSE(xa$visible)) element_blank() else element_line(color=or_default(xa$tickColor,or_default(xa$lineColor,'#738193')),linewidth=or_default(xa$lineWidth,1)),axis.ticks.y=if(isFALSE(ya$showTicks)||isFALSE(ya$visible)) element_blank() else element_line(color=or_default(ya$tickColor,or_default(ya$lineColor,'#738193')),linewidth=or_default(ya$lineWidth,1)),axis.ticks.length.x=grid::unit(or_default(xa$tickLength,5),'pt'),axis.ticks.length.y=grid::unit(or_default(ya$tickLength,5),'pt'),axis.line.x=if(isFALSE(xa$showLine)||isFALSE(xa$visible)) element_blank() else element_line(color=or_default(xa$lineColor,'#738193'),linewidth=or_default(xa$lineWidth,1)),axis.line.y=if(isFALSE(ya$showLine)||isFALSE(ya$visible)) element_blank() else element_line(color=or_default(ya$lineColor,'#738193'),linewidth=or_default(ya$lineWidth,1)),panel.grid.major.x=if(isFALSE(xa$showGrid)) element_blank() else element_line(color=or_default(xa$gridColor,'#e4e8ed'),linewidth=or_default(xa$gridWidth,.8)),panel.grid.major.y=if(isFALSE(ya$showGrid)) element_blank() else element_line(color=or_default(ya$gridColor,'#e4e8ed'),linewidth=or_default(ya$gridWidth,.8)),panel.grid.minor.x=if(isTRUE(xa$showMinorGrid)) element_line(color=or_default(xa$gridColor,'#eef1f4'),linewidth=or_default(xa$gridWidth,.8)*.6) else element_blank(),panel.grid.minor.y=if(isTRUE(ya$showMinorGrid)) element_line(color=or_default(ya$gridColor,'#eef1f4'),linewidth=or_default(ya$gridWidth,.8)*.6) else element_blank())
+  cairo_png <- function(filename,width,height,units='in',res=300,...) grDevices::png(filename,width=width,height=height,units=units,res=res,type='cairo',...)
+  cairo_tiff <- function(filename,width,height,units='in',res=300,...) grDevices::tiff(filename,width=width,height=height,units=units,res=res,type='cairo',compression='lzw',...)
   ggsave('output/preview.svg',p,width=spec$theme$canvas$widthMm/25.4,height=spec$theme$canvas$heightMm/25.4,device=svglite::svglite)
-  ggsave('output/preview.png',p,width=spec$theme$canvas$widthMm/25.4,height=spec$theme$canvas$heightMm/25.4,dpi=180)
+  ggsave('output/preview.png',p,width=spec$theme$canvas$widthMm/25.4,height=spec$theme$canvas$heightMm/25.4,dpi=180,device=cairo_png)
   preview <- 'preview.svg'
-  for(item in spec$exports){ fmt<-item$format; if(fmt %in% c('png','svg','pdf','tiff')) ggsave(file.path('output',paste0('export-',item$id,'.',fmt)),p,dpi=ifelse(is.null(item$dpi),300,item$dpi),device=fmt) }
+  for(item in spec$exports){ fmt<-item$format; if(fmt %in% c('png','svg','pdf','tiff')) { device <- switch(fmt,png=cairo_png,svg=svglite::svglite,pdf=grDevices::cairo_pdf,tiff=cairo_tiff); ggsave(file.path('output',paste0('export-',item$id,'.',fmt)),p,dpi=ifelse(is.null(item$dpi),300,item$dpi),device=device) } }
 } else preview <- 'preview.html'
 results <- list()
 for(a in spec$analysis){ if(isFALSE(a$enabled)) next; values<-as.numeric(data[[a$valueField]]); values<-values[is.finite(values)]; item<-list(analysisId=a$id,method=a$type,engine='R/stats',n=length(values)); if(a$type=='descriptive'&&length(values)>1){item$mean<-mean(values);item$sd<-sd(values)}; results[[length(results)+1]]<-item }
@@ -268,13 +319,20 @@ write_json(list(language='r',chartType=chart,preview=preview,versions=list(R=R.v
 
 const MATLAB_SCRIPT = String.raw`% Generated by FTranslate Scientific Plotting Studio.
 spec = jsondecode(fileread('plot-spec.json'));
-data = readtable('data.csv','VariableNamingRule','preserve');
+data = readtable('data.csv','VariableNamingRule','preserve','Encoding','UTF-8');
 if ~exist('output','dir'), mkdir('output'); end
 chart = string(spec.chart.type); enc = spec.encodings;
-fig = figure('Visible','off','Color','white'); ax = axes(fig); hold(ax,'on');
+fontName=resolveFont(string(spec.theme.fontFamily),jsonencode(spec));
+fig = figure('Visible','off','Color',hexColor(spec.theme.canvas.background),'DefaultAxesFontName',fontName,'DefaultTextFontName',fontName); ax = axes(fig,'FontName',fontName); hold(ax,'on');
 x = ''; y = ''; if isfield(enc,'x'), x=string(enc.x); end; if isfield(enc,'y'), y=string(enc.y); end
+group = ''; if isfield(enc,'color'), group=string(enc.color); elseif isfield(enc,'group'), group=string(enc.group); end
 if any(chart == ["line","area","scatter","bar"])
-    xv=data.(x); yv=data.(y); if chart=="line", plot(ax,xv,yv,'-o'); elseif chart=="area", area(ax,xv,yv); elseif chart=="scatter", scatter(ax,xv,yv); else, bar(ax,xv,yv); end
+    if strlength(group)>0
+        groupValues=unique(string(data.(group)),'stable');
+        for groupIndex=1:numel(groupValues), mask=string(data.(group))==groupValues(groupIndex); h=drawCartesianSeries(ax,chart,data.(x)(mask),data.(y)(mask),spec); set(h,'DisplayName',groupValues(groupIndex)); end
+    else
+        drawCartesianSeries(ax,chart,data.(x),data.(y),spec);
+    end
 elseif chart=="histogram", histogram(ax,data.(x));
 elseif chart=="density", [f,xi]=ksdensity(data.(x)); plot(ax,xi,f);
 elseif chart=="ecdf", [f,xi]=ecdf(data.(x)); stairs(ax,xi,f);
@@ -292,10 +350,43 @@ elseif chart=="forest", low=string(enc.errorLower); high=string(enc.errorUpper);
 elseif chart=="volcano", p=max(data.(y),realmin); scatter(ax,data.(x),-log10(p),12,'filled'); ylabel(ax,'-log10(p)');
 elseif chart=="radar", numeric=data(:,vartype('numeric')); polarplot(ax,[table2array(numeric(1,:)),table2array(numeric(1,1))]);
 else, error('Unsupported controlled MATLAB chart type: %s',chart); end
-if isgraphics(ax), applyAxisSpec(ax,spec,'x'); applyAxisSpec(ax,spec,'y'); title(ax,string(spec.chart.title)); end
+if isgraphics(ax), applyAxisSpec(ax,spec,'x'); applyAxisSpec(ax,spec,'y'); hTitle=title(ax,string(spec.chart.title),'FontName',fontName,'FontSize',spec.theme.titleFontSize,'Color',hexColor(spec.theme.titleColor),'FontWeight',char(spec.theme.titleFontWeight)); hTitle.HorizontalAlignment=char(spec.theme.titleAlign); applyLegend(ax,spec,fontName); applyPlotPadding(ax,spec); end
 exportgraphics(fig,'output/preview.png','Resolution',180); try, exportgraphics(fig,'output/preview.svg','ContentType','vector'); catch, end
 manifest=struct('language','matlab','chartType',chart,'preview','preview.png','versions',struct('MATLAB',version)); fid=fopen('output/render-manifest.json','w'); fwrite(fid,jsonencode(manifest,'PrettyPrint',true),'char'); fclose(fid);
 results=struct('engine','MATLAB','version',version); fid=fopen('output/analysis-results.json','w'); fwrite(fid,jsonencode(results,'PrettyPrint',true),'char'); fclose(fid); close(fig);
+
+function h=drawCartesianSeries(ax,chart,xv,yv,spec)
+lineStyles=struct('solid','-','dashed','--','dotted',':'); markerStyles=struct('circle','o','square','s','diamond','d','triangle','^','none','none');
+lineStyle=lineStyles.(char(spec.chart.lineStyle)); marker=markerStyles.(char(spec.chart.markerShape)); alpha=spec.chart.opacity;
+if chart=="line", h=plot(ax,xv,yv,'LineStyle',lineStyle,'LineWidth',spec.theme.lineWidth,'Marker',marker,'MarkerSize',spec.theme.markerSize);
+elseif chart=="area", h=area(ax,xv,yv,'LineStyle',lineStyle,'LineWidth',spec.theme.lineWidth,'FaceAlpha',min(.35,alpha));
+elseif chart=="scatter", h=scatter(ax,xv,yv,max(1,spec.theme.markerSize)^2,marker,'MarkerFaceAlpha',alpha,'MarkerEdgeAlpha',alpha);
+else, h=bar(ax,xv,yv,'FaceAlpha',alpha); end
+end
+
+function applyLegend(ax,spec,fontName)
+if ~isfield(spec,'theme') || strcmp(string(spec.theme.legendPosition),'none'), existing=legend(ax); existing.Visible='off'; return; end
+if isempty(findobj(ax,'-property','DisplayName')), return; end
+locations=struct('top','northoutside','bottom','southoutside','left','westoutside','right','eastoutside'); position=char(spec.theme.legendPosition); if ~isfield(locations,position), position='top'; end
+lgd=legend(ax,'show','Location',locations.(position),'FontName',fontName,'FontSize',spec.theme.legendFontSize,'TextColor',hexColor(spec.theme.legendColor));
+if strcmp(string(spec.theme.legendOrientation),'horizontal') || (strcmp(string(spec.theme.legendOrientation),'auto') && any(strcmp(position,{'top','bottom'}))), lgd.Orientation='horizontal'; else, lgd.Orientation='vertical'; end
+if isfield(spec.theme,'legendBackgroundVisible') && spec.theme.legendBackgroundVisible, lgd.Color=hexColor(spec.theme.legendBackground); else, lgd.Color='none'; end
+lgd.EdgeColor=hexColor(spec.theme.legendBorderColor); lgd.LineWidth=spec.theme.legendBorderWidth; lgd.Box=onOff(spec.theme.legendBorderWidth>0);
+if isfield(spec.theme,'legendX') && isfield(spec.theme,'legendY'), drawnow; lgd.Units='normalized'; p=lgd.Position; p(1)=spec.theme.legendX/100; p(2)=max(0,1-spec.theme.legendY/100-p(4)); lgd.Position=p; end
+end
+
+function applyPlotPadding(ax,spec)
+if ~isfield(spec.theme,'plotPadding'), return; end; pad=spec.theme.plotPadding; fig=ancestor(ax,'figure'); fig.Units='pixels'; size=fig.Position(3:4); ax.Units='normalized';
+left=min(.45,max(.02,pad.left/max(1,size(1)))); bottom=min(.45,max(.02,pad.bottom/max(1,size(2)))); right=max(.55,min(.98,1-pad.right/max(1,size(1)))); top=max(.55,min(.96,1-pad.top/max(1,size(2))));
+ax.Position=[left,bottom,max(.1,right-left),max(.1,top-bottom)]; drawnow; inset=ax.TightInset;
+left=min(.45,max(left,inset(1)+.015)); bottom=min(.45,max(bottom,inset(2)+.015)); right=max(.55,min(right,1-inset(3)-.015)); top=max(.55,min(top,1-inset(4)-.015)); ax.Position=[left,bottom,max(.1,right-left),max(.1,top-bottom)];
+end
+
+function fontName=resolveFont(stack,probe)
+candidates=strtrim(split(stack,',')); codes=double(char(probe)); hasCJK=any(codes>=hex2dec('4E00') & codes<=hex2dec('9FFF')); if hasCJK, preferred=contains(lower(candidates),["yahei","noto","simhei","simsun","songti"]); preferred=any(preferred,2); candidates=[candidates(preferred);candidates(~preferred)]; end
+available=string(listfonts); fontName='Helvetica'; for k=1:numel(candidates), hit=find(strcmpi(available,candidates(k)),1); if ~isempty(hit), fontName=char(available(hit)); return; end, end
+fallbacks=["Microsoft YaHei","Microsoft YaHei UI","Noto Sans CJK SC","SimHei","Arial Unicode MS","Arial","Helvetica"]; for k=1:numel(fallbacks), hit=find(strcmpi(available,fallbacks(k)),1); if ~isempty(hit), fontName=char(available(hit)); return; end, end
+end
 
 function applyAxisSpec(ax,spec,id)
 a=findAxisSpec(spec,id); if isempty(fieldnames(a)), return; end
@@ -315,6 +406,9 @@ end
 if isfield(a,'labelRotation'), if isX, xtickangle(ax,a.labelRotation); else, ytickangle(ax,a.labelRotation); end, end
 if isfield(a,'labelFontSize'), ax.FontSize=a.labelFontSize; end
 if isfield(a,'labelColor'), color=hexColor(a.labelColor); if isX, ax.XColor=color; else, ax.YColor=color; end, end
+if isfield(a,'lineColor'), color=hexColor(a.lineColor); if isX, ax.XColor=color; else, ax.YColor=color; end, end
+if isfield(a,'lineWidth'), ax.LineWidth=a.lineWidth; end
+if isfield(a,'tickLength'), ax.TickLength=[a.tickLength/100,a.tickLength/100]; end
 if isfield(a,'showTicks') && ~a.showTicks, if isX, ax.XTick=[]; else, ax.YTick=[]; end, end
 if isfield(a,'showLabels') && ~a.showLabels, if isX, ax.XTickLabel=[]; else, ax.YTickLabel=[]; end, end
 if isfield(a,'minorTicks') && a.minorTicks, if isX, ax.XMinorTick='on'; else, ax.YMinorTick='on'; end, end
@@ -323,8 +417,10 @@ if isfield(a,'showMinorGrid'), if isX, ax.XMinorGrid=onOff(a.showMinorGrid); els
 if isfield(a,'gridColor'), ax.GridColor=hexColor(a.gridColor); end; if isfield(a,'gridWidth'), ax.LineWidth=a.gridWidth; end
 if isfield(a,'numberFormat')
     places=2; if isfield(a,'decimalPlaces'), places=round(a.decimalPlaces); end
-    mode=string(a.numberFormat); if mode=="scientific", fmt="%."+places+"e"; elseif mode=="percent", fmt="percentage"; elseif mode=="fixed", fmt="%,."+places+"f"; else, fmt="auto"; end
-    if fmt~="auto", if isX, xtickformat(ax,fmt); else, ytickformat(ax,fmt); end, end
+    mode=string(a.numberFormat); ticks=ifelseAxis(isX,xticks(ax),yticks(ax));
+    if mode=="scientific", labels=compose("%."+places+"e",ticks); elseif mode=="percent", labels=compose("%."+places+"f%%",ticks*100); elseif mode=="fixed", labels=compose("%."+places+"f",ticks); else, labels=string(ticks); end
+    prefix=""; suffix=""; if isfield(a,'prefix'), prefix=string(a.prefix); end; if isfield(a,'suffix'), suffix=string(a.suffix); end; labels=prefix+string(labels)+suffix;
+    if mode~="auto" || strlength(prefix)>0 || strlength(suffix)>0, if isX, xticklabels(ax,labels); else, yticklabels(ax,labels); end, end
 end
 if isfield(a,'label')
     if isX, h=xlabel(ax,string(a.label)); else, h=ylabel(ax,string(a.label)); end

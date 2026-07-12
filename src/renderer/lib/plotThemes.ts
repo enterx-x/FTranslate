@@ -1,12 +1,32 @@
 import type { PlotThemePresetId, PlotThemeSpec } from '../../shared/scientificPlot';
 
 const BASE_PALETTE = ['#526f8a', '#738c7a', '#87768f', '#a27468', '#547f87', '#8b815f'];
+const COMMON_LAYOUT = {
+  titleAlign: 'left' as const,
+  titleColor: '#26364a',
+  titleFontWeight: 'bold' as const,
+  plotPadding: { left: 54, right: 24, top: 62, bottom: 48 },
+  legendAlign: 'center' as const,
+  legendOrientation: 'auto' as const,
+  legendOffsetX: 0,
+  legendOffsetY: 0,
+  legendFontSize: 10,
+  legendColor: '#26364a',
+  legendItemGap: 14,
+  legendSymbolWidth: 24,
+  legendSymbolHeight: 12,
+  legendBackground: '#ffffff',
+  legendBackgroundVisible: false,
+  legendBorderColor: '#d7dee7',
+  legendBorderWidth: 0
+};
 
 export const PLOT_THEME_PRESETS: Record<Exclude<PlotThemePresetId, 'lab'>, PlotThemeSpec> = {
   general: {
+    ...COMMON_LAYOUT,
     presetId: 'general',
     name: '通用科研图',
-    fontFamily: 'Arial, Microsoft YaHei UI, sans-serif',
+    fontFamily: 'Arial, Microsoft YaHei UI, Microsoft YaHei, Noto Sans CJK SC, sans-serif',
     baseFontSize: 10,
     titleFontSize: 14,
     lineWidth: 1.8,
@@ -17,10 +37,12 @@ export const PLOT_THEME_PRESETS: Record<Exclude<PlotThemePresetId, 'lab'>, PlotT
     grid: true
   },
   natureScience: {
+    ...COMMON_LAYOUT,
     presetId: 'natureScience',
     name: 'Nature / Science 起始样式',
-    fontFamily: 'Arial, Helvetica, sans-serif',
+    fontFamily: 'Arial, Helvetica, Microsoft YaHei UI, Noto Sans CJK SC, sans-serif',
     baseFontSize: 8,
+    legendFontSize: 8,
     titleFontSize: 10,
     lineWidth: 1.2,
     markerSize: 5,
@@ -30,10 +52,12 @@ export const PLOT_THEME_PRESETS: Record<Exclude<PlotThemePresetId, 'lab'>, PlotT
     grid: false
   },
   ieee: {
+    ...COMMON_LAYOUT,
     presetId: 'ieee',
     name: 'IEEE 起始样式',
-    fontFamily: 'Times New Roman, serif',
+    fontFamily: 'Times New Roman, SimSun, Noto Serif CJK SC, serif',
     baseFontSize: 8,
+    legendFontSize: 8,
     titleFontSize: 9,
     lineWidth: 1.1,
     markerSize: 4,
@@ -43,10 +67,12 @@ export const PLOT_THEME_PRESETS: Record<Exclude<PlotThemePresetId, 'lab'>, PlotT
     grid: true
   },
   elsevier: {
+    ...COMMON_LAYOUT,
     presetId: 'elsevier',
     name: 'Elsevier 起始样式',
-    fontFamily: 'Arial, Helvetica, sans-serif',
+    fontFamily: 'Arial, Helvetica, Microsoft YaHei UI, Noto Sans CJK SC, sans-serif',
     baseFontSize: 9,
+    legendFontSize: 9,
     titleFontSize: 11,
     lineWidth: 1.4,
     markerSize: 5,
@@ -56,9 +82,10 @@ export const PLOT_THEME_PRESETS: Record<Exclude<PlotThemePresetId, 'lab'>, PlotT
     grid: true
   },
   chineseThesis: {
+    ...COMMON_LAYOUT,
     presetId: 'chineseThesis',
     name: '中文学位论文起始样式',
-    fontFamily: 'SimSun, Songti SC, Microsoft YaHei UI, serif',
+    fontFamily: 'SimSun, Songti SC, Noto Serif CJK SC, Microsoft YaHei UI, serif',
     baseFontSize: 10.5,
     titleFontSize: 14,
     lineWidth: 1.5,
@@ -89,10 +116,11 @@ export function mergePlotTheme(base: PlotThemeSpec, patch: Partial<PlotThemeSpec
     ...cloneTheme(base),
     ...patch,
     palette: patch.palette ? [...patch.palette] : [...base.palette],
-    canvas: { ...base.canvas, ...(patch.canvas ?? {}) }
+    canvas: { ...base.canvas, ...(patch.canvas ?? {}) },
+    plotPadding: { ...base.plotPadding, ...(patch.plotPadding ?? {}) }
   };
 }
 
 function cloneTheme(theme: PlotThemeSpec): PlotThemeSpec {
-  return { ...theme, palette: [...theme.palette], canvas: { ...theme.canvas } };
+  return { ...theme, palette: [...theme.palette], canvas: { ...theme.canvas }, plotPadding: { ...theme.plotPadding } };
 }

@@ -16,6 +16,7 @@ import {
   buildArxivTranslationUiApplication,
   advanceArxivTranslationQueue,
   canStartArxivManualTranslation,
+  getArxivTranslationActionState,
   describeLocalTranslationStatus,
   getArxivCardPreviewText,
   getArxivResultDensityConfig,
@@ -347,14 +348,16 @@ describe('ArxivSearchPage result display', () => {
     expect(preview.hiddenCount).toBe(2);
   });
 
-  it('automatically previews only the first six papers in one bounded batch', () => {
+  it('automatically previews only the first six papers as interruptible jobs', () => {
     const papers = Array.from({ length: 20 }, (_, index) => ({
       ...paper,
       id: `${paper.id}-${index}`,
       stableId: `2601.${String(index).padStart(5, '0')}`
     }));
 
-    expect(buildArxivPreviewTranslationBatches(papers)).toEqual([papers.slice(0, 6)]);
+    expect(buildArxivPreviewTranslationBatches(papers)).toEqual(
+      papers.slice(0, 6).map((item) => [item])
+    );
   });
 
   it('binds result helpers to the last executed query instead of an edited input draft', () => {
@@ -396,15 +399,34 @@ describe('ArxivSearchPage result display', () => {
     }));
 
     expect(buildArxivPreviewTranslationBatches(papers, (_, index) => index >= 6)).toEqual([]);
-    expect(buildArxivPreviewTranslationBatches(papers, (_, index) => index === 5)).toEqual([
-      [papers[5]]
-    ]);
+    expect(buildArxivPreviewTranslationBatches(papers, (_, index) => index === 5)).toEqual([[papers[5]]]);
+  });
+
+  it('splits preview translations into interruptible single-paper jobs', () => {
+    const papers = Array.from({ length: 8 }, (_, index) => ({
+      ...paper,
+      id: `${paper.id}-${index}`,
+      stableId: `2601.${String(index).padStart(5, '0')}`
+    }));
+
+    expect(buildArxivPreviewTranslationBatches(papers)).toEqual(
+      papers.slice(0, 6).map((item) => [item])
+    );
   });
 
   it('blocks manual page and single-paper translations while a search owns the session', () => {
     expect(canStartArxivManualTranslation(true, 7)).toBe(false);
     expect(canStartArxivManualTranslation(false, null)).toBe(false);
     expect(canStartArxivManualTranslation(false, 7)).toBe(true);
+  });
+
+  it('keeps background translation clickable so a paper can be promoted to foreground', () => {
+    expect(getArxivTranslationActionState(false, false, true)).toEqual({
+      disabled: false,
+      label: '优先翻译',
+      title: '点击后提升为前台优先翻译'
+    });
+    expect(getArxivTranslationActionState(false, true, true).disabled).toBe(true);
   });
 
   it('builds explicit preview, page, and foreground IPC request shapes', () => {

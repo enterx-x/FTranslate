@@ -235,12 +235,7 @@ export function buildChatCompletionRequest(
     messages: [
       {
         role: 'system',
-        content: [
-          '你是严谨的学术论文英译中助手。',
-          '请忠实翻译英文论文段落为中文，保留术语、变量名、公式符号、引用编号和模型名称。',
-          '如果原文包含数学表达式，请用 LaTeX 定界符保留：行内公式使用 $...$，独立公式使用 $$...$$。',
-          '只输出中文译文，不要解释，不要添加 Markdown 代码块。'
-        ].join('\n')
+        content: '忠实进行学术英译中；保留术语、变量、模型名、引用及 LaTeX（$...$ / $$...$$）；只输出译文。'
       },
       {
         role: 'user',

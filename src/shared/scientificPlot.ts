@@ -139,6 +139,9 @@ export interface ScientificChartSpec {
   stacked?: boolean;
   smooth?: boolean;
   showPoints?: boolean;
+  lineStyle?: 'solid' | 'dashed' | 'dotted';
+  markerShape?: 'circle' | 'square' | 'diamond' | 'triangle' | 'none';
+  opacity?: number;
 }
 
 export interface PlotEncodingSpec {
@@ -195,6 +198,10 @@ export interface PlotAxisSpec {
   showMinorGrid?: boolean;
   gridColor?: string;
   gridWidth?: number;
+  lineColor?: string;
+  lineWidth?: number;
+  tickColor?: string;
+  tickLength?: number;
   logBase?: number;
 }
 
@@ -222,9 +229,28 @@ export interface PlotThemeSpec {
   titleFontSize: number;
   lineWidth: number;
   markerSize: number;
+  titleAlign: 'left' | 'center' | 'right';
+  titleColor: string;
+  titleFontWeight: 'normal' | 'bold';
   palette: string[];
   canvas: { widthMm: number; heightMm: number; background: string };
+  plotPadding: { left: number; right: number; top: number; bottom: number };
   legendPosition: 'top' | 'right' | 'bottom' | 'left' | 'none';
+  legendAlign: 'start' | 'center' | 'end';
+  legendOrientation: 'auto' | 'horizontal' | 'vertical';
+  legendOffsetX: number;
+  legendOffsetY: number;
+  legendX?: number;
+  legendY?: number;
+  legendFontSize: number;
+  legendColor: string;
+  legendItemGap: number;
+  legendSymbolWidth: number;
+  legendSymbolHeight: number;
+  legendBackground: string;
+  legendBackgroundVisible: boolean;
+  legendBorderColor: string;
+  legendBorderWidth: number;
   grid: boolean;
 }
 
@@ -378,14 +404,31 @@ export interface PlotRendererCapability {
 const DEFAULT_THEME: PlotThemeSpec = {
   presetId: 'general',
   name: '通用科研图',
-  fontFamily: 'Arial, Microsoft YaHei UI, sans-serif',
+  fontFamily: 'Microsoft YaHei UI, Microsoft YaHei, Noto Sans CJK SC, SimHei, Arial, DejaVu Sans, sans-serif',
   baseFontSize: 10,
   titleFontSize: 14,
   lineWidth: 1.8,
   markerSize: 6,
+  titleAlign: 'left',
+  titleColor: '#26364a',
+  titleFontWeight: 'bold',
   palette: ['#526f8a', '#738c7a', '#87768f', '#a27468', '#547f87', '#8b815f'],
   canvas: { widthMm: 180, heightMm: 120, background: '#ffffff' },
+  plotPadding: { left: 54, right: 24, top: 62, bottom: 48 },
   legendPosition: 'top',
+  legendAlign: 'center',
+  legendOrientation: 'auto',
+  legendOffsetX: 0,
+  legendOffsetY: 0,
+  legendFontSize: 10,
+  legendColor: '#26364a',
+  legendItemGap: 14,
+  legendSymbolWidth: 24,
+  legendSymbolHeight: 12,
+  legendBackground: '#ffffff',
+  legendBackgroundVisible: false,
+  legendBorderColor: '#d7dee7',
+  legendBorderWidth: 0,
   grid: true
 };
 
@@ -410,7 +453,10 @@ export function createDefaultScientificPlotSpec(id = createId('plot')): Scientif
       orientation: 'vertical',
       stacked: false,
       smooth: false,
-      showPoints: true
+      showPoints: true,
+      lineStyle: 'solid',
+      markerShape: 'circle',
+      opacity: 1
     },
     encodings: {},
     layers: [
@@ -466,7 +512,10 @@ export function normalizeScientificPlotSpec(value: unknown): ScientificPlotSpec 
       orientation: chartRecord.orientation === 'horizontal' ? 'horizontal' : 'vertical',
       stacked: readOptionalBoolean(chartRecord.stacked) ?? base.chart.stacked,
       smooth: readOptionalBoolean(chartRecord.smooth) ?? base.chart.smooth,
-      showPoints: readOptionalBoolean(chartRecord.showPoints) ?? base.chart.showPoints
+      showPoints: readOptionalBoolean(chartRecord.showPoints) ?? base.chart.showPoints,
+      lineStyle: normalizeEnum(chartRecord.lineStyle, ['solid', 'dashed', 'dotted'], base.chart.lineStyle),
+      markerShape: normalizeEnum(chartRecord.markerShape, ['circle', 'square', 'diamond', 'triangle', 'none'], base.chart.markerShape),
+      opacity: readBoundedNumber(chartRecord.opacity, 0, 1) ?? base.chart.opacity
     },
     encodings,
     renderer: {
@@ -714,6 +763,10 @@ function normalizeAxis(value: unknown, index: number): PlotAxisSpec {
     showMinorGrid: readOptionalBoolean(record.showMinorGrid),
     gridColor: readOptionalString(record.gridColor),
     gridWidth: readBoundedNumber(record.gridWidth, 0.1, 10),
+    lineColor: readOptionalString(record.lineColor),
+    lineWidth: readBoundedNumber(record.lineWidth, 0.1, 10),
+    tickColor: readOptionalString(record.tickColor),
+    tickLength: readBoundedNumber(record.tickLength, 0, 50),
     logBase: readBoundedNumber(record.logBase, 2, 100)
   };
 }
@@ -739,6 +792,7 @@ function normalizeTheme(value: unknown): PlotThemeSpec {
   const accepted: PlotThemePresetId[] = ['general', 'natureScience', 'ieee', 'elsevier', 'chineseThesis', 'lab'];
   if (!accepted.includes(preset as PlotThemePresetId)) throw new Error(`Unsupported theme preset: ${preset}`);
   const canvasRecord = record.canvas === undefined ? {} : asRecord(record.canvas, 'theme canvas');
+  const paddingRecord = record.plotPadding === undefined ? {} : asRecord(record.plotPadding, 'theme plot padding');
   const palette = Array.isArray(record.palette)
     ? record.palette.filter((item): item is string => typeof item === 'string').slice(0, 32)
     : DEFAULT_THEME.palette;
@@ -750,13 +804,37 @@ function normalizeTheme(value: unknown): PlotThemeSpec {
     titleFontSize: readBoundedNumber(record.titleFontSize, 6, 96) ?? DEFAULT_THEME.titleFontSize,
     lineWidth: readBoundedNumber(record.lineWidth, 0.1, 20) ?? DEFAULT_THEME.lineWidth,
     markerSize: readBoundedNumber(record.markerSize, 0, 100) ?? DEFAULT_THEME.markerSize,
+    titleAlign: normalizeEnum(record.titleAlign, ['left', 'center', 'right'], DEFAULT_THEME.titleAlign) ?? DEFAULT_THEME.titleAlign,
+    titleColor: readOptionalString(record.titleColor) || DEFAULT_THEME.titleColor,
+    titleFontWeight: normalizeEnum(record.titleFontWeight, ['normal', 'bold'], DEFAULT_THEME.titleFontWeight) ?? DEFAULT_THEME.titleFontWeight,
     palette: palette.length > 0 ? palette : [...DEFAULT_THEME.palette],
     canvas: {
       widthMm: readBoundedNumber(canvasRecord.widthMm, 20, 2_000) ?? DEFAULT_THEME.canvas.widthMm,
       heightMm: readBoundedNumber(canvasRecord.heightMm, 20, 2_000) ?? DEFAULT_THEME.canvas.heightMm,
       background: readOptionalString(canvasRecord.background) || DEFAULT_THEME.canvas.background
     },
+    plotPadding: {
+      left: readBoundedNumber(paddingRecord.left, 0, 500) ?? DEFAULT_THEME.plotPadding.left,
+      right: readBoundedNumber(paddingRecord.right, 0, 500) ?? DEFAULT_THEME.plotPadding.right,
+      top: readBoundedNumber(paddingRecord.top, 0, 500) ?? DEFAULT_THEME.plotPadding.top,
+      bottom: readBoundedNumber(paddingRecord.bottom, 0, 500) ?? DEFAULT_THEME.plotPadding.bottom
+    },
     legendPosition: normalizeLegendPosition(record.legendPosition),
+    legendAlign: normalizeEnum(record.legendAlign, ['start', 'center', 'end'], DEFAULT_THEME.legendAlign) ?? DEFAULT_THEME.legendAlign,
+    legendOrientation: normalizeEnum(record.legendOrientation, ['auto', 'horizontal', 'vertical'], DEFAULT_THEME.legendOrientation) ?? DEFAULT_THEME.legendOrientation,
+    legendOffsetX: readBoundedNumber(record.legendOffsetX, -500, 500) ?? DEFAULT_THEME.legendOffsetX,
+    legendOffsetY: readBoundedNumber(record.legendOffsetY, -500, 500) ?? DEFAULT_THEME.legendOffsetY,
+    legendX: readBoundedNumber(record.legendX, 0, 100),
+    legendY: readBoundedNumber(record.legendY, 0, 100),
+    legendFontSize: readBoundedNumber(record.legendFontSize, 6, 72) ?? DEFAULT_THEME.legendFontSize,
+    legendColor: readOptionalString(record.legendColor) || DEFAULT_THEME.legendColor,
+    legendItemGap: readBoundedNumber(record.legendItemGap, 0, 100) ?? DEFAULT_THEME.legendItemGap,
+    legendSymbolWidth: readBoundedNumber(record.legendSymbolWidth, 0, 100) ?? DEFAULT_THEME.legendSymbolWidth,
+    legendSymbolHeight: readBoundedNumber(record.legendSymbolHeight, 0, 100) ?? DEFAULT_THEME.legendSymbolHeight,
+    legendBackground: readOptionalString(record.legendBackground) || DEFAULT_THEME.legendBackground,
+    legendBackgroundVisible: readOptionalBoolean(record.legendBackgroundVisible) ?? DEFAULT_THEME.legendBackgroundVisible,
+    legendBorderColor: readOptionalString(record.legendBorderColor) || DEFAULT_THEME.legendBorderColor,
+    legendBorderWidth: readBoundedNumber(record.legendBorderWidth, 0, 20) ?? DEFAULT_THEME.legendBorderWidth,
     grid: readOptionalBoolean(record.grid) ?? DEFAULT_THEME.grid
   };
 }
@@ -843,7 +921,12 @@ function normalizeLegendPosition(value: unknown): PlotThemeSpec['legendPosition'
 }
 
 function cloneTheme(theme: PlotThemeSpec): PlotThemeSpec {
-  return { ...theme, palette: [...theme.palette], canvas: { ...theme.canvas } };
+  return { ...theme, palette: [...theme.palette], canvas: { ...theme.canvas }, plotPadding: { ...theme.plotPadding } };
+}
+
+function normalizeEnum<T extends string>(value: unknown, accepted: readonly T[], fallback: T | undefined): T | undefined {
+  const normalized = String(value ?? '');
+  return accepted.includes(normalized as T) ? normalized as T : fallback;
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {

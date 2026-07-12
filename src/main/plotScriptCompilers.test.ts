@@ -32,4 +32,20 @@ describe('controlled plot script compilers', () => {
     expect(compilePlotScript('matlab').content).toContain("applyAxisSpec(ax,spec,'x')");
     expect(compilePlotScript('matlab').content).toContain("ax.XScale='log'");
   });
+
+  it('preserves UTF-8 text, selected font fallbacks and legend layout in every renderer', () => {
+    const python = compilePlotScript('python').content;
+    const r = compilePlotScript('r').content;
+    const matlab = compilePlotScript('matlab').content;
+    expect(python).toContain("encoding='utf-8-sig'");
+    expect(python).toContain('font_manager.fontManager.ttflist');
+    expect(python).toContain('def apply_legend()');
+    expect(r).toContain("csv_bytes <- readBin('data.csv'");
+    expect(r).toContain("Encoding(csv_text) <- 'UTF-8'");
+    expect(r).toContain('resolve_font');
+    expect(r).toContain('legend.position=legend_position');
+    expect(matlab).toContain("'Encoding','UTF-8'");
+    expect(matlab).toContain('fontName=resolveFont');
+    expect(matlab).toContain('applyLegend(ax,spec,fontName)');
+  });
 });

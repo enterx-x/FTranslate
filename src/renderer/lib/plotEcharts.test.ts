@@ -74,6 +74,27 @@ describe('ECharts scientific compiler', () => {
     expect(yAxis.minorSplitLine).toMatchObject({ show: true });
   });
 
+  it('applies selected fonts, precise legend placement and series appearance', () => {
+    const spec = createDefaultScientificPlotSpec('legend-style');
+    spec.encodings = { x: 'steps', y: 'score', color: 'algorithm' };
+    spec.theme.fontFamily = 'Microsoft YaHei, Noto Sans CJK SC, sans-serif';
+    spec.theme.legendX = 78;
+    spec.theme.legendY = 12;
+    spec.theme.legendOrientation = 'vertical';
+    spec.theme.legendFontSize = 13;
+    spec.theme.legendColor = '#334455';
+    spec.chart.lineStyle = 'dashed';
+    spec.chart.markerShape = 'diamond';
+    spec.chart.opacity = 0.6;
+    const compiled = compileScientificEchartsOption(spec, table);
+    const legend = compiled.option.legend as Record<string, unknown>;
+    const series = (compiled.option.series as Array<Record<string, unknown>>)[0];
+    expect(compiled.option.textStyle).toMatchObject({ fontFamily: spec.theme.fontFamily });
+    expect(legend).toMatchObject({ left: '78%', top: '12%', orient: 'vertical' });
+    expect(legend.textStyle).toMatchObject({ fontSize: 13, color: '#334455' });
+    expect(series).toMatchObject({ symbol: 'diamond', lineStyle: { type: 'dashed', opacity: 0.6 }, itemStyle: { opacity: 0.6 } });
+  });
+
   it('compiles flow and distribution families without substituting a line chart', () => {
     const flowSpec = createDefaultScientificPlotSpec('flow');
     flowSpec.chart.type = 'alluvial';

@@ -593,6 +593,111 @@ button:disabled {
   background: #dc2626;
 }
 
+.pdf-selection-translation {
+  position: absolute;
+  z-index: 24;
+  display: grid;
+  gap: 10px;
+  width: min(340px, calc(100% - 24px));
+  max-height: min(360px, calc(100% - 24px));
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.24);
+  color: #172033;
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+
+.pdf-selection-translation header,
+.pdf-selection-translation footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pdf-selection-translation header > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pdf-selection-translation header strong {
+  font-size: 13px;
+}
+
+.pdf-selection-translation header span,
+.pdf-selection-translation > p {
+  margin: 0;
+  color: #687385;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.pdf-selection-translation > p.is-error {
+  color: #b42318;
+}
+
+.pdf-selection-translation header > button {
+  display: inline-grid;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #d9dee7;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #465266;
+  cursor: pointer;
+  font-size: 19px;
+  line-height: 1;
+}
+
+.pdf-selection-source,
+.pdf-selection-result {
+  padding: 9px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.pdf-selection-source {
+  display: -webkit-box;
+  overflow: hidden;
+  border: 1px solid #e1e6ee;
+  background: #f5f7fa;
+  color: #4d596c;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.pdf-selection-result {
+  border-left: 3px solid #355878;
+  background: #eef3f7;
+  color: #172033;
+}
+
+.pdf-selection-translation footer {
+  justify-content: flex-start;
+}
+
+.pdf-selection-translation footer button {
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .pdf-selection-translation {
+    background: #ffffff;
+  }
+}
+
 .translation-panel {
   grid-template-rows: auto auto auto auto auto auto;
   overflow: auto;

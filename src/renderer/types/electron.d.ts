@@ -72,6 +72,7 @@ export interface AiTranslateResult {
   provider: AiProviderId;
   model: string;
   skipped: boolean;
+  cacheHit?: boolean;
 }
 
 export interface AiConnectionTestResult {

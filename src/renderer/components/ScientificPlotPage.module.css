@@ -9,6 +9,21 @@
 .canvasColumn{padding:14px;background:transparent}.chartToolbar button,.chartToolbar select{font-size:10px}.chartToolbar .activeTool{border-color:var(--plot-accent-strong);background:linear-gradient(135deg,var(--plot-accent-strong),#6d68e8);color:#fff}.canvasSurface{border-color:#cbd4df;border-radius:10px;box-shadow:0 8px 18px rgba(37,48,67,.09)}
 .statusStrip b,.statusStrip span{font-size:9px}.inspectorTabs button{font-size:10px;transition:color .18s ease,background-color .18s ease,border-color .18s ease}.inspectorTabs button:hover{background:#f3f2ff;color:var(--plot-accent-strong)}.inspectorTabs .activeTab{border-bottom-color:var(--plot-accent);color:var(--plot-accent-strong)}.inspectorSection h3{font-size:11px}.mappingRow,.formField{font-size:9px}.mappingRow select,.formField select,.formField input,.transformForm select,.transformForm input,.importSettings select,.importSettings input{min-height:34px;font-size:10px}.layerCard b,.analysisCard b,.exportRow b{font-size:10px}.layerCard span,.analysisCard span,.analysisCard small,.exportRow small{font-size:8px}
 @media(prefers-reduced-transparency:reduce){.header,.dataRail,.inspector{background:#fff;backdrop-filter:none}}
+
+.collapseInspector {
+  left: 6px;
+  top: 4px;
+  width: 24px;
+  height: 24px;
+  transform: none;
+  border-left: 1px solid #cbd5de;
+  border-radius: 6px;
+}
+
+.inspectorTabs {
+  padding-left: 36px;
+}
 /* Runtime setup is an on-demand dialog; the path row stays compact and never occupies the plot canvas. */
 .runtimeTarget{display:flex;align-items:center;gap:7px;margin-bottom:10px;padding:10px;border:1px solid #d6dee5;border-radius:8px;background:#f8fafb}.runtimeTarget>div{min-width:0;margin-right:auto}.runtimeTarget b,.runtimeTarget span{display:block}.runtimeTarget b{font-size:9px}.runtimeTarget span{max-width:510px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#778596;font-size:8px}.runtimeTarget button{padding:7px 9px;border:1px solid #c5d0da;border-radius:6px;background:#fff;color:#40556a;font-size:8px;cursor:pointer}
 .compactGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 7px}.axisEditor{padding:1px}.axisEditor h4{margin:11px 0 3px;padding-top:8px;border-top:1px solid #e4e9ed;color:#53677b;font-size:8px}.inlineChecks{display:flex;flex-wrap:wrap;gap:0 9px}.inlineChecks .checkRow{margin:4px 0}.formField input[type="color"]{height:30px;padding:3px;cursor:pointer}
+.subsectionTitle{margin:12px 0 2px;color:#53677b;font-size:9px}.paletteGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:9px}.paletteGrid label{color:#6f7f8f;font-size:8px}.paletteGrid input{display:block;width:100%;height:30px;margin-top:4px;padding:3px;border:1px solid #cdd6df;border-radius:6px;background:#fff;box-sizing:border-box;cursor:pointer}

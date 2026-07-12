@@ -923,7 +923,10 @@ async function readPdfInitialCenterLayout(client, label) {
       rightHidden: Math.round(rightHidden),
       hiddenDelta: Math.round(Math.abs(leftHidden - rightHidden)),
       visibleWidth: Math.round(visibleWidth),
-      hasWidePage: pageBox.width > containerBox.width + 8
+      hasWidePage: pageBox.width > containerBox.width + 8,
+      fitWidthGap: Math.round(Math.max(0, containerBox.width - pageBox.width)),
+      fullyVisibleHorizontally: leftHidden <= 2 && rightHidden <= 2,
+      isFitWidth: pageBox.width <= containerBox.width + 2 && containerBox.width - pageBox.width <= 80
     };
   }`);
 }
@@ -2174,7 +2177,9 @@ async function runWholePdfReaderScenario(client) {
   const initialPdfCenter = await readPdfInitialCenterLayout(client, 'initial-reader');
   if (
     !initialPdfCenter.hasPage ||
-    (initialPdfCenter.hasWidePage && initialPdfCenter.hiddenDelta > 28)
+    !initialPdfCenter.fullyVisibleHorizontally ||
+    !initialPdfCenter.isFitWidth ||
+    initialPdfCenter.hiddenDelta > 4
   ) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'whole-pdf-initial-center-failed.png'), Buffer.from(shot.data, 'base64'))
@@ -2377,6 +2382,86 @@ async function runWholePdfReaderScenario(client) {
     figureExtraction,
     requireNativeFigureExtraction
   };
+}
+
+async function runPdfSelectionTranslationScenario(client) {
+  await clickSidebarSection(client, 'library');
+  await wait(350);
+  const preparedLibrarySelection = await evaluateJson(client, `() => {
+    document.querySelector('[data-paper-library-row]')?.click();
+    document.querySelector('button[title="展开详情"]')?.click();
+    return Boolean(document.querySelector('[data-paper-library-row]'));
+  }`);
+  if (!preparedLibrarySelection) throw new Error('pdfSelection: paper library row not found');
+  await wait(350);
+  const openedFromLibrary = await evaluateJson(client, `() => {
+    const resume = document.querySelector('[data-paper-library-resume]');
+    if (resume && !resume.disabled) resume.click();
+    return Boolean(resume && !resume.disabled);
+  }`);
+  if (!openedFromLibrary) throw new Error('pdfSelection: paper library resume action not found');
+  await waitForAppReady(client);
+  await waitForPdfCanvas(client);
+  const initialFit = await readPdfInitialCenterLayout(client, 'pdf-selection-reader');
+  if (!initialFit.hasPage || !initialFit.fullyVisibleHorizontally || !initialFit.isFitWidth || initialFit.hiddenDelta > 4) {
+    throw new Error(`pdfSelection: initial PDF should fit width and remain centered, got ${JSON.stringify(initialFit)}`);
+  }
+
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const hasText = await evaluateJson(client, `() => [...document.querySelectorAll('.pdf-viewer-shell .textLayer span')]
+      .some((item) => (item.textContent ?? '').trim().length >= 6)`);
+    if (hasText) break;
+    await wait(100);
+  }
+
+  const selected = await evaluateJson(client, `() => {
+    const span = [...document.querySelectorAll('.pdf-viewer-shell .textLayer span')]
+      .find((item) => (item.textContent ?? '').trim().length >= 6);
+    const container = span?.closest('.pdf-js-viewer-container');
+    if (!span || !container) return false;
+    const range = document.createRange();
+    range.selectNodeContents(span);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+    return true;
+  }`);
+  if (!selected) throw new Error('pdfSelection: selectable PDF text was not found');
+
+  let snapshot = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    snapshot = await evaluateJson(client, `() => {
+      const card = document.querySelector('[data-testid="pdf-selection-translation"]');
+      const shell = card?.closest('.pdf-viewer-shell');
+      const cardRect = card?.getBoundingClientRect();
+      const shellRect = shell?.getBoundingClientRect();
+      const text = card?.textContent ?? '';
+      return {
+        visible: Boolean(card),
+        hasSource: Boolean(document.querySelector('.pdf-selection-source')?.textContent?.trim()),
+        hasTranslateAction: /翻译选中内容/.test(text),
+        hasDirection: /英 → 中|中 → 英/.test(text),
+        withinViewport: Boolean(cardRect && cardRect.left >= 0 && cardRect.right <= window.innerWidth && cardRect.top >= 0 && cardRect.bottom <= window.innerHeight),
+        withinPdfShell: Boolean(cardRect && shellRect && cardRect.left >= shellRect.left && cardRect.right <= shellRect.right + 1 && cardRect.top >= shellRect.top && cardRect.bottom <= shellRect.bottom + 1),
+        horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+        cardOverflow: Boolean(card && card.scrollWidth > card.clientWidth + 3),
+        cardRect: cardRect ? { left: Math.round(cardRect.left), top: Math.round(cardRect.top), width: Math.round(cardRect.width), height: Math.round(cardRect.height) } : null
+      };
+    }`);
+    if (snapshot.visible) break;
+    await wait(100);
+  }
+  if (!snapshot?.visible || !snapshot.hasSource || !snapshot.hasTranslateAction || !snapshot.hasDirection || !snapshot.withinViewport || !snapshot.withinPdfShell || snapshot.horizontalOverflow || snapshot.cardOverflow) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'pdf-selection-translation-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`pdfSelection: selected-text translation card is clipped or incomplete, got ${JSON.stringify(snapshot)}`);
+  }
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'pdf-selection-translation.png'), Buffer.from(shot.data, 'base64'))
+  );
+  return { ...snapshot, initialFit };
 }
 
 async function runPresentationScenario(client) {
@@ -3690,6 +3775,32 @@ async function runScientificPlotScenario(client) {
   );
   await clickButtonByText(client, '样式');
   await wait(200);
+  const styleInspector = await evaluateJson(client, `() => {
+    const sections = [...document.querySelectorAll('section')];
+    const inspector = sections
+      .find((section) => (section.textContent ?? '').includes('字体、线条与配色'))?.parentElement;
+    const legendSection = sections.find((section) => section.querySelector('h3')?.textContent?.trim() === '图例');
+    const labels = [...(inspector?.querySelectorAll('label') ?? [])].map((item) => (item.textContent ?? '').trim());
+    const fontLabel = [...(inspector?.querySelectorAll('label') ?? [])]
+      .find((item) => (item.textContent ?? '').trim().startsWith('字体'));
+    const fontSelect = fontLabel?.querySelector('select');
+    legendSection?.scrollIntoView({ block: 'start', inline: 'nearest' });
+    return {
+      hasFontSelector: Boolean(fontSelect && fontSelect.options.length >= 5),
+      hasLegendPosition: labels.some((label) => label.startsWith('位置')),
+      hasLegendOrientation: labels.some((label) => label.startsWith('排列')),
+      hasCustomLegendCoordinates: labels.some((label) => label.startsWith('自定义 X')) && labels.some((label) => label.startsWith('自定义 Y')),
+      hasLegendAppearance: labels.some((label) => label.startsWith('项目间距')) && labels.some((label) => label.startsWith('边框宽度')),
+      horizontalOverflow: Boolean(inspector && inspector.scrollWidth > inspector.clientWidth + 3)
+    };
+  }`);
+  if (!styleInspector.hasFontSelector || !styleInspector.hasLegendPosition || !styleInspector.hasLegendOrientation || !styleInspector.hasCustomLegendCoordinates || !styleInspector.hasLegendAppearance || styleInspector.horizontalOverflow) {
+    throw new Error(`scientificPlot: font or legend controls are incomplete, got ${JSON.stringify(styleInspector)}`);
+  }
+  await wait(150);
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'scientific-plot-style-editor.png'), Buffer.from(shot.data, 'base64'))
+  );
   const axisEditor = await evaluateJson(client, `() => {
     const sections = [...document.querySelectorAll('section')];
     const xSection = sections.find((section) => section.querySelector('h3')?.textContent?.trim() === '横轴 X');
@@ -3794,7 +3905,7 @@ async function runScientificPlotScenario(client) {
     writeFile(path.join(outputDir, 'scientific-plot-matlab-selected.png'), Buffer.from(shot.data, 'base64'))
   );
   await clickSidebarSection(client, 'researchSheet');
-  return { ...snapshot, axisEditor, runtimeDialog, matlabState };
+  return { ...snapshot, styleInspector, axisEditor, runtimeDialog, matlabState };
 }
 
 async function main() {
@@ -3875,6 +3986,20 @@ async function main() {
       const scientificPlot = await runScientificPlotScenario(client);
       client.close();
       console.log(JSON.stringify({ pdfPath, scientificPlot, outputDir }, null, 2));
+      return;
+    }
+
+    if (visualScenario === 'pdf-selection') {
+      const pdfSelection = await runPdfSelectionTranslationScenario(client);
+      client.close();
+      console.log(JSON.stringify({ pdfPath, pdfSelection, outputDir }, null, 2));
+      return;
+    }
+
+    if (visualScenario === 'arxiv') {
+      const arxivSearch = await runArxivSearchScenario(client);
+      client.close();
+      console.log(JSON.stringify({ pdfPath, arxivSearch, outputDir }, null, 2));
       return;
     }
 

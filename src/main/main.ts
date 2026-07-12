@@ -2076,11 +2076,6 @@ function decryptApiKey(encryptedApiKey?: string): string {
 
 async function translateWithAi(request: AiTranslationItem & { force?: boolean }) {
   const settings = await loadStoredAiSettings();
-  const apiKey = decryptApiKey(settings.encryptedApiKey);
-
-  if (!apiKey) {
-    throw new Error('请先在 AI 设置中保存 API Key。');
-  }
 
   if (!shouldTranslateItem(request, request.force)) {
     return {
@@ -2092,12 +2087,95 @@ async function translateWithAi(request: AiTranslationItem & { force?: boolean })
     };
   }
 
+  const cacheKey = buildAiTranslationCacheKey(settings, request);
+  if (!request.force && cacheKey) {
+    const cached = await readAiTranslationCacheEntry(cacheKey);
+    if (cached) {
+      return {
+        ...applyAiTranslationResult(request, cached.translation, settings, cached.translatedAt),
+        skipped: false,
+        cacheHit: true
+      };
+    }
+  }
+
+  const apiKey = decryptApiKey(settings.encryptedApiKey);
+  if (!apiKey) {
+    throw new Error('请先在 AI 设置中保存 API Key。');
+  }
+
   const chatRequest = buildChatCompletionRequest(settings, request);
   const aiTranslation = await executeChatCompletion(chatRequest.url, chatRequest.body, apiKey, settings);
+  const result = applyAiTranslationResult(request, aiTranslation, settings);
+  if (cacheKey && result.translation.trim()) {
+    await writeAiTranslationCacheEntry(cacheKey, {
+      translation: result.translation,
+      translatedAt: result.translatedAt ?? new Date().toISOString()
+    });
+  }
   return {
-    ...applyAiTranslationResult(request, aiTranslation, settings),
+    ...result,
+    cacheHit: false,
     skipped: false
   };
+}
+
+interface AiTranslationCacheEntry {
+  translation: string;
+  translatedAt: string;
+}
+
+const AI_TRANSLATION_CACHE_LIMIT = 4_000;
+const AI_TRANSLATION_CACHE_SCHEMA = 'academic-zh-v1';
+
+function getAiTranslationCachePath(): string {
+  return path.join(app.getPath('userData'), 'ai-translation-cache.json');
+}
+
+function buildAiTranslationCacheKey(
+  settings: AiProviderSettings,
+  item: AiTranslationItem
+): string | null {
+  const sourceHash = item.sourceHash?.trim();
+  if (!sourceHash) {
+    return null;
+  }
+  return [AI_TRANSLATION_CACHE_SCHEMA, settings.provider, settings.model.trim(), sourceHash].join(':');
+}
+
+async function loadAiTranslationCache(): Promise<Record<string, AiTranslationCacheEntry>> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(getAiTranslationCachePath(), 'utf8')) as unknown;
+    if (!isRecord(parsed)) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, AiTranslationCacheEntry] => {
+        const value = entry[1];
+        return isRecord(value) && typeof value.translation === 'string' && typeof value.translatedAt === 'string';
+      })
+    );
+  } catch {
+    return {};
+  }
+}
+
+async function readAiTranslationCacheEntry(key: string): Promise<AiTranslationCacheEntry | null> {
+  const cache = await loadAiTranslationCache();
+  return cache[key] ?? null;
+}
+
+async function writeAiTranslationCacheEntry(key: string, entry: AiTranslationCacheEntry): Promise<void> {
+  try {
+    const cache = await loadAiTranslationCache();
+    cache[key] = entry;
+    const entries = Object.entries(cache)
+      .sort((left, right) => right[1].translatedAt.localeCompare(left[1].translatedAt))
+      .slice(0, AI_TRANSLATION_CACHE_LIMIT);
+    await fs.writeFile(getAiTranslationCachePath(), JSON.stringify(Object.fromEntries(entries)), 'utf8');
+  } catch {
+    // Translation already succeeded; cache I/O must not discard the result.
+  }
 }
 
 async function completeWithAi(request: AiCompleteRequest): Promise<string> {

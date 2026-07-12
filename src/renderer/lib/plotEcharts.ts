@@ -94,11 +94,12 @@ function compileCartesian(context: CompileContext, type: ScientificChartType): R
       data,
       smooth: context.spec.chart.smooth,
       symbolSize: context.spec.theme.markerSize,
+      symbol: echartsSymbol(context.spec.chart.markerShape),
       showSymbol: context.spec.chart.showPoints,
       stack: context.spec.chart.stacked ? 'total' : undefined,
-      areaStyle: type === 'area' ? { opacity: 0.2 } : undefined,
-      lineStyle: { width: context.spec.theme.lineWidth },
-      itemStyle: { color: paletteColor(context.spec, seriesIndex) }
+      areaStyle: type === 'area' ? { opacity: Math.min(0.35, context.spec.chart.opacity ?? 1) } : undefined,
+      lineStyle: { width: context.spec.theme.lineWidth, type: context.spec.chart.lineStyle ?? 'solid', opacity: context.spec.chart.opacity ?? 1 },
+      itemStyle: { color: paletteColor(context.spec, seriesIndex), opacity: context.spec.chart.opacity ?? 1 }
     };
   });
   appendErrorIntervals(context, series, groups, xIndex);
@@ -388,15 +389,40 @@ function baseOption(spec: ScientificPlotSpec): Record<string, unknown> {
     top: { top: 2, left: 'center' }, right: { right: 2, top: 'middle', orient: 'vertical' },
     bottom: { bottom: 2, left: 'center' }, left: { left: 2, top: 'middle', orient: 'vertical' }, none: { show: false }
   };
+  const titleLeft = spec.theme.titleAlign === 'center' ? 'center' : spec.theme.titleAlign === 'right' ? 'right' : 12;
+  const legendPosition = spec.theme.legendX !== undefined && spec.theme.legendY !== undefined
+    ? { left: `${spec.theme.legendX}%`, top: `${spec.theme.legendY}%` }
+    : legendPositions[spec.theme.legendPosition];
+  const legendOrientation = spec.theme.legendOrientation === 'auto'
+    ? (spec.theme.legendPosition === 'left' || spec.theme.legendPosition === 'right' ? 'vertical' : 'horizontal')
+    : spec.theme.legendOrientation;
   return {
     backgroundColor: spec.theme.canvas.background,
     color: spec.theme.palette,
     animation: false,
     textStyle: { fontFamily: spec.theme.fontFamily, fontSize: spec.theme.baseFontSize, color: '#26364a' },
-    title: { text: spec.chart.title || spec.title, subtext: spec.chart.subtitle, left: 12, top: 8, textStyle: { fontFamily: spec.theme.fontFamily, fontSize: spec.theme.titleFontSize, fontWeight: 600 } },
-    legend: { ...legendPositions[spec.theme.legendPosition], textStyle: { fontFamily: spec.theme.fontFamily, fontSize: spec.theme.baseFontSize } },
+    title: { text: spec.chart.title || spec.title, subtext: spec.chart.subtitle, left: titleLeft, top: 8, textStyle: { fontFamily: spec.theme.fontFamily, fontSize: spec.theme.titleFontSize, color: spec.theme.titleColor, fontWeight: spec.theme.titleFontWeight } },
+    legend: {
+      ...legendPosition,
+      show: spec.theme.legendPosition !== 'none',
+      orient: legendOrientation,
+      align: spec.theme.legendAlign === 'end' ? 'right' : 'left',
+      itemGap: spec.theme.legendItemGap,
+      itemWidth: spec.theme.legendSymbolWidth,
+      itemHeight: spec.theme.legendSymbolHeight,
+      backgroundColor: spec.theme.legendBackgroundVisible ? spec.theme.legendBackground : 'transparent',
+      borderColor: spec.theme.legendBorderColor,
+      borderWidth: spec.theme.legendBorderWidth,
+      textStyle: { fontFamily: spec.theme.fontFamily, fontSize: spec.theme.legendFontSize, color: spec.theme.legendColor }
+    },
     tooltip: { trigger: 'axis', confine: true },
-    grid: { left: 54, right: spec.theme.legendPosition === 'right' ? 96 : 24, top: 62, bottom: 48, containLabel: true }
+    grid: {
+      left: spec.theme.plotPadding.left,
+      right: spec.theme.legendPosition === 'right' ? Math.max(96, spec.theme.plotPadding.right) : spec.theme.plotPadding.right,
+      top: spec.theme.plotPadding.top,
+      bottom: spec.theme.plotPadding.bottom,
+      containLabel: true
+    }
   };
 }
 
@@ -420,8 +446,8 @@ function axisOption(spec: ScientificPlotSpec, id: 'x' | 'y', type: 'value' | 'ca
     nameLocation: 'middle',
     nameGap: axis?.titleGap ?? (id === 'x' ? 30 : 42),
     nameTextStyle: { fontSize: axis?.titleFontSize ?? spec.theme.baseFontSize, color: axis?.titleColor ?? '#26364a' },
-    axisLine: { show: axis?.showLine !== false, lineStyle: { color: '#738193' } },
-    axisTick: { show: axis?.showTicks !== false },
+    axisLine: { show: axis?.showLine !== false, lineStyle: { color: axis?.lineColor ?? '#738193', width: axis?.lineWidth ?? 1 } },
+    axisTick: { show: axis?.showTicks !== false, length: axis?.tickLength ?? 5, lineStyle: { color: axis?.tickColor ?? axis?.lineColor ?? '#738193' } },
     minorTick: { show: axis?.minorTicks === true },
     splitLine: { show: showGrid, lineStyle: { color: axis?.gridColor ?? '#e4e8ed', width: axis?.gridWidth ?? 0.8 } },
     minorSplitLine: { show: axis?.showMinorGrid === true, lineStyle: { color: axis?.gridColor ?? '#eef1f4', width: Math.max(0.1, (axis?.gridWidth ?? 0.8) * 0.6) } },
@@ -453,6 +479,14 @@ function formatAxisLabel(value: unknown, axis: ScientificPlotSpec['axes'][number
     });
   }
   return `${axis?.prefix ?? ''}${text}${axis?.suffix ?? ''}`;
+}
+
+function echartsSymbol(shape: ScientificPlotSpec['chart']['markerShape']): string {
+  if (shape === 'square') return 'rect';
+  if (shape === 'diamond') return 'diamond';
+  if (shape === 'triangle') return 'triangle';
+  if (shape === 'none') return 'none';
+  return 'circle';
 }
 
 function buildAnalysisGraphics(spec: ScientificPlotSpec, analyses: TraceableAnalysisResult[]): Array<Record<string, unknown>> {

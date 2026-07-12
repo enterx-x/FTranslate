@@ -264,7 +264,7 @@ function buildCommandArgs(
 }
 
 function serializeCsv(table: PlotDataTable): string {
-  return [
+  return '\uFEFF' + [
     table.columns.map((column) => csvCell(column.id)).join(','),
     ...table.rows.map((row) => row.map(csvCell).join(','))
   ].join('\r\n');

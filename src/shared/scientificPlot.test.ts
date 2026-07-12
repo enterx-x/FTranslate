@@ -13,12 +13,26 @@ describe('scientific plot contract', () => {
     const spec = createDefaultScientificPlotSpec('plot-1');
 
     expect(spec.id).toBe('plot-1');
+    expect(spec.theme.fontFamily).toContain('Microsoft YaHei');
+    expect(spec.theme).toMatchObject({ legendPosition: 'top', legendFontSize: 10, legendBackgroundVisible: false });
     expect(spec.schemaVersion).toBe('1.0');
     expect(spec.renderer.language).toBe('javascript');
     expect(spec.chart.type).toBe('line');
     expect(spec.encodings).toEqual({});
     expect(spec.transforms).toEqual([]);
     expect(spec.analysis).toEqual([]);
+  });
+
+  it('normalizes editable legend, title, series and axis appearance controls', () => {
+    const spec = normalizeScientificPlotSpec({
+      chart: { type: 'line', lineStyle: 'dashed', markerShape: 'diamond', opacity: 0.55 },
+      theme: { titleAlign: 'center', legendPosition: 'right', legendOrientation: 'vertical', legendX: 82, legendY: 16, legendFontSize: 12, plotPadding: { left: 70 } },
+      axes: [{ id: 'x', lineColor: '#112233', lineWidth: 2, tickColor: '#445566', tickLength: 9 }]
+    });
+    expect(spec.chart).toMatchObject({ lineStyle: 'dashed', markerShape: 'diamond', opacity: 0.55 });
+    expect(spec.theme).toMatchObject({ titleAlign: 'center', legendPosition: 'right', legendOrientation: 'vertical', legendX: 82, legendY: 16, legendFontSize: 12 });
+    expect(spec.theme.plotPadding).toMatchObject({ left: 70 });
+    expect(spec.axes[0]).toMatchObject({ lineColor: '#112233', lineWidth: 2, tickColor: '#445566', tickLength: 9 });
   });
 
   it('migrates an early line spec without discarding mappings', () => {

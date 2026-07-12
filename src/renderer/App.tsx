@@ -1332,7 +1332,13 @@ export default function App() {
       setAiCacheDocument(workingDocument);
       setShowTranslation(true);
       await persistAiCache(workingDocument);
-      setStatusMessage(result.skipped ? '当前段已跳过。' : `AI 已翻译第 ${index + 1} 段并保存缓存。`);
+      setStatusMessage(
+        result.skipped
+          ? '当前段已跳过。'
+          : result.cacheHit
+            ? `第 ${index + 1} 段已复用相同模型的本地译文缓存，未消耗 API token。`
+            : `AI 已翻译第 ${index + 1} 段并保存缓存。`
+      );
     } catch (error) {
       setStatusMessage(`AI 翻译当前段失败：${String(error)}`);
     } finally {
@@ -1354,6 +1360,7 @@ export default function App() {
       }
 
       let translatedCount = 0;
+      let cacheHitCount = 0;
       for (let index = 0; index < workingDocument.items.length; index += 1) {
         const item = workingDocument.items[index];
         if (!shouldTranslateItem(item)) {
@@ -1374,10 +1381,13 @@ export default function App() {
         setAiCacheDocument(workingDocument);
         await persistAiCache(workingDocument);
         translatedCount += result.skipped ? 0 : 1;
+        cacheHitCount += result.cacheHit ? 1 : 0;
       }
 
       setShowTranslation(true);
-      setStatusMessage(`AI 批量翻译完成，本次新增 ${translatedCount} 段译文。`);
+      setStatusMessage(
+        `AI 批量翻译完成：${translatedCount - cacheHitCount} 段调用 API，${cacheHitCount} 段复用本地缓存。`
+      );
     } catch (error) {
       setStatusMessage(`AI 批量翻译失败：${String(error)}`);
     } finally {

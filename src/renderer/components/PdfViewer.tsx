@@ -26,6 +26,12 @@ import {
   buildPdfViewportState,
   type PdfViewportState
 } from '../lib/pdfViewportSync';
+import {
+  buildPdfSelectionPopoverPosition,
+  normalizePdfSelectionText,
+  resolvePdfSelectionTranslationDirection,
+  type PdfSelectionTranslationDirection
+} from '../lib/pdfSelectionTranslation';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -67,8 +73,20 @@ interface HighlightSequenceResult {
   matchedFragments: number;
 }
 
+interface PdfSelectionTranslationState {
+  sourceText: string;
+  translatedText: string;
+  direction: PdfSelectionTranslationDirection;
+  engine: string;
+  message: string;
+  status: 'idle' | 'translating' | 'success' | 'error';
+  left: number;
+  top: number;
+}
+
 export function PdfViewer(props: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const viewerShellRef = useRef<HTMLDivElement | null>(null);
   const viewerElementRef = useRef<HTMLDivElement | null>(null);
   const eventBusRef = useRef<PdfEventBusRuntime | null>(null);
   const linkServiceRef = useRef<PdfLinkServiceRuntime | null>(null);
@@ -81,6 +99,7 @@ export function PdfViewer(props: PdfViewerProps) {
   const isHighlightSequenceRunningRef = useRef(false);
   const pendingZoomAnchorRef = useRef<PdfZoomAnchor | null>(null);
   const hasAppliedInitialHorizontalCenterRef = useRef(false);
+  const hasAppliedInitialFitWidthRef = useRef(false);
   const pendingInitialCenterFrameRef = useRef<number | null>(null);
   const isSpacePressedRef = useRef(false);
   const panStateRef = useRef<{
@@ -91,10 +110,12 @@ export function PdfViewer(props: PdfViewerProps) {
   } | null>(null);
   const isApplyingViewportSyncRef = useRef(false);
   const viewportScrollFrameRef = useRef<number | null>(null);
+  const selectionTranslationRequestRef = useRef(0);
   const [documentProxy, setDocumentProxy] = useState<PDFDocumentProxy | null>(null);
   const [findReadyToken, setFindReadyToken] = useState(0);
   const [isRendering, setIsRendering] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
+  const [selectionTranslation, setSelectionTranslation] = useState<PdfSelectionTranslationState | null>(null);
 
   useEffect(() => {
     propsRef.current = props;
@@ -137,7 +158,16 @@ export function PdfViewer(props: PdfViewerProps) {
         return;
       }
 
-      viewer.currentScale = propsRef.current.scale;
+      if (!hasAppliedInitialFitWidthRef.current) {
+        hasAppliedInitialFitWidthRef.current = true;
+        viewer.currentScaleValue = 'page-width';
+        const fittedScale = viewer.currentScale;
+        if (Number.isFinite(fittedScale) && Math.abs(fittedScale - propsRef.current.scale) > 0.001) {
+          propsRef.current.onScaleChange(fittedScale);
+        }
+      } else {
+        viewer.currentScale = propsRef.current.scale;
+      }
       setIsRendering(false);
       window.requestAnimationFrame(() => {
         setFindReadyToken((value) => (value === 0 ? 1 : value));
@@ -235,6 +265,9 @@ export function PdfViewer(props: PdfViewerProps) {
 
   useEffect(() => {
     if (!props.pdfData) {
+      hasAppliedInitialFitWidthRef.current = false;
+      selectionTranslationRequestRef.current += 1;
+      setSelectionTranslation(null);
       setDocumentProxy(null);
       setFindReadyToken(0);
       setIsRendering(false);
@@ -249,6 +282,9 @@ export function PdfViewer(props: PdfViewerProps) {
     let loadedDocument: PDFDocumentProxy | null = null;
     const loadingTask = pdfjsLib.getDocument({ data: props.pdfData.slice() });
     setIsRendering(true);
+    hasAppliedInitialFitWidthRef.current = false;
+    selectionTranslationRequestRef.current += 1;
+    setSelectionTranslation(null);
     setDocumentProxy(null);
     setFindReadyToken(0);
     props.onExtractedTextReady?.([]);
@@ -298,6 +334,7 @@ export function PdfViewer(props: PdfViewerProps) {
     return () => {
       cancelled = true;
       hasAppliedInitialHorizontalCenterRef.current = false;
+      hasAppliedInitialFitWidthRef.current = false;
       if (pendingInitialCenterFrameRef.current !== null) {
         window.cancelAnimationFrame(pendingInitialCenterFrameRef.current);
         pendingInitialCenterFrameRef.current = null;
@@ -529,6 +566,128 @@ export function PdfViewer(props: PdfViewerProps) {
       scrollTop: container.scrollTop
     };
     setIsPanning(true);
+  }
+
+  function handleTextSelection(): void {
+    if (isPanning) {
+      return;
+    }
+    window.setTimeout(captureTextSelection, 0);
+  }
+
+  function captureTextSelection(): void {
+    const selection = window.getSelection();
+    const viewerElement = viewerElementRef.current;
+    const shell = viewerShellRef.current;
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !viewerElement || !shell) {
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const ancestor = range.commonAncestorContainer;
+    if (!viewerElement.contains(ancestor)) {
+      return;
+    }
+    const ancestorElement = ancestor.nodeType === Node.ELEMENT_NODE
+      ? (ancestor as Element)
+      : ancestor.parentElement;
+    if (!ancestorElement?.closest('.textLayer')) {
+      return;
+    }
+
+    const rawText = selection.toString();
+    const sourceText = normalizePdfSelectionText(rawText);
+    if (!sourceText) {
+      return;
+    }
+    const selectionRect = range.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
+    if (selectionRect.width <= 0 && selectionRect.height <= 0) {
+      return;
+    }
+    const position = buildPdfSelectionPopoverPosition(selectionRect, shellRect, {
+      width: 340,
+      height: 238
+    });
+
+    selectionTranslationRequestRef.current += 1;
+    setSelectionTranslation({
+      sourceText,
+      translatedText: '',
+      direction: resolvePdfSelectionTranslationDirection(sourceText),
+      engine: '',
+      message: rawText.trim().length > sourceText.length ? '已整理 PDF 换行；最多翻译 2000 个字符。' : '',
+      status: 'idle',
+      ...position
+    });
+  }
+
+  async function translateSelectedText(): Promise<void> {
+    if (!selectionTranslation || selectionTranslation.status === 'translating') {
+      return;
+    }
+    const requestId = selectionTranslationRequestRef.current + 1;
+    selectionTranslationRequestRef.current = requestId;
+    const { sourceText, direction } = selectionTranslation;
+    setSelectionTranslation((current) => current ? {
+      ...current,
+      status: 'translating',
+      message: `正在使用本地离线引擎翻译（${direction.label}）...`
+    } : current);
+
+    try {
+      const result = await window.electronAPI.translateLocalBatch({
+        texts: [sourceText],
+        sourceLanguage: direction.sourceLanguage,
+        targetLanguage: direction.targetLanguage,
+        timeoutMs: 120_000
+      });
+      if (selectionTranslationRequestRef.current !== requestId) {
+        return;
+      }
+      const translatedText = result.texts[0]?.trim() ?? '';
+      if (!translatedText) {
+        throw new Error('本地翻译返回空结果。');
+      }
+      setSelectionTranslation((current) => current ? {
+        ...current,
+        translatedText,
+        engine: result.model ?? result.engine,
+        message: `${result.model ?? result.engine} · ${direction.label}`,
+        status: 'success'
+      } : current);
+    } catch (error) {
+      if (selectionTranslationRequestRef.current !== requestId) {
+        return;
+      }
+      setSelectionTranslation((current) => current ? {
+        ...current,
+        message: `翻译失败：${String(error).replace(/^Error:\s*/u, '')}`,
+        status: 'error'
+      } : current);
+    }
+  }
+
+  async function copySelectedTranslation(): Promise<void> {
+    if (!selectionTranslation?.translatedText) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(selectionTranslation.translatedText);
+      setSelectionTranslation((current) => current ? { ...current, message: '译文已复制到剪贴板。' } : current);
+    } catch (error) {
+      setSelectionTranslation((current) => current ? {
+        ...current,
+        message: `复制失败：${String(error).replace(/^Error:\s*/u, '')}`,
+        status: 'error'
+      } : current);
+    }
+  }
+
+  function closeSelectionTranslation(): void {
+    selectionTranslationRequestRef.current += 1;
+    setSelectionTranslation(null);
+    window.getSelection()?.removeAllRanges();
   }
 
   function buildZoomAnchor(clientX: number, clientY: number): PdfZoomAnchor {
@@ -921,7 +1080,7 @@ export function PdfViewer(props: PdfViewerProps) {
         <span>{props.fileName}</span>
         {isRendering ? <span className="subtle">正在渲染...</span> : null}
       </div>
-      <div className="pdf-viewer-shell">
+      <div className="pdf-viewer-shell" ref={viewerShellRef}>
         <div
           className={`pdf-js-viewer-container${isPanning ? ' is-panning' : ''}`}
           ref={containerRef}
@@ -931,10 +1090,59 @@ export function PdfViewer(props: PdfViewerProps) {
             }
           }}
           onMouseDown={handleMouseDown}
+          onMouseUp={handleTextSelection}
           onWheel={handleWheel}
         >
           <div className="pdfViewer" ref={viewerElementRef} />
         </div>
+        {selectionTranslation ? (
+          <aside
+            className="pdf-selection-translation"
+            style={{ left: selectionTranslation.left, top: selectionTranslation.top }}
+            aria-label="选中文字翻译"
+            data-testid="pdf-selection-translation"
+          >
+            <header>
+              <div>
+                <strong>选中翻译</strong>
+                <span>{selectionTranslation.direction.label} · 本地离线</span>
+              </div>
+              <button type="button" aria-label="关闭选中翻译" onClick={closeSelectionTranslation}>×</button>
+            </header>
+            <div className="pdf-selection-source" title={selectionTranslation.sourceText}>
+              {selectionTranslation.sourceText}
+            </div>
+            {selectionTranslation.translatedText ? (
+              <div className="pdf-selection-result" aria-live="polite">
+                {selectionTranslation.translatedText}
+              </div>
+            ) : null}
+            {selectionTranslation.message ? (
+              <p className={selectionTranslation.status === 'error' ? 'is-error' : ''} aria-live="polite">
+                {selectionTranslation.message}
+              </p>
+            ) : null}
+            <footer>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={selectionTranslation.status === 'translating'}
+                onClick={() => void translateSelectedText()}
+              >
+                {selectionTranslation.status === 'translating'
+                  ? '翻译中...'
+                  : selectionTranslation.translatedText
+                    ? '重新翻译'
+                    : '翻译选中内容'}
+              </button>
+              {selectionTranslation.translatedText ? (
+                <button type="button" className="ghost-button" onClick={() => void copySelectedTranslation()}>
+                  复制译文
+                </button>
+              ) : null}
+            </footer>
+          </aside>
+        ) : null}
       </div>
     </div>
   );

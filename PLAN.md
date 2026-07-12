@@ -1,5 +1,39 @@
 # PLAN.md
 
+## 2026-07-13 绘图跨语言一致性、arXiv 响应与 PDF 选词翻译（0.1.18）
+
+### 当前结论
+
+- 科研绘图的字体、图例、线型、标记、透明度、画布边距和坐标轴外观已进入统一 PlotSpec；ECharts、Python、R、MATLAB 使用同一组受控参数，不再由不同后端各自猜测。
+- R 与 MATLAB 已用包含中文标题、中文轴标签、中文图例、百分比刻度和自定义图例坐标的真实数据完成本地渲染；MATLAB 轴标题裁切通过 `TightInset` 自适应边距修复。
+- arXiv 自动预翻译从 6 篇大批次拆为 6 个单篇低优先级任务；后台翻译中的论文仍可点击提升为前台优先任务，空结果会显式报错。
+- PDF.js 文字层新增选词/选段翻译卡片，自动判断翻译方向并复用本地离线翻译 API；支持复制和重试，最长处理 2000 个字符。
+- PDF 首次加载改为 `page-width`：页面以完整左右边界进入视口并水平居中，避免默认比例只显示中间区域；后续手动缩放和阅读位置同步仍保持原逻辑。
+- AI 全文翻译继续把每段完整原文发送给所选模型，不采用机翻后选择性润色。新增按缓存版本、provider、model、sourceHash 隔离的精确持久缓存，并压缩固定 system prompt；重复原文可零 API token 复用，强制重译则绕过缓存。
+
+### 视觉对抗审查
+
+- 科研绘图场景确认 649 × 570 绘图画布、字体下拉、图例位置/排列/自定义 X/Y、坐标范围编辑和 MATLAB 选择均可见且无横向溢出。
+- 审查发现 Inspector 中部折叠按钮遮挡图例标签；已移动到页签栏左上角，避免覆盖“符号宽度”等参数。
+- PDF 选词卡在实际 25 页 PDF 的文字层中验证，卡片 340 × 154，完全位于 PDF 视口内，无横向溢出；截图为 `.tmp-visual-check/pdf-selection-translation.png`。
+- PDF 初始视口测得页面左右隐藏量均为 0，页面宽 888px、滚动容器宽 894px，适宽差值 17px；页面完整可见且居中，未出现横向滚动条。
+- arXiv 空状态、三列/双列/单列结果及详情栏无水平溢出；卡片继续只保留“阅读 / 翻译 / 加入阅读队列”三个主操作。
+
+### 验证记录
+
+- 定向测试：6 个文件、61 个测试通过；新增 arXiv 前台提升、PDF 选区归一化/方向/定位及紧凑 AI 指令回归测试。
+- 最终 `npm run dist` 通过：93 个测试文件、604 个测试全部通过，TypeScript、Vite renderer、Electron main 和 NSIS 构建均完成。
+- `VISUAL_CHECK_SCENARIO=scientific-plot`、`pdf-selection`、`arxiv` 源码场景均通过；最终安装版 `$env:VISUAL_CHECK_PACKAGED='1'; $env:VISUAL_CHECK_SCENARIO='pdf-selection'; npm run visual:check` 通过，输出位于 `.tmp-visual-check/`。
+- R 4.5.1 与 MATLAB R2024b 真实渲染通过；R 仍报告当前运行时 locale 与包构建版本警告，但未造成乱码或渲染失败。
+- Windows 安装包：`dist/PDF Translation Reader Setup 0.1.18.exe`，156,649,864 bytes，SHA-256 `5EB23A8111F0B28A74B980E206E26572D69D7DA2236224BDD47CA0F2742F4DDE`。
+
+### 问题与风险
+
+- 扫描版 PDF 没有可选文字层时，选词翻译不可用，后续应接入 OCR 文字层而不是对截图做猜测翻译。
+- R 4.5.1 当前加载部分由 R 4.5.3 构建的包并出现 `C.UTF-8` locale 警告；本轮已经绕过 BOM/中文读取问题，但长期应统一私有 R 运行时和包版本。
+- Vite 大 chunk 警告仍存在，属于既有打包性能问题，本轮未扩大依赖范围。
+- AI 精确缓存以当前缓存 schema、provider、model 和 sourceHash 为键，只优化完全重复的段落；模型变更、原文变更和强制重译不会复用。缓存上限为 4000 条，磁盘读写失败只会失去复用收益，不会吞掉已成功译文。
+
 ## 2026-07-12 科研绘图坐标轴、无表头导入与 R 修复（0.1.17）
 
 ### 当前结论
