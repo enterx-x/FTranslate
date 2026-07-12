@@ -73,6 +73,7 @@ describe('registerAppIpcHandlers', () => {
         readDataFile: noop,
         detectRuntimes: noop,
         readInstallerIntent: noop,
+        acknowledgeInstallerIntent: noop,
         startRuntimeInstall: noop,
         getRuntimeInstallJob: noop,
         cancelRuntimeInstall: noop,
@@ -82,7 +83,9 @@ describe('registerAppIpcHandlers', () => {
         cancelRender: noop,
         exportFplot: noop,
         importFplot: noop,
-        exportArtifact: noop
+        exportArtifact: noop,
+        exportGeneratedArtifact: noop,
+        readArtifact: noop
       }
     };
 
@@ -135,6 +138,7 @@ describe('registerAppIpcHandlers', () => {
       'scientific-plot:read-data-file',
       'scientific-plot:detect-runtimes',
       'scientific-plot:installer-intent',
+      'scientific-plot:acknowledge-installer-intent',
       'scientific-plot:start-runtime-install',
       'scientific-plot:get-runtime-install-job',
       'scientific-plot:cancel-runtime-install',
@@ -144,7 +148,9 @@ describe('registerAppIpcHandlers', () => {
       'scientific-plot:cancel-render',
       'scientific-plot:export-fplot',
       'scientific-plot:import-fplot',
-      'scientific-plot:export-artifact'
+      'scientific-plot:export-artifact',
+      'scientific-plot:export-generated-artifact',
+      'scientific-plot:read-artifact'
     ]);
   });
 });

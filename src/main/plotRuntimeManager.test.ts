@@ -40,6 +40,23 @@ describe('plot runtime manager', () => {
     await writeFile(intent, '[PlotRuntimes]\nPython=1\nR=0\nMatlabDetect=1\n');
     const manager = new PlotRuntimeManager({ managedRoot: root, manifestPath: path.join(root, 'manifest.json'), installerIntentPath: intent });
     expect(await manager.readInstallerIntent()).toEqual({ python: true, r: false, matlabDetect: true });
+    expect(await manager.acknowledgeInstallerIntent()).toBe(true);
+    expect(await manager.readInstallerIntent()).toEqual({ python: false, r: false, matlabDetect: false });
+  });
+
+  it('detects a managed runtime from a user-selected parent directory after restart', async () => {
+    const root = await fixtureRoot();
+    const customRoot = path.join(root, 'custom-runtimes');
+    const python = path.join(customRoot, 'python', 'python.exe');
+    await writeFile(path.join(root, 'runtime-roots.json'), JSON.stringify({ python: customRoot }));
+    const runner: RuntimeCommandRunner = async (executable, args) => {
+      if (executable === python && args.includes('--version')) return { exitCode: 0, stdout: 'Python 3.12.10', stderr: '' };
+      if (executable === python && args.includes('-c')) return { exitCode: 0, stdout: '{"matplotlib":"3.10.3","seaborn":"0.13.2","plotly":"6.2.0","scipy":"1.16.0","statsmodels":"0.14.5","pandas":"2.3.1"}', stderr: '' };
+      return { exitCode: 1, stdout: '', stderr: '' };
+    };
+    const manager = new PlotRuntimeManager({ managedRoot: root, manifestPath: path.join(root, 'manifest.json'), commandRunner: runner, env: {} });
+    const capability = (await manager.detectAll()).find((runtime) => runtime.language === 'python');
+    expect(capability).toMatchObject({ status: 'ready', executable: python, managed: true });
   });
 
   it('fails closed when an official installer hash does not match', async () => {

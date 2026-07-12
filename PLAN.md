@@ -559,3 +559,42 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 正式设计规格：`docs/superpowers/specs/2026-07-12-scientific-plotting-studio-design.md`。
 - 当前仅完成需求与设计确认，尚未修改应用代码、构建安装包或执行代码验证。
 - 用户最终审阅设计规格后，使用 writing-plans 生成完整实施计划，再按 TDD、视觉对抗式审查、构建、安装包和打包产物验证流程实施全部范围。
+## 2026-07-12 科研绘图工作台 0.1.15
+
+### 当前结论
+
+- 已完成科研绘图数据契约、数据导入/快照、转换流水线、统计分析、主题、ECharts 编译、Python/R/MATLAB 受控脚本、渲染队列、运行时检测/安装、`.fplot` 持久化和独立三栏 UI。
+- 已接入研究表格最后选区、侧栏导航、真实 ECharts Canvas 预览、PNG/SVG 导出和外部语言产物导出。
+- 环境配置改为“管理环境”弹窗；安装程序仅记录用户选择，首次进入绘图页后一次性引导，不在主工作区常驻。
+- 版本提升为 `0.1.15`，安装包构建和安装版视觉检查均已通过。
+- Windows 安装包已生成：`dist/PDF Translation Reader Setup 0.1.15.exe`（156,629,731 bytes，SHA-256 `C09DF062AB7FB710334C86E6500880992A48DE8CE058331F026F2E5F0F629AB0`）。
+
+### 第一性原理与闭环
+
+- 真实问题：研究者不应为了常规实验图反复手写样板代码，也不能接受“看似是 R/Python、实际由浏览器代画”的伪预览。
+- 核心约束：选择哪种语言，就由哪种语言生成预览和导出；统计设计必须显式；原始数据不可静默覆盖；商业 MATLAB 只能检测。
+- 最小闭环：导入数据 → 检查字段 → 映射变量 → 配置统计/主题 → 由所选渲染器真实生成 → 导出图、脚本和可复现包。
+- 证明方式：目标 IPC/运行时测试、TypeScript 类型检查、生产构建、真实 Electron 视觉脚本导入九行实验数据并验证 Canvas 和三栏布局。
+
+### 视觉对抗式审查
+
+- 截图：`.tmp-visual-check/scientific-plot-page.png`。
+- 已处理：环境配置不再常驻；删除与绘图无关的全局论文库状态栏；自动识别 `ci_low/ci_high`；不支持的渲染器/图形组合直接禁用；3D SVG 导出明确不可用。
+- 已确认：1366px 视口无横向溢出；左侧字段、中心真实 Canvas、右侧 Inspector 均可见；导入/环境/导出弹窗关闭后不残留遮罩；关键按钮无重叠或截断。
+- 性能处理：科研绘图按页面懒加载；`echarts-gl` 仅在 3D 图形时加载；ECharts 使用 core 按需注册，普通绘图分块由约 1.89 MB 降至约 0.95 MB，3D 引擎拆为独立分块。
+
+### 验证记录
+
+- `npx vitest run src/main/plotRuntimeManager.test.ts src/main/ipc/handlers/scientificPlot.test.ts src/main/ipc/handlers/index.test.ts src/renderer/components/AppSidebar.test.ts`：4 个文件、21 个测试通过。
+- `npm run typecheck`：通过。
+- `npm run build:renderer`：通过。
+- `npm run visual:check`：通过；包含科研绘图真实 Canvas、无横向溢出和弹窗残留检查。
+- `npm run dist`：全量 92 个测试文件、585 个测试通过，类型检查和生产构建通过；首次 NSIS 尝试因卸载器阶段把未引用自定义页面警告视为错误而停止。已用 `BUILD_UNINSTALLER` 条件隔离安装页，随后 `npx electron-builder` 成功生成 0.1.15 安装包。
+- `$env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check`：通过；确认 `dist/win-unpacked` 中的安装版科研绘图页面与源码版一致。
+
+### 问题与风险
+
+- Python/R 首次安装需要联网，且 R 包编译时间可能较长；任务可取消，失败不会影响内置 ECharts。
+- MATLAB 能力取决于用户许可证和已安装工具箱；FTranslate 不绕过授权、不下载安装 MATLAB。
+- 3D WebGL 图只支持位图导出；SVG 按钮会禁用，避免输出错误矢量文件。
+- Univer 与科研绘图均为大型懒加载模块；当前不影响首页启动，但后续仍可继续拆分图表编译器和统计模块。

@@ -37,10 +37,11 @@ describe('ECharts scientific compiler', () => {
     const spec = createDefaultScientificPlotSpec('line');
     spec.encodings = { x: 'steps', y: 'score', color: 'algorithm', errorLower: 'low', errorUpper: 'high' };
     const compiled = compileScientificEchartsOption(spec, table);
-    const series = compiled.option.series as Array<{ type: string }>;
+    const series = compiled.option.series as Array<{ type: string; name?: string }>;
 
     expect(series.filter((item) => item.type === 'line')).toHaveLength(2);
     expect(series.filter((item) => item.type === 'custom')).toHaveLength(2);
+    expect(series.filter((item) => item.type === 'custom').every((item) => item.name === undefined)).toBe(true);
     expect(compiled.requiresGl).toBe(false);
   });
 

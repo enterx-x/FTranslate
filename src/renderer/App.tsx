@@ -77,6 +77,7 @@ import {
   ensurePaperRow,
   getResearchRowValues
 } from './lib/researchWorkbook';
+import type { ResearchSheetPlotRange } from './lib/plotData';
 import { buildFreshPdfSessionState } from './lib/projectSession';
 import { buildSheetCellsPrompt, cleanSheetCellAiValue, parseSheetCellsAiResponse } from './lib/sheetCellAi';
 import type { PaperTutorEvidenceStoreEntry } from './lib/paperTutor';
@@ -139,6 +140,10 @@ const ResearchSheetPage = lazy(async () => {
   const module = await import('./components/ResearchSheetPage');
   return { default: module.ResearchSheetPage };
 });
+const ScientificPlotPage = lazy(async () => {
+  const module = await import('./components/ScientificPlotPage');
+  return { default: module.ScientificPlotPage };
+});
 const ExperimentMatrixPage = lazy(async () => {
   const module = await import('./components/ExperimentMatrixPage');
   return { default: module.ExperimentMatrixPage };
@@ -198,6 +203,7 @@ export default function App() {
     setResearchSheetLinks
   } = useResearchWorkbook(legacyPapersWithSheetCells);
   const [researchFocusPaperId, setResearchFocusPaperId] = useState<string | null>(null);
+  const [researchPlotSelection, setResearchPlotSelection] = useState<ResearchSheetPlotRange | null>(null);
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
   const {
     pdf,
@@ -1880,6 +1886,10 @@ export default function App() {
     void handleOpenResearchSheet();
   }
 
+  function openScientificPlot(): void {
+    setView('scientificPlot');
+  }
+
   function openKnowledgeGraph(): void {
     setView('knowledgeGraph');
   }
@@ -1958,6 +1968,10 @@ export default function App() {
 
     if (view === 'researchSheet') {
       return 'researchSheet';
+    }
+
+    if (view === 'scientificPlot') {
+      return 'plot';
     }
 
     if (view === 'knowledgeGraph') {
@@ -2115,6 +2129,7 @@ export default function App() {
         onOpenExperimentMatrix={openExperimentMatrix}
         onOpenLibrary={openLibrary}
         onOpenResearchSheet={openResearchSheetFromSidebar}
+        onOpenPlot={openScientificPlot}
         onOpenKnowledgeGraph={openKnowledgeGraph}
         onOpenPresentation={openPresentationGenerator}
         onOpenArxiv={openArxivSearch}
@@ -2204,10 +2219,30 @@ export default function App() {
                 onAnalyzeLiteratureGap={handleAnalyzeLiteratureGap}
                 onOpenAiAssistant={handleOpenAiAssistantForSheet}
                 onOpenKnowledgeGraph={openKnowledgeGraph}
+                onPlotSelectionChange={setResearchPlotSelection}
               />
             </Suspense>
           </ErrorBoundary>
           <ConnectedStatusBar />
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'scientificPlot') {
+    return renderWithContexts(
+      <div className="app-shell desktop-shell scientific-plot-shell">
+        {renderSidebar()}
+        <div className={getAppMainClassName()}>
+          <ErrorBoundary fallback={<main className="research-sheet-loading">科研绘图加载失败，请返回后重试。</main>}>
+            <Suspense fallback={<main className="research-sheet-loading">正在加载科研绘图工作台...</main>}>
+              <ScientificPlotPage
+                researchWorkbook={researchWorkbook}
+                researchSelection={researchPlotSelection}
+                onBackHome={openWorkspace}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </div>
       </div>
     );

@@ -119,9 +119,8 @@ function appendErrorIntervals(
   if (!lowerField || !upperField) return;
   const lowerIndex = columnIndex(context.table, lowerField);
   const upperIndex = columnIndex(context.table, upperField);
-  [...groups.entries()].forEach(([name, rows], seriesIndex) => {
+  [...groups.entries()].forEach(([, rows], seriesIndex) => {
     series.push({
-      name: `${name} interval`,
       type: 'custom',
       silent: true,
       data: rows.map((row) => [row[xIndex], numericOrNull(row[lowerIndex]), numericOrNull(row[upperIndex])]),

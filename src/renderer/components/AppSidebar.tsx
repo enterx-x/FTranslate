@@ -15,6 +15,7 @@ export type AppSidebarSection =
   | 'experimentMatrix'
   | 'library'
   | 'researchSheet'
+  | 'plot'
   | 'knowledgeGraph'
   | 'presentation'
   | 'arxiv'
@@ -29,6 +30,7 @@ export interface AppSidebarProps {
   onOpenExperimentMatrix: () => void;
   onOpenLibrary: () => void;
   onOpenResearchSheet: () => void;
+  onOpenPlot: () => void;
   onOpenKnowledgeGraph: () => void;
   onOpenPresentation: () => void;
   onOpenArxiv: () => void;
@@ -53,6 +55,7 @@ const navigationItems: AppSidebarNavigationItem[] = [
   { section: 'arxiv', label: 'arXiv 检索', icon: searchIcon },
   { section: 'library', label: '论文库', icon: libraryIcon },
   { section: 'researchSheet', label: '研究表格', icon: researchSheetIcon },
+  { section: 'plot', label: '科研绘图', icon: analysisIcon },
   { section: 'reader', label: 'PDF 阅读', icon: pdfReaderIcon },
   { section: 'paperTutor', label: '论文导师', icon: aiFillIcon, isUtility: true },
   { section: 'ai', label: 'AI 助手', icon: aiFillIcon, isUtility: true },
@@ -75,6 +78,7 @@ export function createSidebarNavigationHandlers(
     experimentMatrix: props.onOpenExperimentMatrix,
     library: props.onOpenLibrary,
     researchSheet: props.onOpenResearchSheet,
+    plot: props.onOpenPlot,
     knowledgeGraph: props.onOpenKnowledgeGraph,
     presentation: props.onOpenPresentation,
     arxiv: props.onOpenArxiv,

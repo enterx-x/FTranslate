@@ -3284,6 +3284,50 @@ async function exportScientificPlotArtifactForIpc(
   return { filePath: result.filePath, fileName: path.basename(result.filePath) };
 }
 
+async function exportScientificPlotGeneratedArtifactForIpc(request: {
+  format: 'png' | 'svg';
+  defaultFileName: string;
+  content: string;
+  encoding: 'base64' | 'utf8';
+}): Promise<SavedFileResult | null> {
+  const extension = request.format;
+  const result = await dialog.showSaveDialog({
+    title: '导出科研绘图',
+    defaultPath: sanitizeFileName(request.defaultFileName),
+    filters: [{ name: `${extension.toUpperCase()} Image`, extensions: [extension] }]
+  });
+  if (result.canceled || !result.filePath) return null;
+  const bytes = request.encoding === 'base64'
+    ? Buffer.from(request.content, 'base64')
+    : Buffer.from(request.content, 'utf8');
+  if (bytes.length === 0 || bytes.length > 60 * 1024 * 1024) throw new Error('生成的绘图产物为空或超过 60 MB。');
+  await fs.writeFile(result.filePath, bytes);
+  return { filePath: result.filePath, fileName: path.basename(result.filePath) };
+}
+
+async function readScientificPlotArtifactForIpc(filePath: string) {
+  const services = getScientificPlotServices();
+  const source = path.resolve(filePath);
+  const root = path.resolve(services.store.rootPath);
+  if (!source.startsWith(`${root}${path.sep}`)) throw new Error('只能读取科研绘图项目目录内的产物。');
+  const info = await fs.stat(source);
+  if (!info.isFile() || info.size > 25 * 1024 * 1024) throw new Error('绘图产物不存在或超过 25 MB 预览限制。');
+  const extension = path.extname(source).slice(1).toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    svg: 'image/svg+xml', png: 'image/png', html: 'text/html', json: 'application/json',
+    py: 'text/x-python', r: 'text/x-r', m: 'text/x-matlab', log: 'text/plain', txt: 'text/plain'
+  };
+  const mimeType = mimeTypes[extension];
+  if (!mimeType) throw new Error(`不支持在应用内读取该产物：.${extension}`);
+  const bytes = await fs.readFile(source);
+  const isText = mimeType.startsWith('text/') || mimeType === 'application/json' || mimeType === 'image/svg+xml';
+  return {
+    fileName: path.basename(source),
+    mimeType,
+    ...(isText ? { text: bytes.toString('utf8') } : { base64: bytes.toString('base64') })
+  };
+}
+
 function registerIpcHandlers(): void {
   const plot = getScientificPlotServices();
   registerAppIpcHandlers(ipcMain, {
@@ -3355,6 +3399,7 @@ function registerIpcHandlers(): void {
       readDataFile: readScientificPlotDataFileForIpc,
       detectRuntimes: () => plot.runtimeManager.detectAll(),
       readInstallerIntent: () => plot.runtimeManager.readInstallerIntent(),
+      acknowledgeInstallerIntent: () => plot.runtimeManager.acknowledgeInstallerIntent(),
       startRuntimeInstall: (language, targetRoot) => plot.runtimeManager.startInstall(language, targetRoot),
       getRuntimeInstallJob: (jobId) => plot.runtimeManager.getInstallJob(jobId),
       cancelRuntimeInstall: (jobId) => plot.runtimeManager.cancelInstall(jobId),
@@ -3364,7 +3409,9 @@ function registerIpcHandlers(): void {
       cancelRender: (jobId) => plot.renderer.cancel(jobId),
       exportFplot: exportScientificPlotPackageForIpc,
       importFplot: importScientificPlotPackageForIpc,
-      exportArtifact: exportScientificPlotArtifactForIpc
+      exportArtifact: exportScientificPlotArtifactForIpc,
+      exportGeneratedArtifact: exportScientificPlotGeneratedArtifactForIpc,
+      readArtifact: readScientificPlotArtifactForIpc
     }
   });
 }

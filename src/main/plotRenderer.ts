@@ -168,6 +168,13 @@ export class PlotRendererService {
       job.progress = 84;
       job.message = '正在验证渲染产物…';
       const artifacts = await this.validateArtifacts(job.projectId, relativeRoot, workingDirectory, script);
+      const scriptBytes = await readFile(scriptPath);
+      artifacts.push({
+        kind: 'script',
+        format: path.extname(script.fileName).slice(1).toLowerCase(),
+        filePath: scriptPath,
+        sha256: createHash('sha256').update(scriptBytes).digest('hex')
+      });
       job.artifacts = artifacts;
       job.status = 'succeeded';
       job.progress = 100;

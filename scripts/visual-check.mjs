@@ -187,13 +187,14 @@ async function waitForAppReady(client) {
   let lastSnapshot = null;
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => ({
-      ready: Boolean(document.querySelector('.home-page, .split-layout, .experiment-matrix-page, .research-sheet-page, .ai-assistant-page, .paper-tutor-page, .knowledge-graph-page, .presentation-page, .arxiv-page, .settings-page')),
+      ready: Boolean(document.querySelector('.home-page, .split-layout, .experiment-matrix-page, .research-sheet-page, [data-scientific-plot-page], .ai-assistant-page, .paper-tutor-page, .knowledge-graph-page, .presentation-page, .arxiv-page, .settings-page')),
       activeSidebar: document.querySelector('.app-sidebar-link.active')?.getAttribute('data-sidebar-section') ?? '',
       knownViews: {
         home: Boolean(document.querySelector('.home-page')),
         reader: Boolean(document.querySelector('.split-layout')),
         experimentMatrix: Boolean(document.querySelector('.experiment-matrix-page')),
         researchSheet: Boolean(document.querySelector('.research-sheet-page')),
+        scientificPlot: Boolean(document.querySelector('[data-scientific-plot-page]')),
         aiAssistant: Boolean(document.querySelector('.ai-assistant-page')),
         paperTutor: Boolean(document.querySelector('.paper-tutor-page')),
         knowledgeGraph: Boolean(document.querySelector('.knowledge-graph-page')),
@@ -3617,6 +3618,79 @@ async function runSettingsScenario(client) {
   return snapshot;
 }
 
+async function runScientificPlotScenario(client) {
+  await clickSidebarSection(client, 'plot');
+  await waitForAppReady(client);
+  await clickButtonByText(client, '＋ 导入数据');
+  const selectedPaste = await evaluateJson(client, `() => {
+    const button = [...document.querySelectorAll('button')]
+      .find((item) => (item.textContent ?? '').includes('粘贴表格'));
+    button?.click();
+    return Boolean(button);
+  }`);
+  if (!selectedPaste) throw new Error('scientificPlot: paste import source was not found');
+  const seeded = await evaluateJson(client, `() => {
+    const textarea = document.querySelector('textarea');
+    if (!textarea) return false;
+    const value = [
+      'algorithm\\tsteps\\tsuccess_rate\\tci_low\\tci_high',
+      'PPO\\t50000\\t0.43\\t0.40\\t0.46',
+      'PPO\\t100000\\t0.52\\t0.49\\t0.55',
+      'PPO\\t150000\\t0.61\\t0.58\\t0.64',
+      'SAC\\t50000\\t0.40\\t0.37\\t0.43',
+      'SAC\\t100000\\t0.48\\t0.45\\t0.51',
+      'SAC\\t150000\\t0.57\\t0.54\\t0.60',
+      'CBF-RL\\t50000\\t0.46\\t0.43\\t0.49',
+      'CBF-RL\\t100000\\t0.58\\t0.55\\t0.61',
+      'CBF-RL\\t150000\\t0.69\\t0.66\\t0.72'
+    ].join('\\n');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    setter?.call(textarea, value);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  }`);
+  if (!seeded) throw new Error('scientificPlot: paste editor was not found');
+  await clickButtonByText(client, '导入并创建数据快照');
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const ready = await evaluateJson(client, `() => Boolean(document.querySelector('[data-plot-canvas] canvas'))`);
+    if (ready) break;
+    await wait(150);
+  }
+  const snapshot = await evaluateJson(client, `() => {
+    const page = document.querySelector('[data-scientific-plot-page]');
+    const canvas = document.querySelector('[data-plot-canvas] canvas');
+    const workspace = page?.children[1];
+    const workspaceRect = workspace?.getBoundingClientRect();
+    const canvasRect = canvas?.getBoundingClientRect();
+    const activeSidebar = document.querySelector('.app-sidebar-link.active')?.getAttribute('data-sidebar-section') ?? '';
+    const buttons = [...document.querySelectorAll('button')].map((item) => (item.textContent ?? '').trim());
+    return {
+      hasPage: Boolean(page),
+      hasCanvas: Boolean(canvas),
+      activeSidebar,
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+      workspaceWidth: Math.round(workspaceRect?.width ?? 0),
+      canvasWidth: Math.round(canvasRect?.width ?? 0),
+      canvasHeight: Math.round(canvasRect?.height ?? 0),
+      hasRuntimeAction: buttons.includes('管理环境'),
+      hasExportAction: buttons.includes('导出结果'),
+      dialogCount: document.querySelectorAll('[role="dialog"]').length,
+      bodyText: (document.body.textContent ?? '').slice(0, 1200)
+    };
+  }`);
+  if (!snapshot.hasPage || !snapshot.hasCanvas || snapshot.activeSidebar !== 'plot' || snapshot.hasHorizontalOverflow || snapshot.canvasWidth < 480 || snapshot.canvasHeight < 330 || !snapshot.hasRuntimeAction || !snapshot.hasExportAction || snapshot.dialogCount !== 0) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'scientific-plot-page-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`scientificPlot: layout or real canvas validation failed, got ${JSON.stringify(snapshot)}`);
+  }
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'scientific-plot-page.png'), Buffer.from(shot.data, 'base64'))
+  );
+  await clickSidebarSection(client, 'researchSheet');
+  return snapshot;
+}
+
 async function main() {
   if (usePackagedApp) {
     if (!existsSync(packagedExe)) {
@@ -3694,6 +3768,7 @@ async function main() {
     const home = await runHomeScenario(client);
     const experimentMatrix = await runExperimentMatrixScenario(client);
     const researchSheet = await runResearchSheetScenario(client);
+    const scientificPlot = await runScientificPlotScenario(client);
     const wholePdfReader = await runWholePdfReaderScenario(client);
     const presentation = await runPresentationScenario(client);
     const aiAssistant = await runAiAssistantScenario(client);
@@ -3704,7 +3779,7 @@ async function main() {
     client.close();
     console.log(
       JSON.stringify(
-        { pdfPath, home, experimentMatrix, researchSheet, wholePdfReader, presentation, aiAssistant, paperTutor, knowledgeGraph, arxivSearch, settings, outputDir },
+        { pdfPath, home, experimentMatrix, researchSheet, scientificPlot, wholePdfReader, presentation, aiAssistant, paperTutor, knowledgeGraph, arxivSearch, settings, outputDir },
         null,
         2
       )

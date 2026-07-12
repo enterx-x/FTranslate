@@ -15,6 +15,7 @@ export interface ScientificPlotIpcHandlerDependencies {
   readDataFile: (request: Record<string, unknown>) => AsyncOrSync<unknown>;
   detectRuntimes: () => AsyncOrSync<unknown>;
   readInstallerIntent: () => AsyncOrSync<unknown>;
+  acknowledgeInstallerIntent: () => AsyncOrSync<unknown>;
   startRuntimeInstall: (language: 'python' | 'r', targetRoot?: string) => AsyncOrSync<unknown>;
   getRuntimeInstallJob: (jobId: string) => AsyncOrSync<unknown>;
   cancelRuntimeInstall: (jobId: string) => AsyncOrSync<unknown>;
@@ -25,6 +26,8 @@ export interface ScientificPlotIpcHandlerDependencies {
   exportFplot: (projectId: string, options: { includeRawData: boolean; includeDerivedData: boolean }) => AsyncOrSync<unknown>;
   importFplot: () => AsyncOrSync<unknown>;
   exportArtifact: (filePath: string, defaultFileName: string) => AsyncOrSync<unknown>;
+  exportGeneratedArtifact: (request: { format: 'png' | 'svg'; defaultFileName: string; content: string; encoding: 'base64' | 'utf8' }) => AsyncOrSync<unknown>;
+  readArtifact: (filePath: string) => AsyncOrSync<unknown>;
 }
 
 export function registerScientificPlotIpcHandlers(
@@ -54,6 +57,7 @@ export function registerScientificPlotIpcHandlers(
   });
   ipcMain.handle('scientific-plot:detect-runtimes', async () => deps.detectRuntimes());
   ipcMain.handle('scientific-plot:installer-intent', async () => deps.readInstallerIntent());
+  ipcMain.handle('scientific-plot:acknowledge-installer-intent', async () => deps.acknowledgeInstallerIntent());
   ipcMain.handle('scientific-plot:start-runtime-install', async (_event, request) => {
     const record = asRecord(request, 'runtime install request');
     const language = readManagedLanguage(record.language);
@@ -99,6 +103,25 @@ export function registerScientificPlotIpcHandlers(
       requireString(record.defaultFileName, 'default file name', 240)
     );
   });
+  ipcMain.handle('scientific-plot:export-generated-artifact', async (_event, request) => {
+    const record = asRecord(request, 'generated artifact export request');
+    const format = record.format === 'png' || record.format === 'svg' ? record.format : undefined;
+    if (!format) throw new Error('Generated artifact format must be PNG or SVG.');
+    const encoding = record.encoding === 'base64' || record.encoding === 'utf8' ? record.encoding : undefined;
+    if (!encoding || (format === 'png' && encoding !== 'base64') || (format === 'svg' && encoding !== 'utf8')) {
+      throw new Error('Generated artifact encoding does not match its format.');
+    }
+    const content = requireString(record.content, 'generated artifact content', format === 'png' ? 80_000_000 : 20_000_000);
+    return deps.exportGeneratedArtifact({
+      format,
+      encoding,
+      content,
+      defaultFileName: requireString(record.defaultFileName, 'default file name', 240)
+    });
+  });
+  ipcMain.handle('scientific-plot:read-artifact', async (_event, request) =>
+    deps.readArtifact(requireString(asRecord(request, 'read artifact request').filePath, 'artifact path', 32_768))
+  );
 }
 
 function requireData(value: unknown): PlotDataTable {

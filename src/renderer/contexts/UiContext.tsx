@@ -8,6 +8,7 @@ export type AppView =
   | 'reader'
   | 'experimentMatrix'
   | 'researchSheet'
+  | 'scientificPlot'
   | 'aiAssistant'
   | 'paperTutor'
   | 'knowledgeGraph'

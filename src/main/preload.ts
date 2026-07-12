@@ -161,6 +161,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   }) => ipcRenderer.invoke('scientific-plot:read-data-file', request),
   detectScientificPlotRuntimes: () => ipcRenderer.invoke('scientific-plot:detect-runtimes'),
   getScientificPlotInstallerIntent: () => ipcRenderer.invoke('scientific-plot:installer-intent'),
+  acknowledgeScientificPlotInstallerIntent: () => ipcRenderer.invoke('scientific-plot:acknowledge-installer-intent'),
   startScientificPlotRuntimeInstall: (request: { language: 'python' | 'r'; targetRoot?: string }) =>
     ipcRenderer.invoke('scientific-plot:start-runtime-install', request),
   getScientificPlotRuntimeInstallJob: (jobId: string) =>
@@ -179,5 +180,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('scientific-plot:export-fplot', request),
   importScientificPlotPackage: () => ipcRenderer.invoke('scientific-plot:import-fplot'),
   exportScientificPlotArtifact: (request: { filePath: string; defaultFileName: string }) =>
-    ipcRenderer.invoke('scientific-plot:export-artifact', request)
+    ipcRenderer.invoke('scientific-plot:export-artifact', request),
+  exportScientificPlotGeneratedArtifact: (request: { format: 'png' | 'svg'; defaultFileName: string; content: string; encoding: 'base64' | 'utf8' }) =>
+    ipcRenderer.invoke('scientific-plot:export-generated-artifact', request),
+  readScientificPlotArtifact: (filePath: string) =>
+    ipcRenderer.invoke('scientific-plot:read-artifact', { filePath })
 });

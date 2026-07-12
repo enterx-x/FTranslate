@@ -58,6 +58,7 @@ export class PlotRuntimeManager {
   readonly managedRoot: string;
   private readonly manifestPath: string;
   private readonly installerIntentPath?: string;
+  private readonly configuredRootsPath: string;
   private readonly commandRunner: RuntimeCommandRunner;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => string;
@@ -70,6 +71,7 @@ export class PlotRuntimeManager {
     this.managedRoot = path.resolve(options.managedRoot);
     this.manifestPath = path.resolve(options.manifestPath);
     this.installerIntentPath = options.installerIntentPath ? path.resolve(options.installerIntentPath) : undefined;
+    this.configuredRootsPath = path.join(this.managedRoot, 'runtime-roots.json');
     this.commandRunner = options.commandRunner ?? runCommand;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? (() => new Date().toISOString());
@@ -107,7 +109,18 @@ export class PlotRuntimeManager {
     }
     const content = await readFile(this.installerIntentPath, 'utf8');
     const read = (key: string) => new RegExp(`^${key}=1$`, 'mi').test(content);
+    if (read('Applied')) return { python: false, r: false, matlabDetect: false };
     return { python: read('Python'), r: read('R'), matlabDetect: read('MatlabDetect') };
+  }
+
+  async acknowledgeInstallerIntent(): Promise<boolean> {
+    if (!this.installerIntentPath || !(await exists(this.installerIntentPath))) return false;
+    const content = await readFile(this.installerIntentPath, 'utf8');
+    const next = /^Applied=/mi.test(content)
+      ? content.replace(/^Applied=.*$/mi, 'Applied=1')
+      : `${content.trimEnd()}\nApplied=1\n`;
+    await writeFile(this.installerIntentPath, next, 'utf8');
+    return true;
   }
 
   startInstall(language: 'python' | 'r', targetRoot = this.managedRoot): PlotRuntimeInstallJob {
@@ -153,13 +166,20 @@ export class PlotRuntimeManager {
     const resolved = path.resolve(target);
     if (!resolved.startsWith(`${root}${path.sep}`)) throw new Error('拒绝删除私有运行环境之外的路径。');
     await rm(target, { recursive: true, force: true });
+    const configuredRoots = await this.readConfiguredRoots();
+    if (configuredRoots[language] && path.resolve(configuredRoots[language]) === root) {
+      delete configuredRoots[language];
+      await this.writeConfiguredRoots(configuredRoots);
+    }
     this.runtimeCommands.delete(language);
     return true;
   }
 
   private async detectPython(checkedAt: string): Promise<PlotRuntimeCapability> {
     const candidates: PlotRuntimeCommand[] = [];
+    const configuredRoot = (await this.readConfiguredRoots()).python;
     if (this.env.FTRANSLATE_PLOT_PYTHON) candidates.push({ executable: this.env.FTRANSLATE_PLOT_PYTHON, prefixArgs: [] });
+    if (configuredRoot) candidates.push({ executable: path.join(configuredRoot, 'python', 'python.exe'), prefixArgs: [] });
     candidates.push({ executable: path.join(this.managedRoot, 'python', 'python.exe'), prefixArgs: [] });
     const pythonPath = await this.where('python.exe');
     if (pythonPath) candidates.push({ executable: pythonPath, prefixArgs: [] });
@@ -176,7 +196,7 @@ export class PlotRuntimeManager {
         status: missing.length ? 'degraded' : 'ready',
         version: firstVersion(version),
         executable: candidate.executable,
-        managed: isInside(this.managedRoot, candidate.executable),
+        managed: isInside(this.managedRoot, candidate.executable) || Boolean(configuredRoot && isInside(configuredRoot, candidate.executable)),
         packages,
         message: missing.length ? `Python 可用，但缺少：${missing.join('、')}` : 'Python 科研绘图环境可用。',
         checkedAt
@@ -186,8 +206,10 @@ export class PlotRuntimeManager {
   }
 
   private async detectR(checkedAt: string): Promise<PlotRuntimeCapability> {
+    const configuredRoot = (await this.readConfiguredRoots()).r;
     const candidates = [
       this.env.FTRANSLATE_PLOT_RSCRIPT,
+      configuredRoot ? path.join(configuredRoot, 'r', 'bin', 'Rscript.exe') : undefined,
       path.join(this.managedRoot, 'r', 'bin', 'Rscript.exe'),
       await this.where('Rscript.exe')
     ].filter((item): item is string => Boolean(item)).map((executable) => ({ executable, prefixArgs: [] }));
@@ -202,7 +224,7 @@ export class PlotRuntimeManager {
         status: missing.length ? 'degraded' : 'ready',
         version: firstVersion(version),
         executable: candidate.executable,
-        managed: isInside(this.managedRoot, candidate.executable),
+        managed: isInside(this.managedRoot, candidate.executable) || Boolean(configuredRoot && isInside(configuredRoot, candidate.executable)),
         packages,
         message: missing.length ? `R 可用，但缺少：${missing.join('、')}` : 'R 科研绘图环境可用。',
         checkedAt
@@ -273,6 +295,9 @@ export class PlotRuntimeManager {
       if (job.language === 'python') await this.configurePython(job.targetPath, signal);
       else await this.configureR(job.targetPath, signal);
       await writeFile(path.join(job.targetPath, '.ftranslate-managed-runtime.json'), JSON.stringify({ language: job.language, version: entry.version, createdAt: this.now() }, null, 2));
+      const configuredRoots = await this.readConfiguredRoots();
+      configuredRoots[job.language] = path.dirname(job.targetPath);
+      await this.writeConfiguredRoots(configuredRoots);
       job.status = 'succeeded';
       job.progress = 100;
       job.message = '私有科研绘图环境已配置。';
@@ -304,6 +329,25 @@ export class PlotRuntimeManager {
     const expression = `options(repos=c(CRAN='https://cloud.r-project.org')); install.packages(${JSON.stringify(R_PACKAGES)}, dependencies=TRUE)`;
     const result = await this.commandRunner(executable, ['--vanilla', '-e', expression], { timeoutMs: 30 * 60_000, signal });
     if (result.exitCode !== 0) throw new Error(`R 包安装失败：${trimLog(result.stderr)}`);
+  }
+
+  private async readConfiguredRoots(): Promise<Partial<Record<'python' | 'r', string>>> {
+    if (!(await exists(this.configuredRootsPath))) return {};
+    try {
+      const value = JSON.parse(await readFile(this.configuredRootsPath, 'utf8')) as Record<string, unknown>;
+      return Object.fromEntries(
+        (['python', 'r'] as const)
+          .filter((language) => typeof value[language] === 'string')
+          .map((language) => [language, validateManagedRoot(String(value[language]))])
+      );
+    } catch {
+      return {};
+    }
+  }
+
+  private async writeConfiguredRoots(roots: Partial<Record<'python' | 'r', string>>): Promise<void> {
+    await mkdir(this.managedRoot, { recursive: true });
+    await writeFile(this.configuredRootsPath, JSON.stringify(roots, null, 2), 'utf8');
   }
 
   private async downloadVerified(

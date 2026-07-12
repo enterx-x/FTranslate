@@ -676,3 +676,36 @@ npm run dev
 python -m http.server 8765 --bind 127.0.0.1 --directory .superpowers/brainstorm/ui-motion-comparison
 # 打开 http://127.0.0.1:8765/
 ```
+## 科研绘图工作台（0.1.15）
+
+侧栏“科研绘图”现已接入独立工作台，面向实验数据、论文图表和可复现实验结果整理：
+
+- 数据来源：CSV、TSV、XLSX、多工作表选择、剪贴板表格、当前研究表格及最后选区；导入后创建本地只读快照，并显示行列数、缺失值和重复行。
+- 图形：折线、散点、柱状、面积、分布、热图、相关矩阵、3D、Sankey/Alluvial、生存、森林、火山和雷达等受控图形；不会让未选择的语言代画。
+- 统计：描述统计、置信区间、回归、参数/非参数检验和多重比较校正；检验设计无效时明确报错，不生成伪显著性标记。
+- 渲染器：JavaScript/ECharts 内置即时预览；Python、R 可检测系统环境或安装到用户选择的私有目录；MATLAB 只检测已有授权安装，不由 FTranslate 安装。
+- 导出：ECharts 直接生成 PNG/SVG；外部语言导出自身生成的图片和脚本；`.fplot` 可复现包默认不包含原始数据，可由用户显式选择。
+- UI：环境配置、数据导入、转换、脚本和导出均为按需弹窗，不常驻挤占画布；左侧数据、中间画布、右侧 Inspector 在 1366px 桌面宽度下保持可扫描。
+
+安装程序会提供 Python、R 和 MATLAB 检测意图选项，但不会静默修改系统 `PATH`。首次进入科研绘图时会打开环境管理弹窗；下载任务可取消，官方安装器会校验固定 SHA-256。
+
+必要验证：
+
+```powershell
+npm run typecheck
+npm run build:renderer
+npm run visual:check
+```
+
+绘图页面视觉截图输出到：
+
+```text
+.tmp-visual-check/scientific-plot-page.png
+```
+
+当前 Windows 安装包：
+
+```text
+dist/PDF Translation Reader Setup 0.1.15.exe
+SHA256 C09DF062AB7FB710334C86E6500880992A48DE8CE058331F026F2E5F0F629AB0
+```

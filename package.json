@@ -1,6 +1,6 @@
 {
   "name": "pdf-translation-reader",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Local offline PDF original text and Chinese translation reader for Windows desktop.",
   "main": "dist-electron/main/main.js",
   "private": true,
@@ -74,6 +74,7 @@
       "icon": "assets/icon.ico"
     },
     "nsis": {
+      "include": "build/installer.nsh",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,

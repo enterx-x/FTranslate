@@ -9,10 +9,10 @@ describe('scientific plot IPC boundary', () => {
     const noop = () => { calls += 1; return null; };
     registerScientificPlotIpcHandlers({ handle: (channel, listener) => listeners.set(channel, listener) }, {
       listProjects: noop, createProject: noop, loadProject: noop, saveSpec: noop,
-      selectDataFile: noop, readDataFile: noop, detectRuntimes: noop, readInstallerIntent: noop,
+      selectDataFile: noop, readDataFile: noop, detectRuntimes: noop, readInstallerIntent: noop, acknowledgeInstallerIntent: noop,
       startRuntimeInstall: noop, getRuntimeInstallJob: noop, cancelRuntimeInstall: noop,
       removeManagedRuntime: noop, submitRender: noop, getRenderJob: noop, cancelRender: noop,
-      exportFplot: noop, importFplot: noop, exportArtifact: noop
+      exportFplot: noop, importFplot: noop, exportArtifact: noop, exportGeneratedArtifact: noop, readArtifact: noop
     });
     await expect(listeners.get('scientific-plot:load-project')?.({}, { projectId: '../escape' })).rejects.toThrow(/project id/i);
     const spec = createDefaultScientificPlotSpec('safe');

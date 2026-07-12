@@ -29,6 +29,7 @@ import saveIcon from '../assets/icons/duotone/save.svg';
 import refreshIcon from '../assets/icons/duotone/refresh.svg';
 import { MathText } from './MathText';
 import { MarkdownDocument } from './MarkdownDocument';
+import type { ResearchSheetPlotRange } from '../lib/plotData';
 import {
   RESEARCH_SHEET_LINKS_KEY,
   RESEARCH_WORKBOOK_KEY,
@@ -109,6 +110,7 @@ interface ResearchSheetPageProps {
   onAnalyzeLiteratureGap: (request: AnalyzeLiteratureGapRequest) => Promise<AnalyzeLiteratureGapResult>;
   onOpenAiAssistant: () => void;
   onOpenKnowledgeGraph: () => void;
+  onPlotSelectionChange?: (range: ResearchSheetPlotRange) => void;
 }
 
 interface SelectedCell {
@@ -240,6 +242,15 @@ export function ResearchSheetPage(props: ResearchSheetPageProps) {
     props.papers,
     props.workbook
   ]);
+
+  useEffect(() => {
+    const range = selectedRanges[0];
+    if (!range) return;
+    props.onPlotSelectionChange?.({
+      ...range,
+      a1Notation: formatSelectedRanges([range])
+    });
+  }, [props.onPlotSelectionChange, selectedRanges]);
   const literatureInsightAction = useMemo(
     () =>
       describeLiteratureInsightAction({

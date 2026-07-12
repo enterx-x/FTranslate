@@ -284,6 +284,20 @@ export interface PlotRenderArtifact {
   stale?: boolean;
 }
 
+export interface PlotArtifactPayload {
+  fileName: string;
+  mimeType: string;
+  base64?: string;
+  text?: string;
+}
+
+export interface PlotGeneratedArtifactExportRequest {
+  format: 'png' | 'svg';
+  defaultFileName: string;
+  content: string;
+  encoding: 'base64' | 'utf8';
+}
+
 export interface PlotRenderJob {
   id: string;
   projectId: string;

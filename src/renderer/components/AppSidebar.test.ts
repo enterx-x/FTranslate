@@ -12,6 +12,7 @@ describe('AppSidebar navigation targets', () => {
     ['experimentMatrix', 'experimentMatrix'],
     ['library', 'library'],
     ['researchSheet', 'researchSheet'],
+    ['plot', 'plot'],
     ['knowledgeGraph', 'knowledgeGraph'],
     ['presentation', 'presentation'],
     ['arxiv', 'arxiv'],
@@ -32,6 +33,7 @@ describe('AppSidebar navigation targets', () => {
     expect(labels.slice(0, 4)).toEqual(['项目空间', '实验矩阵', '证据图谱', '组会 PPT']);
     expect(labels).toContain('项目空间');
     expect(labels).toContain('研究表格');
+    expect(labels).toContain('科研绘图');
     expect(labels).toContain('论文导师');
     expect(labels).not.toContain('工作台');
     expect(labels).not.toContain('AI 问答');
@@ -45,6 +47,7 @@ describe('AppSidebar navigation targets', () => {
       onOpenExperimentMatrix: () => calls.push('experimentMatrix'),
       onOpenLibrary: () => calls.push('library'),
       onOpenResearchSheet: () => calls.push('researchSheet'),
+      onOpenPlot: () => calls.push('plot'),
       onOpenKnowledgeGraph: () => calls.push('knowledgeGraph'),
       onOpenPresentation: () => calls.push('presentation'),
       onOpenArxiv: () => calls.push('arxiv'),

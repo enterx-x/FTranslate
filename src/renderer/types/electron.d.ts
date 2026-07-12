@@ -7,6 +7,8 @@ import type {
 } from '../../shared/arxiv';
 import type {
   PlotDataTable,
+  PlotArtifactPayload,
+  PlotGeneratedArtifactExportRequest,
   PlotRenderJob,
   PlotRuntimeCapability,
   PlotRuntimeInstallJob,
@@ -399,6 +401,7 @@ export interface ElectronApi {
   }) => Promise<PlotDataTable>;
   detectScientificPlotRuntimes: () => Promise<PlotRuntimeCapability[]>;
   getScientificPlotInstallerIntent: () => Promise<{ python: boolean; r: boolean; matlabDetect: boolean }>;
+  acknowledgeScientificPlotInstallerIntent: () => Promise<boolean>;
   startScientificPlotRuntimeInstall: (request: { language: 'python' | 'r'; targetRoot?: string }) => Promise<PlotRuntimeInstallJob>;
   getScientificPlotRuntimeInstallJob: (jobId: string) => Promise<PlotRuntimeInstallJob | undefined>;
   cancelScientificPlotRuntimeInstall: (jobId: string) => Promise<boolean>;
@@ -409,6 +412,8 @@ export interface ElectronApi {
   exportScientificPlotPackage: (request: { projectId: string; includeRawData?: boolean; includeDerivedData?: boolean }) => Promise<SaveTextResult | null>;
   importScientificPlotPackage: () => Promise<{ projectId: string } | null>;
   exportScientificPlotArtifact: (request: { filePath: string; defaultFileName: string }) => Promise<SaveTextResult | null>;
+  exportScientificPlotGeneratedArtifact: (request: PlotGeneratedArtifactExportRequest) => Promise<SaveTextResult | null>;
+  readScientificPlotArtifact: (filePath: string) => Promise<PlotArtifactPayload>;
 }
 
 declare global {
