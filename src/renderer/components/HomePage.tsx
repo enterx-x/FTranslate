@@ -429,7 +429,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
 
   if (props.activeSection === 'hub') {
     return (
-      <main className="home-page home-hub-page research-workbench-page">
+      <main className="home-page home-hub-page research-workbench-page research-os-home">
         <header className="research-workbench-header">
           <div className="research-workbench-title">
             <img className="home-header-mark" src={brandMark} alt="" />

@@ -29,8 +29,18 @@
 .nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.groupLabel {
+  margin: 10px 9px 3px;
+  color: #718198;
+  font-size: 9.5px;
+  font-weight: 760;
+  letter-spacing: 0.08em;
 }
 
 .link {

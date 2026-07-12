@@ -19600,6 +19600,212 @@ input[type='checkbox'] {
   }
 }
 
+/* Focused Research OS: shared visual language for the primary research loop. */
+:root {
+  --ft-os-canvas: #f3f5fa;
+  --ft-os-surface: rgba(255, 255, 255, 0.92);
+  --ft-os-surface-solid: #ffffff;
+  --ft-os-surface-muted: #eef1f7;
+  --ft-os-ink: #182033;
+  --ft-os-ink-muted: #657189;
+  --ft-os-border: rgba(129, 143, 169, 0.24);
+  --ft-os-accent: #526d9c;
+  --ft-os-violet: #7469b4;
+  --ft-os-glow: rgba(102, 91, 188, 0.18);
+  --ft-os-radius: 10px;
+  --ft-os-shadow: 0 18px 44px rgba(34, 45, 76, 0.09);
+  --ft-os-motion: 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.research-os-home,
+.research-os-ai,
+.research-os-reader {
+  color: var(--ft-os-ink);
+}
+
+.research-os-home {
+  background:
+    radial-gradient(circle at 74% 4%, rgba(116, 105, 180, 0.11), transparent 30%),
+    radial-gradient(circle at 45% 0%, rgba(82, 109, 156, 0.1), transparent 28%),
+    linear-gradient(180deg, #f8f9fc 0%, var(--ft-os-canvas) 100%) !important;
+}
+
+.research-os-home .research-workbench-header {
+  border-color: var(--ft-os-border);
+  background: rgba(255, 255, 255, 0.76);
+  backdrop-filter: blur(18px) saturate(125%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+}
+
+.research-os-home .research-current-project,
+.research-os-home .research-workflow-board,
+.research-os-home .research-inspector-shell {
+  border-color: var(--ft-os-border);
+  border-radius: var(--ft-os-radius);
+  background: var(--ft-os-surface);
+  box-shadow: var(--ft-os-shadow);
+  backdrop-filter: blur(16px) saturate(118%);
+}
+
+.research-os-home .research-workflow-board {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.research-os-home .research-workflow-board::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: 310px;
+  height: 310px;
+  top: -190px;
+  right: -100px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(116, 105, 180, 0.2), transparent 68%);
+  filter: blur(12px);
+  pointer-events: none;
+}
+
+.research-os-home .research-workflow-card {
+  border-color: rgba(116, 129, 158, 0.24);
+  border-left-width: 1px;
+  border-radius: 9px;
+  box-shadow: 0 8px 18px rgba(38, 50, 80, 0.055);
+  transition: transform var(--ft-os-motion), border-color var(--ft-os-motion), box-shadow var(--ft-os-motion);
+}
+
+.research-os-home .research-workflow-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(100, 91, 178, 0.35);
+  box-shadow: 0 14px 28px rgba(75, 67, 151, 0.12);
+}
+
+.research-os-home .research-inspector-shell {
+  border-color: rgba(105, 95, 180, 0.28);
+  box-shadow: 0 20px 48px rgba(76, 67, 150, 0.12);
+}
+
+.research-os-home .primary-button,
+.research-os-ai .primary-button,
+.research-os-reader .primary-button {
+  border-color: transparent;
+  background: linear-gradient(135deg, #344a6b, #5d5796);
+  box-shadow: 0 8px 18px rgba(76, 68, 151, 0.2);
+  transition: transform var(--ft-os-motion), box-shadow var(--ft-os-motion), filter var(--ft-os-motion);
+}
+
+.research-os-home .primary-button:hover:not(:disabled),
+.research-os-ai .primary-button:hover:not(:disabled),
+.research-os-reader .primary-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  filter: brightness(1.06);
+  box-shadow: 0 12px 24px rgba(76, 68, 151, 0.26);
+}
+
+.research-os-home .primary-button:active:not(:disabled),
+.research-os-ai .primary-button:active:not(:disabled),
+.research-os-reader .primary-button:active:not(:disabled) {
+  transform: translateY(1px) scale(0.99);
+}
+
+.research-os-reader .reader-main {
+  background:
+    radial-gradient(circle at 78% 0%, rgba(116, 105, 180, 0.09), transparent 30%),
+    var(--ft-os-canvas);
+}
+
+.research-os-reader .split-layout {
+  gap: 12px;
+  padding: 12px;
+  background: transparent;
+}
+
+.research-os-reader .pdf-pane,
+.research-os-reader .translation-pane {
+  min-width: 0;
+  border: 1px solid var(--ft-os-border);
+  border-radius: var(--ft-os-radius);
+  background: var(--ft-os-surface-solid);
+  box-shadow: 0 12px 30px rgba(34, 45, 76, 0.07);
+  overflow: hidden;
+}
+
+.research-os-reader .translation-pane {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(18px) saturate(122%);
+  transition: width var(--ft-os-motion), opacity var(--ft-os-motion), box-shadow var(--ft-os-motion);
+}
+
+.research-os-reader .translation-pane:focus-within {
+  border-color: rgba(108, 94, 181, 0.38);
+  box-shadow: 0 18px 42px rgba(87, 73, 164, 0.14);
+}
+
+.research-os-reader .pdf-view-toggle {
+  padding: 3px;
+  border: 1px solid var(--ft-os-border);
+  border-radius: 8px;
+  background: var(--ft-os-surface-muted);
+}
+
+.research-os-reader .pdf-view-toggle button.active {
+  background: linear-gradient(135deg, #ffffff, #eceafa);
+  color: #3f3b70;
+  box-shadow: 0 4px 10px rgba(74, 64, 147, 0.12);
+}
+
+.research-os-ai {
+  background:
+    radial-gradient(circle at 86% 10%, rgba(116, 105, 180, 0.13), transparent 28%),
+    linear-gradient(180deg, #f8f9fc, var(--ft-os-canvas));
+}
+
+.research-os-ai .ai-assistant-header {
+  border-bottom-color: var(--ft-os-border);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(18px) saturate(124%);
+}
+
+.research-os-ai .ai-work-card,
+.research-os-ai .ai-config-panel,
+.research-os-ai .ai-analysis-panel {
+  border-color: var(--ft-os-border);
+  border-radius: var(--ft-os-radius);
+  background: var(--ft-os-surface);
+  box-shadow: 0 10px 26px rgba(34, 45, 76, 0.065);
+  backdrop-filter: blur(14px) saturate(116%);
+}
+
+.research-os-ai .ai-result-card {
+  border-color: rgba(108, 94, 181, 0.3);
+  box-shadow: 0 18px 40px rgba(82, 70, 159, 0.11);
+}
+
+.research-os-ai.is-generating .ai-result-card {
+  animation: ft-os-ai-focus 2.4s ease-in-out infinite;
+}
+
+.research-os-ai.is-generating .indeterminate-progress {
+  background: linear-gradient(90deg, transparent, #6c61b1, #6f8fc0, transparent);
+  filter: drop-shadow(0 0 8px rgba(108, 97, 177, 0.35));
+}
+
+@keyframes ft-os-ai-focus {
+  0%, 100% { box-shadow: 0 18px 40px rgba(82, 70, 159, 0.1); }
+  50% { box-shadow: 0 20px 48px rgba(82, 70, 159, 0.2); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .research-os-home *,
+  .research-os-ai *,
+  .research-os-reader * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* Card dashboard restoration: the project space should feel like a polished
    research cockpit, not a flattened admin table. */
 .home-page.research-workbench-page {
@@ -21606,4 +21812,82 @@ input[type='checkbox'] {
   .arxiv-detail-panel.is-collapsed .arxiv-detail-panel-toggle {
     transition: none !important;
   }
+}
+
+/* Final cascade layer for the Focused Research OS surfaces. */
+.home-page.research-os-home {
+  background:
+    radial-gradient(circle at 72% 3%, rgba(112, 96, 190, 0.16), transparent 29%),
+    radial-gradient(circle at 35% -8%, rgba(79, 121, 178, 0.13), transparent 34%),
+    linear-gradient(180deg, #f9faff 0%, #eef2f8 100%) !important;
+}
+
+.research-os-home .research-workbench-header,
+.research-os-ai .ai-assistant-header {
+  background: rgba(255, 255, 255, 0.78) !important;
+  border-color: rgba(119, 126, 154, 0.22) !important;
+  backdrop-filter: blur(18px) saturate(130%);
+}
+
+.research-os-home .research-current-project,
+.research-os-home .research-workflow-board,
+.research-os-home .research-inspector-shell,
+.research-os-ai .ai-work-card,
+.research-os-ai .ai-config-panel,
+.research-os-ai .ai-analysis-panel {
+  border-color: rgba(112, 108, 158, 0.25) !important;
+  background: rgba(255, 255, 255, 0.9) !important;
+  box-shadow: 0 18px 42px rgba(45, 52, 87, 0.085) !important;
+  backdrop-filter: blur(16px) saturate(120%);
+}
+
+.research-os-home .research-workflow-board,
+.research-os-home .research-workflow-grid {
+  overflow-x: hidden !important;
+}
+
+.research-os-home .research-workflow-grid {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.72), rgba(239, 240, 249, 0.9)),
+    #f5f7fb !important;
+}
+
+.research-os-home .research-workflow-card {
+  border: 1px solid rgba(106, 116, 151, 0.24) !important;
+  border-radius: 9px !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  box-shadow: 0 10px 22px rgba(47, 55, 90, 0.065) !important;
+}
+
+.research-os-home .research-inspector-shell,
+.research-os-ai .ai-result-card {
+  border-color: rgba(103, 88, 181, 0.34) !important;
+  box-shadow: 0 22px 50px rgba(86, 70, 166, 0.14) !important;
+}
+
+.research-os-reader .split-layout {
+  gap: 12px !important;
+  padding: 12px !important;
+  background:
+    radial-gradient(circle at 84% 0%, rgba(111, 95, 187, 0.12), transparent 27%),
+    #eef2f8 !important;
+}
+
+.research-os-reader .pdf-pane,
+.research-os-reader .translation-pane {
+  border: 1px solid rgba(112, 108, 158, 0.25) !important;
+  border-radius: 10px !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  box-shadow: 0 15px 34px rgba(43, 51, 83, 0.09) !important;
+  overflow: hidden;
+}
+
+.research-os-reader .translation-pane {
+  backdrop-filter: blur(18px) saturate(125%);
+}
+
+.research-os-ai {
+  background:
+    radial-gradient(circle at 86% 8%, rgba(112, 96, 190, 0.16), transparent 30%),
+    linear-gradient(180deg, #fafaff, #eef2f8) !important;
 }

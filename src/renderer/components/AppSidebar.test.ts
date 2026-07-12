@@ -29,7 +29,7 @@ describe('AppSidebar navigation targets', () => {
   it('uses clear AI R&D workspace labels instead of generic legacy wording', () => {
     const labels = getSidebarNavigationItems().map((item) => item.label);
 
-    expect(labels.slice(0, 4)).toEqual(['项目空间', '实验矩阵', '证据图谱', '组会 PPT']);
+    expect(labels.slice(0, 4)).toEqual(['项目空间', 'arXiv 检索', '论文库', 'PDF 阅读']);
     expect(labels).toContain('项目空间');
     expect(labels).toContain('研究表格');
     expect(labels).toContain('论文导师');
@@ -59,5 +59,16 @@ describe('AppSidebar navigation targets', () => {
     handlers.settings();
 
     expect(calls).toEqual(['reader', 'arxiv', 'settings']);
+  });
+
+  it('organizes navigation into focused Research OS groups', () => {
+    const groups = getSidebarNavigationItems().map((item) => item.group);
+
+    expect(groups).toContain('overview');
+    expect(groups).toContain('reading');
+    expect(groups).toContain('evidence');
+    expect(groups).toContain('experiments');
+    expect(groups).toContain('assistant');
+    expect(groups).toContain('outputs');
   });
 });

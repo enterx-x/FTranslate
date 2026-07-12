@@ -327,7 +327,7 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
   }
 
   return (
-    <main className="ai-assistant-page">
+    <main className={`ai-assistant-page research-os-ai${props.isBusy ? ' is-generating' : ''}`}>
       <header className="ai-assistant-header">
         <div>
           <span className="eyebrow">AI Research Workbench</span>

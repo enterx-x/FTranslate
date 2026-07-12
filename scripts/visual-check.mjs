@@ -1260,7 +1260,10 @@ async function runHomeScenario(client) {
         })(),
         cardLikeCount: cardLikeElements.length,
         cardLikeElements: cardLikeElements.slice(0, 12),
-        workflowBoardHorizontalOverflow: workflowBoard ? workflowBoard.scrollWidth > workflowBoard.clientWidth + 3 : true,
+        workflowBoardHorizontalOverflow: workflowBoard
+          ? workflowBoard.scrollWidth > workflowBoard.clientWidth + 3 &&
+            !['hidden', 'clip'].includes(getComputedStyle(workflowBoard).overflowX)
+          : true,
         workflowMinCardWidth: workflowCardRects.reduce((min, item) => Math.min(min, item.width), Number.POSITIVE_INFINITY),
         workflowCardOverflowCount: workflowCardRects.filter(
           (item) => item.scrollWidth > item.clientWidth + 3 || item.scrollHeight > item.clientHeight + 3

@@ -675,3 +675,9 @@ npm run dev
 python -m http.server 8765 --bind 127.0.0.1 --directory .superpowers/brainstorm/ui-motion-comparison
 # 打开 http://127.0.0.1:8765/
 ```
+
+## 2026-07-12 聚焦型 Research OS 界面
+
+首页、全局侧栏、PDF 阅读器和 AI 助手已统一为浅色优先的 Research OS 视觉语言：侧栏按科研工作流分组，主操作使用深石墨到蓝紫渐变，关键检查器使用局部玻璃材质和柔和发光。PDF 双语画布保持主区域优先；AI 助手仅在真实生成期间显示持续状态动效，结束后自动归于静态。
+
+界面仍支持 `prefers-reduced-motion: reduce`。视觉回归截图位于 `.tmp-visual-check/home.png`、`.tmp-visual-check/whole-pdf-reader.png` 和 `.tmp-visual-check/ai-assistant.png`。

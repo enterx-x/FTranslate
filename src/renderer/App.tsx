@@ -2328,7 +2328,7 @@ export default function App() {
   }
 
   return renderWithContexts(
-    <div className="app-shell desktop-shell reader-shell">
+    <div className="app-shell desktop-shell reader-shell research-os-reader">
       {renderSidebar()}
       <div className={getAppMainClassName('reader-main')}>
         <Toolbar
