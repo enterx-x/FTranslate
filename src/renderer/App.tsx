@@ -53,6 +53,7 @@ import { NotesPanel } from './components/NotesPanel';
 import { PdfFigureAssetsPanel } from './components/PdfFigureAssetsPanel';
 import { PdfViewer } from './components/PdfViewer';
 import { extractPdfBlocksFromData } from './lib/pdfOutlineExtraction';
+import { decodeBase64ToUint8Array } from './lib/binary';
 import { Toolbar } from './components/Toolbar';
 import { ConnectedStatusBar } from './components/StatusBar';
 import translateIcon from './assets/icons/duotone/translate.svg';
@@ -276,9 +277,15 @@ export default function App() {
   const pdfTranslationRunRef = useRef(0);
   const pdfFigureExtractionRunRef = useRef(0);
   const presentationGenerationRunRef = useRef(0);
+  const paperOpenRunRef = useRef(0);
+  const paperLibraryRef = useRef(paperLibrary);
   const { statusMessage, statusMessages, setStatusMessage } = useStatusQueue(
     '请在论文库中新建或打开一个翻译项目。'
   );
+
+  useEffect(() => {
+    paperLibraryRef.current = paperLibrary;
+  }, [paperLibrary]);
 
   useEffect(() => {
     if (paperLibraryWarning) {
@@ -400,7 +407,7 @@ export default function App() {
     return {
       filePath: payload.filePath,
       fileName: payload.fileName,
-      data: base64ToUint8Array(payload.base64)
+      data: decodeBase64ToUint8Array(payload.base64)
     };
   }
 
@@ -558,87 +565,110 @@ export default function App() {
   }
 
   function rememberPaper(record: PaperRecord): PaperRecord {
-    let nextRecord = record;
-    setPaperLibrary((library) => {
-      const nextLibrary = upsertPaperRecord(library, record);
-      nextRecord = nextLibrary[0];
-      return nextLibrary;
-    });
+    const nextLibrary = upsertPaperRecord(paperLibraryRef.current, record);
+    const nextRecord = nextLibrary[0] ?? record;
+    paperLibraryRef.current = nextLibrary;
+    setPaperLibrary(nextLibrary);
     setActivePaperId(nextRecord.id);
     return nextRecord;
   }
 
   async function handleOpenPaper(paper: PaperRecord): Promise<void> {
+    const openRunId = paperOpenRunRef.current + 1;
+    paperOpenRunRef.current = openRunId;
     try {
-      const result = await window.electronAPI.loadProject({
-        pdfPath: paper.pdfPath,
-        translationPath: paper.translationPath,
-        aiCachePath: paper.aiCachePath,
-        translatedPdfPath: paper.translatedPdfPath,
-        translatedMonoPdfPath: paper.translatedMonoPdfPath
-      });
+      setStatusMessage(`正在打开原文：${paper.chineseTitle || paper.englishTitle || paper.pdfName}`);
+      const sourceResult = await window.electronAPI.loadProject({ pdfPath: paper.pdfPath });
+      if (paperOpenRunRef.current !== openRunId) {
+        return;
+      }
 
-      if (!result.pdf) {
+      if (!sourceResult.pdf) {
         setStatusMessage(
-          result.errors.length > 0
-            ? result.errors.join('；')
+          sourceResult.errors.length > 0
+            ? sourceResult.errors.join('；')
             : '无法打开论文记录，请检查 PDF 是否仍在原路径。'
         );
         return;
       }
 
-      const hasDistinctTranslatedPdf = Boolean(
-        result.translatedPdf && !isSamePdfFilePath(result.translatedPdf.filePath, result.pdf.filePath)
-      );
-      const hasDistinctTranslatedMonoPdf = Boolean(
-        result.translatedMonoPdf && !isSamePdfFilePath(result.translatedMonoPdf.filePath, result.pdf.filePath)
-      );
-      const hasReadableTranslatedPdf = hasDistinctTranslatedPdf || hasDistinctTranslatedMonoPdf;
-      const resourceWarnings = [...result.errors];
-
-      applyPdfPayload(result.pdf, paper.lastPage, { keepTranslatedPdf: hasReadableTranslatedPdf });
-      if (result.translation) {
-        applyTranslationPayload(result.translation);
-      } else {
-        setTranslationDocument(null);
-        setCurrentParagraphIndex(0);
-        setShowTranslation(false);
-      }
-      if (result.aiCache) {
-        const aiDocument = applyAiCachePayload(result.aiCache);
-        if (!aiDocument) {
-          resourceWarnings.push('AI 缓存不是 JSON 翻译数组，已只打开手动翻译文件。');
-        }
-      }
-      const translatedDisplayPdf = result.translatedPdf ?? result.translatedMonoPdf;
-      if (translatedDisplayPdf && hasReadableTranslatedPdf) {
-        applyTranslatedPdfPayload(translatedDisplayPdf, result.translatedPdf ? result.translatedMonoPdf : null);
-      }
-      const translatedPdfLabel = result.translatedPdf ? '双语 PDF' : '中文 PDF';
+      applyPdfPayload(sourceResult.pdf, paper.lastPage);
+      setTranslationDocument(null);
+      setCurrentParagraphIndex(0);
+      setShowTranslation(false);
       const updated = updatePaperRecord(paper, {
         lastOpenedAt: new Date().toISOString()
       });
-      setPaperLibrary((library) =>
-        library.map((item) => (item.id === paper.id ? updated : item))
-      );
+      const updatedLibrary = paperLibraryRef.current.map((item) => (item.id === paper.id ? updated : item));
+      paperLibraryRef.current = updatedLibrary;
+      setPaperLibrary(updatedLibrary);
       setActivePaperId(paper.id);
       const cachedTutorEvidence = paperTutorEvidenceByPaperId[paper.id];
       setPdfFigureAssets(cachedTutorEvidence?.figures ?? []);
       setActiveNotes(paper.notes ?? '');
+      setReaderMode('manual');
+      setIsPdfAiSettingsOpen(false);
       setView('reader');
-      const openedMessage =
-        hasReadableTranslatedPdf
-          ? `已打开论文并切换到${translatedPdfLabel}：${paper.chineseTitle || paper.englishTitle}`
-          : result.aiCache
-            ? `已打开论文并自动导入 AI 缓存：${paper.chineseTitle || paper.englishTitle}`
-            : `已打开论文：${paper.chineseTitle || paper.englishTitle}`;
+      const hasSidecars = Boolean(
+        paper.translationPath || paper.aiCachePath || paper.translatedPdfPath || paper.translatedMonoPdfPath
+      );
+      if (!hasSidecars) {
+        setStatusMessage(`已打开论文：${paper.chineseTitle || paper.englishTitle}`);
+        return;
+      }
+
+      setStatusMessage('原文首屏已打开，正在后台载入翻译与双语 PDF 资源...');
+      const resourceResult = await window.electronAPI.loadProject({
+        translationPath: paper.translationPath,
+        aiCachePath: paper.aiCachePath,
+        translatedPdfPath: isSamePdfFilePath(paper.translatedPdfPath, paper.pdfPath)
+          ? undefined
+          : paper.translatedPdfPath,
+        translatedMonoPdfPath: isSamePdfFilePath(paper.translatedMonoPdfPath, paper.pdfPath)
+          ? undefined
+          : paper.translatedMonoPdfPath
+      });
+      if (paperOpenRunRef.current !== openRunId) {
+        return;
+      }
+
+      const resourceWarnings = [...sourceResult.errors, ...resourceResult.errors];
+      if (resourceResult.translation) {
+        applyTranslationPayload(resourceResult.translation);
+      }
+      if (resourceResult.aiCache) {
+        const aiDocument = applyAiCachePayload(resourceResult.aiCache);
+        if (!aiDocument) {
+          resourceWarnings.push('AI 缓存不是 JSON 翻译数组，已只打开手动翻译文件。');
+        }
+      }
+      const translatedDisplayPdf = resourceResult.translatedPdf ?? resourceResult.translatedMonoPdf;
+      if (translatedDisplayPdf) {
+        setTranslatedPdf(buildPdfState(translatedDisplayPdf));
+        setTranslatedMonoPdf(
+          resourceResult.translatedPdf && resourceResult.translatedMonoPdf
+            ? buildPdfState(resourceResult.translatedMonoPdf)
+            : null
+        );
+      }
+      const loadedLabels = [
+        resourceResult.translation ? '手动译文' : '',
+        resourceResult.aiCache ? 'AI 缓存' : '',
+        resourceResult.translatedPdf ? '双语 PDF' : '',
+        resourceResult.translatedMonoPdf ? '中文 PDF' : ''
+      ].filter(Boolean);
+      const openedMessage = loadedLabels.length > 0
+        ? `论文已打开，后台资源已就绪：${loadedLabels.join('、')}`
+        : `论文已打开：${paper.chineseTitle || paper.englishTitle}`;
       setStatusMessage(
         resourceWarnings.length > 0
           ? `${openedMessage}；部分资源未加载：${resourceWarnings.join('；')}`
           : openedMessage
       );
     } catch (error) {
-      setStatusMessage(`打开论文记录失败：${String(error)}`);
+      if (paperOpenRunRef.current === openRunId) {
+        setStatusMessage(`打开论文记录失败：${String(error)}`);
+      }
     }
   }
 
@@ -1055,6 +1085,7 @@ export default function App() {
   }
 
   function handleArxivPaperDownloaded(arxivPaper: ArxivPaper, pdfPayload: PdfFilePayload): void {
+    paperOpenRunRef.current += 1;
     const now = new Date().toISOString();
     const record: PaperRecord = {
       id: `paper-${hashText(pdfPayload.filePath)}`,
@@ -1078,7 +1109,21 @@ export default function App() {
       updatedAt: now
     };
     const storedRecord = rememberPaper(record);
-    setStatusMessage(`arXiv PDF 已加入论文库：${storedRecord.englishTitle}`);
+    applyPdfPayload(pdfPayload);
+    const freshSession = buildFreshPdfSessionState();
+    setTranslationDocument(freshSession.translationDocument);
+    setAiCacheDocument(freshSession.aiCacheDocument);
+    setCurrentParagraphIndex(freshSession.currentParagraphIndex);
+    setAiParagraphIndex(freshSession.aiParagraphIndex);
+    setShowTranslation(freshSession.showTranslation);
+    setIsEditing(freshSession.isEditing);
+    setEditingText(freshSession.editingText);
+    setActivePaperId(storedRecord.id);
+    setActiveNotes(storedRecord.notes ?? '');
+    setReaderMode('manual');
+    setIsPdfAiSettingsOpen(false);
+    setView('reader');
+    setStatusMessage(`arXiv PDF 已加入论文库并打开：${storedRecord.englishTitle}`);
   }
 
   function ensureActivePaperForCurrentPdf(): PaperRecord | null {
@@ -2437,6 +2482,7 @@ export default function App() {
                 onDocumentLoad={handleSourceDocumentLoad}
                 onCurrentPageChange={handleSourceCurrentPageChange}
                 onExtractedTextReady={handleSourceExtractedTextReady}
+                enableFullTextExtraction
                 onHighlightStatusChange={setStatusMessage}
                 onStatusChange={setStatusMessage}
               />
@@ -2453,6 +2499,7 @@ export default function App() {
                 onDocumentLoad={handleParallelTranslationDocumentLoad}
                 onCurrentPageChange={handleSourceCurrentPageChange}
                 onExtractedTextReady={handleIgnoredExtractedTextReady}
+                enableFullTextExtraction={false}
                 onHighlightStatusChange={setStatusMessage}
                 onStatusChange={setStatusMessage}
               />
@@ -2468,6 +2515,7 @@ export default function App() {
               onDocumentLoad={handleDisplayedDocumentLoad}
               onCurrentPageChange={handleDisplayedCurrentPageChange}
               onExtractedTextReady={handleDisplayedExtractedTextReady}
+              enableFullTextExtraction={pdfViewMode === 'source'}
               onHighlightStatusChange={setStatusMessage}
               onStatusChange={setStatusMessage}
             />
@@ -2813,11 +2861,6 @@ export default function App() {
       </div>
     </div>
   );
-}
-
-function base64ToUint8Array(base64: string): Uint8Array {
-  const binaryString = window.atob(base64);
-  return Uint8Array.from(binaryString, (character) => character.charCodeAt(0));
 }
 
 function buildExportFileName(sourceName?: string): string {

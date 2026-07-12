@@ -97,8 +97,8 @@ const OFFLINE_TRANSLATION_NOTICE_TITLE = '离线翻译未配置';
 export const DEFAULT_ARXIV_SEARCH_QUERY = '';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
-const OFFLINE_TRANSLATION_BATCH_SIZE = 24;
-const OFFLINE_TRANSLATION_BATCH_CONCURRENCY = 2;
+const OFFLINE_TRANSLATION_BATCH_SIZE = 4;
+const OFFLINE_TRANSLATION_BATCH_CONCURRENCY = 1;
 const ARXIV_PREVIEW_TRANSLATION_LIMIT = 6;
 
 const CATEGORY_OPTIONS = [
@@ -123,7 +123,7 @@ const QUERY_MODE_OPTIONS: Array<{ value: ArxivQueryMode; label: string }> = [
   { value: 'explore', label: '探索' }
 ];
 
-export const ARXIV_CARD_PRIMARY_ACTIONS = ['阅读', '翻译', '加入阅读队列'] as const;
+export const ARXIV_CARD_PRIMARY_ACTIONS = ['查看摘要', '翻译', '加入阅读队列'] as const;
 
 const SORT_ORDER_OPTIONS: Array<{ value: ArxivSortOrder; label: string }> = [
   { value: 'descending', label: '降序' },
@@ -179,7 +179,7 @@ export function buildLatestArxivSearchRequest(
     start: nextStart,
     sortBy: 'submittedDate',
     sortOrder: 'descending',
-    forceRefresh: false
+    forceRefresh: Boolean(baseRequest.forceRefresh)
   };
 }
 
@@ -191,7 +191,8 @@ export function buildArxivSearchRequestForUi(
 ): ArxivSearchRequest {
   const request = {
     ...baseRequest,
-    maxResults: options.maxResults ?? baseRequest.maxResults
+    maxResults: options.maxResults ?? baseRequest.maxResults,
+    forceRefresh: Boolean(options.forceRefresh)
   };
   if (options.latest) {
     return buildLatestArxivSearchRequest(request, searchQuery, nextStart);
@@ -539,11 +540,13 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     lastRequestGapMs: number;
     cooldownRemainingMs?: number;
   } | null>(null);
+  const [executedRequest, setExecutedRequest] = useState<ArxivSearchRequest | null>(null);
   const [translationQueue, setTranslationQueue] = useState<ArxivTranslationQueueState | null>(null);
 
   useEffect(() => {
-    setPageJump(String(Math.floor(start / Math.max(1, pageSize)) + 1));
-  }, [pageSize, start]);
+    const activePageSize = executedRequest?.maxResults ?? pageSize;
+    setPageJump(String(Math.floor(start / Math.max(1, activePageSize)) + 1));
+  }, [executedRequest?.maxResults, pageSize, start]);
 
   useEffect(() => {
     let disposed = false;
@@ -658,12 +661,19 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
 
   async function handleSearch(
     nextStart = 0,
-    options: { forceRefresh?: boolean; resetFilters?: boolean; latest?: boolean; maxResults?: number } = {}
+    options: {
+      forceRefresh?: boolean;
+      resetFilters?: boolean;
+      latest?: boolean;
+      maxResults?: number;
+      useExecutedRequest?: boolean;
+    } = {}
   ): Promise<void> {
-    const searchQuery = query.trim();
+    const executedBaseRequest = options.useExecutedRequest ? executedRequest : null;
+    const searchQuery = executedBaseRequest?.searchQuery ?? query.trim();
     const searchSessionId = tryBeginArxivSearchSession(
       searchSessionController,
-      Boolean(searchQuery) || Boolean(options.latest)
+      Boolean(searchQuery) || Boolean(options.latest) || Boolean(executedBaseRequest)
     );
     if (searchSessionId === null) {
       setMessage('请输入关键词后再搜索。');
@@ -671,8 +681,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       return;
     }
     const effectiveSearchQuery = searchQuery || '*';
-
-    const nextRequest = buildArxivSearchRequestForUi(request, effectiveSearchQuery, nextStart, options);
+    const nextRequest = executedBaseRequest
+      ? { ...executedBaseRequest, start: nextStart, forceRefresh: false }
+      : buildArxivSearchRequestForUi(request, effectiveSearchQuery, nextStart, options);
 
     try {
       setIsSearching(true);
@@ -690,10 +701,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         setAbstractModes({});
       }
       if (nextStart === 0) {
-        setStart(0);
-        setPapers([]);
-        setTotalResults(0);
-        setSelectedPaperId(null);
+        setPageJump('1');
       }
       setMessage(
         options.latest
@@ -702,11 +710,20 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           ? '正在刷新 arXiv 官方结果，关键词会同时匹配标题和摘要。'
           : '正在检索论文，关键词会同时匹配标题和摘要。'
       );
+      // Activate the new session before the network request so empty/cache-only results
+      // also cancel queued automatic translations from the previous search.
+      await window.electronAPI.translateArxivTitleAbstractBatch(
+        buildArxivTranslationBatchRequest([], 'preview', searchSessionId)
+      ).catch(() => []);
+      if (!searchSessionController.isCurrent(searchSessionId)) {
+        return;
+      }
       const result = await window.electronAPI.searchArxiv(nextRequest);
       if (!searchSessionController.isCurrent(searchSessionId)) {
         return;
       }
       setStart(nextStart);
+      setExecutedRequest({ ...nextRequest, forceRefresh: false });
       setPapers(result.papers);
       setTotalResults(result.totalResults ?? result.papers.length);
       setSelectedPaperId(result.papers[0]?.id ?? null);
@@ -777,16 +794,15 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     }
     const nextPage = Math.min(Math.max(1, Math.floor(page)), totalPages);
     setPageJump(String(nextPage));
-    void handleSearch((nextPage - 1) * pageSize);
+    const activePageSize = executedRequest?.maxResults ?? pageSize;
+    void handleSearch((nextPage - 1) * activePageSize, { useExecutedRequest: true });
   }
 
   function handlePageSizeChange(nextPageSize: number): void {
     const safePageSize = PAGE_SIZE_OPTIONS.includes(nextPageSize) ? nextPageSize : 50;
     setPageSize(safePageSize);
-    setStart(0);
-    setPageJump('1');
-    if (papers.length > 0 && query.trim()) {
-      setMessage(`每页数量已改为 ${safePageSize}。点击“搜索”“最新论文”或分页后应用，避免仅调整控件就请求 arXiv。`);
+    if (papers.length > 0) {
+      setMessage(`每页数量已改为 ${safePageSize}。下次搜索时应用；当前结果仍按原页大小翻页，避免混用两套条件。`);
     }
   }
 
@@ -927,8 +943,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       return;
     }
     const batches = buildArxivTranslationBatches(missing, OFFLINE_TRANSLATION_BATCH_SIZE);
-    setMessage(`已将当前页 ${missing.length} 篇待翻译论文加入后台队列。`);
-    await queueTranslationBatches(batches, 'background', translationSessionId, 'page');
+    setMessage(`已将当前页 ${missing.length} 篇待翻译论文加入用户翻译队列。`);
+    await queueTranslationBatches(batches, 'foreground', translationSessionId, 'page');
   }
 
   async function queueTranslationBatches(
@@ -1161,7 +1177,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const resultPanelStyle = { '--arxiv-summary-lines': resultDensity.summaryLines } as CSSProperties;
   const workbenchStyle = { '--arxiv-detail-panel-ratio': `${detailPanelRatio * 100}%` } as CSSProperties;
   const readingQueueStyle =
-    (papers.length === 0 || isReadingQueueOpen)
+    papers.length === 0
       ? ({ minHeight: 58 + Math.min(readingQueue.length, 4) * 56 } as CSSProperties)
       : undefined;
   const selectedIsTranslating = selectedPaper ? translatingId === selectedPaper.id : false;
@@ -1180,11 +1196,11 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           8
         )
       : { visible: [], hiddenCount: 0 };
-  const readingQueuePreview = buildArxivReadingQueuePreview(readingQueue, 3);
   const shouldShowReadingQueueList = papers.length === 0 || isReadingQueueOpen;
   const isOfflineTranslationNotice = message.includes(OFFLINE_TRANSLATION_NOTICE_TITLE);
-  const currentPage = Math.floor(start / Math.max(1, pageSize)) + 1;
-  const totalPages = Math.max(1, Math.ceil(totalResults / Math.max(1, pageSize)));
+  const activePageSize = executedRequest?.maxResults ?? pageSize;
+  const currentPage = Math.floor(start / Math.max(1, activePageSize)) + 1;
+  const totalPages = Math.max(1, Math.ceil(totalResults / Math.max(1, activePageSize)));
   const resultRangeText =
     papers.length > 0 ? formatArxivResultRange(start, papers.length, totalResults || papers.length) : '暂无结果';
 
@@ -1558,16 +1574,26 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               </label>
               <div className="arxiv-count-badges">
                 <span className="badge accent-badge">PPT 候选 {pptQueue.length}</span>
-                <span className="badge success-badge">备选 {readingQueue.length}</span>
+                <button
+                  type="button"
+                  className="badge success-badge arxiv-reading-queue-trigger"
+                  aria-expanded={isReadingQueueOpen}
+                  disabled={readingQueue.length === 0}
+                  onClick={() => setIsReadingQueueOpen((value) => !value)}
+                >
+                  备选 {readingQueue.length}
+                </button>
               </div>
             </div>
           </div>
 
-          {readingQueue.length > 0 ? (
+          {readingQueue.length > 0 && shouldShowReadingQueueList ? (
             <div
               className={`arxiv-reading-queue-mini${papers.length === 0 ? ' is-empty-results' : ''}${
                 shouldShowReadingQueueList ? ' is-open' : ''
               }`}
+              role={papers.length === 0 ? 'region' : 'dialog'}
+              aria-label="备选论文库"
               style={readingQueueStyle}
             >
               <button
@@ -1587,7 +1613,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               </button>
               {shouldShowReadingQueueList ? (
                 <div className="arxiv-reading-queue-list" aria-label="备选论文快捷定位">
-                  {readingQueuePreview.visible.map((item) => (
+                  {readingQueue.map((item) => (
                     <button
                       key={item.stableId}
                       type="button"
@@ -1595,6 +1621,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       aria-label={`填入备选论文：${item.title}`}
                       onClick={() => {
                         setQuery(item.title);
+                        setIsReadingQueueOpen(false);
                         setMessage(`已填入备选论文标题：${item.title}。点击搜索可重新定位该论文。`);
                       }}
                     >
@@ -1602,9 +1629,6 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       {item.titleZh && item.titleZh !== item.title ? <small>{item.title}</small> : null}
                     </button>
                   ))}
-                  {readingQueuePreview.hiddenCount > 0 ? (
-                    <span className="arxiv-reading-queue-overflow">+{readingQueuePreview.hiddenCount} 篇</span>
-                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -1747,7 +1771,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                 type="button"
                 className="secondary-button"
                 disabled={isSearching || start === 0}
-                onClick={() => void handleSearch(Math.max(0, start - pageSize))}
+                onClick={() => void handleSearch(Math.max(0, start - activePageSize), { useExecutedRequest: true })}
               >
                 上一页
               </button>
@@ -1758,8 +1782,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               <button
                 type="button"
                 className="secondary-button"
-                disabled={isSearching || start + pageSize >= totalResults}
-                onClick={() => void handleSearch(start + pageSize)}
+                disabled={isSearching || start + activePageSize >= totalResults}
+                onClick={() => void handleSearch(start + activePageSize, { useExecutedRequest: true })}
               >
                 下一页
               </button>
@@ -1952,7 +1976,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                     onClick={() => void handleDownload(selectedPaper)}
                   >
                     <img className="button-icon" src={downloadIcon} alt="" />
-                    {downloadingId === selectedPaper.id ? '下载中' : '下载 PDF 入库'}
+                    {downloadingId === selectedPaper.id ? '下载中' : '下载并阅读'}
                   </button>
                   <button
                     type="button"

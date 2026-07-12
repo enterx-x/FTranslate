@@ -321,6 +321,7 @@ async function waitForPdfCanvas(client) {
         const rect = page.getBoundingClientRect();
         return rect.width > 120 && rect.height > 120;
       });
+      const hasLoadedPage = pages.some((page) => page.dataset.loaded === 'true');
       const hasVisibleTextLayer = textSpans.some((span) => (span.textContent ?? '').trim().length > 0);
       const hasVisibleSvgLayer = svgLayers.some((svg) => {
         const rect = svg.getBoundingClientRect();
@@ -332,10 +333,11 @@ async function waitForPdfCanvas(client) {
       });
       return {
         hasCanvas,
-        hasRenderablePdf: hasCanvas || hasVisibleTextLayer || hasVisibleSvgLayer || hasVisibleImageLayer || hasVisiblePage,
+        hasRenderablePdf: hasLoadedPage && (hasCanvas || hasVisibleTextLayer || hasVisibleSvgLayer || hasVisibleImageLayer),
         canvasCount: canvases.length,
         pageCount: pages.length,
         hasVisiblePage,
+        hasLoadedPage,
         svgLayerCount: svgLayers.length,
         imageLayerCount: imageLayers.length,
         hasVisibleSvgLayer,
@@ -1359,6 +1361,14 @@ async function capturePaperLibraryResponsiveWidths(client) {
     });
     await wait(250);
 
+    const shortcutFocusedSearch = await evaluateJson(client, `() => {
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+      return document.activeElement?.getAttribute('aria-keyshortcuts') === 'Control+K Meta+K';
+    }`);
+    if (!shortcutFocusedSearch) {
+      throw new Error('paperLibrary: Ctrl+K did not focus the advertised library search');
+    }
+
     const batchState = await evaluateJson(client, `() => {
       const checkboxes = [...document.querySelectorAll('[data-paper-library-row] input[type="checkbox"]')].slice(0, 2);
       checkboxes.forEach((checkbox) => checkbox.click());
@@ -2194,6 +2204,8 @@ async function runWholePdfReaderScenario(client) {
       .find((button) => button.classList.contains('active'))?.textContent?.trim() ?? '',
     displayedStatus: document.querySelector('.whole-pdf-header > span')?.textContent?.trim() ?? '',
     hasPdfCanvas: ${JSON.stringify(pdfCanvasStatus.hasRenderablePdf)},
+    hasDualToggle: [...document.querySelectorAll('.pdf-view-toggle button')]
+      .some((button) => /双语 PDF/.test(button.textContent ?? '')),
     pdfCanvasCount: ${JSON.stringify(pdfCanvasStatus.canvasCount)},
     hasGenerateButton: [...document.querySelectorAll('.whole-pdf-panel button')]
       .some((button) => /生成双语 PDF/.test(button.textContent ?? '')),
@@ -2203,13 +2215,37 @@ async function runWholePdfReaderScenario(client) {
 
   if (
     !wholePdf.hasPanel ||
-    wholePdf.activeToggle !== '双语 PDF' ||
-    !/visual-check-dual\.pdf/.test(wholePdf.displayedStatus) ||
+    wholePdf.activeToggle !== '原文 PDF' ||
+    !/2604\.15483v2\.pdf|visual-check-fallback\.pdf/.test(wholePdf.displayedStatus) ||
     !wholePdf.hasPdfCanvas ||
+    !wholePdf.hasDualToggle ||
     !wholePdf.hasGenerateButton ||
     !wholePdf.hasImportButton
   ) {
-    throw new Error(`wholePdf: expected translated PDF as primary reading surface, got ${JSON.stringify(wholePdf)}`);
+    throw new Error(`wholePdf: expected source-first PDF reading surface, got ${JSON.stringify(wholePdf)}`);
+  }
+
+  let dualReady = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    dualReady = await evaluateJson(client, `() => {
+      const button = [...document.querySelectorAll('.pdf-view-toggle button')]
+        .find((item) => /双语 PDF/.test(item.textContent ?? ''));
+      if (!button || button.disabled) return false;
+      button.click();
+      return true;
+    }`);
+    if (dualReady) break;
+    await wait(100);
+  }
+  if (!dualReady) throw new Error('wholePdf: background bilingual PDF resource did not become available');
+  await waitForPdfCanvas(client);
+  const dualSnapshot = await evaluateJson(client, `() => ({
+    activeToggle: [...document.querySelectorAll('.pdf-view-toggle button')]
+      .find((button) => button.classList.contains('active'))?.textContent?.trim() ?? '',
+    displayedStatus: document.querySelector('.whole-pdf-header > span')?.textContent?.trim() ?? ''
+  })`);
+  if (dualSnapshot.activeToggle !== '双语 PDF' || !/visual-check-dual\.pdf/.test(dualSnapshot.displayedStatus)) {
+    throw new Error(`wholePdf: bilingual PDF did not switch after background load, got ${JSON.stringify(dualSnapshot)}`);
   }
 
   const legacyPanels = await evaluateJson(client, `() => ({
@@ -2415,19 +2451,49 @@ async function runPdfSelectionTranslationScenario(client) {
   }
 
   const selected = await evaluateJson(client, `() => {
-    const span = [...document.querySelectorAll('.pdf-viewer-shell .textLayer span')]
-      .find((item) => (item.textContent ?? '').trim().length >= 6);
-    const container = span?.closest('.pdf-js-viewer-container');
-    if (!span || !container) return false;
+    const shells = [...document.querySelectorAll('.pdf-viewer-shell')];
+    let shell = null;
+    let visibleSpans = [];
+    for (const candidate of shells) {
+      const candidateRect = candidate.getBoundingClientRect();
+      const spans = [...candidate.querySelectorAll('.textLayer span')].filter((span) => {
+        const rect = span.getBoundingClientRect();
+        const text = (span.textContent ?? '').trim();
+        return text.length >= 2 && rect.width > 1 && rect.height > 1 &&
+          rect.bottom > candidateRect.top + 40 && rect.top < candidateRect.bottom - 40;
+      });
+      if (spans.length > visibleSpans.length) {
+        shell = candidate;
+        visibleSpans = spans;
+      }
+    }
+    if (!shell || visibleSpans.length === 0) return { ok: false };
+    const shellRect = shell.getBoundingClientRect();
+    const phraseSpan = visibleSpans.find((item) => /\s/.test((item.textContent ?? '').trim()));
+    const firstSpan = phraseSpan ?? visibleSpans[0];
+    const lastSpan = phraseSpan ?? visibleSpans[Math.min(2, visibleSpans.length - 1)];
+    const container = firstSpan?.closest('.pdf-js-viewer-container');
+    if (!firstSpan || !lastSpan || !container) return { ok: false };
     const range = document.createRange();
-    range.selectNodeContents(span);
+    if (phraseSpan) {
+      range.selectNodeContents(phraseSpan);
+    } else {
+      range.setStartBefore(firstSpan);
+      range.setEndAfter(lastSpan);
+    }
     const selection = window.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(range);
     container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
-    return true;
+    const rect = range.getBoundingClientRect();
+    return {
+      ok: true,
+      text: selection?.toString().slice(0, 120) ?? '',
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      shell: shellRect ? { left: shellRect.left, top: shellRect.top, width: shellRect.width, height: shellRect.height } : null
+    };
   }`);
-  if (!selected) throw new Error('pdfSelection: selectable PDF text was not found');
+  if (!selected?.ok) throw new Error('pdfSelection: selectable PDF text was not found');
 
   let snapshot = null;
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -2436,32 +2502,144 @@ async function runPdfSelectionTranslationScenario(client) {
       const shell = card?.closest('.pdf-viewer-shell');
       const cardRect = card?.getBoundingClientRect();
       const shellRect = shell?.getBoundingClientRect();
-      const text = card?.textContent ?? '';
+      const selection = window.getSelection();
+      const selectionRect = selection && selection.rangeCount > 0
+        ? selection.getRangeAt(0).getBoundingClientRect()
+        : null;
       return {
         visible: Boolean(card),
+        mode: card?.getAttribute('data-selection-mode') ?? '',
+        status: card?.getAttribute('data-selection-status') ?? '',
         hasSource: Boolean(document.querySelector('.pdf-selection-source')?.textContent?.trim()),
-        hasTranslateAction: /翻译选中内容/.test(text),
-        hasDirection: /英 → 中|中 → 英/.test(text),
+        hasManualPrimaryAction: Boolean(card?.querySelector('button.primary-button')),
+        hasAutoState: ['translating', 'success', 'error'].includes(card?.getAttribute('data-selection-status') ?? ''),
+        hasDirection: Boolean(card?.querySelector('header span')?.textContent?.trim()),
         withinViewport: Boolean(cardRect && cardRect.left >= 0 && cardRect.right <= window.innerWidth && cardRect.top >= 0 && cardRect.bottom <= window.innerHeight),
         withinPdfShell: Boolean(cardRect && shellRect && cardRect.left >= shellRect.left && cardRect.right <= shellRect.right + 1 && cardRect.top >= shellRect.top && cardRect.bottom <= shellRect.bottom + 1),
         horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
         cardOverflow: Boolean(card && card.scrollWidth > card.clientWidth + 3),
-        cardRect: cardRect ? { left: Math.round(cardRect.left), top: Math.round(cardRect.top), width: Math.round(cardRect.width), height: Math.round(cardRect.height) } : null
+        cardRect: cardRect ? { left: Math.round(cardRect.left), top: Math.round(cardRect.top), width: Math.round(cardRect.width), height: Math.round(cardRect.height) } : null,
+        selectionRect: selectionRect ? { left: Math.round(selectionRect.left), top: Math.round(selectionRect.top), width: Math.round(selectionRect.width), height: Math.round(selectionRect.height) } : null
       };
     }`);
     if (snapshot.visible) break;
     await wait(100);
   }
-  if (!snapshot?.visible || !snapshot.hasSource || !snapshot.hasTranslateAction || !snapshot.hasDirection || !snapshot.withinViewport || !snapshot.withinPdfShell || snapshot.horizontalOverflow || snapshot.cardOverflow) {
+  if (!snapshot?.visible || snapshot.mode !== 'text' || !snapshot.hasSource || snapshot.hasManualPrimaryAction || !snapshot.hasAutoState || !snapshot.hasDirection || !snapshot.withinViewport || !snapshot.withinPdfShell || snapshot.horizontalOverflow || snapshot.cardOverflow) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'pdf-selection-translation-failed.png'), Buffer.from(shot.data, 'base64'))
     );
-    throw new Error(`pdfSelection: selected-text translation card is clipped or incomplete, got ${JSON.stringify(snapshot)}`);
+    throw new Error(`pdfSelection: selected-text translation card is clipped or incomplete, got ${JSON.stringify({ selected, snapshot })}`);
   }
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'pdf-selection-translation.png'), Buffer.from(shot.data, 'base64'))
   );
-  return { ...snapshot, initialFit };
+
+  const beforeScroll = await evaluateJson(client, `() => {
+    const card = document.querySelector('[data-testid="pdf-selection-translation"]');
+    const selection = window.getSelection();
+    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    const cardRect = card?.getBoundingClientRect();
+    const rangeRect = range?.getBoundingClientRect();
+    return cardRect && rangeRect ? { cardTop: cardRect.top, rangeTop: rangeRect.top } : null;
+  }`);
+  await evaluateJson(client, `() => {
+    const container = document.querySelector('.pdf-js-viewer-container');
+    if (!container) return false;
+    container.scrollTop += 32;
+    container.dispatchEvent(new Event('scroll', { bubbles: true }));
+    return true;
+  }`);
+  await wait(220);
+  const afterScroll = await evaluateJson(client, `() => {
+    const card = document.querySelector('[data-testid="pdf-selection-translation"]');
+    const selection = window.getSelection();
+    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    const cardRect = card?.getBoundingClientRect();
+    const rangeRect = range?.getBoundingClientRect();
+    return cardRect && rangeRect ? { cardTop: cardRect.top, rangeTop: rangeRect.top } : null;
+  }`);
+  const relativeAnchorDrift = beforeScroll && afterScroll
+    ? Math.abs((afterScroll.cardTop - afterScroll.rangeTop) - (beforeScroll.cardTop - beforeScroll.rangeTop))
+    : Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(relativeAnchorDrift) || relativeAnchorDrift > 14) {
+    throw new Error(`pdfSelection: translation card did not follow the selected text, got ${JSON.stringify({ beforeScroll, afterScroll, relativeAnchorDrift })}`);
+  }
+
+  await evaluateJson(client, `() => {
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    return true;
+  }`);
+  await wait(120);
+  const dismissed = await evaluateJson(client, `() => !document.querySelector('[data-testid="pdf-selection-translation"]')`);
+  if (!dismissed) throw new Error('pdfSelection: clicking outside should dismiss the translation card');
+
+  const selectedWord = await evaluateJson(client, `() => {
+    const candidates = [...document.querySelectorAll('.pdf-viewer-shell .textLayer span')].filter((span) => {
+      const rect = span.getBoundingClientRect();
+      const shellRect = span.closest('.pdf-viewer-shell')?.getBoundingClientRect();
+      return shellRect && rect.width > 1 && rect.height > 1 &&
+        rect.bottom > shellRect.top + 40 && rect.top < shellRect.bottom - 40;
+    });
+    for (const pattern of [/\b(?:model|learning|robot|control|policy|navigation)\b/i, /[A-Za-z]{4,}/]) {
+      for (const span of candidates) {
+        const textNode = [...span.childNodes].find((node) => node.nodeType === Node.TEXT_NODE);
+        const text = textNode?.textContent ?? '';
+        const match = pattern.exec(text);
+        const container = span.closest('.pdf-js-viewer-container');
+        if (!textNode || !match || !container || typeof match.index !== 'number') continue;
+        const range = document.createRange();
+        range.setStart(textNode, match.index);
+        range.setEnd(textNode, match.index + match[0].length);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+        return match[0];
+      }
+    }
+    return '';
+  }`);
+  if (!selectedWord) throw new Error('pdfSelection: selectable English word was not found');
+
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const enabled = await evaluateJson(client, `() => {
+      const button = document.querySelector('[data-enable-online-dictionary]');
+      if (!button) return false;
+      button.click();
+      return true;
+    }`);
+    if (enabled) break;
+    await wait(100);
+  }
+
+  let wordSnapshot = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    wordSnapshot = await evaluateJson(client, `() => {
+      const card = document.querySelector('[data-testid="pdf-selection-translation"]');
+      const rect = card?.getBoundingClientRect();
+      return {
+        visible: Boolean(card),
+        mode: card?.getAttribute('data-selection-mode') ?? '',
+        status: card?.getAttribute('data-selection-status') ?? '',
+        hasHeading: Boolean(card?.querySelector('.pdf-word-heading strong')?.textContent?.trim()),
+        hasMeaning: Boolean(card?.querySelector('.pdf-word-meaning')),
+        dictionarySettled: Boolean(card?.querySelector('.pdf-word-meaning, .pdf-word-dictionary-status')),
+        withinViewport: Boolean(rect && rect.left >= 0 && rect.right <= window.innerWidth && rect.top >= 0 && rect.bottom <= window.innerHeight),
+        horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+        cardOverflow: Boolean(card && card.scrollWidth > card.clientWidth + 3)
+      };
+    }`);
+    if (wordSnapshot.visible && wordSnapshot.dictionarySettled) break;
+    await wait(100);
+  }
+  if (!wordSnapshot?.visible || wordSnapshot.mode !== 'word' || !wordSnapshot.hasHeading || !wordSnapshot.hasMeaning || !wordSnapshot.dictionarySettled || !wordSnapshot.withinViewport || wordSnapshot.horizontalOverflow || wordSnapshot.cardOverflow) {
+    throw new Error(`pdfSelection: word dictionary card is clipped or incomplete, got ${JSON.stringify(wordSnapshot)}`);
+  }
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'pdf-word-dictionary.png'), Buffer.from(shot.data, 'base64'))
+  );
+  return { ...snapshot, initialFit, followedSelection: true, dismissed, selectedWord, wordSnapshot };
 }
 
 async function runPresentationScenario(client) {
@@ -3190,8 +3368,8 @@ async function runArxivSearchScenario(client) {
     snapshot.activeSidebar !== 'arxiv' ||
     !snapshot.queueVisible ||
     snapshot.queueHeight < 120 ||
-    snapshot.queueButtonCount !== 3 ||
-    !/^\+1/.test(snapshot.queueOverflowText) ||
+    snapshot.queueButtonCount !== 4 ||
+    Boolean(snapshot.queueOverflowText) ||
     snapshot.emptyCardAccentMaxChannelDelta > 80 ||
     snapshot.emptyCardAccentMaxChannelDelta < 35 ||
     snapshot.queueFirstRowCount !== 1 ||
@@ -3499,6 +3677,32 @@ async function runArxivSearchScenario(client) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'arxiv-search-results-three.png'), Buffer.from(shot.data, 'base64'))
     );
+
+    const shortlistPopover = await evaluateJson(client, `() => {
+      const trigger = document.querySelector('.arxiv-reading-queue-trigger');
+      trigger?.click();
+      return Boolean(trigger && !trigger.disabled);
+    }`);
+    if (!shortlistPopover) throw new Error('arxiv: shortlist toolbar trigger is not actionable');
+    await wait(220);
+    const shortlistSnapshot = await evaluateJson(client, `() => {
+      const popover = document.querySelector('.arxiv-reading-queue-mini:not(.is-empty-results)');
+      const rect = popover?.getBoundingClientRect();
+      return {
+        visible: Boolean(popover),
+        itemCount: popover?.querySelectorAll('.arxiv-reading-queue-paper').length ?? 0,
+        withinViewport: Boolean(rect && rect.left >= 0 && rect.right <= window.innerWidth && rect.top >= 0 && rect.bottom <= window.innerHeight),
+        horizontalOverflow: Boolean(popover && popover.scrollWidth > popover.clientWidth + 3)
+      };
+    }`);
+    if (!shortlistSnapshot.visible || shortlistSnapshot.itemCount !== 4 || !shortlistSnapshot.withinViewport || shortlistSnapshot.horizontalOverflow) {
+      throw new Error(`arxiv: shortlist popover is incomplete, got ${JSON.stringify(shortlistSnapshot)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'arxiv-shortlist-popover.png'), Buffer.from(shot.data, 'base64'))
+    );
+    await evaluateJson(client, `() => document.querySelector('.arxiv-reading-queue-head')?.click()`);
+    await wait(120);
     await captureArxivResponsiveWidths(client);
 
     await evaluateJson(client, `() => document.querySelector('.arxiv-detail-panel-toggle')?.click()`);
@@ -3960,6 +4164,7 @@ async function main() {
       ...process.env,
       PDF_TRANSLATION_READER_USER_DATA_DIR: visualUserDataDir,
       PDF_TRANSLATION_READER_VISUAL_MOCK_ARXIV: visualArxivMockMode,
+      PDF_TRANSLATION_READER_VISUAL_MOCK_DICTIONARY: '1',
       ...(!usePackagedApp ? { PDF_TRANSLATION_READER_LOAD_BUILT_RENDERER: '1' } : {})
     },
     windowsHide: true,

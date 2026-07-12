@@ -16,6 +16,7 @@ import type {
   ScientificPlotProjectManifest,
   ScientificPlotSpec
 } from '../../shared/scientificPlot';
+import type { WordDictionaryLookupResult } from '../../shared/wordDictionary';
 
 export interface PdfFilePayload {
   filePath: string;
@@ -336,6 +337,7 @@ export interface ElectronApi {
     targetLanguage?: 'en' | 'zh';
     timeoutMs?: number;
   }) => Promise<LocalTranslateBatchResult>;
+  lookupEnglishWord: (word: string) => Promise<WordDictionaryLookupResult>;
   openExternalUrl: (url: string) => Promise<boolean>;
   saveTextFile: (request: {
     filePath?: string;

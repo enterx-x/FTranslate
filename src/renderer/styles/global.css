@@ -597,17 +597,21 @@ button:disabled {
   position: absolute;
   z-index: 24;
   display: grid;
-  gap: 10px;
+  gap: 9px;
   width: min(340px, calc(100% - 24px));
-  max-height: min(360px, calc(100% - 24px));
+  max-height: min(440px, calc(100% - 24px));
   padding: 12px;
   overflow: auto;
-  border: 1px solid rgba(15, 23, 42, 0.18);
+  border: 1px solid #cfd7e2;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.24);
+  background: #ffffff;
+  box-shadow: 0 6px 8px rgba(15, 23, 42, 0.16);
   color: #172033;
   font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+
+.pdf-selection-translation.is-word-card {
+  width: min(420px, calc(100% - 24px));
 }
 
 .pdf-selection-translation header,
@@ -677,19 +681,156 @@ button:disabled {
 }
 
 .pdf-selection-result {
-  border-left: 3px solid #355878;
+  border: 1px solid #cbd8e4;
   background: #eef3f7;
   color: #172033;
 }
 
+.pdf-word-card {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+}
+
+.pdf-word-heading {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid #d9e0e9;
+  border-radius: 8px;
+  background: #f7f9fb;
+}
+
+.pdf-word-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+}
+
+.pdf-word-heading strong {
+  color: #172033;
+  font-size: 19px;
+  line-height: 1.2;
+}
+
+.pdf-word-heading span {
+  color: #5a687b;
+  font-family: "Segoe UI", sans-serif;
+  font-size: 12px;
+}
+
+.pdf-word-translation {
+  margin: 0;
+  color: #253b52;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.45;
+  user-select: text;
+}
+
+.pdf-word-dictionary-loading {
+  display: grid;
+  gap: 6px;
+}
+
+.pdf-word-dictionary-loading span {
+  height: 10px;
+  border-radius: 4px;
+  background: #e5eaf0;
+}
+
+.pdf-word-dictionary-loading span:nth-child(2) {
+  width: 82%;
+}
+
+.pdf-word-dictionary-loading span:nth-child(3) {
+  width: 64%;
+}
+
+.pdf-word-meanings {
+  display: grid;
+  gap: 12px;
+}
+
+.pdf-word-meaning {
+  display: grid;
+  gap: 7px;
+  padding-top: 10px;
+  border-top: 1px solid #e1e6ed;
+}
+
+.pdf-word-meaning:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.pdf-word-meaning h4 {
+  width: fit-content;
+  margin: 0;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: #e9eef4;
+  color: #32445a;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pdf-word-meaning ol {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.pdf-word-meaning li {
+  padding-left: 2px;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pdf-word-meaning li p,
+.pdf-word-meaning li small {
+  margin: 0;
+}
+
+.pdf-word-meaning li small {
+  display: block;
+  margin-top: 3px;
+  color: #6b7788;
+  font-size: 11px;
+}
+
+.pdf-word-related,
+.pdf-word-dictionary-status {
+  margin: 0;
+  color: #5b6879;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.pdf-word-related b {
+  margin-right: 7px;
+  color: #34475d;
+}
+
 .pdf-selection-translation footer {
   justify-content: flex-start;
+  flex-wrap: wrap;
 }
 
 .pdf-selection-translation footer button {
   min-height: 32px;
   padding: 6px 10px;
   font-size: 12px;
+}
+
+.pdf-word-license {
+  color: #7b8594;
+  font-size: 10px;
+  line-height: 1.35;
 }
 
 @media (prefers-reduced-transparency: reduce) {
@@ -21871,6 +22012,23 @@ input[type='checkbox'] {
 .arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results){position:absolute;z-index:12;top:70px;right:14px;width:176px;min-height:34px;border-radius:8px;box-shadow:0 5px 12px rgba(30,41,59,.1)}
 .arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results)>.arxiv-reading-queue-head{min-height:34px;padding:4px 7px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results) .arxiv-reading-queue-head>span:first-child::before{width:20px;height:20px;flex-basis:20px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results) .arxiv-reading-queue-head strong{font-size:11px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results) .arxiv-reading-queue-head em{font-size:10px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results) .arxiv-reading-queue-toggle{padding:3px 6px;font-size:0}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results) .arxiv-reading-queue-toggle::after{margin-left:0;font-size:11px}
 .arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results).is-open{width:min(720px,calc(100% - 28px));max-height:220px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results).is-open>.arxiv-reading-queue-head{min-height:40px;padding:6px 10px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results).is-open .arxiv-reading-queue-toggle{font-size:11px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results).is-open .arxiv-reading-queue-toggle::after{margin-left:5px}
+
+/* The shortlist is opened from the result toolbar; no closed overlay may cover cards. */
+.arxiv-page .arxiv-count-badges .arxiv-reading-queue-trigger {
+  min-height: 24px;
+  border: 1px solid var(--ft-accent-sage-border);
+  font: inherit;
+  cursor: pointer;
+}
+
+.arxiv-page .arxiv-count-badges .arxiv-reading-queue-trigger:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results) {
+  top: 58px;
+}
 
 /* Focused Research OS shared visual layer. */
 :root {

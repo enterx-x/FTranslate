@@ -27,6 +27,9 @@ describe('registerAppIpcHandlers', () => {
         warmUpNllbTranslator: noop,
         translateWithLocalEngine: noop
       },
+      dictionary: {
+        lookupEnglishWord: noop
+      },
       pdf: {
         checkPdfTranslationEngine: noop,
         translatePdfWithSidecar: noop,
@@ -107,6 +110,7 @@ describe('registerAppIpcHandlers', () => {
       'local-translation:install-check',
       'local-translation:warmup',
       'local-translation:translate-batch',
+      'dictionary:lookup-english',
       'pdf-translation:check-engine',
       'pdf-translation:translate',
       'dialog:open-pdf',

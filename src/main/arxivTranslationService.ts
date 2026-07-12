@@ -37,6 +37,7 @@ interface ArxivTranslationServiceOptions {
 
 export interface ArxivTranslationOptions {
   priority?: ArxivTranslationPriority;
+  sessionId?: number;
 }
 
 interface CachedTranslationRow {
@@ -58,6 +59,9 @@ let argosPythonRuntime: ArgosPythonRuntime | null = null;
 
 interface QueuedTranslationJob {
   run: () => Promise<void>;
+  cancel: () => void;
+  priority: ArxivTranslationPriority;
+  sessionId?: number;
 }
 
 interface PreparedTranslationBatchItem {
@@ -100,6 +104,7 @@ export class ArxivTranslationService {
     background: []
   };
   private translationRunning = false;
+  private activeSessionId: number | null = null;
 
   constructor(options: ArxivTranslationServiceOptions) {
     this.db = new DatabaseSync(options.dbPath);
@@ -148,6 +153,9 @@ export class ArxivTranslationService {
     requests: ArxivTitleAbstractTranslationRequest[],
     options?: ArxivTranslationOptions
   ): Promise<ArxivTitleAbstractTranslationResult[]> {
+    if (typeof options?.sessionId === 'number' && Number.isSafeInteger(options.sessionId)) {
+      this.activateSearchSession(options.sessionId);
+    }
     const startedAt = this.now();
     const results = new Array<ArxivTitleAbstractTranslationResult>(requests.length);
     const missing: Array<{
@@ -185,6 +193,17 @@ export class ArxivTranslationService {
       return finalizeTranslationResults(results, startedAt, this.now());
     }
 
+    const buildSupersededResults = (): ArxivTitleAbstractTranslationResult[] => {
+      missing.forEach((item) => {
+        if (!results[item.index]) {
+          results[item.index] = buildFailedTranslationResult(
+            item.stableId,
+            '搜索会话已更新，已取消旧的后台翻译。'
+          );
+        }
+      });
+      return results;
+    };
     const queuedResults = await this.enqueue(async () => {
       const remaining: typeof missing = [];
       missing.forEach((item) => {
@@ -300,7 +319,7 @@ export class ArxivTranslationService {
         });
       }
       return results;
-    }, options?.priority);
+    }, options?.priority, options?.sessionId, buildSupersededResults);
     return finalizeTranslationResults(queuedResults, startedAt, this.now());
   }
 
@@ -319,20 +338,70 @@ export class ArxivTranslationService {
     `);
   }
 
-  private enqueue<T>(task: () => Promise<T>, priority?: ArxivTranslationPriority): Promise<T> {
-    const queue = this.translationQueues[normalizeTranslationPriority(priority)];
+  private enqueue<T>(
+    task: () => Promise<T>,
+    priority?: ArxivTranslationPriority,
+    sessionId?: number,
+    onCancel?: () => T
+  ): Promise<T> {
+    const normalizedPriority = normalizeTranslationPriority(priority);
+    if (typeof sessionId === 'number' && Number.isSafeInteger(sessionId)) {
+      this.activateSearchSession(sessionId);
+    }
+    const queue = this.translationQueues[normalizedPriority];
     return new Promise<T>((resolve, reject) => {
-      queue.push({
+      const job: QueuedTranslationJob = {
+        priority: normalizedPriority,
+        ...(typeof sessionId === 'number' ? { sessionId } : {}),
         run: async () => {
           try {
             resolve(await task());
           } catch (error) {
             reject(error);
           }
+        },
+        cancel: () => {
+          if (onCancel) {
+            resolve(onCancel());
+          } else {
+            reject(new Error('Translation job was superseded by a newer search session.'));
+          }
         }
-      });
+      };
+      if (this.isSupersededLowPriorityJob(job)) {
+        job.cancel();
+        return;
+      }
+      queue.push(job);
       this.runNextTranslationJob();
     });
+  }
+
+  private activateSearchSession(sessionId: number): void {
+    if (this.activeSessionId !== null && sessionId <= this.activeSessionId) {
+      return;
+    }
+    this.activeSessionId = sessionId;
+    (['preview', 'background'] as const).forEach((priority) => {
+      const retained: QueuedTranslationJob[] = [];
+      this.translationQueues[priority].forEach((job) => {
+        if (this.isSupersededLowPriorityJob(job)) {
+          job.cancel();
+        } else {
+          retained.push(job);
+        }
+      });
+      this.translationQueues[priority] = retained;
+    });
+  }
+
+  private isSupersededLowPriorityJob(job: QueuedTranslationJob): boolean {
+    return (
+      job.priority !== 'foreground' &&
+      this.activeSessionId !== null &&
+      typeof job.sessionId === 'number' &&
+      job.sessionId < this.activeSessionId
+    );
   }
 
   private runNextTranslationJob(): void {

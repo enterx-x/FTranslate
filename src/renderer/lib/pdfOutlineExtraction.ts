@@ -9,23 +9,51 @@ import {
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
-export async function extractPdfBlocksFromData(
+const pdfBlockExtractionCache = new WeakMap<Uint8Array, Promise<ExtractedPdfBlock[]>>();
+const completedPdfBlockCache = new WeakMap<Uint8Array, ExtractedPdfBlock[]>();
+
+export function extractPdfBlocksFromData(
   pdfData: Uint8Array,
   isCancelled: () => boolean = () => false
 ): Promise<ExtractedPdfBlock[]> {
-  const loadingTask = pdfjsLib.getDocument({ data: pdfData.slice() });
-  let pdfDocument: PDFDocumentProxy | null = null;
-
-  try {
-    pdfDocument = await loadingTask.promise;
-    return await extractPdfBlocksFromDocument(pdfDocument, isCancelled);
-  } finally {
-    if (pdfDocument) {
-      await pdfDocument.destroy();
-    } else {
-      await loadingTask.destroy();
-    }
+  const completed = completedPdfBlockCache.get(pdfData);
+  if (completed) {
+    return Promise.resolve(completed);
   }
+  return getOrCreatePdfBlockExtraction(pdfData, isCancelled, async () => {
+    const loadingTask = pdfjsLib.getDocument({ data: pdfData.slice() });
+    let pdfDocument: PDFDocumentProxy | null = null;
+
+    try {
+      pdfDocument = await loadingTask.promise;
+      return await extractPdfBlocksFromDocument(pdfDocument, isCancelled);
+    } finally {
+      if (pdfDocument) {
+        await pdfDocument.destroy();
+      } else {
+        await loadingTask.destroy();
+      }
+    }
+  });
+}
+
+export function extractPdfBlocksFromCachedDocument(
+  pdfData: Uint8Array,
+  pdfDocument: PDFDocumentProxy,
+  isCancelled: () => boolean = () => false
+): Promise<ExtractedPdfBlock[]> {
+  const completed = completedPdfBlockCache.get(pdfData);
+  if (completed) {
+    return Promise.resolve(completed);
+  }
+  // A viewer owns this PDFDocumentProxy and may destroy it on navigation. Do not expose
+  // its in-flight promise to longer-lived figure/PPT consumers; only share a completed result.
+  return extractPdfBlocksFromDocument(pdfDocument, isCancelled).then((blocks) => {
+    if (!isCancelled()) {
+      completedPdfBlockCache.set(pdfData, blocks);
+    }
+    return blocks;
+  });
 }
 
 export async function extractPdfBlocksFromDocument(
@@ -83,4 +111,28 @@ function toPositionedTextItems(
       return positionedItem;
     })
     .filter((item): item is PositionedPdfTextItem => item !== null);
+}
+
+function getOrCreatePdfBlockExtraction(
+  pdfData: Uint8Array,
+  isCancelled: () => boolean,
+  create: () => Promise<ExtractedPdfBlock[]>
+): Promise<ExtractedPdfBlock[]> {
+  const existing = pdfBlockExtractionCache.get(pdfData);
+  if (existing) {
+    return existing;
+  }
+  const extraction = create();
+  pdfBlockExtractionCache.set(pdfData, extraction);
+  void extraction.then(
+    (blocks) => {
+      if (isCancelled()) {
+        pdfBlockExtractionCache.delete(pdfData);
+      } else {
+        completedPdfBlockCache.set(pdfData, blocks);
+      }
+    },
+    () => pdfBlockExtractionCache.delete(pdfData)
+  );
+  return extraction;
 }

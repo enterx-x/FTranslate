@@ -18,6 +18,22 @@ export interface PdfSelectionPopoverPosition {
   top: number;
 }
 
+const PART_OF_SPEECH_LABELS: Record<string, string> = {
+  noun: '名词',
+  verb: '动词',
+  adjective: '形容词',
+  adverb: '副词',
+  pronoun: '代词',
+  preposition: '介词',
+  conjunction: '连词',
+  interjection: '感叹词',
+  determiner: '限定词',
+  numeral: '数词',
+  article: '冠词',
+  auxiliary: '助动词',
+  phrase: '短语'
+};
+
 export function normalizePdfSelectionText(value: string, maxLength = 2_000): string {
   const normalized = value
     .replace(/\u00ad/gu, '')
@@ -55,6 +71,25 @@ export function buildPdfSelectionPopoverPosition(
     left,
     top: clamp(preferredTop, margin, maxTop)
   };
+}
+
+export function isPdfSelectionRectVisible(
+  selection: PdfSelectionRect,
+  shell: PdfSelectionRect,
+  inset = 4
+): boolean {
+  return (
+    selection.right > shell.left + inset &&
+    selection.left < shell.right - inset &&
+    selection.bottom > shell.top + inset &&
+    selection.top < shell.bottom - inset
+  );
+}
+
+export function formatDictionaryPartOfSpeech(value: string): string {
+  const normalized = value.trim().toLocaleLowerCase('en-US');
+  const chinese = PART_OF_SPEECH_LABELS[normalized];
+  return chinese ? `${chinese} · ${value}` : value;
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

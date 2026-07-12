@@ -17,7 +17,7 @@ import {
   type PdfZoomAnchor
 } from '../lib/pdfInteraction';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
-import { extractPdfBlocksFromDocument } from '../lib/pdfOutlineExtraction';
+import { extractPdfBlocksFromCachedDocument } from '../lib/pdfOutlineExtraction';
 import { buildHighlightOverlayLines, type HighlightRectLike } from '../lib/pdfHighlightOverlay';
 import { buildOfficialFindFragments } from '../lib/pdfFindQuery';
 import {
@@ -28,10 +28,17 @@ import {
 } from '../lib/pdfViewportSync';
 import {
   buildPdfSelectionPopoverPosition,
+  formatDictionaryPartOfSpeech,
+  isPdfSelectionRectVisible,
   normalizePdfSelectionText,
   resolvePdfSelectionTranslationDirection,
   type PdfSelectionTranslationDirection
 } from '../lib/pdfSelectionTranslation';
+import {
+  isSingleEnglishDictionaryWord,
+  type EnglishWordDictionaryEntry,
+  type WordDictionaryLookupStatus
+} from '../../shared/wordDictionary';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -45,6 +52,7 @@ interface PdfViewerProps {
   onDocumentLoad: (pageCount: number) => void;
   onCurrentPageChange: (pageNumber: number) => void;
   onExtractedTextReady?: (outline: ExtractedPdfBlock[]) => void;
+  enableFullTextExtraction?: boolean;
   onHighlightStatusChange?: (message: string) => void;
   onStatusChange: (message: string) => void;
   viewportSyncId?: string;
@@ -77,12 +85,18 @@ interface PdfSelectionTranslationState {
   sourceText: string;
   translatedText: string;
   direction: PdfSelectionTranslationDirection;
+  mode: 'word' | 'text';
   engine: string;
   message: string;
+  dictionaryStatus: WordDictionaryLookupStatus | 'idle' | 'loading';
+  dictionaryMessage: string;
+  dictionary?: EnglishWordDictionaryEntry;
   status: 'idle' | 'translating' | 'success' | 'error';
   left: number;
   top: number;
 }
+
+const ONLINE_DICTIONARY_STORAGE_KEY = 'pdfTranslationReader:onlineDictionaryEnabled';
 
 export function PdfViewer(props: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -111,11 +125,18 @@ export function PdfViewer(props: PdfViewerProps) {
   const isApplyingViewportSyncRef = useRef(false);
   const viewportScrollFrameRef = useRef<number | null>(null);
   const selectionTranslationRequestRef = useRef(0);
+  const selectionRangeRef = useRef<Range | null>(null);
+  const selectionPopoverRef = useRef<HTMLElement | null>(null);
+  const selectionPopoverFrameRef = useRef<number | null>(null);
+  const selectionTranslationDebounceRef = useRef<number | null>(null);
   const [documentProxy, setDocumentProxy] = useState<PDFDocumentProxy | null>(null);
   const [findReadyToken, setFindReadyToken] = useState(0);
   const [isRendering, setIsRendering] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [selectionTranslation, setSelectionTranslation] = useState<PdfSelectionTranslationState | null>(null);
+  const [onlineDictionaryEnabled, setOnlineDictionaryEnabled] = useState(
+    () => typeof window !== 'undefined' && localStorage.getItem(ONLINE_DICTIONARY_STORAGE_KEY) === 'true'
+  );
 
   useEffect(() => {
     propsRef.current = props;
@@ -144,9 +165,7 @@ export function PdfViewer(props: PdfViewerProps) {
       linkService,
       findController,
       removePageBorders: true,
-      textLayerMode: 1,
-      maxCanvasPixels: -1,
-      maxCanvasDim: -1
+      textLayerMode: 1
     });
 
     pdfViewer.scrollMode = ScrollMode.VERTICAL;
@@ -168,7 +187,6 @@ export function PdfViewer(props: PdfViewerProps) {
       } else {
         viewer.currentScale = propsRef.current.scale;
       }
-      setIsRendering(false);
       window.requestAnimationFrame(() => {
         setFindReadyToken((value) => (value === 0 ? 1 : value));
       });
@@ -184,12 +202,18 @@ export function PdfViewer(props: PdfViewerProps) {
     function handlePageChanging(event: { pageNumber?: number }): void {
       const pageNumber = Number(event.pageNumber);
       if (Number.isInteger(pageNumber) && pageNumber > 0) {
+        if (selectionRangeRef.current && pageNumber !== propsRef.current.currentPage) {
+          closeSelectionTranslation();
+        }
         propsRef.current.onCurrentPageChange(pageNumber);
       }
     }
 
     function handleScaleChanging(event: { scale?: number }): void {
       const nextScale = Number(event.scale);
+      if (selectionRangeRef.current) {
+        closeSelectionTranslation();
+      }
       if (Number.isFinite(nextScale) && Math.abs(nextScale - propsRef.current.scale) > 0.001) {
         propsRef.current.onScaleChange(nextScale);
       }
@@ -267,11 +291,18 @@ export function PdfViewer(props: PdfViewerProps) {
     if (!props.pdfData) {
       hasAppliedInitialFitWidthRef.current = false;
       selectionTranslationRequestRef.current += 1;
+      selectionRangeRef.current = null;
+      if (selectionTranslationDebounceRef.current !== null) {
+        window.clearTimeout(selectionTranslationDebounceRef.current);
+        selectionTranslationDebounceRef.current = null;
+      }
       setSelectionTranslation(null);
       setDocumentProxy(null);
       setFindReadyToken(0);
       setIsRendering(false);
-      props.onExtractedTextReady?.([]);
+      if (props.enableFullTextExtraction) {
+        props.onExtractedTextReady?.([]);
+      }
       pdfViewerRef.current?.setDocument(null as unknown as PDFDocumentProxy);
       linkServiceRef.current?.setDocument(null);
       findControllerRef.current?.setDocument(null as unknown as PDFDocumentProxy);
@@ -280,14 +311,22 @@ export function PdfViewer(props: PdfViewerProps) {
 
     let cancelled = false;
     let loadedDocument: PDFDocumentProxy | null = null;
+    let cancelScheduledTextExtraction: (() => void) | null = null;
     const loadingTask = pdfjsLib.getDocument({ data: props.pdfData.slice() });
     setIsRendering(true);
     hasAppliedInitialFitWidthRef.current = false;
     selectionTranslationRequestRef.current += 1;
+    selectionRangeRef.current = null;
+    if (selectionTranslationDebounceRef.current !== null) {
+      window.clearTimeout(selectionTranslationDebounceRef.current);
+      selectionTranslationDebounceRef.current = null;
+    }
     setSelectionTranslation(null);
     setDocumentProxy(null);
     setFindReadyToken(0);
-    props.onExtractedTextReady?.([]);
+    if (props.enableFullTextExtraction) {
+      props.onExtractedTextReady?.([]);
+    }
     props.onHighlightStatusChange?.('');
 
     loadingTask.promise
@@ -311,16 +350,29 @@ export function PdfViewer(props: PdfViewerProps) {
         findController.setDocument(pdfDocument);
         setDocumentProxy(pdfDocument);
         propsRef.current.onDocumentLoad(pdfDocument.numPages);
-        propsRef.current.onStatusChange(`PDF 已加载，共 ${pdfDocument.numPages} 页。`);
+        propsRef.current.onStatusChange(`PDF 结构已加载，共 ${pdfDocument.numPages} 页；正在渲染首屏。`);
         void viewer.onePageRendered?.then(() => {
           if (!cancelled) {
+            setIsRendering(false);
             setFindReadyToken((value) => value + 1);
             scheduleInitialHorizontalCenter(8);
-          }
-        });
-        void extractPdfBlocksFromDocument(pdfDocument, () => cancelled).then((outline) => {
-          if (!cancelled) {
-            propsRef.current.onExtractedTextReady?.(outline);
+            propsRef.current.onStatusChange(`PDF 首屏已显示，共 ${pdfDocument.numPages} 页。`);
+            if (propsRef.current.enableFullTextExtraction && propsRef.current.pdfData) {
+              const extractionData = propsRef.current.pdfData;
+              cancelScheduledTextExtraction = schedulePdfBackgroundWork(() => {
+                void extractPdfBlocksFromCachedDocument(extractionData, pdfDocument, () => cancelled)
+                  .then((outline) => {
+                    if (!cancelled) {
+                      propsRef.current.onExtractedTextReady?.(outline);
+                    }
+                  })
+                  .catch((error) => {
+                    if (!cancelled) {
+                      propsRef.current.onStatusChange(`PDF 文本索引失败：${String(error)}`);
+                    }
+                  });
+              });
+            }
           }
         });
       })
@@ -333,6 +385,14 @@ export function PdfViewer(props: PdfViewerProps) {
 
     return () => {
       cancelled = true;
+      cancelScheduledTextExtraction?.();
+      cancelScheduledTextExtraction = null;
+      selectionTranslationRequestRef.current += 1;
+      selectionRangeRef.current = null;
+      if (selectionPopoverFrameRef.current !== null) {
+        window.cancelAnimationFrame(selectionPopoverFrameRef.current);
+        selectionPopoverFrameRef.current = null;
+      }
       hasAppliedInitialHorizontalCenterRef.current = false;
       hasAppliedInitialFitWidthRef.current = false;
       if (pendingInitialCenterFrameRef.current !== null) {
@@ -388,6 +448,7 @@ export function PdfViewer(props: PdfViewerProps) {
     }
 
     const query = props.highlightText?.trim() ?? '';
+    const previousQuery = currentFindQueryRef.current;
     currentFindQueryRef.current = query;
     const runId = activeHighlightRunIdRef.current + 1;
     activeHighlightRunIdRef.current = runId;
@@ -395,7 +456,9 @@ export function PdfViewer(props: PdfViewerProps) {
     clearHighlightRectStore();
 
     if (!query) {
-      eventBus.dispatch('find', buildFindRequest(findController, ''));
+      if (previousQuery) {
+        eventBus.dispatch('find', buildFindRequest(findController, ''));
+      }
       props.onHighlightStatusChange?.('');
       clearHighlightOverlay();
       return;
@@ -464,6 +527,68 @@ export function PdfViewer(props: PdfViewerProps) {
       window.removeEventListener('mouseup', stopPanning);
     };
   }, [isPanning]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !documentProxy) {
+      return;
+    }
+
+    function handleSelectionViewportChange(): void {
+      if (selectionRangeRef.current) {
+        scheduleSelectionPopoverPosition();
+      }
+    }
+
+    function handlePointerDown(event: PointerEvent): void {
+      if (!selectionRangeRef.current || !(event.target instanceof Node)) {
+        return;
+      }
+      if (selectionPopoverRef.current?.contains(event.target)) {
+        return;
+      }
+      closeSelectionTranslation();
+    }
+
+    function handleSelectionChange(): void {
+      window.setTimeout(() => {
+        const activeElement = document.activeElement;
+        if (activeElement && selectionPopoverRef.current?.contains(activeElement)) {
+          return;
+        }
+        const selection = window.getSelection();
+        if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+          if (selectionRangeRef.current) {
+            closeSelectionTranslation(false);
+          }
+          return;
+        }
+        captureTextSelection();
+      }, 0);
+    }
+
+    container.addEventListener('scroll', handleSelectionViewportChange, { passive: true });
+    window.addEventListener('resize', handleSelectionViewportChange);
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => {
+      container.removeEventListener('scroll', handleSelectionViewportChange);
+      window.removeEventListener('resize', handleSelectionViewportChange);
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+      document.removeEventListener('selectionchange', handleSelectionChange);
+    };
+  }, [documentProxy]);
+
+  useEffect(() => {
+    const popover = selectionPopoverRef.current;
+    if (!popover || !selectionTranslation) {
+      return;
+    }
+    const observer = new ResizeObserver(scheduleSelectionPopoverPosition);
+    observer.observe(popover);
+    scheduleSelectionPopoverPosition();
+    return () => observer.disconnect();
+  }, [selectionTranslation?.sourceText]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -605,36 +730,53 @@ export function PdfViewer(props: PdfViewerProps) {
     if (selectionRect.width <= 0 && selectionRect.height <= 0) {
       return;
     }
+    const mode = isSingleEnglishDictionaryWord(sourceText) ? 'word' : 'text';
     const position = buildPdfSelectionPopoverPosition(selectionRect, shellRect, {
-      width: 340,
-      height: 238
+      width: mode === 'word' ? 380 : 340,
+      height: mode === 'word' ? 420 : 250
     });
-
-    selectionTranslationRequestRef.current += 1;
+    const requestId = selectionTranslationRequestRef.current + 1;
+    selectionTranslationRequestRef.current = requestId;
+    if (selectionTranslationDebounceRef.current !== null) {
+      window.clearTimeout(selectionTranslationDebounceRef.current);
+    }
+    selectionRangeRef.current = range.cloneRange();
+    const direction = resolvePdfSelectionTranslationDirection(sourceText);
+    const normalizedSelection = rawText.replace(/\s+/gu, ' ').trim();
     setSelectionTranslation({
       sourceText,
       translatedText: '',
-      direction: resolvePdfSelectionTranslationDirection(sourceText),
+      direction,
+      mode,
       engine: '',
-      message: rawText.trim().length > sourceText.length ? '已整理 PDF 换行；最多翻译 2000 个字符。' : '',
-      status: 'idle',
+      message: `正在使用本地离线引擎自动翻译（${direction.label}）...`,
+      dictionaryStatus: mode === 'word' && onlineDictionaryEnabled ? 'loading' : 'idle',
+      dictionaryMessage: mode === 'word'
+        ? onlineDictionaryEnabled
+          ? '正在加载在线音标、词性和多义项...'
+          : '在线词典未启用；点击后只会发送当前单词，本地译文仍会自动生成。'
+        : '',
+      status: 'translating',
       ...position
     });
+    selectionTranslationDebounceRef.current = window.setTimeout(() => {
+      selectionTranslationDebounceRef.current = null;
+      if (selectionTranslationRequestRef.current === requestId) {
+        void translateSelectionText(requestId, sourceText, direction, normalizedSelection !== sourceText);
+      }
+    }, 160);
+    if (mode === 'word' && onlineDictionaryEnabled) {
+      void lookupSelectedWord(requestId, sourceText);
+    }
+    scheduleSelectionPopoverPosition();
   }
 
-  async function translateSelectedText(): Promise<void> {
-    if (!selectionTranslation || selectionTranslation.status === 'translating') {
-      return;
-    }
-    const requestId = selectionTranslationRequestRef.current + 1;
-    selectionTranslationRequestRef.current = requestId;
-    const { sourceText, direction } = selectionTranslation;
-    setSelectionTranslation((current) => current ? {
-      ...current,
-      status: 'translating',
-      message: `正在使用本地离线引擎翻译（${direction.label}）...`
-    } : current);
-
+  async function translateSelectionText(
+    requestId: number,
+    sourceText: string,
+    direction: PdfSelectionTranslationDirection,
+    normalizedPdfText = false
+  ): Promise<void> {
     try {
       const result = await window.electronAPI.translateLocalBatch({
         texts: [sourceText],
@@ -653,7 +795,7 @@ export function PdfViewer(props: PdfViewerProps) {
         ...current,
         translatedText,
         engine: result.model ?? result.engine,
-        message: `${result.model ?? result.engine} · ${direction.label}`,
+        message: `${result.model ?? result.engine} · ${direction.label}${normalizedPdfText ? ' · 已整理 PDF 换行' : ''}`,
         status: 'success'
       } : current);
     } catch (error) {
@@ -665,6 +807,76 @@ export function PdfViewer(props: PdfViewerProps) {
         message: `翻译失败：${String(error).replace(/^Error:\s*/u, '')}`,
         status: 'error'
       } : current);
+    }
+  }
+
+  async function lookupSelectedWord(requestId: number, sourceText: string): Promise<void> {
+    try {
+      const result = await window.electronAPI.lookupEnglishWord(sourceText);
+      if (selectionTranslationRequestRef.current !== requestId) {
+        return;
+      }
+      setSelectionTranslation((current) => current ? {
+        ...current,
+        dictionaryStatus: result.status,
+        dictionaryMessage: result.message,
+        ...(result.entry ? { dictionary: result.entry } : {})
+      } : current);
+    } catch {
+      if (selectionTranslationRequestRef.current !== requestId) {
+        return;
+      }
+      setSelectionTranslation((current) => current ? {
+        ...current,
+        dictionaryStatus: 'unavailable',
+        dictionaryMessage: '词典查询失败，已保留本地翻译。'
+      } : current);
+    }
+  }
+
+  function enableOnlineDictionary(): void {
+    if (!selectionTranslation || selectionTranslation.mode !== 'word') {
+      return;
+    }
+    localStorage.setItem(ONLINE_DICTIONARY_STORAGE_KEY, 'true');
+    setOnlineDictionaryEnabled(true);
+    const requestId = selectionTranslationRequestRef.current;
+    setSelectionTranslation((current) => current ? {
+      ...current,
+      dictionaryStatus: 'loading',
+      dictionaryMessage: '正在加载在线音标、词性和多义项...'
+    } : current);
+    void lookupSelectedWord(requestId, selectionTranslation.sourceText);
+  }
+
+  function disableOnlineDictionary(): void {
+    localStorage.removeItem(ONLINE_DICTIONARY_STORAGE_KEY);
+    setOnlineDictionaryEnabled(false);
+    setSelectionTranslation((current) => current && current.mode === 'word' && !current.dictionary ? {
+      ...current,
+      dictionaryStatus: 'idle',
+      dictionaryMessage: '在线词典已停用；本地译文仍会自动生成。'
+    } : current);
+  }
+
+  function retrySelectedTranslation(): void {
+    if (!selectionTranslation || selectionTranslation.status === 'translating') {
+      return;
+    }
+    const requestId = selectionTranslationRequestRef.current + 1;
+    selectionTranslationRequestRef.current = requestId;
+    const { sourceText, direction, mode, dictionary } = selectionTranslation;
+    setSelectionTranslation((current) => current ? {
+      ...current,
+      status: 'translating',
+      message: `正在使用本地离线引擎重新翻译（${direction.label}）...`,
+      ...(mode === 'word' && onlineDictionaryEnabled && !dictionary
+        ? { dictionaryStatus: 'loading' as const, dictionaryMessage: '正在重新连接词典...' }
+        : {})
+    } : current);
+    void translateSelectionText(requestId, sourceText, direction);
+    if (mode === 'word' && onlineDictionaryEnabled && !dictionary) {
+      void lookupSelectedWord(requestId, sourceText);
     }
   }
 
@@ -684,10 +896,69 @@ export function PdfViewer(props: PdfViewerProps) {
     }
   }
 
-  function closeSelectionTranslation(): void {
+  function closeSelectionTranslation(clearNativeSelection = true): void {
     selectionTranslationRequestRef.current += 1;
+    selectionRangeRef.current = null;
+    if (selectionTranslationDebounceRef.current !== null) {
+      window.clearTimeout(selectionTranslationDebounceRef.current);
+      selectionTranslationDebounceRef.current = null;
+    }
+    if (selectionPopoverFrameRef.current !== null) {
+      window.cancelAnimationFrame(selectionPopoverFrameRef.current);
+      selectionPopoverFrameRef.current = null;
+    }
     setSelectionTranslation(null);
-    window.getSelection()?.removeAllRanges();
+    if (clearNativeSelection) {
+      window.getSelection()?.removeAllRanges();
+    }
+  }
+
+  function scheduleSelectionPopoverPosition(): void {
+    if (!selectionRangeRef.current || selectionPopoverFrameRef.current !== null) {
+      return;
+    }
+    selectionPopoverFrameRef.current = window.requestAnimationFrame(() => {
+      selectionPopoverFrameRef.current = null;
+      updateSelectionPopoverPosition();
+    });
+  }
+
+  function updateSelectionPopoverPosition(): void {
+    const range = selectionRangeRef.current;
+    const shell = viewerShellRef.current;
+    if (!range || !shell) {
+      return;
+    }
+    let selectionRect: DOMRect;
+    try {
+      selectionRect = range.getBoundingClientRect();
+    } catch {
+      closeSelectionTranslation(false);
+      return;
+    }
+    const shellRect = shell.getBoundingClientRect();
+    if (
+      (selectionRect.width <= 0 && selectionRect.height <= 0) ||
+      !isPdfSelectionRectVisible(selectionRect, shellRect)
+    ) {
+      closeSelectionTranslation();
+      return;
+    }
+    const popoverRect = selectionPopoverRef.current?.getBoundingClientRect();
+    const position = buildPdfSelectionPopoverPosition(
+      selectionRect,
+      shellRect,
+      {
+        width: popoverRect?.width || 340,
+        height: Math.min(popoverRect?.height || 250, Math.max(180, shellRect.height - 24))
+      }
+    );
+    setSelectionTranslation((current) => {
+      if (!current || (Math.abs(current.left - position.left) < 1 && Math.abs(current.top - position.top) < 1)) {
+        return current;
+      }
+      return { ...current, ...position };
+    });
   }
 
   function buildZoomAnchor(clientX: number, clientY: number): PdfZoomAnchor {
@@ -1097,50 +1368,134 @@ export function PdfViewer(props: PdfViewerProps) {
         </div>
         {selectionTranslation ? (
           <aside
-            className="pdf-selection-translation"
+            ref={selectionPopoverRef}
+            className={`pdf-selection-translation${selectionTranslation.mode === 'word' ? ' is-word-card' : ''}`}
             style={{ left: selectionTranslation.left, top: selectionTranslation.top }}
             aria-label="选中文字翻译"
             data-testid="pdf-selection-translation"
+            data-selection-mode={selectionTranslation.mode}
+            data-selection-status={selectionTranslation.status}
           >
             <header>
               <div>
-                <strong>选中翻译</strong>
-                <span>{selectionTranslation.direction.label} · 本地离线</span>
+                <strong>{selectionTranslation.mode === 'word' ? '单词解析' : '自动翻译'}</strong>
+                <span>{selectionTranslation.direction.label} · 选中即翻译</span>
               </div>
-              <button type="button" aria-label="关闭选中翻译" onClick={closeSelectionTranslation}>×</button>
+              <button type="button" aria-label="关闭选中翻译" onClick={() => closeSelectionTranslation()}>×</button>
             </header>
-            <div className="pdf-selection-source" title={selectionTranslation.sourceText}>
-              {selectionTranslation.sourceText}
-            </div>
-            {selectionTranslation.translatedText ? (
-              <div className="pdf-selection-result" aria-live="polite">
-                {selectionTranslation.translatedText}
+            {selectionTranslation.mode === 'word' ? (
+              <div className="pdf-word-card">
+                <div className="pdf-word-heading">
+                  <div>
+                    <strong>{selectionTranslation.sourceText}</strong>
+                    {selectionTranslation.dictionary?.phonetics.length ? (
+                      <span>{selectionTranslation.dictionary.phonetics.join(' · ')}</span>
+                    ) : null}
+                  </div>
+                  {selectionTranslation.translatedText ? (
+                    <p className="pdf-word-translation" aria-live="polite">
+                      {selectionTranslation.translatedText}
+                    </p>
+                  ) : null}
+                </div>
+                {selectionTranslation.dictionaryStatus === 'loading' ? (
+                  <div className="pdf-word-dictionary-loading" aria-live="polite">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                ) : null}
+                {selectionTranslation.dictionary ? (
+                  <div className="pdf-word-meanings">
+                    {selectionTranslation.dictionary.meanings.map((meaning, meaningIndex) => {
+                      const synonyms = [
+                        ...meaning.synonyms,
+                        ...meaning.definitions.flatMap((definition) => definition.synonyms)
+                      ].filter((value, index, values) => values.indexOf(value) === index).slice(0, 8);
+                      const antonyms = [
+                        ...meaning.antonyms,
+                        ...meaning.definitions.flatMap((definition) => definition.antonyms)
+                      ].filter((value, index, values) => values.indexOf(value) === index).slice(0, 8);
+                      return (
+                        <section key={`${meaning.partOfSpeech}-${meaningIndex}`} className="pdf-word-meaning">
+                          <h4>{formatDictionaryPartOfSpeech(meaning.partOfSpeech)}</h4>
+                          <ol>
+                            {meaning.definitions.map((definition, definitionIndex) => (
+                              <li key={`${definition.definition}-${definitionIndex}`}>
+                                <p>{definition.definition}</p>
+                                {definition.example ? <small>例：{definition.example}</small> : null}
+                              </li>
+                            ))}
+                          </ol>
+                          {synonyms.length ? <p className="pdf-word-related"><b>近义词</b>{synonyms.join('、')}</p> : null}
+                          {antonyms.length ? <p className="pdf-word-related"><b>反义词</b>{antonyms.join('、')}</p> : null}
+                        </section>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {selectionTranslation.dictionaryStatus !== 'loading' && selectionTranslation.dictionaryMessage ? (
+                  <p className="pdf-word-dictionary-status">{selectionTranslation.dictionaryMessage}</p>
+                ) : null}
               </div>
-            ) : null}
+            ) : (
+              <>
+                <div className="pdf-selection-source" title={selectionTranslation.sourceText}>
+                  {selectionTranslation.sourceText}
+                </div>
+                {selectionTranslation.translatedText ? (
+                  <div className="pdf-selection-result" aria-live="polite">
+                    {selectionTranslation.translatedText}
+                  </div>
+                ) : null}
+              </>
+            )}
             {selectionTranslation.message ? (
               <p className={selectionTranslation.status === 'error' ? 'is-error' : ''} aria-live="polite">
                 {selectionTranslation.message}
               </p>
             ) : null}
             <footer>
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={selectionTranslation.status === 'translating'}
-                onClick={() => void translateSelectedText()}
-              >
-                {selectionTranslation.status === 'translating'
-                  ? '翻译中...'
-                  : selectionTranslation.translatedText
-                    ? '重新翻译'
-                    : '翻译选中内容'}
-              </button>
+              {selectionTranslation.status === 'error' ? (
+                <button type="button" className="secondary-button" onClick={retrySelectedTranslation}>
+                  重试翻译
+                </button>
+              ) : null}
               {selectionTranslation.translatedText ? (
                 <button type="button" className="ghost-button" onClick={() => void copySelectedTranslation()}>
                   复制译文
                 </button>
               ) : null}
+              {selectionTranslation.dictionary?.sourceUrl ? (
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => void window.electronAPI.openExternalUrl(selectionTranslation.dictionary?.sourceUrl ?? '')}
+                >
+                  词典来源
+                </button>
+              ) : null}
+              {selectionTranslation.mode === 'word' && !onlineDictionaryEnabled ? (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  data-enable-online-dictionary
+                  onClick={enableOnlineDictionary}
+                >
+                  加载在线词典详情
+                </button>
+              ) : null}
+              {selectionTranslation.mode === 'word' && onlineDictionaryEnabled ? (
+                <button type="button" className="ghost-button" onClick={disableOnlineDictionary}>
+                  停用自动在线词典
+                </button>
+              ) : null}
             </footer>
+            {selectionTranslation.dictionary?.license ? (
+              <small className="pdf-word-license">
+                Free Dictionary API · {selectionTranslation.dictionary.license.name}
+              </small>
+            ) : null}
           </aside>
         ) : null}
       </div>
@@ -1171,4 +1526,25 @@ function getHighlightRectKey(rect: HighlightRectLike): string {
 
 function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+}
+
+function schedulePdfBackgroundWork(callback: () => void): () => void {
+  let cancelled = false;
+  const run = (): void => {
+    if (!cancelled) {
+      callback();
+    }
+  };
+  if (typeof window.requestIdleCallback === 'function') {
+    const idleId = window.requestIdleCallback(run, { timeout: 1_200 });
+    return () => {
+      cancelled = true;
+      window.cancelIdleCallback(idleId);
+    };
+  }
+  const timerId = window.setTimeout(run, 180);
+  return () => {
+    cancelled = true;
+    window.clearTimeout(timerId);
+  };
 }

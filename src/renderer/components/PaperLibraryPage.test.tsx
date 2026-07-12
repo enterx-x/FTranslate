@@ -75,6 +75,7 @@ describe('PaperLibraryPage', () => {
     expect(html).toContain('data-paper-library-page');
     expect(html).toContain('data-paper-library-navigator');
     expect(html).toContain('data-paper-library-sort');
+    expect(html).toContain('aria-keyshortcuts="Control+K Meta+K"');
     expect(html).toContain('最近活动');
     expect(html).toContain('data-paper-library-row');
     expect(html).toContain('Control Barrier Functions');

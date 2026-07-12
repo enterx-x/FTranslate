@@ -1,10 +1,12 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent
+  type MouseEvent as ReactMouseEvent,
+  type RefObject
 } from 'react';
 import {
   PAPER_LIBRARY_VIEW_KEY,
@@ -100,11 +102,33 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
   const [managedTagDraft, setManagedTagDraft] = useState('');
   const [confirmTagDeletion, setConfirmTagDeletion] = useState(false);
   const [pathAvailable, setPathAvailable] = useState<boolean | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => setSearch(searchInput), 120);
     return () => window.clearTimeout(timeoutId);
   }, [searchInput]);
+
+  useEffect(() => {
+    function focusLibrarySearch(event: KeyboardEvent): void {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        target !== searchInputRef.current &&
+        (target.matches('input, textarea, select') || target.isContentEditable)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    }
+    window.addEventListener('keydown', focusLibrarySearch);
+    return () => window.removeEventListener('keydown', focusLibrarySearch);
+  }, []);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -371,6 +395,7 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
           sortDirection={preferences.sortDirection}
           density={preferences.density}
           inspectorCollapsed={preferences.inspectorCollapsed}
+          searchInputRef={searchInputRef}
           onBackHome={props.onBackHome}
           onNewProject={props.onNewProject}
           onSearchChange={() => undefined}
@@ -419,6 +444,7 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
         sortDirection={preferences.sortDirection}
         density={preferences.density}
         inspectorCollapsed={preferences.inspectorCollapsed}
+        searchInputRef={searchInputRef}
         onBackHome={props.onBackHome}
         onNewProject={props.onNewProject}
         onSearchChange={setSearchInput}
@@ -906,6 +932,7 @@ function LibraryToolbar(props: {
   sortDirection: PaperLibrarySortDirection;
   density: PaperLibraryDensity;
   inspectorCollapsed: boolean;
+  searchInputRef: RefObject<HTMLInputElement | null>;
   onBackHome: () => void;
   onNewProject: () => void;
   onSearchChange: (value: string) => void;
@@ -925,8 +952,10 @@ function LibraryToolbar(props: {
       <label className={styles.searchBox}>
         <span className={styles.searchIcon} />
         <input
+          ref={props.searchInputRef}
           value={props.searchInput}
           placeholder="搜索标题、作者、标签或笔记..."
+          aria-keyshortcuts="Control+K Meta+K"
           onChange={(event) => props.onSearchChange(event.target.value)}
           onKeyDown={props.onSearchKeyDown}
         />

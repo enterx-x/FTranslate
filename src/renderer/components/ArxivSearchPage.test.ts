@@ -183,7 +183,8 @@ describe('ArxivSearchPage result display', () => {
         sortBy: 'comprehensive',
         sortOrder: 'ascending',
         yearFrom: '',
-        yearTo: ''
+        yearTo: '',
+        forceRefresh: true
       },
       '机器人'
     );
@@ -193,7 +194,7 @@ describe('ArxivSearchPage result display', () => {
       start: 0,
       sortBy: 'submittedDate',
       sortOrder: 'descending',
-      forceRefresh: false
+      forceRefresh: true
     });
   });
 
@@ -467,6 +468,21 @@ describe('ArxivSearchPage result display', () => {
         abstractZh: '中文摘要'
       }
     });
+
+    const latestFromUi = buildArxivSearchRequestForUi(
+      {
+        searchQuery: '',
+        category: '',
+        start: 0,
+        maxResults: 50,
+        sortBy: 'relevance',
+        sortOrder: 'descending'
+      },
+      '*',
+      0,
+      { latest: true, forceRefresh: true }
+    );
+    expect(latestFromUi.forceRefresh).toBe(true);
   });
 
   it('drops stale failed results before they can update metadata, view mode, or message', () => {
@@ -486,7 +502,7 @@ describe('ArxivSearchPage result display', () => {
   });
 
   it('keeps only read, translate, and reading-queue actions primary on result cards', () => {
-    expect(ARXIV_CARD_PRIMARY_ACTIONS).toEqual(['阅读', '翻译', '加入阅读队列']);
+    expect(ARXIV_CARD_PRIMARY_ACTIONS).toEqual(['查看摘要', '翻译', '加入阅读队列']);
     expect(ARXIV_CARD_PRIMARY_ACTIONS).not.toContain('加入 PPT');
     expect(ARXIV_CARD_PRIMARY_ACTIONS).not.toContain('导出 Markdown');
   });

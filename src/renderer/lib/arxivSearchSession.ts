@@ -4,12 +4,15 @@ export interface ArxivSearchSessionController {
   isCurrent: (sessionId: number) => boolean;
 }
 
+let nextArxivSearchSessionId = Date.now() * 1_000;
+
 export function createArxivSearchSessionController(): ArxivSearchSessionController {
   let currentSessionId: number | null = null;
 
   return {
     begin: () => {
-      const nextSessionId = (currentSessionId ?? 0) + 1;
+      nextArxivSearchSessionId += 1;
+      const nextSessionId = nextArxivSearchSessionId;
       currentSessionId = nextSessionId;
       return nextSessionId;
     },

@@ -10,8 +10,8 @@ describe('createArxivSearchSessionController', () => {
     const firstSession = controller.begin();
     const secondSession = controller.begin();
 
-    expect(firstSession).toBe(1);
-    expect(secondSession).toBe(2);
+    expect(Number.isSafeInteger(firstSession)).toBe(true);
+    expect(secondSession).toBe(firstSession + 1);
     expect(controller.current()).toBe(secondSession);
     expect(controller.isCurrent(firstSession)).toBe(false);
     expect(controller.isCurrent(secondSession)).toBe(true);

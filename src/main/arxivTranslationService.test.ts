@@ -246,6 +246,69 @@ describe('ArxivTranslationService', () => {
     }
   });
 
+  it('cancels queued preview and background jobs from an older search session', async () => {
+    const starts: string[] = [];
+    let releaseRunningJob!: () => void;
+    let markRunningJobStarted!: () => void;
+    const runningJobReleased = new Promise<void>((resolve) => {
+      releaseRunningJob = resolve;
+    });
+    const runningJobStarted = new Promise<void>((resolve) => {
+      markRunningJobStarted = resolve;
+    });
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) => {
+        starts.push(texts[0]);
+        if (texts[0] === 'Old running title') {
+          markRunningJobStarted();
+          await runningJobReleased;
+        }
+        return texts.map(() => '这是可用且完整的中文翻译结果，用于机器人学习与安全控制研究。');
+      }
+    });
+
+    try {
+      const running = service.translatePaper(
+        {
+          stableId: 'old-running',
+          title: 'Old running title',
+          summary: 'The old preview job is already running and cannot be interrupted safely.'
+        },
+        { priority: 'preview', sessionId: 100 }
+      );
+      await runningJobStarted;
+
+      const staleBackground = service.translatePaper(
+        {
+          stableId: 'old-background',
+          title: 'Old background title',
+          summary: 'This queued background job belongs to the superseded search session.'
+        },
+        { priority: 'background', sessionId: 100 }
+      );
+      await service.translatePapers([], { priority: 'preview', sessionId: 101 });
+      const freshPreview = service.translatePaper(
+        {
+          stableId: 'new-preview',
+          title: 'New preview title',
+          summary: 'This preview belongs to the newest search session and should run next.'
+        },
+        { priority: 'preview', sessionId: 101 }
+      );
+
+      const staleResult = await staleBackground;
+      expect(staleResult.status).toBe('failed');
+      expect(staleResult.message).toContain('会话已更新');
+
+      releaseRunningJob();
+      await Promise.all([running, freshPreview]);
+      expect(starts).toEqual(['Old running title', 'New preview title']);
+    } finally {
+      service.close();
+    }
+  });
+
   it('deduplicates repeated texts before sending a batch to the local translator', async () => {
     const batches: string[][] = [];
     const sharedSummary = 'This shared abstract studies safe robot navigation and obstacle avoidance.';

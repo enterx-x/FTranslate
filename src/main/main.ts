@@ -64,6 +64,7 @@ import {
 } from './aiResponseParsing';
 import { toExcelExportCellValue } from './excelExportSafety';
 import { registerAppIpcHandlers } from './ipc/handlers';
+import { EnglishWordDictionaryService } from './wordDictionaryService';
 import {
   assertAllowedExtension,
   assertMaxBytes,
@@ -1176,6 +1177,35 @@ function toRuntimePdfTranslationEngineView(engine: PdfTranslationEngineView): Ru
 
 let arxivService: ArxivService | null = null;
 let arxivTranslationService: ArxivTranslationService | null = null;
+const visualDictionaryFetch = (async (input: string | URL | Request) => {
+  const requestedWord = decodeURIComponent(String(input).split('/').pop() ?? 'model');
+  return new Response(JSON.stringify([
+    {
+      word: requestedWord,
+      phonetic: '/ˈmɒdəl/',
+      meanings: [
+        {
+          partOfSpeech: 'noun',
+          definitions: [
+            {
+              definition: 'A simplified representation used to explain, predict, or study a system.',
+              example: 'The dynamics model predicts the next robot state.',
+              synonyms: ['representation', 'framework'],
+              antonyms: []
+            }
+          ],
+          synonyms: ['representation'],
+          antonyms: []
+        }
+      ],
+      sourceUrls: ['https://dictionaryapi.dev/'],
+      license: { name: 'CC BY-SA 3.0', url: 'https://creativecommons.org/licenses/by-sa/3.0' }
+    }
+  ]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}) as typeof fetch;
+const wordDictionaryService = new EnglishWordDictionaryService(
+  process.env.PDF_TRANSLATION_READER_VISUAL_MOCK_DICTIONARY === '1' ? visualDictionaryFetch : fetch
+);
 
 function getArxivService(): ArxivService {
   if (!arxivService) {
@@ -3053,54 +3083,54 @@ async function loadProjectForIpc(request: LoadProjectRequest): Promise<{
   errors: string[];
 }> {
   request = (isRecord(request) ? request : {}) as LoadProjectRequest;
-  const errors: string[] = [];
-  let pdf: PdfFilePayload | null = null;
-  let translation: TextFilePayload | null = null;
-  let aiCache: TextFilePayload | null = null;
-  let translatedPdf: PdfFilePayload | null = null;
-  let translatedMonoPdf: PdfFilePayload | null = null;
-
-  if (request.pdfPath) {
+  async function loadOptionalResource<T>(
+    filePath: string | undefined,
+    label: string,
+    reader: (resolvedPath: string) => Promise<T>
+  ): Promise<{ value: T | null; error: string | null }> {
+    if (!filePath) {
+      return { value: null, error: null };
+    }
     try {
-      pdf = await readPdfFile(request.pdfPath);
+      return { value: await reader(filePath), error: null };
     } catch (error) {
-      errors.push(`无法读取 PDF：${request.pdfPath}，${String(error)}`);
+      return { value: null, error: `无法读取${label}：${filePath}，${String(error)}` };
     }
   }
 
-  if (request.translationPath) {
-    try {
-      translation = await readTextFile(request.translationPath);
-    } catch (error) {
-      errors.push(`无法读取翻译文件：${request.translationPath}，${String(error)}`);
-    }
-  }
+  // Never read multiple large PDFs concurrently: each payload temporarily owns both
+  // a Buffer and a base64 string. Small text sidecars may safely load beside the source PDF.
+  const [pdfResult, translationResult, aiCacheResult] = await Promise.all([
+    loadOptionalResource(request.pdfPath, ' PDF', readPdfFile),
+    loadOptionalResource(request.translationPath, '翻译文件', readTextFile),
+    loadOptionalResource(request.aiCachePath, ' AI 缓存', readTextFile)
+  ]);
+  const translatedPdfResult = await loadOptionalResource(
+    request.translatedPdfPath,
+    '双语 PDF',
+    readPdfFile
+  );
+  const translatedMonoPdfResult = await loadOptionalResource(
+    request.translatedMonoPdfPath,
+    '中文 PDF',
+    readPdfFile
+  );
+  const errors = [
+    pdfResult.error,
+    translationResult.error,
+    aiCacheResult.error,
+    translatedPdfResult.error,
+    translatedMonoPdfResult.error
+  ].filter((message): message is string => Boolean(message));
 
-  if (request.aiCachePath) {
-    try {
-      aiCache = await readTextFile(request.aiCachePath);
-    } catch (error) {
-      errors.push(`无法读取 AI 缓存：${request.aiCachePath}，${String(error)}`);
-    }
-  }
-
-  if (request.translatedPdfPath) {
-    try {
-      translatedPdf = await readPdfFile(request.translatedPdfPath);
-    } catch (error) {
-      errors.push(`无法读取双语 PDF：${request.translatedPdfPath}，${String(error)}`);
-    }
-  }
-
-  if (request.translatedMonoPdfPath) {
-    try {
-      translatedMonoPdf = await readPdfFile(request.translatedMonoPdfPath);
-    } catch (error) {
-      errors.push(`无法读取中文 PDF：${request.translatedMonoPdfPath}，${String(error)}`);
-    }
-  }
-
-  return { pdf, translation, aiCache, translatedPdf, translatedMonoPdf, errors };
+  return {
+    pdf: pdfResult.value,
+    translation: translationResult.value,
+    aiCache: aiCacheResult.value,
+    translatedPdf: translatedPdfResult.value,
+    translatedMonoPdf: translatedMonoPdfResult.value,
+    errors
+  };
 }
 
 async function openExternalUrlForIpc(url: unknown): Promise<boolean> {
@@ -3233,7 +3263,8 @@ async function translateArxivPapersForIpc(
     return safeRequest.map((item) => buildVisualArxivTranslationResult(item));
   }
   return getArxivTranslationService().translatePapers(safeRequest, {
-    priority: request.priority
+    priority: request.priority,
+    sessionId: request.sessionId
   });
 }
 
@@ -3424,6 +3455,9 @@ function registerIpcHandlers(): void {
       checkLocalTranslationInstall,
       warmUpNllbTranslator,
       translateWithLocalEngine
+    },
+    dictionary: {
+      lookupEnglishWord: (word) => wordDictionaryService.lookup(word)
     },
     pdf: {
       checkPdfTranslationEngine,
