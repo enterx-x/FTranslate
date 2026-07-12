@@ -56,8 +56,9 @@ const PYTHON_REPAIR_PACKAGES = [
   'numpy', 'pandas', 'matplotlib', 'seaborn', 'plotly', 'scipy', 'statsmodels',
   'openpyxl', 'pillow', 'tifffile'
 ];
-const R_CRAN_PACKAGES = ['jsonlite', 'ggplot2', 'patchwork', 'ggalluvial', 'survival', 'svglite', 'ragg', 'plotly', 'htmlwidgets', 'BiocManager'];
-const R_BIOCONDUCTOR_PACKAGES = ['ComplexHeatmap'];
+// Keep repair aligned with packages the controlled R compiler actually imports.
+// Optional backends should be installed on demand when their chart type is selected.
+const R_CRAN_PACKAGES = ['jsonlite', 'ggplot2', 'svglite', 'ggalluvial', 'plotly', 'htmlwidgets'];
 
 export class PlotRuntimeManager {
   readonly managedRoot: string;
@@ -267,7 +268,7 @@ export class PlotRuntimeManager {
       const version = await this.tryCommand(candidate, ['--version'], 8_000);
       if (!version) continue;
       const packages = await this.readRPackages(candidate);
-      const missing = ['ggplot2', 'patchwork', 'jsonlite'].filter((name) => !packages[name]);
+      const missing = ['jsonlite', 'ggplot2', 'svglite'].filter((name) => !packages[name]);
       const managed = isInside(this.managedRoot, candidate.executable) || Boolean(configuredRoot && isInside(configuredRoot, candidate.executable));
       const capability: PlotRuntimeCapability = {
         language: 'r',
@@ -442,10 +443,7 @@ export class PlotRuntimeManager {
     signal: AbortSignal,
     onProgress?: (packageName: string, index: number, total: number) => void
   ): Promise<void> {
-    const packages = [
-      ...R_CRAN_PACKAGES.map((name) => ({ name, source: 'cran' as const })),
-      ...R_BIOCONDUCTOR_PACKAGES.map((name) => ({ name, source: 'bioconductor' as const }))
-    ];
+    const packages = R_CRAN_PACKAGES.map((name) => ({ name, source: 'cran' as const }));
     for (let index = 0; index < packages.length; index += 1) {
       const item = packages[index];
       onProgress?.(item.name, index, packages.length);
@@ -528,7 +526,7 @@ export class PlotRuntimeManager {
   }
 
   private async readRPackages(command: PlotRuntimeCommand): Promise<Record<string, string>> {
-    const expression = "p<-c('ggplot2','patchwork','jsonlite','ComplexHeatmap','ggalluvial','survival','svglite','ragg'); for(x in p) cat(sprintf('FTRANSLATE_PACKAGE=%s\\t%s\\n',x,if(requireNamespace(x,quietly=TRUE)) as.character(packageVersion(x)) else ''))";
+    const expression = "p<-c('jsonlite','ggplot2','svglite','ggalluvial','plotly','htmlwidgets'); for(x in p) cat(sprintf('FTRANSLATE_PACKAGE=%s\\t%s\\n',x,if(requireNamespace(x,quietly=TRUE)) as.character(packageVersion(x)) else ''))";
     const result = await this.commandRunner(command.executable, [...command.prefixArgs, '--vanilla', '-e', expression], { timeoutMs: 20_000 });
     if (result.exitCode !== 0) return {};
     return Object.fromEntries(
@@ -669,8 +667,7 @@ export function buildRPackageInstallExpression(
       "if (nzchar(userLib)) { dir.create(userLib, recursive=TRUE, showWarnings=FALSE); .libPaths(c(userLib, .libPaths())) }",
       `required <- ${packages}`,
       "missing <- setdiff(required, rownames(installed.packages()))",
-      "if (length(missing)) install.packages(missing, lib=if(nzchar(userLib)) userLib else NULL, dependencies=NA)",
-      "if (!requireNamespace('ComplexHeatmap', quietly=TRUE)) BiocManager::install('ComplexHeatmap', lib=if(nzchar(userLib)) userLib else NULL, ask=FALSE, update=FALSE)"
+      "if (length(missing)) install.packages(missing, lib=if(nzchar(userLib)) userLib else NULL, dependencies=NA)"
     ].join('; ');
   }
   const quoted = JSON.stringify(packageName);

@@ -103,4 +103,14 @@ describe('ECharts scientific compiler', () => {
     expect(compiled.option.xAxis).toMatchObject({ type: 'value', scale: true });
     expect((compiled.option.series as Array<{ data: number[][] }>)[0].data[0]).toEqual([1985, 577.38]);
   });
+
+  it('lets users treat numeric years as discrete categories', () => {
+    const spec = createDefaultScientificPlotSpec('year-categories');
+    spec.encodings = { x: 'steps', y: 'score' };
+    spec.axes = [{ id: 'x', scale: 'category' }, { id: 'y', scale: 'auto' }];
+    const compiled = compileScientificEchartsOption(spec, table);
+
+    expect(compiled.option.xAxis).toMatchObject({ type: 'category', data: [50, 100] });
+    expect((compiled.option.series as Array<{ data: number[] }>)[0].data).toEqual([0.5, 0.7]);
+  });
 });

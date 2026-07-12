@@ -1,5 +1,30 @@
 # PLAN.md
 
+## 2026-07-12 科研绘图坐标轴、无表头导入与 R 修复（0.1.17）
+
+### 当前结论
+
+- 已合并另一代理分支 `codex/scientific-plot-ui-refactor` 的最新提交 `963c530`，保留其 Research OS 外壳、侧栏分组与科研绘图视觉精修，并与本分支真实绘图功能统一。
+- 已修复 `GDP.xlsx` 无表头数据被错误解释为字段名的问题：自动模式会识别数值首行，显式“无表头”会保留全部数据并生成“列 A / 列 B”字段；指定表头行仍可覆盖自动判断。
+- 已修复年份折线看起来像竖线的问题：ECharts 数值轴默认按数据范围缩放，不再强制包含零；用户也可手动设置 X/Y 最小值、最大值或切换分类轴。
+- 已扩展统一 PlotSpec 和右侧样式 Inspector，覆盖轴标题、尺度、范围、反向、位置、可见性、主次刻度、标签旋转与数字格式、前后缀、字号、主次网格、颜色和线宽，并映射到 ECharts、Python、R、MATLAB 受控脚本。
+- 已修复 R 修复任务卡在 20% 的交互与效率问题：逐包更新真实进度、同语言任务去重、只安装当前 R 编译器实际使用的 6 个 CRAN 包、使用必需依赖而非 Suggests，并逐包验证安装结果。旧版本启动的 R 进程已结束。
+- 已修复生成 R 脚本的既有语法问题（转义反引号与无花括号 `else if`），真实 R 解析输出 `R_SYNTAX_OK`。
+
+### 验证记录
+
+- `npm run build` 与 `npm run dist`：通过；92 个测试文件、595 个测试全部通过，TypeScript、Vite renderer、Electron main 和 NSIS 构建均完成。
+- 本机 MATLAB R2024b 对生成的 `render_plot.m` 执行 `checkcode`，输出 `MATLAB_CHECKCODE_OK`；仅有对齐/多余逗号风格提示，无解析或语法错误。
+- 源码与安装版 `$env:VISUAL_CHECK_SCENARIO='scientific-plot'; npm run visual:check`：均通过；1227px 工作区无横向溢出，中心 Canvas 为 649×570，坐标轴编辑器可设置 `40000–160000`，Runtime 弹窗在视口内，MATLAB 可从顶部语言选择器选择。
+- 人工复查 `.tmp-visual-check/scientific-plot-page.png`、`.tmp-visual-check/scientific-plot-axis-editor.png` 和 `.tmp-visual-check/scientific-plot-runtime-dialog.png`：未发现文字/按钮重叠、关键控件截断、横向滚动或弹窗越界。
+- Windows 安装包：`dist/PDF Translation Reader Setup 0.1.17.exe`，156,640,562 bytes，SHA-256 `16C9A33F31C07DFB17253D2085323DBC4D07FF21149CCFC0F2CC1759F732D6BA`。
+
+### 问题与风险
+
+- 当前轴属性是四种语言的安全共有子集；语言专属的高级标注、次坐标系、多面板独立轴和交互式选点仍应在后续以显式能力声明扩展，不能直接暴露任意代码执行。
+- R 修复仍需要网络和 CRAN 可用；`ggalluvial`、`plotly` 等扩展按当前首版一次补齐，后续可进一步按图型按需安装。
+- Vite 仍报告既有 Univer/绘图大 chunk，electron-builder 仍报告 author 缺失、duplicate dependency references 和 Node DEP0190；均未阻断本轮构建，但应独立治理。
+
 ## 2026-07-12 科研绘图视觉收敛
 
 - 已完成：在不修改绘图数据、统计、ECharts 和 Runtime/IPC 的前提下，提高页面标题、字段列表、工具栏、Inspector 与状态条的可读性，并统一主操作与选中态。
@@ -612,7 +637,7 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 
 - 已把 Python/R 运行时策略改为“系统环境优先、完整环境优先、私有安装兜底”。检测会扫描 `PATH`、Windows 注册表和常见安装目录，不再因为先遇到一个缺包环境就忽略后续完整环境。
 - 已新增“修复现有环境”流程：Python/R 已存在但缺绘图库时，只向当前检测到的解释器补齐依赖；完全未安装时才显示“安装私有环境”。MATLAB 继续只检测、不安装。
-- 已修复 R 安装失败根因：旧实现把 JavaScript 数组文本传给 R 的 `install.packages()`，不是合法 R 向量；现改为 `c(...)`，CRAN 包与 Bioconductor `ComplexHeatmap` 分开安装，并准备用户级 R library 以避免系统目录权限问题。
+- 已修复 R 安装失败根因：旧实现把 JavaScript 数组文本传给 R 的 `install.packages()`，不是合法 R 向量；0.1.16 先改为合法 `c(...)` 并准备用户级 R library。0.1.17 又移除了当前编译器未使用的 Bioconductor/重型包，只保留真实功能所需的最小包集。
 - 已修复 Python 私有安装 `ENOENT` 的触发路径：当机器已有同小版本 Python 时，官方安装器可能升级现有解释器而忽略私有 `TargetDir`；现在会先选取系统完整环境或修复现有环境，不再默认走重复私有下载。
 - 顶部“绘图语言”下拉框现在始终显示 JavaScript、Python、R、MATLAB 及实时状态；检测到 MATLAB 后选项明确显示 `MATLAB（已检测）`。环境弹窗同步提示“可在顶部绘图语言中选择”。
 

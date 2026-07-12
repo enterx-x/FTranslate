@@ -98,7 +98,9 @@ describe('plot runtime manager', () => {
     const job = manager.startRepair('r');
     await waitFor(() => manager.getInstallJob(job.id)?.status === 'succeeded');
     expect(installExpressions[0]).toContain('jsonlite');
-    expect(installExpressions.at(-1)).toContain('BiocManager::install("ComplexHeatmap"');
+    expect(installExpressions).toHaveLength(6);
+    expect(installExpressions.at(-1)).toContain('htmlwidgets');
+    expect(installExpressions.join('\n')).not.toContain('ComplexHeatmap');
     expect(installExpressions.join('\n')).not.toContain('dependencies=TRUE');
   });
 

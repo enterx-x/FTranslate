@@ -78,7 +78,8 @@ function compileCartesian(context: CompileContext, type: ScientificChartType): R
   const groupIndex = groupField ? columnIndex(context.table, groupField) : -1;
   const groups = groupRows(context.rows, groupIndex);
   const xColumn = context.table.columns[xIndex];
-  const isCategory = !isNumericColumn(xColumn);
+  const requestedCategory = context.spec.axes.find((axis) => axis.id === 'x')?.scale === 'category';
+  const isCategory = requestedCategory || !isNumericColumn(xColumn);
   const categories = isCategory ? uniqueCells(context.rows.map((row) => row[xIndex])) : [];
   const series = [...groups.entries()].map(([name, rows], seriesIndex) => {
     const data = isCategory

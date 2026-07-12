@@ -3688,6 +3688,48 @@ async function runScientificPlotScenario(client) {
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'scientific-plot-page.png'), Buffer.from(shot.data, 'base64'))
   );
+  await clickButtonByText(client, '样式');
+  await wait(200);
+  const axisEditor = await evaluateJson(client, `() => {
+    const sections = [...document.querySelectorAll('section')];
+    const xSection = sections.find((section) => section.querySelector('h3')?.textContent?.trim() === '横轴 X');
+    const ySection = sections.find((section) => section.querySelector('h3')?.textContent?.trim() === '纵轴 Y');
+    const setNumber = (section, labelText, value) => {
+      const label = [...(section?.querySelectorAll('label') ?? [])]
+        .find((item) => (item.textContent ?? '').trim().startsWith(labelText));
+      const input = label?.querySelector('input[type="number"]');
+      if (!input) return false;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(input, String(value));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    };
+    const changedMin = setNumber(xSection, '最小值', 40000);
+    const changedMax = setNumber(xSection, '最大值', 160000);
+    xSection?.scrollIntoView({ block: 'start', inline: 'nearest' });
+    const inspector = xSection?.closest('[class*="inspector"]') ?? xSection?.parentElement;
+    return {
+      hasX: Boolean(xSection),
+      hasY: Boolean(ySection),
+      hasScale: Boolean(xSection && (xSection.textContent ?? '').includes('尺度')),
+      hasTickFormat: Boolean(xSection && (xSection.textContent ?? '').includes('数字格式')),
+      hasGridControls: Boolean(xSection && (xSection.textContent ?? '').includes('网格与标题')),
+      changedMin,
+      changedMax,
+      horizontalOverflow: Boolean(inspector && inspector.scrollWidth > inspector.clientWidth + 3)
+    };
+  }`);
+  if (!axisEditor.hasX || !axisEditor.hasY || !axisEditor.hasScale || !axisEditor.hasTickFormat || !axisEditor.hasGridControls || !axisEditor.changedMin || !axisEditor.changedMax || axisEditor.horizontalOverflow) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'scientific-plot-axis-editor-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`scientificPlot: axis editor validation failed, got ${JSON.stringify(axisEditor)}`);
+  }
+  await wait(200);
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'scientific-plot-axis-editor.png'), Buffer.from(shot.data, 'base64'))
+  );
   await clickButtonByText(client, '管理环境');
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const ready = await evaluateJson(client, `() => Boolean(document.querySelector('[role="dialog"]'))`);
@@ -3752,7 +3794,7 @@ async function runScientificPlotScenario(client) {
     writeFile(path.join(outputDir, 'scientific-plot-matlab-selected.png'), Buffer.from(shot.data, 'base64'))
   );
   await clickSidebarSection(client, 'researchSheet');
-  return { ...snapshot, runtimeDialog, matlabState };
+  return { ...snapshot, axisEditor, runtimeDialog, matlabState };
 }
 
 async function main() {
