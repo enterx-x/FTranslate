@@ -2444,11 +2444,28 @@ async function runPdfSelectionTranslationScenario(client) {
     throw new Error(`pdfSelection: initial PDF should fit width and remain centered, got ${JSON.stringify(initialFit)}`);
   }
 
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    const hasText = await evaluateJson(client, `() => [...document.querySelectorAll('.pdf-viewer-shell .textLayer span')]
-      .some((item) => (item.textContent ?? '').trim().length >= 6)`);
-    if (hasText) break;
+  let hasSelectablePdfText = false;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const hasText = await evaluateJson(client, `() => [...document.querySelectorAll('.pdf-viewer-shell')]
+      .some((shell) => {
+        const shellRect = shell.getBoundingClientRect();
+        return [...shell.querySelectorAll('.textLayer span')].some((item) => {
+          const rect = item.getBoundingClientRect();
+          const text = (item.textContent ?? '').trim();
+          return text.length >= 2 && rect.width > 1 && rect.height > 1 &&
+            rect.bottom > shellRect.top + 40 && rect.top < shellRect.bottom - 40;
+        });
+      })`);
+    if (hasText) {
+      hasSelectablePdfText = true;
+      break;
+    }
     await wait(100);
+  }
+  if (!hasSelectablePdfText) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'pdf-selection-text-layer-timeout.png'), Buffer.from(shot.data, 'base64'))
+    );
   }
 
   const selected = await evaluateJson(client, `() => {

@@ -5,11 +5,11 @@
 ### 当前结论
 
 - PDF 慢并不主要是 PDF.js 缺少虚拟化，而是 viewer 挂载前的同步 base64 解码，以及首屏 canvas、空 find、目录抽取和翻译侧全文扫描相互争抢。当前方案保留 PDF.js 官方可见页渲染队列，先消除重复工作。
-- 15,587,236-byte / 25 页样本中，旧 `Uint8Array.from(binaryString, callback)` 解码约 1091 ms，预分配数组循环约 24 ms；新实现已抽成受测 helper。论文库多资源读取改为并行，减少原文、翻译缓存和双语 PDF 串行等待。
-- PDF 首屏状态改为等待真实 `onePageRendered`；空关键词不再触发全文 find，目录抽取延后到首屏后的 idle 阶段，同一 PDF 的显式图表/PPT提取与 viewer 目录共用缓存任务，翻译 viewer 不再做无效全文抽取。
-- PDF 选中即自动翻译，卡片通过克隆 `Range` 跟随滚动；外部点击、失焦、离开视口、翻页和缩放都会自动清理。单词模式接入词典 IPC，显示音标、词性、释义、例句及近反义词，网络失败仍保留本地译文。
+- 15,587,236-byte / 25 页样本中，旧 `Uint8Array.from(binaryString, callback)` 解码约 1091 ms，预分配数组循环约 24 ms；新实现已抽成受测 helper。论文库改为原文优先：先显示原文首屏，再顺序读取较大的翻译 PDF；只有体积小的文本 sidecar 与原文读取并行，避免多份大 PDF 同时进入内存。
+- PDF 首屏状态改为等待真实 `onePageRendered`；空关键词不再触发全文 find，目录抽取延后到首屏后的 idle 阶段。只有完成的目录结果可在显式图表/PPT提取之间复用，viewer 短生命周期的进行中任务不外泄；翻译 viewer 不再做无效全文抽取。
+- PDF 选中即自动翻译，卡片通过克隆 `Range` 跟随滚动；外部点击、失焦、离开视口、翻页和缩放都会自动清理。单词模式接入词典 IPC，首次在线增强必须明确启用且只发送当前单词；启用后显示音标、词性、释义、例句及近反义词，网络失败仍保留本地译文。
 - arXiv 最新论文真实强制刷新，分页改为复用最后一次已执行请求；下载成功直接写入论文库并进入 reader。预翻译缩小为 4 篇/单并发，新搜索会取消未开始的旧会话低优先级任务。
-- 已合并另一代理 `codex/scientific-plot-ui-refactor` 的 `4fd9953`，保留其紧凑 arXiv 备选队列浮层；本轮没有覆盖该代理负责的队列视觉结构。
+- 已合并另一代理 `codex/scientific-plot-ui-refactor` 的最新提交 `8568660`，保留 Research OS 动效、紧凑 arXiv 备选队列、外部点击/Esc 关闭及其他页面视觉增强；同时保留本轮的 PDF 性能、arXiv 会话与论文库状态修复。备选浮层会完整显示 4 篇，不再留下不可点击的 `+N`。
 - 论文库显示的 `Ctrl K` 现在同时支持 Windows/Linux 的 Ctrl+K 与 macOS 的 Cmd+K，搜索继续使用 120 ms 防抖和现有持久排序偏好。
 
 ### 第一性原理与最小闭环
@@ -23,8 +23,11 @@
 
 - arXiv 队列、会话和页面定向测试：4 个文件、84 个测试通过。
 - PDF 选区、快速解码、词典服务/IPC、论文库组件和 arXiv 旧会话取消：6 个文件、39 个测试通过；队列取消单测单独运行 28/28 通过。
-- `npm run typecheck` 通过；`node --check scripts/visual-check.mjs` 通过。
-- 最终全量测试、源码/安装版视觉检查、NSIS 构建、安装包哈希和人工截图审查将在本节完成后补记，未完成前不声称发布完成。
+- 最终 `npm run dist` 通过：97 个测试文件、615 个测试全部通过，TypeScript、Vite renderer、Electron main 和 NSIS 构建完成。
+- 源码完整 `npm run visual:check` 通过，用时约 71.5 秒；PDF、论文库、arXiv 以及首页、实验矩阵、AI、PPT、图谱和设置页面无横向溢出或关键遮挡。
+- 安装版 `VISUAL_CHECK_SCENARIO=pdf-selection` 与 `arxiv` 均通过。PDF 初始页宽 892px、容器宽 909px、左右隐藏量均为 0；选区卡 340×143，随滚动定位并能自动关闭；单词卡显示词性、释义和例句。
+- 人工对抗式复查 `.tmp-visual-check/pdf-selection-translation.png`、`pdf-word-dictionary.png`、`paper-library-1366.png`、`paper-library-1920.png`、`arxiv-search-results-three.png` 与 `arxiv-shortlist-popover.png`，未发现文字/按钮重叠、横向滚动或不可操作入口。
+- Windows 安装包：`dist/PDF Translation Reader Setup 0.1.19.exe`，156,659,509 bytes，SHA-256 `929A4BD2762AA5C57DB5D43134A3F6B771C57BD28FDA9F3D0FFE335E9DE4E7D9`。
 
 ### 问题与风险
 
@@ -32,6 +35,8 @@
 - 已经开始执行的旧 NLLB 进程不能安全硬中断；新会话只取消尚未开始的 preview/background 任务，避免破坏翻译进程和缓存一致性。
 - 扫描版 PDF 仍没有可选文字层，后续应接 OCR 层；当前不能把图片 OCR 猜测伪装为原文词典结果。
 - 论文库仍通过 IPC 传输 base64 PDF；本轮显著降低 renderer 解码和多资源串行等待，但超大 PDF 的长期方案仍是安全自定义协议、流式/Range 加载和按需加载翻译版本。
+- 本地译文的成功、失败和复制终态已有逻辑/单测覆盖，但当前视觉 mock 截图停留在 `translating` 状态；后续应增加稳定 success/error mock，专门锁定终态卡片布局。
+- 第一次 NSIS 构建曾因旧视觉检查进程占用 `dist/win-unpacked/v8_context_snapshot.bin` 报 `EBUSY`；仅结束本工作树打包应用进程后重试成功。后续重打包前应先关闭正在运行的同版本安装目录应用。
 
 ## 2026-07-13 绘图跨语言一致性、arXiv 响应与 PDF 选词翻译（0.1.18）
 
