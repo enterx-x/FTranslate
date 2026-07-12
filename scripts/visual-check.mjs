@@ -572,6 +572,7 @@ async function readArxivResultLayout(client) {
       readingQueueToFirstCardGap: readingQueueRect && Number.isFinite(firstTop)
         ? Math.round(firstTop - readingQueueRect.bottom)
         : null,
+      readingQueuePosition: readingQueue ? getComputedStyle(readingQueue).position : null,
       readingQueueNativeTitleCount,
       readingQueueOcclusionCount,
       resultsPanelRect: resultsPanelRect
@@ -3020,6 +3021,8 @@ async function runArxivSearchScenario(client) {
     const text = page?.textContent ?? '';
     const queue = document.querySelector('.arxiv-reading-queue-mini');
     const queueRect = queue?.getBoundingClientRect();
+    const queueTrigger = document.querySelector('.arxiv-reading-queue-toolbar-button');
+    const queueTriggerRect = queueTrigger?.getBoundingClientRect();
     const queueButtons = [
       ...document.querySelectorAll('.arxiv-reading-queue-list .arxiv-reading-queue-paper, .arxiv-reading-queue-items .arxiv-reading-queue-paper')
     ];
@@ -3072,8 +3075,11 @@ async function runArxivSearchScenario(client) {
       hasEmptyState: Boolean(document.querySelector('.arxiv-empty-card')),
       startsWithGenericEmptyQuery: (inputs[0]?.value ?? '') === '',
       activeSidebar: activeSidebar?.getAttribute('data-sidebar-section') ?? '',
-      queueVisible: Boolean(queue),
+      queueMounted: Boolean(queue),
       queueHeight: queueRect ? Math.round(queueRect.height) : 0,
+      queueTriggerVisible: Boolean(queueTriggerRect && queueTriggerRect.width > 0 && queueTriggerRect.height > 0),
+      queueTriggerText: queueTrigger?.textContent?.trim() ?? '',
+      queueTriggerExpanded: queueTrigger?.getAttribute('aria-expanded') ?? '',
       queueButtonCount: queueButtons.length,
       queueFirstRowCount,
       queueButtonRects,
@@ -3103,13 +3109,16 @@ async function runArxivSearchScenario(client) {
     !snapshot.hasPageSize200 ||
     !snapshot.startsWithGenericEmptyQuery ||
     snapshot.activeSidebar !== 'arxiv' ||
-    !snapshot.queueVisible ||
-    snapshot.queueHeight < 120 ||
-    snapshot.queueButtonCount !== 3 ||
-    !/^\+1/.test(snapshot.queueOverflowText) ||
+    !snapshot.queueMounted ||
+    snapshot.queueHeight > 2 ||
+    !snapshot.queueTriggerVisible ||
+    !/备选\s*4/.test(snapshot.queueTriggerText) ||
+    snapshot.queueTriggerExpanded !== 'false' ||
+    snapshot.queueButtonCount !== 0 ||
+    snapshot.queueOverflowText !== '' ||
     snapshot.emptyCardAccentMaxChannelDelta > 80 ||
     snapshot.emptyCardAccentMaxChannelDelta < 35 ||
-    snapshot.queueFirstRowCount !== 1 ||
+    snapshot.queueFirstRowCount !== 0 ||
     snapshot.queueUsesLegacyPills ||
     !snapshot.hasRankingScopeLabel ||
     !['严格', '均衡', '探索'].every((label) => snapshot.queryModeLabels.includes(label)) ||
@@ -3401,7 +3410,8 @@ async function runArxivSearchScenario(client) {
       threeColumnLayout.maxDetailActionHeight > 38 ||
       threeColumnLayout.maxTopicTileHeight > 58 ||
       threeColumnLayout.maxCardTitleHeight > 44 ||
-      (threeColumnLayout.readingQueueToFirstCardGap ?? 8) < 8 ||
+      (threeColumnLayout.readingQueuePosition !== 'absolute' &&
+        (threeColumnLayout.readingQueueToFirstCardGap ?? 8) < 8) ||
       threeColumnLayout.readingQueueNativeTitleCount > 0 ||
       threeColumnLayout.readingQueueOcclusionCount > 0 ||
       Math.abs(threeColumnLayout.detailSearchTopDelta ?? Number.POSITIVE_INFINITY) > 16
@@ -3414,6 +3424,36 @@ async function runArxivSearchScenario(client) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'arxiv-search-results-three.png'), Buffer.from(shot.data, 'base64'))
     );
+    await evaluateJson(client, `() => document.querySelector('.arxiv-reading-queue-toolbar-button')?.click()`);
+    await wait(280);
+    const shortlistOverlay = await evaluateJson(client, `() => {
+      const overlay = document.querySelector('.arxiv-reading-queue-mini.is-open');
+      const rect = overlay?.getBoundingClientRect();
+      return {
+        visible: Boolean(rect && rect.width > 0 && rect.height > 0),
+        position: overlay ? getComputedStyle(overlay).position : '',
+        paperCount: overlay?.querySelectorAll('.arxiv-reading-queue-paper').length ?? 0,
+        width: rect?.width ?? 0,
+        right: rect?.right ?? 0,
+        viewportWidth: window.innerWidth,
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+      };
+    }`);
+    if (
+      !shortlistOverlay.visible ||
+      shortlistOverlay.position !== 'absolute' ||
+      shortlistOverlay.paperCount < 3 ||
+      shortlistOverlay.width < 420 ||
+      shortlistOverlay.right > shortlistOverlay.viewportWidth + 2 ||
+      shortlistOverlay.hasHorizontalOverflow
+    ) {
+      throw new Error(`arxiv: shortlist popover should expand without resizing results, got ${JSON.stringify(shortlistOverlay)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'arxiv-reading-queue-open.png'), Buffer.from(shot.data, 'base64'))
+    );
+    await evaluateJson(client, `() => document.querySelector('.arxiv-reading-queue-toolbar-button')?.click()`);
+    await wait(180);
     await captureArxivResponsiveWidths(client);
 
     await evaluateJson(client, `() => document.querySelector('.arxiv-detail-panel-toggle')?.click()`);

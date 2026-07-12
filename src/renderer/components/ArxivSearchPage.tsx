@@ -530,6 +530,33 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   }, [pageSize, start]);
 
   useEffect(() => {
+    if (!isReadingQueueOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Element &&
+        !event.target.closest('.arxiv-reading-queue-toolbar-button, .arxiv-reading-queue-mini')
+      ) {
+        setIsReadingQueueOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsReadingQueueOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isReadingQueueOpen]);
+
+  useEffect(() => {
     let disposed = false;
     window.electronAPI
       .getLocalTranslationStatus()
@@ -1141,10 +1168,6 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const resultDensity = getArxivResultDensityConfig(columnMode);
   const resultPanelStyle = { '--arxiv-summary-lines': resultDensity.summaryLines } as CSSProperties;
   const workbenchStyle = { '--arxiv-detail-panel-ratio': `${detailPanelRatio * 100}%` } as CSSProperties;
-  const readingQueueStyle =
-    (papers.length === 0 || isReadingQueueOpen)
-      ? ({ minHeight: 58 + Math.min(readingQueue.length, 4) * 56 } as CSSProperties)
-      : undefined;
   const selectedIsTranslating = selectedPaper
     ? translatingId === selectedPaper.id || Boolean(backgroundTranslatingIds[selectedPaper.id])
     : false;
@@ -1161,7 +1184,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         )
       : { visible: [], hiddenCount: 0 };
   const readingQueuePreview = buildArxivReadingQueuePreview(readingQueue, 3);
-  const shouldShowReadingQueueList = papers.length === 0 || isReadingQueueOpen;
+  const shouldShowReadingQueueList = isReadingQueueOpen;
   const isOfflineTranslationNotice = message.includes(OFFLINE_TRANSLATION_NOTICE_TITLE);
   const currentPage = Math.floor(start / Math.max(1, pageSize)) + 1;
   const totalPages = Math.max(1, Math.ceil(totalResults / Math.max(1, pageSize)));
@@ -1538,33 +1561,27 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               </label>
               <div className="arxiv-count-badges">
                 <span className="badge accent-badge">PPT 候选 {pptQueue.length}</span>
-                <span className="badge success-badge">备选 {readingQueue.length}</span>
+                {readingQueue.length === 0 ? <span className="badge success-badge">备选 0</span> : null}
               </div>
+              {readingQueue.length > 0 ? (
+                <button
+                  type="button"
+                  className={`arxiv-reading-queue-toolbar-button${shouldShowReadingQueueList ? ' is-open' : ''}`}
+                  aria-expanded={shouldShowReadingQueueList}
+                  onClick={() => setIsReadingQueueOpen((value) => !value)}
+                >
+                  <span aria-hidden="true">☆</span>
+                  <span>备选 {readingQueue.length}</span>
+                  <span aria-hidden="true">⌄</span>
+                </button>
+              ) : null}
             </div>
           </div>
 
           {readingQueue.length > 0 ? (
             <div
-              className={`arxiv-reading-queue-mini${papers.length === 0 ? ' is-empty-results' : ''}${
-                shouldShowReadingQueueList ? ' is-open' : ''
-              }`}
-              style={readingQueueStyle}
+              className={`arxiv-reading-queue-mini${shouldShowReadingQueueList ? ' is-open' : ''}`}
             >
-              <button
-                type="button"
-                className="arxiv-reading-queue-head"
-                aria-expanded={shouldShowReadingQueueList}
-                onClick={() => setIsReadingQueueOpen((value) => !value)}
-              >
-                <span>
-                  <strong>备选论文库</strong>
-                  <em>{readingQueue.length} 篇</em>
-                </span>
-                <span className="arxiv-reading-queue-toggle">
-                  <span className="when-closed">展开列表</span>
-                  <span className="when-open">收起列表</span>
-                </span>
-              </button>
               {shouldShowReadingQueueList ? (
                 <div className="arxiv-reading-queue-list" aria-label="备选论文快捷定位">
                   {readingQueuePreview.visible.map((item) => (
@@ -1576,6 +1593,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       onClick={() => {
                         setQuery(item.title);
                         setMessage(`已填入备选论文标题：${item.title}。点击搜索可重新定位该论文。`);
+                        setIsReadingQueueOpen(false);
                       }}
                     >
                       <span>{item.titleZh || item.title}</span>

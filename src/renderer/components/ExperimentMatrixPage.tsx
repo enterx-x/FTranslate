@@ -183,36 +183,55 @@ export function ExperimentMatrixPage(props: ExperimentMatrixPageProps) {
 
           <div className="experiment-matrix-table-wrap">
             {visibleRows.length > 0 ? (
-              <table className="experiment-matrix-table">
-                <thead>
-                  <tr>
-                    <th>实验组</th>
-                    <th>论文</th>
-                    <th>假设</th>
-                    <th>方法 / 消融</th>
-                    <th>指标</th>
-                    <th>状态</th>
-                    <th>证据</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleRows.map((row) => (
-                    <tr
-                      key={row.id}
-                      className={selectedRow?.id === row.id ? 'is-selected' : ''}
-                      onClick={() => props.onSelectRow(row.id)}
-                    >
-                      <td><span className={`experiment-badge group-${row.group}`}>{formatGroup(row.group)}</span></td>
-                      <td>{row.paper || '-'}</td>
-                      <td>{row.hypothesis || '-'}</td>
-                      <td>{formatMethodCell(row)}</td>
-                      <td>{row.metrics || '-'}</td>
-                      <td><span className={`experiment-badge status-${row.status}`}>{formatStatus(row.status)}</span></td>
-                      <td>{row.evidenceLocators.join(' · ') || '未绑定证据'}</td>
+              <>
+                <table className="experiment-matrix-table">
+                  <thead>
+                    <tr>
+                      <th>实验组</th>
+                      <th>论文</th>
+                      <th>假设</th>
+                      <th>方法 / 消融</th>
+                      <th>指标</th>
+                      <th>状态</th>
+                      <th>证据</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {visibleRows.map((row) => (
+                      <tr
+                        key={row.id}
+                        className={selectedRow?.id === row.id ? 'is-selected' : ''}
+                        tabIndex={0}
+                        aria-selected={selectedRow?.id === row.id}
+                        onClick={() => props.onSelectRow(row.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            props.onSelectRow(row.id);
+                          }
+                        }}
+                      >
+                        <td><span className={`experiment-badge group-${row.group}`}>{formatGroup(row.group)}</span></td>
+                        <td>{row.paper || '-'}</td>
+                        <td>{row.hypothesis || '-'}</td>
+                        <td>{formatMethodCell(row)}</td>
+                        <td>{row.metrics || '-'}</td>
+                        <td><span className={`experiment-badge status-${row.status}`}>{formatStatus(row.status)}</span></td>
+                        <td>{row.evidenceLocators.join(' · ') || '未绑定证据'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {visibleRows.length < 3 ? (
+                  <div className="experiment-matrix-density-hint" aria-live="polite">
+                    <span aria-hidden="true">＋</span>
+                    <div>
+                      <strong>当前筛选显示 {visibleRows.length} 行</strong>
+                      <p>继续从方法卡补齐 Baseline、Proposed 与 Ablation，形成可审查的对照实验网格。</p>
+                    </div>
+                  </div>
+                ) : null}
+              </>
             ) : (
               <EmptyMatrixState
                 hasRows={rows.length > 0}
@@ -227,6 +246,7 @@ export function ExperimentMatrixPage(props: ExperimentMatrixPageProps) {
         <aside className="experiment-matrix-detail" aria-label="选中实验详情">
           {selectedRow ? (
             <ExperimentDetail
+              key={selectedRow.id}
               row={selectedRow}
               onPatchStatus={(status) => props.onPatchRowStatus(selectedRow.id, status)}
             />

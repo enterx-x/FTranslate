@@ -290,7 +290,10 @@ export function PresentationPage(props: PresentationPageProps) {
           </div>
 
           {previewMode === 'slide' && selectedSlide && selectedPlan ? (
-            <article className={`ppt-slide-preview ppt-export-preview ppt-slide-${selectedPlan.type} ppt-layout-${selectedPlan.layout}`}>
+            <article
+              key={selectedSlide.id}
+              className={`ppt-slide-preview ppt-export-preview ppt-slide-${selectedPlan.type} ppt-layout-${selectedPlan.layout}`}
+            >
               <header className="ppt-slide-topline">
                 <span className="ppt-slide-kicker">{selectedPlan.section}</span>
                 <span className="ppt-slide-confidence">
