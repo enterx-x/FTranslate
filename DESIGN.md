@@ -1,5 +1,12 @@
 # FTranslate DESIGN.md
 
+## 科研绘图工作区补充规则（2026-07-12）
+
+- 绘图画布保持最高视觉优先级，左右数据栏和 Inspector 使用低对比表面，不与图表争夺注意力。
+- 高密度桌面工具的操作文字不低于 9px，常用控件目标高度不低于 34px；主操作统一使用受控蓝紫强调色。
+- 渐变只用于主操作和页面环境色，不用于文字；局部半透明表面必须提供 `prefers-reduced-transparency` 退化。
+- 动效限于 hover、按压和状态切换，并继续遵守 `prefers-reduced-motion`。
+
 本文件定义 FTranslate 未来 UI 的设计语言。它面向 AI coding agent 和后续人工开发，不以当前界面为最终参考。
 
 ## 1. 产品气质

@@ -1,5 +1,12 @@
 # PLAN.md
 
+## 2026-07-12 科研绘图视觉收敛
+
+- 已完成：在不修改绘图数据、统计、ECharts 和 Runtime/IPC 的前提下，提高页面标题、字段列表、工具栏、Inspector 与状态条的可读性，并统一主操作与选中态。
+- 视觉审查：`VISUAL_CHECK_SCENARIO=scientific-plot` 通过；截图位于 `.tmp-visual-check/scientific-plot-page.png`。1227px 工作区无横向溢出，649×570 绘图画布无遮挡，Runtime 对话框位于视口内。
+- 已验证：`npm run typecheck`、`npm run build:renderer`、科学绘图定向 `npm run visual:check`。
+- 剩余风险：Vite 仍提示既有大 chunk；本轮仅改 CSS，不在视觉任务中调整代码分包。
+
 本文件用于记录 FTranslate 的长期计划、当前阶段目标、问题台账和防重复犯错事项。每次操作前必须先阅读本文件、`README.md` 和 `DESIGN.md`。
 
 ## 1. 产品定位

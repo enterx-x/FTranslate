@@ -1,5 +1,7 @@
 # PDF Translation Reader / FTranslate
 
+> 2026-07-12：科研绘图工作区完成可读性与交互层级优化。三栏绘图结构、统计逻辑和本地 Runtime 接口保持不变；字段列表、图层 Inspector、工具栏和状态条统一为 Research OS 视觉语言，并支持减少动态效果与减少透明度的系统偏好。
+
 FTranslate 是一个 Windows 桌面端科研论文工作台，面向论文阅读、PDF 翻译、研究表格整理、AI 大观分析、知识图谱、阅读笔记和组会 PPT 草稿生成。
 
 当前主流程是：
