@@ -6,7 +6,7 @@
 
 **Architecture:** A versioned `ScientificPlotSpec` and normalized `PlotDataTable` are the shared source of truth. Renderer-side pure modules handle data shaping, statistics, themes, and ECharts options; Electron main-process services own filesystem persistence, runtime detection/installation, generated-script execution, job lifecycle, and exports. The React page is a three-column workbench with on-demand import/runtime/export dialogs and no AI path.
 
-**Tech Stack:** Electron 39, React 19, TypeScript 5.9, Vitest 4, ExcelJS, Apache ECharts 6.1, ECharts GL 2.1, PapaParse 5.5, simple-statistics 7.9, stdlib distribution CDF packages, fflate 0.8, electron-builder NSIS.
+**Tech Stack:** Electron 39, React 19, TypeScript 5.9, Vitest 4, ExcelJS, Apache ECharts 6.1, ECharts GL 2.1, PapaParse 5.5, simple-statistics 7.9, jStat 1.9, fflate 0.8, electron-builder NSIS.
 
 ---
 
@@ -98,9 +98,7 @@ Run `npm test -- src/shared/scientificPlot.test.ts`. Expected: FAIL because `sci
 Run:
 
 ```powershell
-npm install echarts@6.1.0 echarts-gl@2.1.0 papaparse@5.5.4 simple-statistics@7.9.3 fflate@0.8.3 `
-  @stdlib/stats-base-dists-t-cdf@0.2.3 @stdlib/stats-base-dists-f-cdf@0.2.3 `
-  @stdlib/stats-base-dists-chisquare-cdf@0.3.1 @stdlib/stats-base-dists-normal-cdf@0.3.1
+npm install echarts@6.1.0 echarts-gl@2.1.0 papaparse@5.5.4 simple-statistics@7.9.3 jstat@1.9.6 fflate@0.8.3
 npm install --save-dev @types/papaparse@5.5.2
 ```
 
@@ -154,7 +152,7 @@ Run `npm test -- src/renderer/lib/plotStatistics.test.ts`. Expected: FAIL becaus
 
 - [ ] **Step 3: Implement the statistical engine**
 
-Create `plotStatistics.ts`. Use simple-statistics for descriptive/regression primitives and stdlib CDFs for p-values. Every result must include `analysisId`, `method`, `sampleSizes`, `statistic`, raw/corrected p, effect size, CI where applicable, input hash, engine/version, and warnings.
+Create `plotStatistics.ts`. Use simple-statistics for descriptive/regression primitives and jStat distribution functions for p-values. Every result must include `analysisId`, `method`, `sampleSizes`, `statistic`, raw/corrected p, effect size, CI where applicable, input hash, engine/version, and warnings.
 
 ```ts
 export interface TraceableAnalysisResult {
