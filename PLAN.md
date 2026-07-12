@@ -598,3 +598,32 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - MATLAB 能力取决于用户许可证和已安装工具箱；FTranslate 不绕过授权、不下载安装 MATLAB。
 - 3D WebGL 图只支持位图导出；SVG 按钮会禁用，避免输出错误矢量文件。
 - Univer 与科研绘图均为大型懒加载模块；当前不影响首页启动，但后续仍可继续拆分图表编译器和统计模块。
+
+## 2026-07-12 科研绘图运行环境修复（0.1.16）
+
+### 当前结论
+
+- 已把 Python/R 运行时策略改为“系统环境优先、完整环境优先、私有安装兜底”。检测会扫描 `PATH`、Windows 注册表和常见安装目录，不再因为先遇到一个缺包环境就忽略后续完整环境。
+- 已新增“修复现有环境”流程：Python/R 已存在但缺绘图库时，只向当前检测到的解释器补齐依赖；完全未安装时才显示“安装私有环境”。MATLAB 继续只检测、不安装。
+- 已修复 R 安装失败根因：旧实现把 JavaScript 数组文本传给 R 的 `install.packages()`，不是合法 R 向量；现改为 `c(...)`，CRAN 包与 Bioconductor `ComplexHeatmap` 分开安装，并准备用户级 R library 以避免系统目录权限问题。
+- 已修复 Python 私有安装 `ENOENT` 的触发路径：当机器已有同小版本 Python 时，官方安装器可能升级现有解释器而忽略私有 `TargetDir`；现在会先选取系统完整环境或修复现有环境，不再默认走重复私有下载。
+- 顶部“绘图语言”下拉框现在始终显示 JavaScript、Python、R、MATLAB 及实时状态；检测到 MATLAB 后选项明确显示 `MATLAB（已检测）`。环境弹窗同步提示“可在顶部绘图语言中选择”。
+
+### 验证记录
+
+- `npx vitest run src/main/plotRuntimeManager.test.ts src/main/ipc/handlers/scientificPlot.test.ts src/main/ipc/handlers/index.test.ts`：3 个文件、10 个测试通过。
+- `npm run typecheck`：通过。
+- `npm run build:renderer` 与 `npm run build:electron`：通过。
+- 本机真实检测：自动选择 `E:\\Anaconda\\python.exe`（系统 Python，ready）、私有 R 4.5.1（degraded，等待修复）和 `F:\\matlab\\MATLAB\\bin\\matlab.exe`（MATLAB R2024b，ready）。
+- 现有私有 Rscript 对新的包安装表达式执行只解析验证，输出 `R_SYNTAX_OK`；未在验证阶段静默安装或修改用户全局包。
+- `npm run visual:check`：源码版科研绘图主界面无横向溢出；顶部语言选择器可见。视觉脚本已补充运行环境弹窗和 MATLAB 入口检查，截图输出为 `.tmp-visual-check/scientific-plot-runtime-dialog.png`。
+- 视觉脚本新增 `VISUAL_CHECK_SCENARIO=scientific-plot`，用于只运行与本次改动相关的必要回归，避免无关论文库空状态波动阻断科研绘图安装版验收。
+- `npm run dist`：全量 92 个测试文件、588 个测试通过，类型检查、renderer/main 构建与 NSIS 打包通过。
+- `$env:VISUAL_CHECK_PACKAGED='1'; $env:VISUAL_CHECK_SCENARIO='scientific-plot'; npm run visual:check`：通过；安装版实际状态为 Python（已检测）、R（缺依赖）、MATLAB（已检测），并成功把顶部选择器切换到 `MATLAB（已检测）`。截图为 `.tmp-visual-check/scientific-plot-runtime-dialog.png` 和 `.tmp-visual-check/scientific-plot-matlab-selected.png`。
+- Windows 安装包：`dist/PDF Translation Reader Setup 0.1.16.exe`，156,632,426 bytes，SHA-256 `FED5B62B8F9B4DBF02CA2B934D8ACDB77E7612DB3E96ED39FB36323B4546CE23`。
+
+### 问题与风险
+
+- 修复现有 Python/R 会联网安装缺失库，并修改该解释器对应的包环境；必须由用户点击“修复现有环境”后执行，不静默修改。
+- MATLAB 是否能完成某种具体图形仍取决于许可证和工具箱；检测 ready 只证明 MATLAB 可启动，不代表所有工具箱都存在。
+- 全页面安装版视觉回归存在既有波动：一次在科研绘图截图完成后调试 socket 关闭，另一次停在论文库空结果状态；科研绘图专项安装版回归已独立通过，未把无关页面波动误报为本功能失败。

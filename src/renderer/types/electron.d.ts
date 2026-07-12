@@ -403,6 +403,7 @@ export interface ElectronApi {
   getScientificPlotInstallerIntent: () => Promise<{ python: boolean; r: boolean; matlabDetect: boolean }>;
   acknowledgeScientificPlotInstallerIntent: () => Promise<boolean>;
   startScientificPlotRuntimeInstall: (request: { language: 'python' | 'r'; targetRoot?: string }) => Promise<PlotRuntimeInstallJob>;
+  repairScientificPlotRuntime: (language: 'python' | 'r') => Promise<PlotRuntimeInstallJob>;
   getScientificPlotRuntimeInstallJob: (jobId: string) => Promise<PlotRuntimeInstallJob | undefined>;
   cancelScientificPlotRuntimeInstall: (jobId: string) => Promise<boolean>;
   removeScientificPlotManagedRuntime: (request: { language: 'python' | 'r'; targetRoot?: string }) => Promise<boolean>;

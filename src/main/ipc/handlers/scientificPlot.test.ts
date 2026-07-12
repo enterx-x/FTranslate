@@ -10,7 +10,7 @@ describe('scientific plot IPC boundary', () => {
     registerScientificPlotIpcHandlers({ handle: (channel, listener) => listeners.set(channel, listener) }, {
       listProjects: noop, createProject: noop, loadProject: noop, saveSpec: noop,
       selectDataFile: noop, readDataFile: noop, detectRuntimes: noop, readInstallerIntent: noop, acknowledgeInstallerIntent: noop,
-      startRuntimeInstall: noop, getRuntimeInstallJob: noop, cancelRuntimeInstall: noop,
+      startRuntimeInstall: noop, repairRuntime: noop, getRuntimeInstallJob: noop, cancelRuntimeInstall: noop,
       removeManagedRuntime: noop, submitRender: noop, getRenderJob: noop, cancelRender: noop,
       exportFplot: noop, importFplot: noop, exportArtifact: noop, exportGeneratedArtifact: noop, readArtifact: noop
     });

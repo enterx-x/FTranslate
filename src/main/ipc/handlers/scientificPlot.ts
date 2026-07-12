@@ -17,6 +17,7 @@ export interface ScientificPlotIpcHandlerDependencies {
   readInstallerIntent: () => AsyncOrSync<unknown>;
   acknowledgeInstallerIntent: () => AsyncOrSync<unknown>;
   startRuntimeInstall: (language: 'python' | 'r', targetRoot?: string) => AsyncOrSync<unknown>;
+  repairRuntime: (language: 'python' | 'r') => AsyncOrSync<unknown>;
   getRuntimeInstallJob: (jobId: string) => AsyncOrSync<unknown>;
   cancelRuntimeInstall: (jobId: string) => AsyncOrSync<unknown>;
   removeManagedRuntime: (language: 'python' | 'r', targetRoot?: string) => AsyncOrSync<unknown>;
@@ -64,6 +65,9 @@ export function registerScientificPlotIpcHandlers(
     const targetRoot = optionalString(record.targetRoot, 32_768);
     return deps.startRuntimeInstall(language, targetRoot);
   });
+  ipcMain.handle('scientific-plot:repair-runtime', async (_event, request) =>
+    deps.repairRuntime(readManagedLanguage(asRecord(request, 'runtime repair request').language))
+  );
   ipcMain.handle('scientific-plot:get-runtime-install-job', async (_event, request) =>
     deps.getRuntimeInstallJob(readJobId(asRecord(request, 'runtime job request').jobId))
   );

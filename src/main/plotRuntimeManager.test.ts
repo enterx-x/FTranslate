@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { PlotRuntimeManager, type RuntimeCommandRunner } from './plotRuntimeManager';
+import { buildRPackageInstallExpression, PlotRuntimeManager, type RuntimeCommandRunner } from './plotRuntimeManager';
 
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
@@ -57,6 +57,55 @@ describe('plot runtime manager', () => {
     const manager = new PlotRuntimeManager({ managedRoot: root, manifestPath: path.join(root, 'manifest.json'), commandRunner: runner, env: {} });
     const capability = (await manager.detectAll()).find((runtime) => runtime.language === 'python');
     expect(capability).toMatchObject({ status: 'ready', executable: python, managed: true });
+  });
+
+  it('prefers a complete system Python over an earlier degraded candidate', async () => {
+    const root = await fixtureRoot();
+    const degraded = 'C:\\Python310\\python.exe';
+    const ready = 'D:\\Python312\\python.exe';
+    const runner: RuntimeCommandRunner = async (executable, args) => {
+      if (executable === 'where.exe' && args[0] === 'python.exe') return { exitCode: 0, stdout: `${degraded}\n${ready}\n`, stderr: '' };
+      if (executable === 'where.exe' || executable === 'reg.exe') return { exitCode: 1, stdout: '', stderr: '' };
+      if ((executable === degraded || executable === ready) && args.includes('--version')) return { exitCode: 0, stdout: executable === degraded ? 'Python 3.10.14' : 'Python 3.12.10', stderr: '' };
+      if (executable === degraded && args.includes('-c')) return { exitCode: 0, stdout: '{"pandas":"2.2.3"}', stderr: '' };
+      if (executable === ready && args.includes('-c')) return { exitCode: 0, stdout: '{"matplotlib":"3.10.3","seaborn":"0.13.2","plotly":"6.2.0","scipy":"1.16.0","statsmodels":"0.14.5","pandas":"2.3.1"}', stderr: '' };
+      return { exitCode: 1, stdout: '', stderr: '' };
+    };
+    const manager = new PlotRuntimeManager({ managedRoot: root, manifestPath: path.join(root, 'manifest.json'), commandRunner: runner, env: {} });
+    const capability = (await manager.detectAll()).find((runtime) => runtime.language === 'python');
+    expect(capability).toMatchObject({ status: 'ready', executable: ready, managed: false });
+    expect(manager.getRuntimeCommand('python')?.executable).toBe(ready);
+  });
+
+  it('repairs an existing R environment with valid R vector syntax', async () => {
+    const root = await fixtureRoot();
+    const rscript = 'D:\\R\\R-4.5.1\\bin\\Rscript.exe';
+    let installExpression = '';
+    const runner: RuntimeCommandRunner = async (executable, args) => {
+      if (executable === 'where.exe' && args[0] === 'Rscript.exe') return { exitCode: 0, stdout: `${rscript}\n`, stderr: '' };
+      if (executable === 'where.exe' || executable === 'reg.exe') return { exitCode: 1, stdout: '', stderr: '' };
+      if (executable === rscript && args.includes('--version')) return { exitCode: 0, stdout: 'R scripting front-end version 4.5.1', stderr: '' };
+      if (executable === rscript && args.includes('-e')) {
+        const expression = args.at(-1) ?? '';
+        if (expression.includes('FTRANSLATE_PACKAGE=')) return { exitCode: 0, stdout: 'FTRANSLATE_PACKAGE=jsonlite\t2.0.0\n', stderr: '' };
+        installExpression = expression;
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      return { exitCode: 1, stdout: '', stderr: '' };
+    };
+    const manager = new PlotRuntimeManager({ managedRoot: root, manifestPath: path.join(root, 'manifest.json'), commandRunner: runner, env: {} });
+    expect((await manager.detectAll()).find((runtime) => runtime.language === 'r')?.status).toBe('degraded');
+    const job = manager.startRepair('r');
+    await waitFor(() => manager.getInstallJob(job.id)?.status === 'succeeded');
+    expect(installExpression).toContain('required <- c(');
+    expect(installExpression).toContain("BiocManager::install('ComplexHeatmap'");
+    expect(installExpression).not.toContain('["jsonlite"');
+  });
+
+  it('builds R package installation code without JavaScript array syntax', () => {
+    const expression = buildRPackageInstallExpression();
+    expect(expression).toContain('c("jsonlite","ggplot2"');
+    expect(expression).not.toContain('["jsonlite"');
   });
 
   it('fails closed when an official installer hash does not match', async () => {

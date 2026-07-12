@@ -164,6 +164,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   acknowledgeScientificPlotInstallerIntent: () => ipcRenderer.invoke('scientific-plot:acknowledge-installer-intent'),
   startScientificPlotRuntimeInstall: (request: { language: 'python' | 'r'; targetRoot?: string }) =>
     ipcRenderer.invoke('scientific-plot:start-runtime-install', request),
+  repairScientificPlotRuntime: (language: 'python' | 'r') =>
+    ipcRenderer.invoke('scientific-plot:repair-runtime', { language }),
   getScientificPlotRuntimeInstallJob: (jobId: string) =>
     ipcRenderer.invoke('scientific-plot:get-runtime-install-job', { jobId }),
   cancelScientificPlotRuntimeInstall: (jobId: string) =>

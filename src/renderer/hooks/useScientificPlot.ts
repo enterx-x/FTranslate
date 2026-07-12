@@ -44,6 +44,7 @@ export interface ScientificPlotController {
   readDataFile: (request: Parameters<typeof window.electronAPI.readScientificPlotDataFile>[0]) => Promise<void>;
   refreshRuntimes: () => Promise<void>;
   startRuntimeInstall: (language: 'python' | 'r', targetRoot?: string) => Promise<PlotRuntimeInstallJob>;
+  repairRuntime: (language: 'python' | 'r') => Promise<PlotRuntimeInstallJob>;
   cancelRuntimeInstall: (jobId: string) => Promise<boolean>;
   render: (force?: boolean) => Promise<void>;
   cancelRender: () => Promise<void>;
@@ -163,6 +164,12 @@ export function useScientificPlot(): ScientificPlotController {
     return job;
   }, []);
 
+  const repairRuntime = useCallback(async (language: 'python' | 'r') => {
+    const job = await window.electronAPI.repairScientificPlotRuntime(language);
+    setMessage(job.message);
+    return job;
+  }, []);
+
   const cancelRuntimeInstall = useCallback(async (jobId: string) =>
     window.electronAPI.cancelScientificPlotRuntimeInstall(jobId), []);
 
@@ -226,7 +233,7 @@ export function useScientificPlot(): ScientificPlotController {
     spec, rawData, plotData, health, transformRecords: transformResult?.records ?? [], analyses,
     runtimes, renderJob, externalPreview, echarts, projectCreated, busy, message, error,
     updateSpec, importTable, importPaste, importResearchSheet, selectDataFile, readDataFile,
-    refreshRuntimes, startRuntimeInstall, cancelRuntimeInstall, render, cancelRender,
+    refreshRuntimes, startRuntimeInstall, repairRuntime, cancelRuntimeInstall, render, cancelRender,
     runAnalyses, exportPackage, importPackage
   };
 }

@@ -52,7 +52,11 @@ const PYTHON_PACKAGES = [
   'plotly==6.2.0', 'scipy==1.16.0', 'statsmodels==0.14.5', 'openpyxl==3.1.5',
   'pillow==11.3.0', 'tifffile==2025.6.11'
 ];
-const R_PACKAGES = ['jsonlite', 'ggplot2', 'patchwork', 'ComplexHeatmap', 'ggalluvial', 'survival', 'svglite', 'ragg', 'plotly', 'htmlwidgets'];
+const PYTHON_REPAIR_PACKAGES = [
+  'numpy', 'pandas', 'matplotlib', 'seaborn', 'plotly', 'scipy', 'statsmodels',
+  'openpyxl', 'pillow', 'tifffile'
+];
+const R_CRAN_PACKAGES = ['jsonlite', 'ggplot2', 'patchwork', 'ggalluvial', 'survival', 'svglite', 'ragg', 'plotly', 'htmlwidgets', 'BiocManager'];
 
 export class PlotRuntimeManager {
   readonly managedRoot: string;
@@ -142,6 +146,25 @@ export class PlotRuntimeManager {
     return { ...job };
   }
 
+  startRepair(language: 'python' | 'r'): PlotRuntimeInstallJob {
+    const command = this.runtimeCommands.get(language);
+    if (!command) throw new Error(`未检测到可修复的 ${language === 'python' ? 'Python' : 'R'} 环境。`);
+    const job: PlotRuntimeInstallJob = {
+      id: `runtime-${randomUUID()}`,
+      language,
+      status: 'queued',
+      progress: 0,
+      message: `等待修复现有 ${language === 'python' ? 'Python' : 'R'} 环境。`,
+      targetPath: command.executable,
+      createdAt: this.now()
+    };
+    this.installJobs.set(job.id, job);
+    const controller = new AbortController();
+    this.controllers.set(job.id, controller);
+    void this.runRepair(job, command, controller.signal);
+    return { ...job };
+  }
+
   getInstallJob(jobId: string): PlotRuntimeInstallJob | undefined {
     const job = this.installJobs.get(jobId);
     return job ? { ...job } : undefined;
@@ -176,60 +199,88 @@ export class PlotRuntimeManager {
   }
 
   private async detectPython(checkedAt: string): Promise<PlotRuntimeCapability> {
-    const candidates: PlotRuntimeCommand[] = [];
     const configuredRoot = (await this.readConfiguredRoots()).python;
+    const candidates: PlotRuntimeCommand[] = [];
     if (this.env.FTRANSLATE_PLOT_PYTHON) candidates.push({ executable: this.env.FTRANSLATE_PLOT_PYTHON, prefixArgs: [] });
+    candidates.push(...(await this.whereAll('python.exe')).map((executable) => ({ executable, prefixArgs: [] })));
+    candidates.push(...(await this.findPythonFromRegistry()).map((executable) => ({ executable, prefixArgs: [] })));
+    candidates.push(...(await this.findPythonCommonPaths()).map((executable) => ({ executable, prefixArgs: [] })));
+    const pyLauncher = await this.where('py.exe');
+    if (pyLauncher) candidates.push({ executable: pyLauncher, prefixArgs: ['-3'] });
     if (configuredRoot) candidates.push({ executable: path.join(configuredRoot, 'python', 'python.exe'), prefixArgs: [] });
     candidates.push({ executable: path.join(this.managedRoot, 'python', 'python.exe'), prefixArgs: [] });
-    const pythonPath = await this.where('python.exe');
-    if (pythonPath) candidates.push({ executable: pythonPath, prefixArgs: [] });
-    const pyLauncher = await this.where('py.exe');
-    if (pyLauncher) candidates.push({ executable: pyLauncher, prefixArgs: ['-3.12'] });
+    let degraded: { capability: PlotRuntimeCapability; command: PlotRuntimeCommand } | undefined;
     for (const candidate of uniqueCommands(candidates)) {
       const version = await this.tryCommand(candidate, ['--version'], 8_000);
       if (!version) continue;
       const packages = await this.readPythonPackages(candidate);
-      this.runtimeCommands.set('python', candidate);
       const missing = ['matplotlib', 'seaborn', 'plotly', 'scipy', 'statsmodels', 'pandas'].filter((name) => !packages[name]);
-      return {
+      const managed = isInside(this.managedRoot, candidate.executable) || Boolean(configuredRoot && isInside(configuredRoot, candidate.executable));
+      const capability: PlotRuntimeCapability = {
         language: 'python',
         status: missing.length ? 'degraded' : 'ready',
         version: firstVersion(version),
         executable: candidate.executable,
-        managed: isInside(this.managedRoot, candidate.executable) || Boolean(configuredRoot && isInside(configuredRoot, candidate.executable)),
+        managed,
         packages,
-        message: missing.length ? `Python 可用，但缺少：${missing.join('、')}` : 'Python 科研绘图环境可用。',
+        message: missing.length
+          ? `检测到${managed ? ' FTranslate 私有' : '系统'} Python，但缺少：${missing.join('、')}`
+          : `已自动使用${managed ? ' FTranslate 私有' : '系统'} Python 科研绘图环境。`,
         checkedAt
       };
+      if (!missing.length) {
+        this.runtimeCommands.set('python', candidate);
+        return capability;
+      }
+      degraded ??= { capability, command: candidate };
     }
+    if (degraded) {
+      this.runtimeCommands.set('python', degraded.command);
+      return degraded.capability;
+    }
+    this.runtimeCommands.delete('python');
     return missingCapability('python', '未检测到 Python。可检测系统环境或安装 FTranslate 私有环境。', checkedAt);
   }
 
   private async detectR(checkedAt: string): Promise<PlotRuntimeCapability> {
     const configuredRoot = (await this.readConfiguredRoots()).r;
-    const candidates = [
-      this.env.FTRANSLATE_PLOT_RSCRIPT,
-      configuredRoot ? path.join(configuredRoot, 'r', 'bin', 'Rscript.exe') : undefined,
-      path.join(this.managedRoot, 'r', 'bin', 'Rscript.exe'),
-      await this.where('Rscript.exe')
-    ].filter((item): item is string => Boolean(item)).map((executable) => ({ executable, prefixArgs: [] }));
+    const candidates: PlotRuntimeCommand[] = [];
+    if (this.env.FTRANSLATE_PLOT_RSCRIPT) candidates.push({ executable: this.env.FTRANSLATE_PLOT_RSCRIPT, prefixArgs: [] });
+    candidates.push(...(await this.whereAll('Rscript.exe')).map((executable) => ({ executable, prefixArgs: [] })));
+    candidates.push(...(await this.findRFromRegistry()).map((executable) => ({ executable, prefixArgs: [] })));
+    candidates.push(...(await this.findRCommonPaths()).map((executable) => ({ executable, prefixArgs: [] })));
+    if (configuredRoot) candidates.push({ executable: path.join(configuredRoot, 'r', 'bin', 'Rscript.exe'), prefixArgs: [] });
+    candidates.push({ executable: path.join(this.managedRoot, 'r', 'bin', 'Rscript.exe'), prefixArgs: [] });
+    let degraded: { capability: PlotRuntimeCapability; command: PlotRuntimeCommand } | undefined;
     for (const candidate of uniqueCommands(candidates)) {
       const version = await this.tryCommand(candidate, ['--version'], 8_000);
       if (!version) continue;
       const packages = await this.readRPackages(candidate);
-      this.runtimeCommands.set('r', candidate);
       const missing = ['ggplot2', 'patchwork', 'jsonlite'].filter((name) => !packages[name]);
-      return {
+      const managed = isInside(this.managedRoot, candidate.executable) || Boolean(configuredRoot && isInside(configuredRoot, candidate.executable));
+      const capability: PlotRuntimeCapability = {
         language: 'r',
         status: missing.length ? 'degraded' : 'ready',
         version: firstVersion(version),
         executable: candidate.executable,
-        managed: isInside(this.managedRoot, candidate.executable) || Boolean(configuredRoot && isInside(configuredRoot, candidate.executable)),
+        managed,
         packages,
-        message: missing.length ? `R 可用，但缺少：${missing.join('、')}` : 'R 科研绘图环境可用。',
+        message: missing.length
+          ? `检测到${managed ? ' FTranslate 私有' : '系统'} R，但缺少：${missing.join('、')}`
+          : `已自动使用${managed ? ' FTranslate 私有' : '系统'} R 科研绘图环境。`,
         checkedAt
       };
+      if (!missing.length) {
+        this.runtimeCommands.set('r', candidate);
+        return capability;
+      }
+      degraded ??= { capability, command: candidate };
     }
+    if (degraded) {
+      this.runtimeCommands.set('r', degraded.command);
+      return degraded.capability;
+    }
+    this.runtimeCommands.delete('r');
     return missingCapability('r', '未检测到 Rscript。PowerShell 的 r 别名不会被误判为 R。', checkedAt);
   }
 
@@ -269,6 +320,14 @@ export class PlotRuntimeManager {
   private async runInstall(job: PlotRuntimeInstallJob, signal: AbortSignal): Promise<void> {
     let temporaryPath = '';
     try {
+      if (job.language === 'r' && await exists(path.join(job.targetPath, 'bin', 'Rscript.exe'))) {
+        job.status = 'configuring';
+        job.progress = 82;
+        job.message = '检测到已安装的私有 R，正在修复科研绘图库…';
+        await this.configureR(job.targetPath, signal);
+        await this.finishManagedRuntimeInstall(job, 'existing');
+        return;
+      }
       const manifest = await this.readManifest();
       const entry = manifest.runtimes[job.language];
       const downloads = path.join(this.managedRoot, '.downloads');
@@ -294,14 +353,7 @@ export class PlotRuntimeManager {
       job.message = '正在安装固定版本科研绘图包…';
       if (job.language === 'python') await this.configurePython(job.targetPath, signal);
       else await this.configureR(job.targetPath, signal);
-      await writeFile(path.join(job.targetPath, '.ftranslate-managed-runtime.json'), JSON.stringify({ language: job.language, version: entry.version, createdAt: this.now() }, null, 2));
-      const configuredRoots = await this.readConfiguredRoots();
-      configuredRoots[job.language] = path.dirname(job.targetPath);
-      await this.writeConfiguredRoots(configuredRoots);
-      job.status = 'succeeded';
-      job.progress = 100;
-      job.message = '私有科研绘图环境已配置。';
-      job.finishedAt = this.now();
+      await this.finishManagedRuntimeInstall(job, entry.version);
     } catch (error) {
       if (signal.aborted) {
         job.status = 'cancelled';
@@ -318,17 +370,60 @@ export class PlotRuntimeManager {
     }
   }
 
+  private async runRepair(job: PlotRuntimeInstallJob, command: PlotRuntimeCommand, signal: AbortSignal): Promise<void> {
+    try {
+      job.status = 'configuring';
+      job.progress = 20;
+      job.message = `正在为现有 ${job.language === 'python' ? 'Python' : 'R'} 补齐科研绘图库…`;
+      if (job.language === 'python') await this.configurePythonCommand(command, PYTHON_REPAIR_PACKAGES, signal);
+      else await this.configureRCommand(command, signal);
+      job.status = 'succeeded';
+      job.progress = 100;
+      job.message = `现有 ${job.language === 'python' ? 'Python' : 'R'} 科研绘图环境已修复。`;
+      job.finishedAt = this.now();
+    } catch (error) {
+      if (signal.aborted) {
+        job.status = 'cancelled';
+        job.message = '修复已取消。';
+      } else {
+        job.status = 'failed';
+        job.error = error instanceof Error ? error.message : String(error);
+        job.message = `修复失败：${job.error}`;
+      }
+      job.finishedAt = this.now();
+    } finally {
+      this.controllers.delete(job.id);
+    }
+  }
+
   private async configurePython(targetPath: string, signal: AbortSignal): Promise<void> {
-    const executable = path.join(targetPath, 'python.exe');
-    const result = await this.commandRunner(executable, ['-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', ...PYTHON_PACKAGES], { timeoutMs: 20 * 60_000, signal });
+    await this.configurePythonCommand({ executable: path.join(targetPath, 'python.exe'), prefixArgs: [] }, PYTHON_PACKAGES, signal);
+  }
+
+  private async configurePythonCommand(command: PlotRuntimeCommand, packages: string[], signal: AbortSignal): Promise<void> {
+    const result = await this.commandRunner(command.executable, [...command.prefixArgs, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', ...packages], { timeoutMs: 20 * 60_000, signal });
     if (result.exitCode !== 0) throw new Error(`Python 包安装失败：${trimLog(result.stderr)}`);
   }
 
   private async configureR(targetPath: string, signal: AbortSignal): Promise<void> {
-    const executable = path.join(targetPath, 'bin', 'Rscript.exe');
-    const expression = `options(repos=c(CRAN='https://cloud.r-project.org')); install.packages(${JSON.stringify(R_PACKAGES)}, dependencies=TRUE)`;
-    const result = await this.commandRunner(executable, ['--vanilla', '-e', expression], { timeoutMs: 30 * 60_000, signal });
+    await this.configureRCommand({ executable: path.join(targetPath, 'bin', 'Rscript.exe'), prefixArgs: [] }, signal);
+  }
+
+  private async configureRCommand(command: PlotRuntimeCommand, signal: AbortSignal): Promise<void> {
+    const expression = buildRPackageInstallExpression();
+    const result = await this.commandRunner(command.executable, [...command.prefixArgs, '--vanilla', '-e', expression], { timeoutMs: 30 * 60_000, signal });
     if (result.exitCode !== 0) throw new Error(`R 包安装失败：${trimLog(result.stderr)}`);
+  }
+
+  private async finishManagedRuntimeInstall(job: PlotRuntimeInstallJob, version: string): Promise<void> {
+    await writeFile(path.join(job.targetPath, '.ftranslate-managed-runtime.json'), JSON.stringify({ language: job.language, version, createdAt: this.now() }, null, 2));
+    const configuredRoots = await this.readConfiguredRoots();
+    configuredRoots[job.language] = path.dirname(job.targetPath);
+    await this.writeConfiguredRoots(configuredRoots);
+    job.status = 'succeeded';
+    job.progress = 100;
+    job.message = '私有科研绘图环境已配置。';
+    job.finishedAt = this.now();
   }
 
   private async readConfiguredRoots(): Promise<Partial<Record<'python' | 'r', string>>> {
@@ -393,9 +488,14 @@ export class PlotRuntimeManager {
   }
 
   private async readRPackages(command: PlotRuntimeCommand): Promise<Record<string, string>> {
-    const expression = "p<-c('ggplot2','patchwork','jsonlite','ComplexHeatmap','ggalluvial','survival','svglite','ragg'); cat(jsonlite::toJSON(setNames(as.list(sapply(p,function(x) if(requireNamespace(x,quietly=TRUE)) as.character(packageVersion(x)) else '')),p),auto_unbox=TRUE))";
+    const expression = "p<-c('ggplot2','patchwork','jsonlite','ComplexHeatmap','ggalluvial','survival','svglite','ragg'); for(x in p) cat(sprintf('FTRANSLATE_PACKAGE=%s\\t%s\\n',x,if(requireNamespace(x,quietly=TRUE)) as.character(packageVersion(x)) else ''))";
     const result = await this.commandRunner(command.executable, [...command.prefixArgs, '--vanilla', '-e', expression], { timeoutMs: 20_000 });
-    return result.exitCode === 0 ? parseLastJsonObject(result.stdout) : {};
+    if (result.exitCode !== 0) return {};
+    return Object.fromEntries(
+      [...result.stdout.matchAll(/^FTRANSLATE_PACKAGE=([^\t\r\n]+)\t([^\r\n]*)$/gm)]
+        .map((match) => [match[1].trim(), match[2].trim()] as const)
+        .filter((entry) => Boolean(entry[1]))
+    );
   }
 
   private async tryCommand(command: PlotRuntimeCommand, args: string[], timeoutMs: number): Promise<string | null> {
@@ -408,13 +508,64 @@ export class PlotRuntimeManager {
   }
 
   private async where(executable: string): Promise<string | undefined> {
+    return (await this.whereAll(executable))[0];
+  }
+
+  private async whereAll(executable: string): Promise<string[]> {
     try {
       const result = await this.commandRunner('where.exe', [executable], { timeoutMs: 5_000 });
-      if (result.exitCode !== 0) return undefined;
-      return result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+      if (result.exitCode !== 0) return [];
+      return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     } catch {
-      return undefined;
+      return [];
     }
+  }
+
+  private async findPythonFromRegistry(): Promise<string[]> {
+    return this.findRegistryValues(
+      ['HKCU\\SOFTWARE\\Python\\PythonCore', 'HKLM\\SOFTWARE\\Python\\PythonCore'],
+      'ExecutablePath',
+      (value) => value
+    );
+  }
+
+  private async findRFromRegistry(): Promise<string[]> {
+    return this.findRegistryValues(
+      ['HKCU\\SOFTWARE\\R-core\\R', 'HKLM\\SOFTWARE\\R-core\\R'],
+      'InstallPath',
+      (value) => path.join(value, 'bin', 'Rscript.exe')
+    );
+  }
+
+  private async findRegistryValues(keys: string[], valueName: string, mapValue: (value: string) => string): Promise<string[]> {
+    const values: string[] = [];
+    for (const key of keys) {
+      try {
+        const result = await this.commandRunner('reg.exe', ['query', key, '/s', '/v', valueName], { timeoutMs: 8_000 });
+        if (result.exitCode !== 0) continue;
+        const pattern = new RegExp(`${valueName}\\s+REG_(?:SZ|EXPAND_SZ)\\s+([^\\r\\n]+)`, 'gi');
+        values.push(...[...result.stdout.matchAll(pattern)].map((match) => mapValue(match[1].trim())));
+      } catch {
+        // Registry lookup is best-effort; PATH and common directories remain available.
+      }
+    }
+    return values;
+  }
+
+  private async findPythonCommonPaths(): Promise<string[]> {
+    const roots = [
+      this.env.LOCALAPPDATA ? path.join(this.env.LOCALAPPDATA, 'Programs', 'Python') : undefined,
+      this.env.ProgramFiles ? path.join(this.env.ProgramFiles, 'Python') : undefined
+    ].filter((item): item is string => Boolean(item));
+    return findExecutablesInVersionDirectories(roots, 'Python', ['python.exe']);
+  }
+
+  private async findRCommonPaths(): Promise<string[]> {
+    const roots = [
+      this.env.ProgramFiles ? path.join(this.env.ProgramFiles, 'R') : undefined,
+      this.env.LOCALAPPDATA ? path.join(this.env.LOCALAPPDATA, 'Programs', 'R') : undefined
+    ].filter((item): item is string => Boolean(item));
+    return findExecutablesInVersionDirectories(roots, 'R-', [path.join('bin', 'Rscript.exe'), path.join('bin', 'x64', 'Rscript.exe')]);
   }
 
   private async findMatlabFromRegistry(): Promise<string | undefined> {
@@ -466,6 +617,19 @@ export async function runCommand(
   });
 }
 
+export function buildRPackageInstallExpression(): string {
+  const packages = `c(${R_CRAN_PACKAGES.map((name) => JSON.stringify(name)).join(',')})`;
+  return [
+    "options(repos=c(CRAN='https://cloud.r-project.org'))",
+    "userLib <- Sys.getenv('R_LIBS_USER')",
+    "if (nzchar(userLib)) { dir.create(userLib, recursive=TRUE, showWarnings=FALSE); .libPaths(c(userLib, .libPaths())) }",
+    `required <- ${packages}`,
+    "missing <- setdiff(required, rownames(installed.packages()))",
+    "if (length(missing)) install.packages(missing, lib=if(nzchar(userLib)) userLib else NULL, dependencies=TRUE)",
+    "if (!requireNamespace('ComplexHeatmap', quietly=TRUE)) BiocManager::install('ComplexHeatmap', lib=if(nzchar(userLib)) userLib else NULL, ask=FALSE, update=FALSE)"
+  ].join('; ');
+}
+
 function missingCapability(language: PlotRendererLanguage, message: string, checkedAt: string): PlotRuntimeCapability {
   return { language, status: 'missing', managed: false, packages: {}, message, checkedAt };
 }
@@ -495,6 +659,27 @@ function isInside(root: string, target: string): boolean {
 
 async function exists(target: string): Promise<boolean> {
   try { await access(target); return true; } catch { return false; }
+}
+
+async function findExecutablesInVersionDirectories(roots: string[], prefix: string, relativePaths: string[]): Promise<string[]> {
+  const found: string[] = [];
+  for (const root of roots) {
+    try {
+      const entries = await readdir(root, { withFileTypes: true });
+      const directories = entries
+        .filter((entry) => entry.isDirectory() && entry.name.toLowerCase().startsWith(prefix.toLowerCase()))
+        .sort((left, right) => right.name.localeCompare(left.name, undefined, { numeric: true }));
+      for (const directory of directories) {
+        for (const relativePath of relativePaths) {
+          const executable = path.join(root, directory.name, relativePath);
+          if (await exists(executable)) found.push(executable);
+        }
+      }
+    } catch {
+      // Common-directory probing is best-effort.
+    }
+  }
+  return found;
 }
 
 function firstVersion(value: string): string {

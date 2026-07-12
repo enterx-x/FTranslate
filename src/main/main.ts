@@ -3401,6 +3401,7 @@ function registerIpcHandlers(): void {
       readInstallerIntent: () => plot.runtimeManager.readInstallerIntent(),
       acknowledgeInstallerIntent: () => plot.runtimeManager.acknowledgeInstallerIntent(),
       startRuntimeInstall: (language, targetRoot) => plot.runtimeManager.startInstall(language, targetRoot),
+      repairRuntime: (language) => plot.runtimeManager.startRepair(language),
       getRuntimeInstallJob: (jobId) => plot.runtimeManager.getInstallJob(jobId),
       cancelRuntimeInstall: (jobId) => plot.runtimeManager.cancelInstall(jobId),
       removeManagedRuntime: (language, targetRoot) => plot.runtimeManager.removeManagedRuntime(language, targetRoot),

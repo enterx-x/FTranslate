@@ -13,6 +13,7 @@ const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electro
 const electronMainEntry = path.join(root, 'dist-electron', 'main', 'main.js');
 const rendererIndex = path.join(root, 'dist-renderer', 'index.html');
 const usePackagedApp = process.env.VISUAL_CHECK_PACKAGED === '1';
+const visualScenario = process.env.VISUAL_CHECK_SCENARIO?.trim() ?? 'all';
 const visualArxivMockMode = process.env.PDF_TRANSLATION_READER_VISUAL_MOCK_ARXIV ?? '1';
 const requireNativeFigureExtraction = process.env.VISUAL_CHECK_REQUIRE_NATIVE_FIGURES === '1';
 const pdfPath =
@@ -3687,8 +3688,71 @@ async function runScientificPlotScenario(client) {
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'scientific-plot-page.png'), Buffer.from(shot.data, 'base64'))
   );
+  await clickButtonByText(client, '管理环境');
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const ready = await evaluateJson(client, `() => Boolean(document.querySelector('[role="dialog"]'))`);
+    if (ready) break;
+    await wait(250);
+  }
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    const detected = await evaluateJson(client, `() => {
+      const renderer = document.querySelector('select[aria-label="选择绘图语言"]');
+      const options = renderer ? [...renderer.options].slice(1).map((option) => option.textContent ?? '') : [];
+      return options.length === 3 && options.every((option) => !option.includes('检测中') && !option.includes('未检测'));
+    }`);
+    if (detected) break;
+    await wait(250);
+  }
+  const runtimeDialog = await evaluateJson(client, `() => {
+    const dialog = document.querySelector('[role="dialog"]');
+    const renderer = document.querySelector('select[aria-label="选择绘图语言"]');
+    const optionTexts = renderer ? [...renderer.options].map((option) => option.textContent ?? '') : [];
+    const rect = dialog?.getBoundingClientRect();
+    const text = dialog?.textContent ?? '';
+    return {
+      visible: Boolean(dialog),
+      width: Math.round(rect?.width ?? 0),
+      withinViewport: Boolean(rect && rect.left >= 0 && rect.right <= window.innerWidth),
+      hasGlobalFirstCopy: text.includes('优先使用系统已有环境'),
+      hasMatlabChoice: optionTexts.some((option) => option.includes('MATLAB（')),
+      hasMatlabGuidance: text.includes('可在顶部“绘图语言”中选择') || text.includes('仅检测，不安装'),
+      hasRepairOrFallback: text.includes('修复现有环境') || text.includes('安装私有环境'),
+      horizontalOverflow: Boolean(dialog && dialog.scrollWidth > dialog.clientWidth + 3),
+      optionTexts
+    };
+  }`);
+  if (!runtimeDialog.visible || runtimeDialog.width < 640 || !runtimeDialog.withinViewport || !runtimeDialog.hasGlobalFirstCopy || !runtimeDialog.hasMatlabChoice || !runtimeDialog.hasMatlabGuidance || runtimeDialog.horizontalOverflow) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'scientific-plot-runtime-dialog-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`scientificPlot: runtime dialog validation failed, got ${JSON.stringify(runtimeDialog)}`);
+  }
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'scientific-plot-runtime-dialog.png'), Buffer.from(shot.data, 'base64'))
+  );
+  await clickButtonByText(client, '关闭');
+  const matlabSelected = await evaluateJson(client, `() => {
+    const renderer = document.querySelector('select[aria-label="选择绘图语言"]');
+    if (!renderer) return false;
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+    setter?.call(renderer, 'matlab');
+    renderer.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }`);
+  if (!matlabSelected) throw new Error('scientificPlot: MATLAB renderer selector was not found');
+  await wait(300);
+  const matlabState = await evaluateJson(client, `() => {
+    const renderer = document.querySelector('select[aria-label="选择绘图语言"]');
+    return { value: renderer?.value ?? '', text: renderer?.selectedOptions[0]?.textContent ?? '' };
+  }`);
+  if (matlabState.value !== 'matlab' || !matlabState.text.includes('MATLAB（已检测）')) {
+    throw new Error(`scientificPlot: MATLAB could not be selected from the renderer dropdown, got ${JSON.stringify(matlabState)}`);
+  }
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'scientific-plot-matlab-selected.png'), Buffer.from(shot.data, 'base64'))
+  );
   await clickSidebarSection(client, 'researchSheet');
-  return snapshot;
+  return { ...snapshot, runtimeDialog, matlabState };
 }
 
 async function main() {
@@ -3764,6 +3828,13 @@ async function main() {
       translatedModel: 'kimi-k2.5'
     });
     await waitForAppReady(client);
+
+    if (visualScenario === 'scientific-plot') {
+      const scientificPlot = await runScientificPlotScenario(client);
+      client.close();
+      console.log(JSON.stringify({ pdfPath, scientificPlot, outputDir }, null, 2));
+      return;
+    }
 
     const home = await runHomeScenario(client);
     const experimentMatrix = await runExperimentMatrixScenario(client);
