@@ -493,7 +493,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [history, setHistory] = useState<string[]>(() => loadStringList(ARXIV_HISTORY_STORAGE_KEY));
   const [pptQueue, setPptQueue] = useState<string[]>(() => loadStringList(ARXIV_PPT_QUEUE_STORAGE_KEY));
   const [readingQueue, setReadingQueue] = useState<ArxivQueuedPaper[]>(() => loadArxivReadingQueue());
-  const [isReadingQueueOpen, setIsReadingQueueOpen] = useState(true);
+  const [isReadingQueueOpen, setIsReadingQueueOpen] = useState(false);
   const [columnMode, setColumnMode] = useState<ResultColumnMode>(() => loadResultColumnMode());
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [pageJump, setPageJump] = useState('1');
@@ -1161,7 +1161,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const resultPanelStyle = { '--arxiv-summary-lines': resultDensity.summaryLines } as CSSProperties;
   const workbenchStyle = { '--arxiv-detail-panel-ratio': `${detailPanelRatio * 100}%` } as CSSProperties;
   const readingQueueStyle =
-    papers.length === 0 && isReadingQueueOpen
+    (papers.length === 0 || isReadingQueueOpen)
       ? ({ minHeight: 58 + Math.min(readingQueue.length, 4) * 56 } as CSSProperties)
       : undefined;
   const selectedIsTranslating = selectedPaper ? translatingId === selectedPaper.id : false;
@@ -1181,7 +1181,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         )
       : { visible: [], hiddenCount: 0 };
   const readingQueuePreview = buildArxivReadingQueuePreview(readingQueue, 3);
-  const shouldShowReadingQueueList = papers.length === 0 && isReadingQueueOpen;
+  const shouldShowReadingQueueList = papers.length === 0 || isReadingQueueOpen;
   const isOfflineTranslationNotice = message.includes(OFFLINE_TRANSLATION_NOTICE_TITLE);
   const currentPage = Math.floor(start / Math.max(1, pageSize)) + 1;
   const totalPages = Math.max(1, Math.ceil(totalResults / Math.max(1, pageSize)));
@@ -1574,11 +1574,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                 type="button"
                 className="arxiv-reading-queue-head"
                 aria-expanded={shouldShowReadingQueueList}
-                onClick={() => {
-                  if (papers.length === 0) {
-                    setIsReadingQueueOpen((value) => !value);
-                  }
-                }}
+                onClick={() => setIsReadingQueueOpen((value) => !value)}
               >
                 <span>
                   <strong>备选论文库</strong>
@@ -1606,7 +1602,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       {item.titleZh && item.titleZh !== item.title ? <small>{item.title}</small> : null}
                     </button>
                   ))}
-                  {papers.length === 0 && readingQueuePreview.hiddenCount > 0 ? (
+                  {readingQueuePreview.hiddenCount > 0 ? (
                     <span className="arxiv-reading-queue-overflow">+{readingQueuePreview.hiddenCount} 篇</span>
                   ) : null}
                 </div>

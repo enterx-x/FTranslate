@@ -59,6 +59,13 @@
 - R 修复仍需要网络和 CRAN 可用；`ggalluvial`、`plotly` 等扩展按当前首版一次补齐，后续可进一步按图型按需安装。
 - Vite 仍报告既有 Univer/绘图大 chunk，electron-builder 仍报告 author 缺失、duplicate dependency references 和 Node DEP0190；均未阻断本轮构建，但应独立治理。
 
+## 2026-07-13 arXiv 备选论文库修复
+
+- 范围：仅修改 arXiv 页内备选队列；正式论文库与结果单/双/三列布局保持不变。
+- 修复：有结果时备选标题条可展开，显示 3 篇快速定位项和剩余数量；空结果页继续直接显示队列。
+- 布局修正：有结果时改为右上角悬浮收缩入口，展开为浮层，不再向下挤压或压缩结果卡区域。
+- 验证：arXiv 组件测试 29/29、typecheck、renderer build 和 visual check 通过；三列截图无重叠或横向溢出。
+
 ## 2026-07-12 科研绘图视觉收敛
 
 - 已完成：在不修改绘图数据、统计、ECharts 和 Runtime/IPC 的前提下，提高页面标题、字段列表、工具栏、Inspector 与状态条的可读性，并统一主操作与选中态。
