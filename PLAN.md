@@ -462,3 +462,18 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - `$env:NODE_OPTIONS='--max-old-space-size=4096'; npm run dist`：通过，77 个测试文件 / 454 个测试通过，安装包输出 `dist/PDF Translation Reader Setup 0.1.12.exe`。
 - `$env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check`：通过；打包产物内首页 `clippedNextActionCount=0`、`nextActionOverlapCount=0`、`clippedRiskCount=0`，人工查看 `.tmp-visual-check/home.png` 确认左右三栏未折叠成上下堆叠，三条下一步和三条风险均在首屏可见。
 - 仍有既有 Vite large chunk、`package.json` author 缺失、electron-builder duplicate dependency references 和 Node DEP0190 警告；本轮只记录，不在主界面精修中治理。
+
+## 16. 2026-07-12 聚焦型 Research OS 全局设计重构
+
+### 设计决策
+
+- 用户选择大幅重构，第一批覆盖首页、全局侧栏与 App Shell、PDF 阅读器和 AI 助手，采用浅色优先方案。
+- 设计方向确定为“聚焦型 Research OS”：当前科研任务优先，次要信息渐进披露，统一上下文栏、检查器、组件 token 和状态动效。
+- Taste Skill 用于反模板化与视觉纪律；Impeccable 用于产品界面层级、状态、可访问性、响应式和跨页面一致性。
+- 正式规格位于 `docs/superpowers/specs/2026-07-12-focused-research-os-design.md`。
+
+### 当前状态
+
+- 已完成需求收敛、三套视觉方向对比和方案 B 确认。
+- 本轮仅写设计规格，尚未修改运行时代码、运行测试、重建安装包或执行视觉回归。
+- 下一步在规格确认后编写分阶段实施计划，再按 App Shell、首页、PDF 阅读器、AI 助手和视觉收口顺序执行。
