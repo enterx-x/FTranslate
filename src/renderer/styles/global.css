@@ -13117,6 +13117,20 @@ body.is-resizing-layout .layout-resize-handle::after {
   color: #047857;
 }
 
+/* Reading shortlist: useful when results exist, compact until explicitly expanded. */
+.arxiv-results-panel .arxiv-reading-queue-mini{position:relative;padding:0;border:1px solid #dbe4ef;border-radius:10px;background:#f8fafc;overflow:hidden;transition:border-color 180ms ease,background-color 180ms ease,box-shadow 220ms ease}
+.arxiv-results-panel .arxiv-reading-queue-mini:hover,.arxiv-results-panel .arxiv-reading-queue-mini.is-open{border-color:#b8c7da;background:#fff;box-shadow:0 4px 8px rgba(30,41,59,.07)}
+.arxiv-results-panel .arxiv-reading-queue-head{min-height:42px;padding:7px 10px;color:#26374c}
+.arxiv-results-panel .arxiv-reading-queue-head>span:first-child::before{content:"☆";display:grid;place-items:center;width:24px;height:24px;flex:0 0 24px;border-radius:6px;background:#e9eef6;color:#516982;font-size:14px}
+.arxiv-results-panel .arxiv-reading-queue-head strong{font-size:12px}.arxiv-results-panel .arxiv-reading-queue-head em{font-size:11px}
+.arxiv-results-panel .arxiv-reading-queue-toggle{border-color:#d5deea;border-radius:6px;background:#fff;color:#52657a;font-size:11px;transition:transform 180ms ease,border-color 180ms ease,color 180ms ease}.arxiv-results-panel .arxiv-reading-queue-toggle::after{content:"⌄";display:inline-block;margin-left:5px;transition:transform 220ms cubic-bezier(.22,1,.36,1)}.arxiv-results-panel .arxiv-reading-queue-mini.is-open .arxiv-reading-queue-toggle::after{transform:rotate(180deg)}
+.arxiv-results-panel .arxiv-reading-queue-list{grid-template-columns:repeat(3,minmax(0,1fr));max-height:150px;margin:0;padding:0 10px 10px;overflow:auto;animation:arxiv-shortlist-in 240ms cubic-bezier(.22,1,.36,1)}
+.arxiv-results-panel .arxiv-reading-queue-paper{min-height:58px;border-radius:8px;background:#fff}.arxiv-results-panel .arxiv-reading-queue-paper:hover{transform:translateY(-1px);border-color:#aebed1;background:#f7f9fc}
+.arxiv-results-panel .arxiv-reading-queue-overflow{align-self:center;color:#68778a;font-size:11px;white-space:nowrap}
+@keyframes arxiv-shortlist-in{from{opacity:.45;transform:translateY(-5px)}to{opacity:1;transform:none}}
+@media(max-width:1180px){.arxiv-results-panel .arxiv-reading-queue-list{grid-template-columns:minmax(0,1fr)}}
+@media(prefers-reduced-motion:reduce){.arxiv-results-panel .arxiv-reading-queue-list{animation:none}.arxiv-results-panel .arxiv-reading-queue-toggle::after{transition:none}}
+
 /* Final arXiv queue guard: expanded queue is a readable list, not horizontal chips. */
 .arxiv-reading-queue-list,
 .arxiv-reading-queue-mini.is-empty-results .arxiv-reading-queue-list {
@@ -21739,6 +21753,19 @@ input[type='checkbox'] {
   background: linear-gradient(90deg, transparent, rgba(77, 93, 118, 0.42), transparent);
   animation: ft-arxiv-search-scan 920ms cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
+
+/* Final shortlist precedence: keep the queue header usable above result cards. */
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results){display:block;max-height:none;min-height:42px;padding:0;overflow:hidden;border:1px solid #dbe4ef;border-radius:10px;background:#f8fafc}
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results)>.arxiv-reading-queue-head{display:flex;min-height:42px;padding:7px 10px;visibility:visible;opacity:1;pointer-events:auto}
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results) .arxiv-reading-queue-toggle{display:inline-flex;align-items:center;visibility:visible}
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini.is-open{max-height:210px;background:#fff}
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini.is-open .arxiv-reading-queue-list{display:grid}
+
+/* Keep the shortlist out of the result flow: compact popover, never a middle row. */
+.arxiv-page .arxiv-results-panel{position:relative}
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results){position:absolute;z-index:12;top:70px;right:14px;width:176px;min-height:34px;border-radius:8px;box-shadow:0 5px 12px rgba(30,41,59,.1)}
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results)>.arxiv-reading-queue-head{min-height:34px;padding:4px 7px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results) .arxiv-reading-queue-head>span:first-child::before{width:20px;height:20px;flex-basis:20px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results) .arxiv-reading-queue-head strong{font-size:11px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results) .arxiv-reading-queue-head em{font-size:10px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results) .arxiv-reading-queue-toggle{padding:3px 6px;font-size:0}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results) .arxiv-reading-queue-toggle::after{margin-left:0;font-size:11px}
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results).is-open{width:min(720px,calc(100% - 28px));max-height:220px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results).is-open>.arxiv-reading-queue-head{min-height:40px;padding:6px 10px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results).is-open .arxiv-reading-queue-toggle{font-size:11px}.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results).is-open .arxiv-reading-queue-toggle::after{margin-left:5px}
 
 /* Focused Research OS shared visual layer. */
 :root {
