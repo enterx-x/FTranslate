@@ -5,6 +5,7 @@ import { registerFileIpcHandlers, type FileIpcHandlerDependencies } from './file
 import { registerPdfIpcHandlers, type PdfIpcHandlerDependencies } from './pdf';
 import { registerProjectIpcHandlers, type ProjectIpcHandlerDependencies } from './project';
 import { registerRuntimeIpcHandlers, type RuntimeIpcHandlerDependencies } from './runtime';
+import { registerScientificPlotIpcHandlers, type ScientificPlotIpcHandlerDependencies } from './scientificPlot';
 import type { IpcMainLike } from './types';
 
 export interface AppIpcHandlerDependencies {
@@ -15,6 +16,7 @@ export interface AppIpcHandlerDependencies {
   project: ProjectIpcHandlerDependencies;
   runtime: RuntimeIpcHandlerDependencies;
   codeRepository: CodeRepositoryIpcHandlerDependencies;
+  scientificPlot: ScientificPlotIpcHandlerDependencies;
 }
 
 export function registerAppIpcHandlers(
@@ -28,4 +30,5 @@ export function registerAppIpcHandlers(
   registerArxivIpcHandlers(ipcMain, deps.arxiv);
   registerRuntimeIpcHandlers(ipcMain, deps.runtime);
   registerCodeRepositoryIpcHandlers(ipcMain, deps.codeRepository);
+  registerScientificPlotIpcHandlers(ipcMain, deps.scientificPlot);
 }

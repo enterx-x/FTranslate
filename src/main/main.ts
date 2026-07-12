@@ -83,6 +83,10 @@ import {
   warmUpNllbTranslator
 } from './localTranslationService';
 import { buildRuntimeCenterSnapshot } from './runtimeCenter';
+import { PlotFileImportService, type PlotDataFileReadRequest } from './plotFileImport';
+import { PlotRendererService } from './plotRenderer';
+import { PlotRuntimeManager } from './plotRuntimeManager';
+import { ScientificPlotStore } from './scientificPlotStore';
 
 interface PdfFilePayload {
   filePath: string;
@@ -338,6 +342,10 @@ interface PdfTranslationProgress {
 }
 
 let mainWindow: BrowserWindow | null = null;
+let scientificPlotStore: ScientificPlotStore | null = null;
+let plotRuntimeManager: PlotRuntimeManager | null = null;
+let plotRendererService: PlotRendererService | null = null;
+let plotFileImportService: PlotFileImportService | null = null;
 
 const userDataDirOverride = process.env.PDF_TRANSLATION_READER_USER_DATA_DIR;
 if (userDataDirOverride) {
@@ -354,6 +362,38 @@ interface RuntimePdfTranslationEngineView {
 
 const shouldLoadBuiltRenderer =
   app.isPackaged || process.env.PDF_TRANSLATION_READER_LOAD_BUILT_RENDERER === '1';
+
+function getScientificPlotServices(): {
+  store: ScientificPlotStore;
+  runtimeManager: PlotRuntimeManager;
+  renderer: PlotRendererService;
+  fileImport: PlotFileImportService;
+} {
+  if (!scientificPlotStore) {
+    scientificPlotStore = new ScientificPlotStore(path.join(app.getPath('userData'), 'scientific-plots'));
+  }
+  if (!plotRuntimeManager) {
+    const installerIntentRoot = process.env.APPDATA || app.getPath('appData');
+    plotRuntimeManager = new PlotRuntimeManager({
+      managedRoot: path.join(app.getPath('userData'), 'plot-runtimes'),
+      manifestPath: path.join(app.getAppPath(), 'assets', 'plot-runtimes', 'manifest.json'),
+      installerIntentPath: path.join(installerIntentRoot, 'FTranslate', 'plot-runtime-intent.ini')
+    });
+  }
+  if (!plotRendererService) {
+    plotRendererService = new PlotRendererService({
+      store: scientificPlotStore,
+      runtimeManager: plotRuntimeManager
+    });
+  }
+  if (!plotFileImportService) plotFileImportService = new PlotFileImportService();
+  return {
+    store: scientificPlotStore,
+    runtimeManager: plotRuntimeManager,
+    renderer: plotRendererService,
+    fileImport: plotFileImportService
+  };
+}
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -3164,7 +3204,88 @@ async function exportPdfForIpc(request: { sourcePath: string; defaultFileName: s
   };
 }
 
+async function selectScientificPlotDataFileForIpc(): Promise<Awaited<ReturnType<PlotFileImportService['authorize']>> | null> {
+  const result = await dialog.showOpenDialog({
+    title: '导入科研绘图数据',
+    properties: ['openFile'],
+    filters: [
+      { name: '科研数据', extensions: ['csv', 'tsv', 'txt', 'xlsx'] },
+      { name: 'CSV / TSV', extensions: ['csv', 'tsv', 'txt'] },
+      { name: 'Excel Workbook', extensions: ['xlsx'] }
+    ]
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  return getScientificPlotServices().fileImport.authorize(result.filePaths[0]);
+}
+
+async function readScientificPlotDataFileForIpc(request: Record<string, unknown>) {
+  const encodingValue = typeof request.encoding === 'string' ? request.encoding.toLowerCase() : 'utf8';
+  const allowedEncodings: BufferEncoding[] = ['utf8', 'utf16le', 'latin1'];
+  const encoding = allowedEncodings.includes(encodingValue as BufferEncoding)
+    ? encodingValue as BufferEncoding
+    : 'utf8';
+  const normalized: PlotDataFileReadRequest = {
+    filePath: String(request.filePath),
+    sheetName: typeof request.sheetName === 'string' ? request.sheetName.slice(0, 240) : undefined,
+    headerRow: typeof request.headerRow === 'number' ? Math.max(1, Math.min(10_000, Math.floor(request.headerRow))) : 1,
+    delimiter: typeof request.delimiter === 'string' && request.delimiter.length <= 4 ? request.delimiter : undefined,
+    encoding
+  };
+  return getScientificPlotServices().fileImport.read(normalized);
+}
+
+async function exportScientificPlotPackageForIpc(
+  projectId: string,
+  options: { includeRawData: boolean; includeDerivedData: boolean }
+): Promise<SavedFileResult | null> {
+  const bytes = await getScientificPlotServices().store.exportFplot(projectId, options);
+  const result = await dialog.showSaveDialog({
+    title: '导出可复现绘图项目',
+    defaultPath: `${sanitizeFileName(projectId)}.fplot`,
+    filters: [{ name: 'FTranslate Plot Project', extensions: ['fplot'] }]
+  });
+  if (result.canceled || !result.filePath) return null;
+  await fs.writeFile(result.filePath, bytes);
+  return { filePath: result.filePath, fileName: path.basename(result.filePath) };
+}
+
+async function importScientificPlotPackageForIpc(): Promise<{ projectId: string } | null> {
+  const result = await dialog.showOpenDialog({
+    title: '导入可复现绘图项目',
+    properties: ['openFile'],
+    filters: [{ name: 'FTranslate Plot Project', extensions: ['fplot'] }]
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const info = await fs.stat(result.filePaths[0]);
+  if (!info.isFile() || info.size > 512 * 1024 * 1024) throw new Error('.fplot 文件不存在或超过 512 MB。');
+  const imported = await getScientificPlotServices().store.importFplot(new Uint8Array(await fs.readFile(result.filePaths[0])));
+  return { projectId: imported.projectId };
+}
+
+async function exportScientificPlotArtifactForIpc(
+  filePath: string,
+  defaultFileName: string
+): Promise<SavedFileResult | null> {
+  const services = getScientificPlotServices();
+  const source = path.resolve(filePath);
+  const root = path.resolve(services.store.rootPath);
+  if (!source.startsWith(`${root}${path.sep}`)) throw new Error('只能导出科研绘图项目目录内的产物。');
+  const extension = path.extname(source).slice(1).toLowerCase();
+  if (!['png', 'svg', 'pdf', 'tiff', 'html', 'py', 'r', 'm', 'json'].includes(extension)) {
+    throw new Error(`不支持导出该绘图产物：.${extension}`);
+  }
+  const result = await dialog.showSaveDialog({
+    title: '导出科研绘图产物',
+    defaultPath: sanitizeFileName(defaultFileName),
+    filters: [{ name: `${extension.toUpperCase()} File`, extensions: [extension] }]
+  });
+  if (result.canceled || !result.filePath) return null;
+  await fs.copyFile(source, result.filePath);
+  return { filePath: result.filePath, fileName: path.basename(result.filePath) };
+}
+
 function registerIpcHandlers(): void {
+  const plot = getScientificPlotServices();
   registerAppIpcHandlers(ipcMain, {
     ai: {
       loadAiSettings: loadAiSettingsForIpc,
@@ -3224,6 +3345,26 @@ function registerIpcHandlers(): void {
     codeRepository: {
       selectCodeRepository: selectCodeRepositoryForIpc,
       scanCodeRepository: scanCodeRepositoryForIpc
+    },
+    scientificPlot: {
+      listProjects: () => plot.store.listProjects(),
+      createProject: (spec, data) => plot.store.createProject(spec, data),
+      loadProject: (projectId) => plot.store.loadProject(projectId),
+      saveSpec: (spec) => plot.store.saveSpec(spec),
+      selectDataFile: selectScientificPlotDataFileForIpc,
+      readDataFile: readScientificPlotDataFileForIpc,
+      detectRuntimes: () => plot.runtimeManager.detectAll(),
+      readInstallerIntent: () => plot.runtimeManager.readInstallerIntent(),
+      startRuntimeInstall: (language, targetRoot) => plot.runtimeManager.startInstall(language, targetRoot),
+      getRuntimeInstallJob: (jobId) => plot.runtimeManager.getInstallJob(jobId),
+      cancelRuntimeInstall: (jobId) => plot.runtimeManager.cancelInstall(jobId),
+      removeManagedRuntime: (language, targetRoot) => plot.runtimeManager.removeManagedRuntime(language, targetRoot),
+      submitRender: (request) => plot.renderer.submit(request),
+      getRenderJob: (jobId) => plot.renderer.getJob(jobId),
+      cancelRender: (jobId) => plot.renderer.cancel(jobId),
+      exportFplot: exportScientificPlotPackageForIpc,
+      importFplot: importScientificPlotPackageForIpc,
+      exportArtifact: exportScientificPlotArtifactForIpc
     }
   });
 }
@@ -3246,6 +3387,8 @@ app.on('will-quit', () => {
   arxivService = null;
   arxivTranslationService?.close();
   arxivTranslationService = null;
+  plotRendererService?.dispose();
+  plotRendererService = null;
   resetNllbRuntime();
 });
 

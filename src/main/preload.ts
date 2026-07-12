@@ -3,6 +3,7 @@ import type {
   ArxivTitleAbstractTranslationRequest,
   ArxivTranslationBatchRequest
 } from '../shared/arxiv';
+import type { PlotDataTable, ScientificPlotSpec } from '../shared/scientificPlot';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   openPdf: () => ipcRenderer.invoke('dialog:open-pdf'),
@@ -142,5 +143,41 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportResearchWorkbookExcel: (request: { workbook: unknown }) =>
     ipcRenderer.invoke('research-workbook:export-excel', request),
   importResearchWorkbookExcel: () =>
-    ipcRenderer.invoke('research-workbook:import-excel')
+    ipcRenderer.invoke('research-workbook:import-excel'),
+  listScientificPlotProjects: () => ipcRenderer.invoke('scientific-plot:list-projects'),
+  createScientificPlotProject: (request: { spec: ScientificPlotSpec; data?: PlotDataTable }) =>
+    ipcRenderer.invoke('scientific-plot:create-project', request),
+  loadScientificPlotProject: (projectId: string) =>
+    ipcRenderer.invoke('scientific-plot:load-project', { projectId }),
+  saveScientificPlotSpec: (spec: ScientificPlotSpec) =>
+    ipcRenderer.invoke('scientific-plot:save-spec', { spec }),
+  selectScientificPlotDataFile: () => ipcRenderer.invoke('scientific-plot:select-data-file'),
+  readScientificPlotDataFile: (request: {
+    filePath: string;
+    sheetName?: string;
+    headerRow?: number;
+    delimiter?: string;
+    encoding?: string;
+  }) => ipcRenderer.invoke('scientific-plot:read-data-file', request),
+  detectScientificPlotRuntimes: () => ipcRenderer.invoke('scientific-plot:detect-runtimes'),
+  getScientificPlotInstallerIntent: () => ipcRenderer.invoke('scientific-plot:installer-intent'),
+  startScientificPlotRuntimeInstall: (request: { language: 'python' | 'r'; targetRoot?: string }) =>
+    ipcRenderer.invoke('scientific-plot:start-runtime-install', request),
+  getScientificPlotRuntimeInstallJob: (jobId: string) =>
+    ipcRenderer.invoke('scientific-plot:get-runtime-install-job', { jobId }),
+  cancelScientificPlotRuntimeInstall: (jobId: string) =>
+    ipcRenderer.invoke('scientific-plot:cancel-runtime-install', { jobId }),
+  removeScientificPlotManagedRuntime: (request: { language: 'python' | 'r'; targetRoot?: string }) =>
+    ipcRenderer.invoke('scientific-plot:remove-managed-runtime', request),
+  submitScientificPlotRender: (request: { projectId: string; spec: ScientificPlotSpec; data: PlotDataTable; force?: boolean }) =>
+    ipcRenderer.invoke('scientific-plot:submit-render', request),
+  getScientificPlotRenderJob: (jobId: string) =>
+    ipcRenderer.invoke('scientific-plot:get-render-job', { jobId }),
+  cancelScientificPlotRender: (jobId: string) =>
+    ipcRenderer.invoke('scientific-plot:cancel-render', { jobId }),
+  exportScientificPlotPackage: (request: { projectId: string; includeRawData?: boolean; includeDerivedData?: boolean }) =>
+    ipcRenderer.invoke('scientific-plot:export-fplot', request),
+  importScientificPlotPackage: () => ipcRenderer.invoke('scientific-plot:import-fplot'),
+  exportScientificPlotArtifact: (request: { filePath: string; defaultFileName: string }) =>
+    ipcRenderer.invoke('scientific-plot:export-artifact', request)
 });

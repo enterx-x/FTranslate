@@ -300,6 +300,35 @@ export interface PlotRenderJob {
   cacheHit: boolean;
 }
 
+export interface ScientificPlotProjectManifest {
+  schemaVersion: '1.0';
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  rendererLanguage: PlotRendererLanguage;
+  dataSnapshotHash?: string;
+  links: ResearchObjectLink[];
+}
+
+export interface ScientificPlotProjectLoadResult {
+  manifest: ScientificPlotProjectManifest;
+  spec: ScientificPlotSpec;
+  data?: PlotDataTable;
+}
+
+export interface PlotRuntimeInstallJob {
+  id: string;
+  language: 'python' | 'r';
+  status: 'queued' | 'downloading' | 'installing' | 'configuring' | 'succeeded' | 'failed' | 'cancelled';
+  progress: number;
+  message: string;
+  targetPath: string;
+  createdAt: string;
+  finishedAt?: string;
+  error?: string;
+}
+
 export interface PlotRendererCapability {
   language: PlotRendererLanguage;
   chartType: ScientificChartType;

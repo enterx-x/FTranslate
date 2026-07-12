@@ -5,6 +5,15 @@ import type {
   ArxivTitleAbstractTranslationResult,
   ArxivTranslationBatchRequest
 } from '../../shared/arxiv';
+import type {
+  PlotDataTable,
+  PlotRenderJob,
+  PlotRuntimeCapability,
+  PlotRuntimeInstallJob,
+  ScientificPlotProjectLoadResult,
+  ScientificPlotProjectManifest,
+  ScientificPlotSpec
+} from '../../shared/scientificPlot';
 
 export interface PdfFilePayload {
   filePath: string;
@@ -371,6 +380,35 @@ export interface ElectronApi {
     fileName: string;
     workbook: unknown;
   } | null>;
+  listScientificPlotProjects: () => Promise<ScientificPlotProjectManifest[]>;
+  createScientificPlotProject: (request: { spec: ScientificPlotSpec; data?: PlotDataTable }) => Promise<ScientificPlotProjectManifest>;
+  loadScientificPlotProject: (projectId: string) => Promise<ScientificPlotProjectLoadResult>;
+  saveScientificPlotSpec: (spec: ScientificPlotSpec) => Promise<ScientificPlotProjectManifest>;
+  selectScientificPlotDataFile: () => Promise<{
+    filePath: string;
+    fileName: string;
+    kind: 'delimited' | 'excel';
+    sheets: string[];
+  } | null>;
+  readScientificPlotDataFile: (request: {
+    filePath: string;
+    sheetName?: string;
+    headerRow?: number;
+    delimiter?: string;
+    encoding?: string;
+  }) => Promise<PlotDataTable>;
+  detectScientificPlotRuntimes: () => Promise<PlotRuntimeCapability[]>;
+  getScientificPlotInstallerIntent: () => Promise<{ python: boolean; r: boolean; matlabDetect: boolean }>;
+  startScientificPlotRuntimeInstall: (request: { language: 'python' | 'r'; targetRoot?: string }) => Promise<PlotRuntimeInstallJob>;
+  getScientificPlotRuntimeInstallJob: (jobId: string) => Promise<PlotRuntimeInstallJob | undefined>;
+  cancelScientificPlotRuntimeInstall: (jobId: string) => Promise<boolean>;
+  removeScientificPlotManagedRuntime: (request: { language: 'python' | 'r'; targetRoot?: string }) => Promise<boolean>;
+  submitScientificPlotRender: (request: { projectId: string; spec: ScientificPlotSpec; data: PlotDataTable; force?: boolean }) => Promise<PlotRenderJob>;
+  getScientificPlotRenderJob: (jobId: string) => Promise<PlotRenderJob | undefined>;
+  cancelScientificPlotRender: (jobId: string) => Promise<boolean>;
+  exportScientificPlotPackage: (request: { projectId: string; includeRawData?: boolean; includeDerivedData?: boolean }) => Promise<SaveTextResult | null>;
+  importScientificPlotPackage: () => Promise<{ projectId: string } | null>;
+  exportScientificPlotArtifact: (request: { filePath: string; defaultFileName: string }) => Promise<SaveTextResult | null>;
 }
 
 declare global {

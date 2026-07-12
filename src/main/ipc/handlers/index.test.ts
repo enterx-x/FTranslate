@@ -63,6 +63,26 @@ describe('registerAppIpcHandlers', () => {
       codeRepository: {
         selectCodeRepository: noop,
         scanCodeRepository: noop
+      },
+      scientificPlot: {
+        listProjects: noop,
+        createProject: noop,
+        loadProject: noop,
+        saveSpec: noop,
+        selectDataFile: noop,
+        readDataFile: noop,
+        detectRuntimes: noop,
+        readInstallerIntent: noop,
+        startRuntimeInstall: noop,
+        getRuntimeInstallJob: noop,
+        cancelRuntimeInstall: noop,
+        removeManagedRuntime: noop,
+        submitRender: noop,
+        getRenderJob: noop,
+        cancelRender: noop,
+        exportFplot: noop,
+        importFplot: noop,
+        exportArtifact: noop
       }
     };
 
@@ -106,7 +126,25 @@ describe('registerAppIpcHandlers', () => {
       'runtime-center:snapshot',
       'runtime-center:check',
       'code-repository:select',
-      'code-repository:scan'
+      'code-repository:scan',
+      'scientific-plot:list-projects',
+      'scientific-plot:create-project',
+      'scientific-plot:load-project',
+      'scientific-plot:save-spec',
+      'scientific-plot:select-data-file',
+      'scientific-plot:read-data-file',
+      'scientific-plot:detect-runtimes',
+      'scientific-plot:installer-intent',
+      'scientific-plot:start-runtime-install',
+      'scientific-plot:get-runtime-install-job',
+      'scientific-plot:cancel-runtime-install',
+      'scientific-plot:remove-managed-runtime',
+      'scientific-plot:submit-render',
+      'scientific-plot:get-render-job',
+      'scientific-plot:cancel-render',
+      'scientific-plot:export-fplot',
+      'scientific-plot:import-fplot',
+      'scientific-plot:export-artifact'
     ]);
   });
 });
