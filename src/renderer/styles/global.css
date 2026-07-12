@@ -22000,6 +22000,36 @@ input[type='checkbox'] {
   animation: ft-arxiv-search-scan 920ms cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
+/* Research OS motion and material layer: expressive by default, quiet when requested. */
+:root{--research-fx-accent:#625be4;--research-fx-accent-2:#3b82f6;--research-fx-glow:rgba(98,91,228,.18);--research-fx-ease:cubic-bezier(.22,1,.36,1)}
+button{position:relative;overflow:visible;transition:border-color 180ms ease,background-color 180ms ease,color 180ms ease,box-shadow 220ms var(--research-fx-ease),transform 180ms var(--research-fx-ease),filter 180ms ease}
+button:hover:not(:disabled){transform:translateY(-1px)}
+button:active:not(:disabled){transform:translateY(0) scale(.975)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:3px solid rgba(98,91,228,.2);outline-offset:2px;border-color:#7770e8}
+.primary-button{overflow:hidden}.primary-button::after{content:"";position:absolute;inset:-1px auto -1px -45%;width:36%;pointer-events:none;background:linear-gradient(105deg,transparent,rgba(255,255,255,.35),transparent);transform:skewX(-18deg);transition:left 480ms var(--research-fx-ease)}
+.primary-button:hover:not(:disabled)::after{left:118%}
+.home-page,.settings-page,.ai-assistant-page,.knowledge-graph-page,.paper-tutor-page,.presentation-page,.experiment-matrix-page,.research-sheet-page{position:relative;isolation:isolate;background:radial-gradient(circle at 88% -12%,rgba(98,91,228,.12),transparent 28%),radial-gradient(circle at 20% 110%,rgba(59,130,246,.08),transparent 30%),var(--ui-bg,#f3f5f8)}
+.home-page::before,.settings-page::before,.ai-assistant-page::before,.knowledge-graph-page::before,.paper-tutor-page::before,.presentation-page::before,.experiment-matrix-page::before{content:"";position:absolute;z-index:-1;top:0;right:0;width:220px;height:220px;border-radius:50%;pointer-events:none;background:radial-gradient(circle,rgba(115,105,255,.16),rgba(59,130,246,.05) 46%,transparent 72%);filter:blur(4px);animation:research-ambient-drift 9s ease-in-out infinite alternate}
+.research-workbench-header,.settings-header,.ai-assistant-header,.knowledge-graph-header,.presentation-header,.experiment-matrix-header,.paper-tutor-topbar{position:relative;overflow:hidden;background:linear-gradient(120deg,rgba(255,255,255,.97),rgba(250,249,255,.9));backdrop-filter:blur(14px);box-shadow:0 8px 24px rgba(35,43,68,.07)}
+.research-workbench-header::after,.settings-header::after,.ai-assistant-header::after,.knowledge-graph-header::after,.presentation-header::after,.experiment-matrix-header::after,.paper-tutor-topbar::after{content:"";position:absolute;inset:0 18px auto;height:2px;border-radius:999px;background:linear-gradient(90deg,transparent,var(--research-fx-accent),var(--research-fx-accent-2),transparent);opacity:.58;transform-origin:left;animation:research-accent-reveal 720ms var(--research-fx-ease) both}
+.panel-title-icon,.home-header-mark{transition:transform 260ms var(--research-fx-ease),filter 260ms ease}.research-workbench-header:hover .home-header-mark,.settings-header:hover .panel-title-icon,.ai-assistant-header:hover .panel-title-icon,.knowledge-graph-header:hover .panel-title-icon{transform:rotate(-4deg) scale(1.06);filter:drop-shadow(0 5px 8px var(--research-fx-glow))}
+.content-card,.research-workflow-card,.research-recent-paper,.workflow-inspector,.settings-card,.ai-work-card,.knowledge-graph-panel,.paper-tutor-panel,.presentation-card{transition:transform 240ms var(--research-fx-ease),border-color 200ms ease,box-shadow 240ms var(--research-fx-ease),background-color 200ms ease}
+.research-workflow-card:hover,.research-recent-paper:hover,.ai-work-card:hover,.presentation-card:hover{transform:translateY(-2px);border-color:rgba(98,91,228,.3);box-shadow:0 10px 22px rgba(50,56,86,.1)}
+.badge.success,.status-ready .badge,.status-draftable .badge,.runtime-ready{position:relative;overflow:hidden}.badge.success::after,.status-ready .badge::after,.status-draftable .badge::after,.runtime-ready::after{content:"";position:absolute;inset:0 auto 0 -55%;width:45%;pointer-events:none;background:linear-gradient(105deg,transparent,rgba(255,255,255,.72),transparent);animation:research-status-sheen 3.8s ease-in-out 1}
+.settings-nav button,.inspector-tabs button,.ai-template-list button{transition:transform 180ms var(--research-fx-ease),background-color 180ms ease,color 180ms ease,box-shadow 180ms ease}
+.settings-nav button:hover,.ai-template-list button:hover{transform:translateX(2px)}
+.settings-nav button.active{background:linear-gradient(135deg,#34445b,#514e9c);box-shadow:0 7px 14px rgba(45,54,85,.18)}
+.settings-save-state{width:fit-content;max-width:100%;margin:2px 2px 0;padding:7px 10px;border:1px solid rgba(98,91,228,.14);border-radius:8px;background:rgba(247,247,255,.88);color:#657087;font-size:12px;box-shadow:0 4px 10px rgba(44,52,79,.04)}
+.ai-assistant-layout,.settings-layout,.research-workbench-shell,.experiment-matrix-workspace{animation:research-page-enter 440ms var(--research-fx-ease) both}
+.research-workflow-column:nth-child(2),.ai-assistant-side-column,.settings-content{animation:research-panel-enter 500ms 70ms var(--research-fx-ease) both}
+@keyframes research-page-enter{from{opacity:.72;transform:scale(.995);filter:blur(3px)}to{opacity:1;transform:none;filter:none}}
+@keyframes research-panel-enter{from{opacity:.65;transform:translateX(10px)}to{opacity:1;transform:none}}
+@keyframes research-accent-reveal{from{opacity:0;transform:scaleX(.08)}to{opacity:.58;transform:scaleX(1)}}
+@keyframes research-status-sheen{0%,58%{left:-55%}82%,100%{left:135%}}
+@keyframes research-ambient-drift{from{transform:translate3d(0,0,0) scale(.96)}to{transform:translate3d(-18px,14px,0) scale(1.06)}}
+@media(prefers-reduced-transparency:reduce){.research-workbench-header,.settings-header,.ai-assistant-header,.knowledge-graph-header,.presentation-header,.experiment-matrix-header,.paper-tutor-topbar{background:#fff;backdrop-filter:none}}
+@media(prefers-reduced-motion:reduce){.home-page::before,.settings-page::before,.ai-assistant-page::before,.knowledge-graph-page::before,.paper-tutor-page::before,.presentation-page::before,.experiment-matrix-page::before,.research-workbench-header::after,.settings-header::after,.ai-assistant-header::after,.knowledge-graph-header::after,.presentation-header::after,.experiment-matrix-header::after,.paper-tutor-topbar::after,.badge.success::after,.status-ready .badge::after,.status-draftable .badge::after,.runtime-ready::after,.ai-assistant-layout,.settings-layout,.research-workbench-shell,.experiment-matrix-workspace,.research-workflow-column:nth-child(2),.ai-assistant-side-column,.settings-content{animation:none!important}.primary-button::after{display:none}button,.content-card,.research-workflow-card,.research-recent-paper,.workflow-inspector,.settings-card,.ai-work-card,.knowledge-graph-panel,.paper-tutor-panel,.presentation-card{transition:none!important;transform:none!important}}
+
 /* Final shortlist precedence: keep the queue header usable above result cards. */
 .arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results){display:block;max-height:none;min-height:42px;padding:0;overflow:hidden;border:1px solid #dbe4ef;border-radius:10px;background:#f8fafc}
 .arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results)>.arxiv-reading-queue-head{display:flex;min-height:42px;padding:7px 10px;visibility:visible;opacity:1;pointer-events:auto}
@@ -22285,4 +22315,508 @@ input[type='checkbox'] {
   right: 0;
   left: 0;
   pointer-events: none;
+}
+
+/* Final app-shell polish: navigation feedback and calm, readable global status. */
+.app-sidebar-link{position:relative;overflow:hidden;transition:transform 200ms var(--research-fx-ease),border-color 180ms ease,background-color 180ms ease,color 180ms ease,box-shadow 220ms var(--research-fx-ease)}
+.app-sidebar-link:hover:not(:disabled){transform:translateX(2px);background:linear-gradient(90deg,rgba(95,110,143,.16),rgba(98,91,228,.1));box-shadow:inset 0 0 0 1px rgba(137,151,180,.08)}
+.app-sidebar-link.active{background:linear-gradient(110deg,rgba(43,56,75,.96),rgba(61,70,91,.92));box-shadow:inset 3px 0 0 #718096,0 8px 18px rgba(0,0,0,.16)}
+.app-sidebar-link.active::after{content:"";position:absolute;inset:0 auto 0 -40%;width:30%;pointer-events:none;background:linear-gradient(105deg,transparent,rgba(255,255,255,.12),transparent);animation:research-sidebar-sheen 720ms var(--research-fx-ease) 1}
+.app-sidebar-link .app-sidebar-icon{transition:transform 220ms var(--research-fx-ease),filter 220ms ease}.app-sidebar-link:hover .app-sidebar-icon,.app-sidebar-link.active .app-sidebar-icon{transform:scale(1.08);filter:drop-shadow(0 3px 5px rgba(118,111,238,.28))}
+.app-main .status-bar{position:relative;display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-top-color:rgba(98,91,228,.14);background:linear-gradient(90deg,rgba(255,255,255,.95),rgba(247,247,255,.94));box-shadow:0 -5px 16px rgba(31,41,68,.05)}
+.app-main .status-bar::before{content:"";position:absolute;inset:0 auto 0 0;width:2px;background:linear-gradient(180deg,var(--research-fx-accent),var(--research-fx-accent-2))}
+@keyframes research-sidebar-sheen{from{left:-40%}to{left:125%}}
+@media(prefers-reduced-motion:reduce){.app-sidebar-link,.app-sidebar-link .app-sidebar-icon{transition:none!important;transform:none!important}.app-sidebar-link.active::after{animation:none;display:none}}
+
+/* The reading shortlist trigger belongs to the result toolbar; only its expanded menu floats. */
+.arxiv-page .arxiv-reading-queue-toolbar-button{height:28px;min-height:28px;padding:0 8px;border-color:#d6dfeb;border-radius:7px;background:#fff;color:#52657a;font-size:11px;white-space:nowrap;box-shadow:none}
+.arxiv-page .arxiv-reading-queue-toolbar-button>span:last-child{transition:transform 200ms var(--research-fx-ease)}.arxiv-page .arxiv-reading-queue-toolbar-button.is-open>span:last-child{transform:rotate(180deg)}
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results):not(.is-open){display:none}
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results).is-open{position:absolute;z-index:12;top:58px;right:14px;width:min(720px,calc(100% - 28px));min-height:0!important;max-height:190px;padding:10px;border:1px solid #ccd7e5;border-radius:10px;background:rgba(255,255,255,.98);box-shadow:0 18px 36px rgba(24,34,55,.18);backdrop-filter:blur(14px)}
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results).is-open .arxiv-reading-queue-list{margin:0;padding:0;max-height:168px}
+@media(prefers-reduced-transparency:reduce){.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini:not(.is-empty-results).is-open{background:#fff;backdrop-filter:none}}
+
+/* Interaction polish: functional motion for dense research work surfaces. */
+.arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini.is-open {
+  transform-origin: top right;
+  animation: arxiv-shortlist-pop 210ms var(--research-fx-ease) both;
+}
+
+.arxiv-page .arxiv-reading-queue-toolbar-button > span:first-child {
+  display: inline-block;
+  color: #655de0;
+  transition: transform 220ms var(--research-fx-ease), filter 220ms ease;
+}
+
+.arxiv-page .arxiv-reading-queue-toolbar-button.is-open > span:first-child {
+  transform: rotate(18deg) scale(1.15);
+  filter: drop-shadow(0 3px 5px rgba(98, 91, 228, 0.34));
+}
+
+.arxiv-page .arxiv-reading-queue-overflow {
+  grid-column: 1 / -1;
+  justify-self: end;
+  width: fit-content;
+  min-height: 25px;
+  padding: 4px 9px;
+  border: 1px solid #d7deea;
+  border-radius: 999px;
+  background: #f5f7fb;
+  color: #59677b;
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.arxiv-page .arxiv-reading-queue-paper:nth-child(2) { animation-delay: 35ms; }
+.arxiv-page .arxiv-reading-queue-paper:nth-child(3) { animation-delay: 70ms; }
+
+@keyframes arxiv-shortlist-pop {
+  from { opacity: 0; transform: translateY(-7px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Collapse controls communicate direction without changing panel geometry. */
+.paper-tutor-rail-toggle,
+.presentation-panel-toggle,
+.knowledge-panel-toggle {
+  gap: 5px;
+}
+
+.paper-tutor-rail-toggle::before,
+.presentation-panel-toggle::before,
+.knowledge-panel-toggle::before {
+  display: inline-block;
+  font-size: 14px;
+  line-height: 1;
+  writing-mode: horizontal-tb;
+  transition: transform 220ms var(--research-fx-ease);
+}
+
+.paper-tutor-paper-rail:not(.is-collapsed) .paper-tutor-rail-toggle::before,
+.presentation-thumbs:not(.is-collapsed) .presentation-panel-toggle::before,
+.knowledge-filter-panel:not(.is-collapsed) .knowledge-panel-toggle::before { content: "‹"; }
+
+.paper-tutor-paper-rail.is-collapsed .paper-tutor-rail-toggle::before,
+.presentation-thumbs.is-collapsed .presentation-panel-toggle::before,
+.knowledge-filter-panel.is-collapsed .knowledge-panel-toggle::before { content: "›"; }
+
+.paper-tutor-evidence-rail:not(.is-collapsed) .paper-tutor-rail-toggle::before,
+.presentation-editor:not(.is-collapsed) .presentation-panel-toggle::before,
+.knowledge-detail-panel:not(.is-collapsed) .knowledge-panel-toggle::before { content: "›"; }
+
+.paper-tutor-evidence-rail.is-collapsed .paper-tutor-rail-toggle::before,
+.presentation-editor.is-collapsed .presentation-panel-toggle::before,
+.knowledge-detail-panel.is-collapsed .knowledge-panel-toggle::before { content: "‹"; }
+
+/* Paper Tutor: make the first question and evidence interactions feel intentional. */
+.paper-tutor-empty-state {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid rgba(98, 91, 228, 0.2);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 12% 16%, rgba(98, 91, 228, 0.15), transparent 32%),
+    radial-gradient(circle at 88% 88%, rgba(59, 130, 246, 0.1), transparent 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.97), rgba(248, 248, 255, 0.94));
+  box-shadow: 0 18px 38px rgba(48, 52, 91, 0.09);
+  animation: tutor-empty-reveal 420ms var(--research-fx-ease) both;
+}
+
+.paper-tutor-empty-state::before {
+  content: "✦";
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  margin: 0 auto 12px;
+  border: 1px solid rgba(98, 91, 228, 0.22);
+  border-radius: 14px;
+  background: linear-gradient(145deg, #ffffff, #eeedff);
+  color: #5d55dc;
+  font-size: 20px;
+  box-shadow: 0 10px 24px rgba(98, 91, 228, 0.17);
+}
+
+.paper-tutor-empty-state::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: -70px;
+  right: -50px;
+  width: 180px;
+  height: 180px;
+  border: 1px solid rgba(98, 91, 228, 0.12);
+  border-radius: 50%;
+  box-shadow: 0 0 0 22px rgba(98, 91, 228, 0.035), 0 0 0 48px rgba(59, 130, 246, 0.025);
+}
+
+.paper-tutor-suggestions button {
+  border-color: rgba(98, 91, 228, 0.2);
+  background: rgba(255, 255, 255, 0.9);
+  color: #4b4c72;
+  box-shadow: 0 6px 14px rgba(46, 52, 84, 0.06);
+}
+
+.paper-tutor-suggestions button:hover:not(:disabled) {
+  border-color: rgba(98, 91, 228, 0.42);
+  background: #ffffff;
+  color: #4f46cf;
+  box-shadow: 0 9px 18px rgba(73, 67, 165, 0.12);
+}
+
+.paper-tutor-message {
+  animation: tutor-message-enter 230ms var(--research-fx-ease) both;
+}
+
+.paper-tutor-thinking {
+  position: relative;
+  overflow: hidden;
+  border-color: rgba(98, 91, 228, 0.22);
+  background: linear-gradient(90deg, #f7f7ff, #ffffff, #f3f7ff);
+}
+
+.paper-tutor-thinking::after {
+  content: "";
+  display: inline-block;
+  width: 28px;
+  height: 5px;
+  margin-left: 8px;
+  background: radial-gradient(circle, #625be4 2px, transparent 2.5px) 0 50% / 9px 5px repeat-x;
+  animation: tutor-thinking-dots 900ms ease-in-out infinite alternate;
+}
+
+.paper-tutor-composer {
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 220ms var(--research-fx-ease);
+}
+
+.paper-tutor-composer:focus-within {
+  border-top-color: rgba(98, 91, 228, 0.34);
+  background: linear-gradient(90deg, #ffffff, #faf9ff);
+  box-shadow: 0 -10px 24px rgba(78, 72, 160, 0.07);
+}
+
+.paper-tutor-session-item,
+.paper-tutor-paper-item {
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 200ms var(--research-fx-ease);
+}
+
+.paper-tutor-session-item.active,
+.paper-tutor-paper-item:has(input:checked) {
+  box-shadow: inset 3px 0 0 #665ee1, 0 6px 14px rgba(65, 69, 105, 0.07);
+}
+
+.paper-tutor-figure-preview img {
+  transition: transform 260ms var(--research-fx-ease), filter 220ms ease;
+}
+
+.paper-tutor-figure-preview:hover img {
+  transform: scale(1.018);
+  filter: saturate(1.03) contrast(1.02);
+}
+
+.paper-tutor-figure-lightbox-backdrop { animation: research-backdrop-in 180ms ease both; }
+.paper-tutor-figure-lightbox-panel { animation: research-dialog-in 240ms var(--research-fx-ease) both; }
+.paper-tutor-figure-lightbox-header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes tutor-empty-reveal {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes tutor-message-enter {
+  from { opacity: 0; transform: translateY(7px) scale(0.995); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes tutor-thinking-dots {
+  from { opacity: 0.38; transform: translateX(-2px); }
+  to { opacity: 1; transform: translateX(2px); }
+}
+
+/* Presentation: composition canvas, selected slide and editor hierarchy. */
+.presentation-header .page-header-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.presentation-stage {
+  background:
+    radial-gradient(circle at 1px 1px, rgba(103, 111, 144, 0.13) 1px, transparent 1.2px) 0 0 / 18px 18px,
+    radial-gradient(circle at 82% 4%, rgba(112, 110, 150, 0.12), transparent 26%),
+    linear-gradient(145deg, #f4f6fa, #eef1f7);
+}
+
+.ppt-slide-preview {
+  box-shadow: 0 22px 52px rgba(26, 33, 56, 0.2), 0 0 0 1px rgba(255, 255, 255, 0.62);
+  animation: presentation-slide-reveal 260ms var(--research-fx-ease) both;
+}
+
+.presentation-thumbs button:not(.presentation-panel-toggle) {
+  position: relative;
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 220ms var(--research-fx-ease), transform 180ms var(--research-fx-ease);
+}
+
+.presentation-thumbs button:not(.presentation-panel-toggle):hover {
+  border-color: rgba(98, 91, 228, 0.3);
+  box-shadow: 0 8px 17px rgba(45, 50, 82, 0.1);
+}
+
+.presentation-thumbs button.active {
+  border-color: rgba(98, 91, 228, 0.5);
+  background: linear-gradient(135deg, #ffffff, #f3f2ff);
+  box-shadow: inset 3px 0 0 #625be4, 0 10px 20px rgba(66, 62, 145, 0.12);
+}
+
+.presentation-preview-tabs button.active {
+  border-color: rgba(98, 91, 228, 0.34);
+  background: linear-gradient(135deg, #353d50, #5751a0);
+  color: #ffffff;
+  box-shadow: 0 7px 15px rgba(53, 54, 97, 0.18);
+}
+
+.presentation-card:focus-within {
+  border-color: rgba(98, 91, 228, 0.3);
+  box-shadow: 0 10px 22px rgba(60, 61, 104, 0.09);
+}
+
+.presentation-source-list p,
+.ppt-export-preview h2,
+.ppt-slide-subtitle,
+.ppt-export-claim p,
+.ppt-export-visual strong {
+  overflow-wrap: anywhere;
+}
+
+.presentation-markdown-preview { animation: presentation-slide-reveal 220ms var(--research-fx-ease) both; }
+
+@keyframes presentation-slide-reveal {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Experiment Matrix: strong selection, sparse-data guidance and status feedback. */
+.experiment-matrix-summary > div {
+  --matrix-summary-accent: #778196;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 180ms ease, box-shadow 220ms var(--research-fx-ease);
+}
+
+.experiment-matrix-summary > div::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--matrix-summary-accent);
+}
+
+.experiment-matrix-summary > div:nth-child(2) { --matrix-summary-accent: #64748b; }
+.experiment-matrix-summary > div:nth-child(3) { --matrix-summary-accent: #625be4; }
+.experiment-matrix-summary > div:nth-child(4) { --matrix-summary-accent: #c88742; }
+.experiment-matrix-summary > div:nth-child(5) { --matrix-summary-accent: #37856f; }
+
+.experiment-matrix-table tbody tr {
+  transition: background-color 170ms ease, box-shadow 190ms ease;
+}
+
+.experiment-matrix-table tbody tr.is-selected {
+  background: linear-gradient(90deg, rgba(98, 91, 228, 0.095), rgba(98, 91, 228, 0.025));
+  box-shadow: inset 3px 0 0 #625be4;
+}
+
+.experiment-matrix-table tbody tr:focus-visible {
+  outline: 2px solid rgba(98, 91, 228, 0.42);
+  outline-offset: -2px;
+  background: #f7f6ff;
+}
+
+.experiment-matrix-density-hint {
+  display: flex;
+  width: min(620px, calc(100% - 40px));
+  align-items: center;
+  gap: 12px;
+  margin: 56px auto 22px;
+  padding: 13px 15px;
+  border: 1px dashed rgba(98, 91, 228, 0.24);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(249, 249, 255, 0.96), rgba(244, 248, 255, 0.88));
+  color: #5c6577;
+  box-shadow: 0 12px 28px rgba(49, 55, 87, 0.06);
+  animation: matrix-hint-enter 340ms var(--research-fx-ease) both;
+}
+
+.experiment-matrix-density-hint > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #665ee1, #417fe1);
+  color: #ffffff;
+  font-size: 18px;
+  box-shadow: 0 8px 16px rgba(83, 78, 191, 0.2);
+}
+
+.experiment-matrix-density-hint strong { color: #293145; font-size: 12.5px; }
+.experiment-matrix-density-hint p { margin: 3px 0 0; font-size: 11.5px; line-height: 1.45; }
+
+.experiment-detail-head,
+.experiment-detail-list,
+.experiment-evidence-panel {
+  animation: experiment-detail-enter 240ms var(--research-fx-ease) both;
+}
+
+.experiment-detail-status button {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color 170ms ease, background-color 170ms ease, color 170ms ease, box-shadow 190ms ease;
+}
+
+.experiment-detail-status button.is-active {
+  border-color: rgba(98, 91, 228, 0.32);
+  background: #f0efff;
+  color: #4e47c9;
+  box-shadow: inset 0 0 0 1px rgba(98, 91, 228, 0.08);
+}
+
+.experiment-detail-head h2,
+.experiment-detail-list dd,
+.experiment-evidence-panel li { overflow-wrap: anywhere; }
+
+.experiment-matrix-empty,
+.experiment-matrix-detail-empty {
+  background: radial-gradient(circle at 18% 22%, rgba(98, 91, 228, 0.09), transparent 33%);
+  animation: experiment-detail-enter 260ms var(--research-fx-ease) both;
+}
+
+.experiment-matrix-loading::before {
+  content: "";
+  width: 22px;
+  height: 22px;
+  margin-bottom: 10px;
+  border: 2px solid #d8dbe6;
+  border-top-color: #625be4;
+  border-radius: 50%;
+  animation: research-spinner 700ms linear infinite;
+}
+
+@keyframes matrix-hint-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes experiment-detail-enter {
+  from { opacity: 0; transform: translateX(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes research-spinner { to { transform: rotate(360deg); } }
+
+/* AI panels and dialogs: clear expandable state, focus and modal feedback. */
+.ai-work-card:hover,
+.presentation-card:hover {
+  transform: none;
+}
+
+.collapsible-card-summary em {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.collapsible-card-summary em::after {
+  content: "⌄";
+  display: inline-block;
+  color: #625be4;
+  font-size: 13px;
+  transition: transform 220ms var(--research-fx-ease);
+}
+
+.collapsible-card-summary[aria-expanded="true"] em::after { transform: rotate(180deg); }
+
+.ai-advanced-card.is-open > :not(.collapsible-card-summary) {
+  animation: ai-advanced-enter 220ms var(--research-fx-ease) both;
+}
+
+.ai-prompt-editor {
+  transition: border-color 180ms ease, box-shadow 220ms var(--research-fx-ease), background-color 180ms ease;
+}
+
+.ai-prompt-editor:focus-within {
+  border-color: rgba(98, 91, 228, 0.36);
+  background: #ffffff;
+  box-shadow: 0 9px 21px rgba(69, 64, 147, 0.1);
+}
+
+.modal-backdrop { animation: research-backdrop-in 180ms ease both; }
+.document-modal { animation: research-dialog-in 240ms var(--research-fx-ease) both; }
+.document-modal-header > div:first-child { min-width: 0; }
+.document-modal-header h2 { overflow-wrap: anywhere; }
+.document-modal-header .ai-card-actions { flex: 0 0 auto; }
+
+@keyframes ai-advanced-enter {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes research-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes research-dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Knowledge graph: animate only the active evidence path and selected node. */
+.graph-edge.is-active {
+  stroke-dasharray: 7 8;
+  animation: knowledge-edge-flow 1.5s linear infinite;
+}
+
+.knowledge-node.is-selected circle:first-child {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: knowledge-node-select 560ms var(--research-fx-ease) 1;
+}
+
+.knowledge-detail-panel .empty-state.compact {
+  background: radial-gradient(circle at 50% 0%, rgba(98, 91, 228, 0.11), transparent 42%);
+}
+
+@keyframes knowledge-edge-flow { to { stroke-dashoffset: -30; } }
+@keyframes knowledge-node-select {
+  from { opacity: 0.35; transform: scale(0.72); }
+  to { opacity: 0.82; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arxiv-page .arxiv-results-panel .arxiv-reading-queue-mini.is-open,
+  .paper-tutor-empty-state,
+  .paper-tutor-message,
+  .paper-tutor-thinking::after,
+  .paper-tutor-figure-lightbox-backdrop,
+  .paper-tutor-figure-lightbox-panel,
+  .ppt-slide-preview,
+  .presentation-markdown-preview,
+  .experiment-matrix-density-hint,
+  .experiment-detail-head,
+  .experiment-detail-list,
+  .experiment-evidence-panel,
+  .experiment-matrix-empty,
+  .experiment-matrix-detail-empty,
+  .experiment-matrix-loading::before,
+  .ai-advanced-card.is-open > :not(.collapsible-card-summary),
+  .modal-backdrop,
+  .document-modal,
+  .graph-edge.is-active,
+  .knowledge-node.is-selected circle:first-child {
+    animation: none !important;
+  }
 }

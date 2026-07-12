@@ -759,7 +759,7 @@ function shouldShowLabel(
   if (isSelected || isHovered) return true;
   if (strategy === 'hover') return isNeighbor;
   return (
-    node.type === 'paper' ||
+    (node.type === 'paper' && node.count >= 2) ||
     (node.count >= 4 && (node.type === 'method' || node.type === 'keyword' || node.type === 'scene'))
   );
 }

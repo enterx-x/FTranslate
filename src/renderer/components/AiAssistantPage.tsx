@@ -176,6 +176,26 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
   const selectedTemplate = promptTemplates.find((template) => template.key === selectedTemplateKey) ?? promptTemplates[0];
 
   useEffect(() => {
+    if (!isResultExpanded) {
+      return;
+    }
+
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const closeButton = document.querySelector<HTMLElement>('.document-modal .primary-button');
+    closeButton?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsResultExpanded(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [isResultExpanded]);
+
+  useEffect(() => {
     const restoredState = restoreLiteratureInsightRunStateForUi(
       readJsonFromLocalStorage(LITERATURE_INSIGHT_STATE_KEY)
     );
@@ -487,6 +507,8 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
                   type="button"
                   className="secondary-button"
                   disabled={!analysisResult}
+                  aria-haspopup="dialog"
+                  aria-expanded={isResultExpanded}
                   onClick={() => setIsResultExpanded(true)}
                 >
                   全屏查看
@@ -634,7 +656,12 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
           </section>
 
           <section className={`ai-work-card ai-advanced-card${advancedOpen ? ' is-open' : ''}`}>
-            <button type="button" className="collapsible-card-summary" onClick={() => setAdvancedOpen((value) => !value)}>
+            <button
+              type="button"
+              className="collapsible-card-summary"
+              aria-expanded={advancedOpen}
+              onClick={() => setAdvancedOpen((value) => !value)}
+            >
               <span>
                 <img className="panel-title-icon" src={settingsIcon} alt="" />
                 API 高级设置
@@ -848,11 +875,17 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
 
       {isResultExpanded ? (
         <div className="modal-backdrop" role="presentation" onClick={() => setIsResultExpanded(false)}>
-          <section className="document-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+          <section
+            className="document-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ai-result-modal-title"
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="document-modal-header">
               <div>
                 <span className="eyebrow">Rendered Markdown</span>
-                <h2>AI 大观分析结果</h2>
+                <h2 id="ai-result-modal-title">AI 大观分析结果</h2>
               </div>
               <div className="ai-card-actions">
                 <button type="button" className="secondary-button" onClick={() => void navigator.clipboard.writeText(analysisResult)}>
