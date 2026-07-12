@@ -21740,18 +21740,6 @@ input[type='checkbox'] {
   animation: ft-arxiv-search-scan 920ms cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
-/* 2026-07-12 arXiv research inbox: list-first, overflow-safe, detail-led. */
-.arxiv-page.page-workspace{--arxiv-accent:#5653d9;gap:10px;padding:12px 14px;background:linear-gradient(145deg,#f2f5fa,#f7f6ff 58%,#eef3f8)}
-.arxiv-page-header{align-items:center;padding:0 2px}.arxiv-page-header .eyebrow{min-height:22px;padding:2px 8px;border-radius:7px;box-shadow:none;font-size:9px}.arxiv-page-header h1{margin:4px 0 2px;font-size:24px}.arxiv-page-header p{max-width:70ch;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.arxiv-search-card,.arxiv-filter-panel,.arxiv-results-panel,.arxiv-detail-panel{border-radius:12px}.arxiv-search-card{padding:12px;background:rgba(255,255,255,.94)}.arxiv-page .content-card{box-shadow:0 6px 14px rgba(30,41,59,.07)}
-.arxiv-workbench,.arxiv-layout-standard,.arxiv-layout-compact,.arxiv-layout-wide{grid-template-columns:minmax(164px,190px) minmax(420px,1fr) minmax(280px,340px)}
-.arxiv-results-list{grid-template-columns:minmax(0,1fr)!important;gap:7px}.arxiv-paper-card{contain:layout paint;gap:6px;padding:11px 12px;border-radius:9px;box-shadow:none;transition:transform 220ms cubic-bezier(.22,1,.36,1),border-color 180ms ease,background-color 180ms ease}.arxiv-paper-card:hover{transform:translateY(-1px);box-shadow:0 5px 8px rgba(30,41,59,.08)}.arxiv-paper-card.is-selected{background:#f8f7ff;box-shadow:inset 2px 0 0 var(--arxiv-accent)}
-.arxiv-paper-card h3,.arxiv-title-en,.arxiv-authors,.arxiv-summary,.arxiv-result-summary,.arxiv-detail-panel h2,.arxiv-detail-panel p{min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word}.arxiv-paper-card h3{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:15px}.arxiv-title-en,.arxiv-authors{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.arxiv-summary{-webkit-line-clamp:2;font-size:12px}.arxiv-card-actions{min-width:0;flex-wrap:wrap}.arxiv-card-actions button{max-width:100%;white-space:nowrap}.arxiv-tag-row{min-width:0;overflow:hidden;flex-wrap:nowrap}.arxiv-tag-row .pill-tag{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.arxiv-results-toolbar,.arxiv-results-controls,.arxiv-search-primary-row,.arxiv-header-actions{min-width:0;flex-wrap:wrap}.arxiv-runtime-status{min-width:0;overflow:hidden}.arxiv-runtime-query{min-width:0;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.arxiv-detail-panel{animation:arxiv-detail-in 260ms cubic-bezier(.22,1,.36,1)}
-@keyframes arxiv-detail-in{from{opacity:.65;transform:translateX(8px)}to{opacity:1;transform:none}}
-@media(max-width:1320px){.arxiv-workbench,.arxiv-layout-standard,.arxiv-layout-compact,.arxiv-layout-wide{grid-template-columns:176px minmax(0,1fr)}.arxiv-detail-panel{position:absolute;z-index:8;right:14px;bottom:14px;top:170px;width:min(350px,38vw);box-shadow:-8px 0 18px rgba(30,41,59,.12)}}
-@media(prefers-reduced-motion:reduce){.arxiv-paper-card,.arxiv-detail-panel{animation:none!important;transform:none!important}}
-
 /* Focused Research OS shared visual layer. */
 :root {
   --ft-os-canvas: #eef2f8;
