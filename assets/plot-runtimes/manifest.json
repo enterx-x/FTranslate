@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAt": "2026-07-12T04:26:00.000Z",
+  "runtimes": {
+    "python": {
+      "version": "3.12.10",
+      "fileName": "python-3.12.10-amd64.exe",
+      "url": "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe",
+      "sha256": "67B5635E80EA51072B87941312D00EC8927C4DB9BA18938F7AD2D27B328B95FB",
+      "size": 26964224,
+      "license": "Python-2.0"
+    },
+    "r": {
+      "version": "4.5.1",
+      "fileName": "R-4.5.1-win.exe",
+      "url": "https://cran.r-project.org/bin/windows/base/old/4.5.1/R-4.5.1-win.exe",
+      "sha256": "8555C189390349924F23104C8AF9C5A932281434CD6719C4CCCE3D74574627C3",
+      "size": 90111968,
+      "license": "GPL-2.0-or-later"
+    }
+  }
+}
