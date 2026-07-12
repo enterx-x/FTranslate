@@ -3,19 +3,8 @@ import { createWriteStream } from 'node:fs';
 import { access, mkdir, open, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import type { PlotRendererLanguage, PlotRuntimeCapability } from '../shared/scientificPlot';
-
-export interface PlotRuntimeInstallJob {
-  id: string;
-  language: 'python' | 'r';
-  status: 'queued' | 'downloading' | 'installing' | 'configuring' | 'succeeded' | 'failed' | 'cancelled';
-  progress: number;
-  message: string;
-  targetPath: string;
-  createdAt: string;
-  finishedAt?: string;
-  error?: string;
-}
+import type { PlotRendererLanguage, PlotRuntimeCapability, PlotRuntimeInstallJob } from '../shared/scientificPlot';
+export type { PlotRuntimeInstallJob } from '../shared/scientificPlot';
 
 export interface PlotRuntimeCommand {
   executable: string;

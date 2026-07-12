@@ -15,25 +15,11 @@ import {
   assertPlotDataTable,
   normalizeScientificPlotSpec,
   type PlotDataTable,
+  type ScientificPlotProjectLoadResult,
+  type ScientificPlotProjectManifest,
   type ScientificPlotSpec
 } from '../shared/scientificPlot';
-
-export interface ScientificPlotProjectManifest {
-  schemaVersion: '1.0';
-  id: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  rendererLanguage: ScientificPlotSpec['renderer']['language'];
-  dataSnapshotHash?: string;
-  links: ScientificPlotSpec['links'];
-}
-
-export interface ScientificPlotProjectLoadResult {
-  manifest: ScientificPlotProjectManifest;
-  spec: ScientificPlotSpec;
-  data?: PlotDataTable;
-}
+export type { ScientificPlotProjectLoadResult, ScientificPlotProjectManifest } from '../shared/scientificPlot';
 
 export interface ScientificPlotStoreOptions {
   now?: () => string;
