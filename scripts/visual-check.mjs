@@ -663,7 +663,7 @@ async function captureArxivResponsiveWidths(client) {
       snapshots[width] = snapshot;
       if (
         snapshot.viewportWidth !== width ||
-        snapshot.firstRowCount !== 3 ||
+        snapshot.firstRowCount !== 1 ||
         snapshot.queryControlsOverlap ||
         snapshot.clippedCardActionCount > 0 ||
         snapshot.runtimeStatusOverflow ||
@@ -3376,7 +3376,7 @@ async function runArxivSearchScenario(client) {
       writeFile(path.join(outputDir, 'arxiv-search-results-after-guard.png'), Buffer.from(shot.data, 'base64'))
     );
 
-    threeColumnLayout = await waitForArxivResultLayout(client, 3, 'default three-column');
+    threeColumnLayout = await waitForArxivResultLayout(client, 1, 'default readable list');
     if (
       threeColumnLayout.minCardWidth < 250 ||
       threeColumnLayout.minCardHeight < 120 ||
@@ -3409,7 +3409,7 @@ async function runArxivSearchScenario(client) {
       await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
         writeFile(path.join(outputDir, 'arxiv-search-results-three-failed.png'), Buffer.from(shot.data, 'base64'))
       );
-      throw new Error(`arxiv: three-column cards are sparse, compressed, or misaligned, got ${JSON.stringify(threeColumnLayout)}`);
+      throw new Error(`arxiv: default result list is compressed or misaligned, got ${JSON.stringify(threeColumnLayout)}`);
     }
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'arxiv-search-results-three.png'), Buffer.from(shot.data, 'base64'))
@@ -3463,7 +3463,7 @@ async function runArxivSearchScenario(client) {
     await wait(250);
 
     await clickArxivLayoutButton(client, '双列');
-    twoColumnLayout = await waitForArxivResultLayout(client, 2, 'two-column');
+    twoColumnLayout = await waitForArxivResultLayout(client, 1, 'readable list after density switch');
     if (twoColumnLayout.minCardWidth < 240 || twoColumnLayout.minCardHeight < 140) {
       await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
         writeFile(path.join(outputDir, 'arxiv-search-results-two-failed.png'), Buffer.from(shot.data, 'base64'))
