@@ -21740,6 +21740,123 @@ input[type='checkbox'] {
   animation: ft-arxiv-search-scan 920ms cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
+/* Focused Research OS shared visual layer. */
+:root {
+  --ft-os-canvas: #eef2f8;
+  --ft-os-surface: rgba(255, 255, 255, 0.9);
+  --ft-os-border: rgba(112, 108, 158, 0.25);
+  --ft-os-violet: #7469b4;
+  --ft-os-shadow: 0 18px 42px rgba(45, 52, 87, 0.085);
+  --ft-os-motion: 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.home-page.research-os-home {
+  background:
+    radial-gradient(circle at 72% 3%, rgba(112, 96, 190, 0.16), transparent 29%),
+    radial-gradient(circle at 35% -8%, rgba(79, 121, 178, 0.13), transparent 34%),
+    linear-gradient(180deg, #f9faff 0%, var(--ft-os-canvas) 100%) !important;
+}
+
+.research-os-home .research-workbench-header,
+.research-os-ai .ai-assistant-header {
+  background: rgba(255, 255, 255, 0.78) !important;
+  border-color: var(--ft-os-border) !important;
+  backdrop-filter: blur(18px) saturate(130%);
+}
+
+.research-os-home .research-current-project,
+.research-os-home .research-workflow-board,
+.research-os-home .research-inspector-shell,
+.research-os-ai .ai-work-card,
+.research-os-ai .ai-config-panel,
+.research-os-ai .ai-analysis-panel {
+  border-color: var(--ft-os-border) !important;
+  background: var(--ft-os-surface) !important;
+  box-shadow: var(--ft-os-shadow) !important;
+  backdrop-filter: blur(16px) saturate(120%);
+}
+
+.research-os-home .research-workflow-board,
+.research-os-home .research-workflow-grid {
+  overflow-x: hidden !important;
+}
+
+.research-os-home .research-workflow-card {
+  border: 1px solid rgba(106, 116, 151, 0.24) !important;
+  border-radius: 9px !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  box-shadow: 0 10px 22px rgba(47, 55, 90, 0.065) !important;
+  transition: transform var(--ft-os-motion), border-color var(--ft-os-motion), box-shadow var(--ft-os-motion);
+}
+
+.research-os-home .research-workflow-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(100, 91, 178, 0.35) !important;
+  box-shadow: 0 14px 28px rgba(75, 67, 151, 0.12) !important;
+}
+
+.research-os-home .research-inspector-shell,
+.research-os-ai .ai-result-card {
+  border-color: rgba(103, 88, 181, 0.34) !important;
+  box-shadow: 0 22px 50px rgba(86, 70, 166, 0.14) !important;
+}
+
+.research-os-home .primary-button,
+.research-os-ai .primary-button,
+.research-os-reader .primary-button {
+  border-color: transparent !important;
+  background: linear-gradient(135deg, #344a6b, #5d5796) !important;
+  box-shadow: 0 8px 18px rgba(76, 68, 151, 0.2) !important;
+  transition: transform var(--ft-os-motion), box-shadow var(--ft-os-motion), filter var(--ft-os-motion);
+}
+
+.research-os-home .primary-button:hover:not(:disabled),
+.research-os-ai .primary-button:hover:not(:disabled),
+.research-os-reader .primary-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  filter: brightness(1.06);
+}
+
+.research-os-reader .split-layout {
+  gap: 12px !important;
+  padding: 12px !important;
+  background: radial-gradient(circle at 84% 0%, rgba(111, 95, 187, 0.12), transparent 27%), var(--ft-os-canvas) !important;
+}
+
+.research-os-reader .pdf-pane,
+.research-os-reader .translation-pane {
+  border: 1px solid var(--ft-os-border) !important;
+  border-radius: 10px !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  box-shadow: 0 15px 34px rgba(43, 51, 83, 0.09) !important;
+  overflow: hidden;
+}
+
+.research-os-reader .translation-pane {
+  backdrop-filter: blur(18px) saturate(125%);
+}
+
+.research-os-ai {
+  background: radial-gradient(circle at 86% 8%, rgba(112, 96, 190, 0.16), transparent 30%), linear-gradient(180deg, #fafaff, var(--ft-os-canvas)) !important;
+}
+
+.research-os-ai.is-generating .ai-result-card {
+  animation: ft-os-ai-focus 2.4s ease-in-out infinite;
+}
+
+@keyframes ft-os-ai-focus {
+  0%, 100% { box-shadow: 0 18px 40px rgba(82, 70, 159, 0.1); }
+  50% { box-shadow: 0 20px 48px rgba(82, 70, 159, 0.2); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .research-os-home *, .research-os-ai *, .research-os-reader * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 .arxiv-results-list > .arxiv-paper-card {
   position: relative;
   isolation: isolate;

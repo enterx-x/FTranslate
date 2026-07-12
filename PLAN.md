@@ -1,5 +1,12 @@
 # PLAN.md
 
+## 2026-07-12 科研绘图视觉收敛
+
+- 已完成：在不修改绘图数据、统计、ECharts 和 Runtime/IPC 的前提下，提高页面标题、字段列表、工具栏、Inspector 与状态条的可读性，并统一主操作与选中态。
+- 视觉审查：`VISUAL_CHECK_SCENARIO=scientific-plot` 通过；截图位于 `.tmp-visual-check/scientific-plot-page.png`。1227px 工作区无横向溢出，649×570 绘图画布无遮挡，Runtime 对话框位于视口内。
+- 已验证：`npm run typecheck`、`npm run build:renderer`、科学绘图定向 `npm run visual:check`。
+- 剩余风险：Vite 仍提示既有大 chunk；本轮仅改 CSS，不在视觉任务中调整代码分包。
+
 本文件用于记录 FTranslate 的长期计划、当前阶段目标、问题台账和防重复犯错事项。每次操作前必须先阅读本文件、`README.md` 和 `DESIGN.md`。
 
 ## 1. 产品定位
@@ -627,3 +634,13 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 修复现有 Python/R 会联网安装缺失库，并修改该解释器对应的包环境；必须由用户点击“修复现有环境”后执行，不静默修改。
 - MATLAB 是否能完成某种具体图形仍取决于许可证和工具箱；检测 ready 只证明 MATLAB 可启动，不代表所有工具箱都存在。
 - 全页面安装版视觉回归存在既有波动：一次在科研绘图截图完成后调试 socket 关闭，另一次停在论文库空结果状态；科研绘图专项安装版回归已独立通过，未把无关页面波动误报为本功能失败。
+
+## 2026-07-12 聚焦型 Research OS 视觉统一
+
+- 基于 `c23c468` 增量完成，没有 cherry-pick 其他分支，保留科学绘图、论文库和绘图运行时能力。
+- 侧栏按科研工作流重新分组，科研绘图保留在“实验与运行”；首页、PDF 阅读器和 AI 助手增加统一语义类与蓝紫焦点材质。
+- AI 仅在 `isBusy` 真实生成状态触发持续焦点动效，减少动画模式立即降级。
+- `npm run build` 通过：92 个测试文件、588 个测试全部通过，TypeScript、renderer 和 Electron build 通过。
+- 源码与安装版 `npm run visual:check` 均通过；人工查看首页、科研绘图、双语 PDF 和 AI 助手截图，未发现重叠、遮挡、关键操作裁切或横向溢出。
+- 安装包：`dist/PDF Translation Reader Setup 0.1.16.exe`，156,635,821 bytes，SHA-256 `46831CE42ED5AED75F20DD49BCB08426F56DDFDCF7BCD82836490334316D9F3E`。
+- `npm install` 报告 8 个依赖审计漏洞（1 low、2 moderate、3 high、2 critical）；未执行可能改变依赖版本的 `npm audit fix`。
