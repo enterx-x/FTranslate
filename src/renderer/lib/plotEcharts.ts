@@ -101,6 +101,13 @@ function compileCartesian(context: CompileContext, type: ScientificChartType): R
     };
   });
   appendErrorIntervals(context, series, groups, xIndex);
+  if (type === 'bar' && context.spec.chart.orientation === 'horizontal' && isCategory) {
+    return {
+      xAxis: axisOption(context.spec, 'x', 'value'),
+      yAxis: axisOption(context.spec, 'y', 'category', categories),
+      series
+    };
+  }
   return {
     xAxis: axisOption(context.spec, 'x', isCategory ? 'category' : 'value', categories),
     yAxis: axisOption(context.spec, 'y', 'value'),
@@ -394,20 +401,57 @@ function baseOption(spec: ScientificPlotSpec): Record<string, unknown> {
 
 function axisOption(spec: ScientificPlotSpec, id: 'x' | 'y', type: 'value' | 'category', data?: unknown[]): Record<string, unknown> {
   const axis = spec.axes.find((item) => item.id === id);
+  const resolvedType = axis?.scale === 'log' ? 'log' : axis?.scale === 'time' ? 'time' : axis?.scale === 'category' ? 'category' : type;
+  const showGrid = axis?.showGrid ?? spec.theme.grid;
   return {
-    type,
+    type: resolvedType,
+    scale: resolvedType === 'value',
     data,
     name: axis?.label,
     min: axis?.min,
     max: axis?.max,
     inverse: axis?.reverse,
+    show: axis?.visible !== false,
+    position: axis?.position === 'secondary' ? (id === 'x' ? 'top' : 'right') : (id === 'x' ? 'bottom' : 'left'),
+    logBase: axis?.logBase ?? 10,
+    splitNumber: axis?.tickCount,
+    interval: axis?.tickInterval,
     nameLocation: 'middle',
-    nameGap: id === 'x' ? 30 : 42,
-    axisLine: { show: true, lineStyle: { color: '#738193' } },
-    axisTick: { show: true },
-    splitLine: { show: spec.theme.grid, lineStyle: { color: '#e4e8ed', width: 0.8 } },
-    axisLabel: { hideOverlap: true }
+    nameGap: axis?.titleGap ?? (id === 'x' ? 30 : 42),
+    nameTextStyle: { fontSize: axis?.titleFontSize ?? spec.theme.baseFontSize, color: axis?.titleColor ?? '#26364a' },
+    axisLine: { show: axis?.showLine !== false, lineStyle: { color: '#738193' } },
+    axisTick: { show: axis?.showTicks !== false },
+    minorTick: { show: axis?.minorTicks === true },
+    splitLine: { show: showGrid, lineStyle: { color: axis?.gridColor ?? '#e4e8ed', width: axis?.gridWidth ?? 0.8 } },
+    minorSplitLine: { show: axis?.showMinorGrid === true, lineStyle: { color: axis?.gridColor ?? '#eef1f4', width: Math.max(0.1, (axis?.gridWidth ?? 0.8) * 0.6) } },
+    axisLabel: {
+      show: axis?.showLabels !== false,
+      hideOverlap: true,
+      rotate: axis?.labelRotation ?? 0,
+      fontSize: axis?.labelFontSize ?? spec.theme.baseFontSize,
+      color: axis?.labelColor ?? '#526172',
+      formatter: (value: unknown) => formatAxisLabel(value, axis)
+    }
   };
+}
+
+function formatAxisLabel(value: unknown, axis: ScientificPlotSpec['axes'][number] | undefined): string {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  let text: string;
+  if (!Number.isFinite(numeric) || axis?.numberFormat === 'auto' || !axis?.numberFormat) {
+    text = String(value ?? '');
+  } else if (axis.numberFormat === 'scientific') {
+    text = numeric.toExponential(axis.decimalPlaces ?? 2);
+  } else if (axis.numberFormat === 'percent') {
+    text = `${(numeric * 100).toFixed(axis.decimalPlaces ?? 1)}%`;
+  } else {
+    text = numeric.toLocaleString(undefined, {
+      useGrouping: axis.thousandsSeparator !== false,
+      minimumFractionDigits: axis.decimalPlaces ?? 2,
+      maximumFractionDigits: axis.decimalPlaces ?? 2
+    });
+  }
+  return `${axis?.prefix ?? ''}${text}${axis?.suffix ?? ''}`;
 }
 
 function buildAnalysisGraphics(spec: ScientificPlotSpec, analyses: TraceableAnalysisResult[]): Array<Record<string, unknown>> {

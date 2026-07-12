@@ -80,7 +80,7 @@ describe('plot runtime manager', () => {
   it('repairs an existing R environment with valid R vector syntax', async () => {
     const root = await fixtureRoot();
     const rscript = 'D:\\R\\R-4.5.1\\bin\\Rscript.exe';
-    let installExpression = '';
+    const installExpressions: string[] = [];
     const runner: RuntimeCommandRunner = async (executable, args) => {
       if (executable === 'where.exe' && args[0] === 'Rscript.exe') return { exitCode: 0, stdout: `${rscript}\n`, stderr: '' };
       if (executable === 'where.exe' || executable === 'reg.exe') return { exitCode: 1, stdout: '', stderr: '' };
@@ -88,7 +88,7 @@ describe('plot runtime manager', () => {
       if (executable === rscript && args.includes('-e')) {
         const expression = args.at(-1) ?? '';
         if (expression.includes('FTRANSLATE_PACKAGE=')) return { exitCode: 0, stdout: 'FTRANSLATE_PACKAGE=jsonlite\t2.0.0\n', stderr: '' };
-        installExpression = expression;
+        installExpressions.push(expression);
         return { exitCode: 0, stdout: '', stderr: '' };
       }
       return { exitCode: 1, stdout: '', stderr: '' };
@@ -97,9 +97,35 @@ describe('plot runtime manager', () => {
     expect((await manager.detectAll()).find((runtime) => runtime.language === 'r')?.status).toBe('degraded');
     const job = manager.startRepair('r');
     await waitFor(() => manager.getInstallJob(job.id)?.status === 'succeeded');
-    expect(installExpression).toContain('required <- c(');
-    expect(installExpression).toContain("BiocManager::install('ComplexHeatmap'");
-    expect(installExpression).not.toContain('["jsonlite"');
+    expect(installExpressions[0]).toContain('jsonlite');
+    expect(installExpressions.at(-1)).toContain('BiocManager::install("ComplexHeatmap"');
+    expect(installExpressions.join('\n')).not.toContain('dependencies=TRUE');
+  });
+
+  it('reuses the active repair job instead of starting duplicate package installers', async () => {
+    const root = await fixtureRoot();
+    const rscript = 'D:\\R\\R-4.5.1\\bin\\Rscript.exe';
+    let releaseInstall: (() => void) | undefined;
+    const installGate = new Promise<void>((resolve) => { releaseInstall = resolve; });
+    const runner: RuntimeCommandRunner = async (executable, args) => {
+      if (executable === 'where.exe' && args[0] === 'Rscript.exe') return { exitCode: 0, stdout: `${rscript}\n`, stderr: '' };
+      if (executable === 'where.exe' || executable === 'reg.exe') return { exitCode: 1, stdout: '', stderr: '' };
+      if (executable === rscript && args.includes('--version')) return { exitCode: 0, stdout: 'R scripting front-end version 4.5.1', stderr: '' };
+      if (executable === rscript && args.includes('-e')) {
+        const expression = args.at(-1) ?? '';
+        if (expression.includes('FTRANSLATE_PACKAGE=')) return { exitCode: 0, stdout: '', stderr: '' };
+        await installGate;
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      return { exitCode: 1, stdout: '', stderr: '' };
+    };
+    const manager = new PlotRuntimeManager({ managedRoot: root, manifestPath: path.join(root, 'manifest.json'), commandRunner: runner, env: {} });
+    await manager.detectAll();
+    const first = manager.startRepair('r');
+    const second = manager.startRepair('r');
+    expect(second.id).toBe(first.id);
+    releaseInstall?.();
+    await waitFor(() => manager.getInstallJob(first.id)?.status === 'succeeded');
   });
 
   it('builds R package installation code without JavaScript array syntax', () => {

@@ -168,10 +168,34 @@ export interface PlotLayerSpec {
 export interface PlotAxisSpec {
   id: 'x' | 'y' | 'z' | 'color';
   label?: string;
-  scale?: 'linear' | 'log' | 'category' | 'time';
+  scale?: 'auto' | 'linear' | 'log' | 'category' | 'time';
   min?: number;
   max?: number;
   reverse?: boolean;
+  visible?: boolean;
+  position?: 'primary' | 'secondary';
+  showLine?: boolean;
+  showTicks?: boolean;
+  showLabels?: boolean;
+  tickCount?: number;
+  tickInterval?: number;
+  minorTicks?: boolean;
+  labelRotation?: number;
+  labelFontSize?: number;
+  labelColor?: string;
+  titleFontSize?: number;
+  titleColor?: string;
+  titleGap?: number;
+  numberFormat?: 'auto' | 'fixed' | 'scientific' | 'percent';
+  decimalPlaces?: number;
+  prefix?: string;
+  suffix?: string;
+  thousandsSeparator?: boolean;
+  showGrid?: boolean;
+  showMinorGrid?: boolean;
+  gridColor?: string;
+  gridWidth?: number;
+  logBase?: number;
 }
 
 export interface PlotAnnotationSpec {
@@ -393,8 +417,8 @@ export function createDefaultScientificPlotSpec(id = createId('plot')): Scientif
       { id: 'data-layer', kind: 'data', visible: true, label: '原始数据', params: {} }
     ],
     axes: [
-      { id: 'x', scale: 'linear' },
-      { id: 'y', scale: 'linear' }
+      { id: 'x', scale: 'auto', visible: true, position: 'primary', showLine: true, showTicks: true, showLabels: true, minorTicks: false, numberFormat: 'auto', decimalPlaces: 2, thousandsSeparator: true, showGrid: true, showMinorGrid: false, gridColor: '#e4e8ed', gridWidth: 0.8, logBase: 10 },
+      { id: 'y', scale: 'auto', visible: true, position: 'primary', showLine: true, showTicks: true, showLabels: true, minorTicks: false, numberFormat: 'auto', decimalPlaces: 2, thousandsSeparator: true, showGrid: true, showMinorGrid: false, gridColor: '#e4e8ed', gridWidth: 0.8, logBase: 10 }
     ],
     annotations: [],
     theme: cloneTheme(DEFAULT_THEME),
@@ -656,15 +680,41 @@ function normalizeAxis(value: unknown, index: number): PlotAxisSpec {
   const record = asRecord(value, `axis ${index + 1}`);
   const id = String(record.id ?? '');
   if (!['x', 'y', 'z', 'color'].includes(id)) throw new Error(`Unsupported axis: ${id}`);
-  const scale = String(record.scale ?? 'linear');
-  if (!['linear', 'log', 'category', 'time'].includes(scale)) throw new Error(`Unsupported axis scale: ${scale}`);
+  const scale = String(record.scale ?? 'auto');
+  if (!['auto', 'linear', 'log', 'category', 'time'].includes(scale)) throw new Error(`Unsupported axis scale: ${scale}`);
   return {
     id: id as PlotAxisSpec['id'],
     label: readOptionalString(record.label),
     scale: scale as NonNullable<PlotAxisSpec['scale']>,
     min: readOptionalFiniteNumber(record.min),
     max: readOptionalFiniteNumber(record.max),
-    reverse: readOptionalBoolean(record.reverse)
+    reverse: readOptionalBoolean(record.reverse),
+    visible: readOptionalBoolean(record.visible),
+    position: record.position === 'secondary' ? 'secondary' : 'primary',
+    showLine: readOptionalBoolean(record.showLine),
+    showTicks: readOptionalBoolean(record.showTicks),
+    showLabels: readOptionalBoolean(record.showLabels),
+    tickCount: readBoundedNumber(record.tickCount, 2, 50),
+    tickInterval: readBoundedNumber(record.tickInterval, Number.MIN_VALUE, Number.MAX_SAFE_INTEGER),
+    minorTicks: readOptionalBoolean(record.minorTicks),
+    labelRotation: readBoundedNumber(record.labelRotation, -90, 90),
+    labelFontSize: readBoundedNumber(record.labelFontSize, 6, 72),
+    labelColor: readOptionalString(record.labelColor),
+    titleFontSize: readBoundedNumber(record.titleFontSize, 6, 72),
+    titleColor: readOptionalString(record.titleColor),
+    titleGap: readBoundedNumber(record.titleGap, 0, 200),
+    numberFormat: ['fixed', 'scientific', 'percent'].includes(String(record.numberFormat))
+      ? record.numberFormat as NonNullable<PlotAxisSpec['numberFormat']>
+      : 'auto',
+    decimalPlaces: readBoundedNumber(record.decimalPlaces, 0, 10),
+    prefix: readOptionalString(record.prefix),
+    suffix: readOptionalString(record.suffix),
+    thousandsSeparator: readOptionalBoolean(record.thousandsSeparator),
+    showGrid: readOptionalBoolean(record.showGrid),
+    showMinorGrid: readOptionalBoolean(record.showMinorGrid),
+    gridColor: readOptionalString(record.gridColor),
+    gridWidth: readBoundedNumber(record.gridWidth, 0.1, 10),
+    logBase: readBoundedNumber(record.logBase, 2, 100)
   };
 }
 

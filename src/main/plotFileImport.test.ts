@@ -32,4 +32,32 @@ describe('plot file import service', () => {
     expect((await service.authorize(filePath)).sheets).toEqual(['First', 'Results']);
     expect((await service.read({ filePath, sheetName: 'Results' })).rows).toEqual([['SAC', 0.7]]);
   });
+
+  it('keeps the first numeric Excel row as data when the file has no header', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'plot-file-'));
+    roots.push(root);
+    const filePath = path.join(root, 'gdp.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    workbook.addWorksheet('GDP').addRows([[1985, 577.38], [1986, 671.25], [1987, 758.04]]);
+    await workbook.xlsx.writeFile(filePath);
+    const service = new PlotFileImportService();
+    await service.authorize(filePath);
+    const table = await service.read({ filePath, sheetName: 'GDP' });
+    expect(table.columns.map((column) => column.label)).toEqual(['列 A', '列 B']);
+    expect(table.rows).toEqual([[1985, 577.38], [1986, 671.25], [1987, 758.04]]);
+  });
+
+  it('lets the user explicitly override header detection', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'plot-file-'));
+    roots.push(root);
+    const filePath = path.join(root, 'values.csv');
+    await writeFile(filePath, '1985,577.38\n1986,671.25');
+    const service = new PlotFileImportService();
+    await service.authorize(filePath);
+    const noHeader = await service.read({ filePath, headerRow: 0 });
+    const firstRowHeader = await service.read({ filePath, headerRow: 1 });
+    expect(noHeader.rows).toHaveLength(2);
+    expect(firstRowHeader.columns.map((column) => column.label)).toEqual(['1985', '577.38']);
+    expect(firstRowHeader.rows).toEqual([[1986, 671.25]]);
+  });
 });

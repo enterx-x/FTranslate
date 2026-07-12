@@ -42,7 +42,7 @@ export class PlotFileImportService {
     const extension = path.extname(filePath).toLowerCase();
     const raw = extension === '.xlsx'
       ? await readExcelRows(filePath, request.sheetName, request.headerRow)
-      : await readDelimitedRows(filePath, request.delimiter, request.encoding);
+      : await readDelimitedRows(filePath, request.delimiter, request.encoding, request.headerRow);
     const table = typedTable(raw.headers, raw.rows, {
       kind: 'file',
       name: path.basename(filePath),
@@ -61,30 +61,79 @@ async function listExcelSheets(filePath: string): Promise<string[]> {
   return workbook.worksheets.map((sheet) => sheet.name);
 }
 
-async function readExcelRows(filePath: string, sheetName?: string, headerRow = 1): Promise<{ headers: string[]; rows: string[][]; sheetName: string }> {
+async function readExcelRows(filePath: string, sheetName?: string, headerRow?: number): Promise<{ headers: string[]; rows: string[][]; sheetName: string }> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(filePath);
   const sheet = sheetName ? workbook.getWorksheet(sheetName) : workbook.worksheets[0];
   if (!sheet) throw new Error(`Excel 工作表不存在：${sheetName ?? '(first sheet)'}`);
-  const header = sheet.getRow(Math.max(1, headerRow));
-  const columnCount = Math.max(header.cellCount, sheet.columnCount);
-  const headers = Array.from({ length: columnCount }, (_, index) => excelCellText(header.getCell(index + 1).value));
-  const rows: string[][] = [];
-  for (let rowIndex = Math.max(1, headerRow) + 1; rowIndex <= sheet.rowCount; rowIndex += 1) {
+  const columnCount = Math.max(1, sheet.columnCount);
+  const populated: Array<{ rowIndex: number; values: string[] }> = [];
+  for (let rowIndex = 1; rowIndex <= sheet.rowCount; rowIndex += 1) {
     const row = Array.from({ length: columnCount }, (_, index) => excelCellText(sheet.getRow(rowIndex).getCell(index + 1).value));
-    if (row.some((value) => value.trim())) rows.push(row);
+    if (row.some((value) => value.trim())) populated.push({ rowIndex, values: row });
   }
+  if (!populated.length) throw new Error('Excel 工作表为空。');
+  const resolvedHeaderRow = resolveHeaderRow(populated.map((item) => item.values), headerRow, populated[0].rowIndex);
+  const headers = resolvedHeaderRow === 0
+    ? generatedHeaders(columnCount)
+    : Array.from({ length: columnCount }, (_, index) => excelCellText(sheet.getRow(resolvedHeaderRow).getCell(index + 1).value));
+  const rows = populated.filter((item) => resolvedHeaderRow === 0 || item.rowIndex > resolvedHeaderRow).map((item) => item.values);
   return { headers, rows, sheetName: sheet.name };
 }
 
-async function readDelimitedRows(filePath: string, delimiter?: string, encoding: BufferEncoding = 'utf8'): Promise<{ headers: string[]; rows: string[][]; sheetName: string }> {
+async function readDelimitedRows(filePath: string, delimiter?: string, encoding: BufferEncoding = 'utf8', headerRow?: number): Promise<{ headers: string[]; rows: string[][]; sheetName: string }> {
   const text = (await readFile(filePath)).toString(encoding).replace(/^\uFEFF/, '');
   const parsed = Papa.parse<string[]>(text, { delimiter, skipEmptyLines: 'greedy' });
   if (parsed.errors.length) throw new Error(`CSV/TSV 解析失败：${parsed.errors[0].message}`);
   if (!parsed.data.length) throw new Error('数据文件为空。');
-  const headers = parsed.data[0].map(String);
-  const rows = parsed.data.slice(1).map((row) => Array.from({ length: headers.length }, (_, index) => String(row[index] ?? '')));
+  const columnCount = Math.max(...parsed.data.map((row) => row.length));
+  const allRows = parsed.data.map((row) => Array.from({ length: columnCount }, (_, index) => String(row[index] ?? '')));
+  const resolvedHeaderRow = resolveHeaderRow(allRows, headerRow, 1);
+  const headers = resolvedHeaderRow === 0 ? generatedHeaders(columnCount) : allRows[resolvedHeaderRow - 1];
+  const rows = resolvedHeaderRow === 0 ? allRows : allRows.slice(resolvedHeaderRow);
   return { headers, rows, sheetName: '' };
+}
+
+function resolveHeaderRow(rows: string[][], requested: number | undefined, firstPhysicalRow: number): number {
+  if (requested === 0) return 0;
+  if (requested !== undefined) return Math.max(1, Math.floor(requested));
+  return isProbableHeader(rows[0], rows.slice(1, 6)) ? firstPhysicalRow : 0;
+}
+
+function isProbableHeader(first: string[], following: string[][]): boolean {
+  const present = first.map((value) => value.trim()).filter(Boolean);
+  if (!present.length || !following.length) return false;
+  const firstKinds = first.map(cellKind);
+  const textCount = firstKinds.filter((kind) => kind === 'text').length;
+  if (textCount < Math.ceil(present.length / 2)) return false;
+  const comparison = following[0] ?? [];
+  const typeTransitions = firstKinds.filter((kind, index) => kind === 'text' && ['number', 'date', 'boolean'].includes(cellKind(comparison[index] ?? ''))).length;
+  const identifiers = present.every((value) => /^[\p{L}_][\p{L}\p{N}_ .%()/-]*$/u.test(value));
+  return typeTransitions > 0 || (identifiers && firstKinds.every((kind) => kind === 'text') && comparison.some((value) => cellKind(value) !== 'text'));
+}
+
+function cellKind(value: string): 'empty' | 'number' | 'date' | 'boolean' | 'text' {
+  const text = value.trim();
+  if (!text) return 'empty';
+  if (/^(true|false)$/i.test(text)) return 'boolean';
+  if (Number.isFinite(Number(text))) return 'number';
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T].*)?$/.test(text) && Number.isFinite(Date.parse(text))) return 'date';
+  return 'text';
+}
+
+function generatedHeaders(columnCount: number): string[] {
+  return Array.from({ length: columnCount }, (_, index) => `列 ${excelColumnName(index + 1)}`);
+}
+
+function excelColumnName(index: number): string {
+  let value = index;
+  let name = '';
+  while (value > 0) {
+    value -= 1;
+    name = String.fromCharCode(65 + (value % 26)) + name;
+    value = Math.floor(value / 26);
+  }
+  return name;
 }
 
 function typedTable(headers: string[], rows: string[][], source: PlotDataTable['source']): PlotDataTable {

@@ -23,4 +23,13 @@ describe('controlled plot script compilers', () => {
     expect(matlab.supportedChartTypes).not.toContain('raincloud');
     expect(matlab.content).not.toMatch(/websave|system\(|!\s/);
   });
+
+  it('applies the shared axis specification in every external renderer', () => {
+    expect(compilePlotScript('python').content).toContain("apply_axis('x')");
+    expect(compilePlotScript('python').content).toContain("axis.get('tickInterval')");
+    expect(compilePlotScript('r').content).toContain("axis_by_id('x')");
+    expect(compilePlotScript('r').content).toContain('scale_x_continuous');
+    expect(compilePlotScript('matlab').content).toContain("applyAxisSpec(ax,spec,'x')");
+    expect(compilePlotScript('matlab').content).toContain("ax.XScale='log'");
+  });
 });

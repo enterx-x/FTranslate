@@ -57,6 +57,7 @@ const PYTHON_REPAIR_PACKAGES = [
   'openpyxl', 'pillow', 'tifffile'
 ];
 const R_CRAN_PACKAGES = ['jsonlite', 'ggplot2', 'patchwork', 'ggalluvial', 'survival', 'svglite', 'ragg', 'plotly', 'htmlwidgets', 'BiocManager'];
+const R_BIOCONDUCTOR_PACKAGES = ['ComplexHeatmap'];
 
 export class PlotRuntimeManager {
   readonly managedRoot: string;
@@ -128,6 +129,8 @@ export class PlotRuntimeManager {
   }
 
   startInstall(language: 'python' | 'r', targetRoot = this.managedRoot): PlotRuntimeInstallJob {
+    const active = this.findActiveInstallJob(language);
+    if (active) return { ...active };
     const safeRoot = validateManagedRoot(targetRoot);
     const targetPath = path.join(safeRoot, language);
     const job: PlotRuntimeInstallJob = {
@@ -147,6 +150,8 @@ export class PlotRuntimeManager {
   }
 
   startRepair(language: 'python' | 'r'): PlotRuntimeInstallJob {
+    const active = this.findActiveInstallJob(language);
+    if (active) return { ...active };
     const command = this.runtimeCommands.get(language);
     if (!command) throw new Error(`未检测到可修复的 ${language === 'python' ? 'Python' : 'R'} 环境。`);
     const job: PlotRuntimeInstallJob = {
@@ -168,6 +173,12 @@ export class PlotRuntimeManager {
   getInstallJob(jobId: string): PlotRuntimeInstallJob | undefined {
     const job = this.installJobs.get(jobId);
     return job ? { ...job } : undefined;
+  }
+
+  private findActiveInstallJob(language: 'python' | 'r'): PlotRuntimeInstallJob | undefined {
+    return [...this.installJobs.values()].find((job) =>
+      job.language === language && !['succeeded', 'failed', 'cancelled'].includes(job.status)
+    );
   }
 
   cancelInstall(jobId: string): boolean {
@@ -324,7 +335,10 @@ export class PlotRuntimeManager {
         job.status = 'configuring';
         job.progress = 82;
         job.message = '检测到已安装的私有 R，正在修复科研绘图库…';
-        await this.configureR(job.targetPath, signal);
+        await this.configureR(job.targetPath, signal, (packageName, index, total) => {
+          job.progress = 82 + Math.round((index / Math.max(1, total)) * 14);
+          job.message = `正在配置 R 绘图库 ${index + 1}/${total}：${packageName}`;
+        });
         await this.finishManagedRuntimeInstall(job, 'existing');
         return;
       }
@@ -352,7 +366,10 @@ export class PlotRuntimeManager {
       job.progress = 82;
       job.message = '正在安装固定版本科研绘图包…';
       if (job.language === 'python') await this.configurePython(job.targetPath, signal);
-      else await this.configureR(job.targetPath, signal);
+      else await this.configureR(job.targetPath, signal, (packageName, index, total) => {
+        job.progress = 82 + Math.round((index / Math.max(1, total)) * 14);
+        job.message = `正在配置 R 绘图库 ${index + 1}/${total}：${packageName}`;
+      });
       await this.finishManagedRuntimeInstall(job, entry.version);
     } catch (error) {
       if (signal.aborted) {
@@ -375,8 +392,15 @@ export class PlotRuntimeManager {
       job.status = 'configuring';
       job.progress = 20;
       job.message = `正在为现有 ${job.language === 'python' ? 'Python' : 'R'} 补齐科研绘图库…`;
-      if (job.language === 'python') await this.configurePythonCommand(command, PYTHON_REPAIR_PACKAGES, signal);
-      else await this.configureRCommand(command, signal);
+      if (job.language === 'python') {
+        job.message = '正在为现有 Python 安装缺失绘图库；下载期间仍可取消…';
+        await this.configurePythonCommand(command, PYTHON_REPAIR_PACKAGES, signal);
+      } else {
+        await this.configureRCommand(command, signal, (packageName, index, total) => {
+          job.progress = 12 + Math.round((index / Math.max(1, total)) * 80);
+          job.message = `正在安装 R 绘图库 ${index + 1}/${total}：${packageName}`;
+        });
+      }
       job.status = 'succeeded';
       job.progress = 100;
       job.message = `现有 ${job.language === 'python' ? 'Python' : 'R'} 科研绘图环境已修复。`;
@@ -405,14 +429,30 @@ export class PlotRuntimeManager {
     if (result.exitCode !== 0) throw new Error(`Python 包安装失败：${trimLog(result.stderr)}`);
   }
 
-  private async configureR(targetPath: string, signal: AbortSignal): Promise<void> {
-    await this.configureRCommand({ executable: path.join(targetPath, 'bin', 'Rscript.exe'), prefixArgs: [] }, signal);
+  private async configureR(
+    targetPath: string,
+    signal: AbortSignal,
+    onProgress?: (packageName: string, index: number, total: number) => void
+  ): Promise<void> {
+    await this.configureRCommand({ executable: path.join(targetPath, 'bin', 'Rscript.exe'), prefixArgs: [] }, signal, onProgress);
   }
 
-  private async configureRCommand(command: PlotRuntimeCommand, signal: AbortSignal): Promise<void> {
-    const expression = buildRPackageInstallExpression();
-    const result = await this.commandRunner(command.executable, [...command.prefixArgs, '--vanilla', '-e', expression], { timeoutMs: 30 * 60_000, signal });
-    if (result.exitCode !== 0) throw new Error(`R 包安装失败：${trimLog(result.stderr)}`);
+  private async configureRCommand(
+    command: PlotRuntimeCommand,
+    signal: AbortSignal,
+    onProgress?: (packageName: string, index: number, total: number) => void
+  ): Promise<void> {
+    const packages = [
+      ...R_CRAN_PACKAGES.map((name) => ({ name, source: 'cran' as const })),
+      ...R_BIOCONDUCTOR_PACKAGES.map((name) => ({ name, source: 'bioconductor' as const }))
+    ];
+    for (let index = 0; index < packages.length; index += 1) {
+      const item = packages[index];
+      onProgress?.(item.name, index, packages.length);
+      const expression = buildRPackageInstallExpression(item.name, item.source);
+      const result = await this.commandRunner(command.executable, [...command.prefixArgs, '--vanilla', '-e', expression], { timeoutMs: 12 * 60_000, signal });
+      if (result.exitCode !== 0) throw new Error(`R 包 ${item.name} 安装失败：${trimLog(result.stderr || result.stdout)}`);
+    }
   }
 
   private async finishManagedRuntimeInstall(job: PlotRuntimeInstallJob, version: string): Promise<void> {
@@ -617,16 +657,34 @@ export async function runCommand(
   });
 }
 
-export function buildRPackageInstallExpression(): string {
-  const packages = `c(${R_CRAN_PACKAGES.map((name) => JSON.stringify(name)).join(',')})`;
+export function buildRPackageInstallExpression(
+  packageName?: string,
+  source: 'cran' | 'bioconductor' = 'cran'
+): string {
+  if (!packageName) {
+    const packages = `c(${R_CRAN_PACKAGES.map((name) => JSON.stringify(name)).join(',')})`;
+    return [
+      "options(repos=c(CRAN='https://cloud.r-project.org'))",
+      "userLib <- Sys.getenv('R_LIBS_USER')",
+      "if (nzchar(userLib)) { dir.create(userLib, recursive=TRUE, showWarnings=FALSE); .libPaths(c(userLib, .libPaths())) }",
+      `required <- ${packages}`,
+      "missing <- setdiff(required, rownames(installed.packages()))",
+      "if (length(missing)) install.packages(missing, lib=if(nzchar(userLib)) userLib else NULL, dependencies=NA)",
+      "if (!requireNamespace('ComplexHeatmap', quietly=TRUE)) BiocManager::install('ComplexHeatmap', lib=if(nzchar(userLib)) userLib else NULL, ask=FALSE, update=FALSE)"
+    ].join('; ');
+  }
+  const quoted = JSON.stringify(packageName);
   return [
     "options(repos=c(CRAN='https://cloud.r-project.org'))",
     "userLib <- Sys.getenv('R_LIBS_USER')",
     "if (nzchar(userLib)) { dir.create(userLib, recursive=TRUE, showWarnings=FALSE); .libPaths(c(userLib, .libPaths())) }",
-    `required <- ${packages}`,
-    "missing <- setdiff(required, rownames(installed.packages()))",
-    "if (length(missing)) install.packages(missing, lib=if(nzchar(userLib)) userLib else NULL, dependencies=TRUE)",
-    "if (!requireNamespace('ComplexHeatmap', quietly=TRUE)) BiocManager::install('ComplexHeatmap', lib=if(nzchar(userLib)) userLib else NULL, ask=FALSE, update=FALSE)"
+    source === 'cran'
+      ? `if (!requireNamespace(${quoted}, quietly=TRUE)) install.packages(${quoted}, lib=if(nzchar(userLib)) userLib else NULL, dependencies=NA)`
+      : "if (!requireNamespace('BiocManager', quietly=TRUE)) install.packages('BiocManager', lib=if(nzchar(userLib)) userLib else NULL, dependencies=NA)",
+    source === 'bioconductor'
+      ? `if (!requireNamespace(${quoted}, quietly=TRUE)) BiocManager::install(${quoted}, lib=if(nzchar(userLib)) userLib else NULL, ask=FALSE, update=FALSE)`
+      : 'invisible(NULL)',
+    `if (!requireNamespace(${quoted}, quietly=TRUE)) stop('Package installation did not make ${packageName} available')`
   ].join('; ');
 }
 

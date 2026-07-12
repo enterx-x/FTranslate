@@ -3227,7 +3227,7 @@ async function readScientificPlotDataFileForIpc(request: Record<string, unknown>
   const normalized: PlotDataFileReadRequest = {
     filePath: String(request.filePath),
     sheetName: typeof request.sheetName === 'string' ? request.sheetName.slice(0, 240) : undefined,
-    headerRow: typeof request.headerRow === 'number' ? Math.max(1, Math.min(10_000, Math.floor(request.headerRow))) : 1,
+    headerRow: typeof request.headerRow === 'number' ? Math.max(0, Math.min(10_000, Math.floor(request.headerRow))) : undefined,
     delimiter: typeof request.delimiter === 'string' && request.delimiter.length <= 4 ? request.delimiter : undefined,
     encoding
   };
