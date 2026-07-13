@@ -2162,9 +2162,8 @@ async function runResearchSheetScenario(client) {
 }
 
 async function runWholePdfReaderScenario(client) {
-  await clickButtonByText(client, '返回主页');
-  await waitForAppReady(client);
-  await clickButtonByText(client, '进入论文库');
+  await clickSidebarSection(client, 'library');
+  await wait(350);
   const preparedLibrarySelection = await evaluateJson(client, `() => {
     document.querySelector('[data-paper-library-row]')?.click();
     const expandInspector = document.querySelector('button[title="展开详情"]');
@@ -2365,28 +2364,30 @@ async function runWholePdfReaderScenario(client) {
   await waitForExtractedPdfBlocks(client);
   await clickButtonByText(client, '提取 PDF 图表');
   let figureExtraction = null;
-  const figureExtractionAttempts = requireNativeFigureExtraction ? 240 : 30;
+  const figureExtractionAttempts = requireNativeFigureExtraction ? 240 : 90;
   for (let attempt = 0; attempt < figureExtractionAttempts; attempt += 1) {
     figureExtraction = await evaluateJson(client, `() => {
-      const assets = [...document.querySelectorAll('.pdf-figure-grid article')];
-      const readyAssets = assets.filter((asset) => Boolean(asset.querySelector('img')));
-      const badges = [...document.querySelectorAll('.pdf-figure-source-badge')].map((badge) => badge.textContent?.trim() ?? '');
-      const panelText = document.querySelector('.pdf-figure-assets')?.textContent ?? '';
+      const workspace = document.querySelector('[data-testid="pdf-figure-workspace"]');
+      const assets = [...document.querySelectorAll('[data-figure-card]')];
+      const readyAssets = assets.filter((asset) => Boolean(asset.querySelector('.figure-assets-thumbnail img')));
+      const panelText = workspace?.textContent ?? '';
+      const workspaceRect = workspace?.getBoundingClientRect();
       return {
-        hasPanel: Boolean(document.querySelector('.pdf-figure-assets')),
+        hasPanel: Boolean(workspace),
         assetCount: assets.length,
         readyCount: readyAssets.length,
-        nativeCount: badges.filter((text) => text === 'PDF 内嵌图像').length,
-        compositeCount: badges.filter((text) => text === 'PDF 内嵌图像组合').length,
-        cropCount: badges.filter((text) => text === '页面裁剪').length,
+        nativeCount: panelText.includes('PDF 内嵌图像') ? 1 : 0,
+        compositeCount: panelText.includes('PDF 内嵌图像组合') ? 1 : 0,
+        cropCount: panelText.includes('完整页面渲染裁剪') ? 1 : 0,
         panelText,
         statusText: document.body.textContent ?? '',
-        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+        workspaceWithinViewport: Boolean(workspaceRect && workspaceRect.left >= 0 && workspaceRect.right <= window.innerWidth && workspaceRect.top >= 0 && workspaceRect.bottom <= window.innerHeight),
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3 || Boolean(workspace && workspace.scrollWidth > workspace.clientWidth + 3)
       };
     }`);
-    const hasFigurePanelLayout = figureExtraction.hasPanel && figureExtraction.assetCount >= 1 && !figureExtraction.hasHorizontalOverflow;
-    const hasNativeFigure = figureExtraction.readyCount >= 1 && figureExtraction.nativeCount + figureExtraction.compositeCount >= 1;
-    if (hasFigurePanelLayout && (!requireNativeFigureExtraction || hasNativeFigure)) {
+    const hasFigurePanelLayout = figureExtraction.hasPanel && figureExtraction.assetCount >= 1 && figureExtraction.workspaceWithinViewport && !figureExtraction.hasHorizontalOverflow;
+    const hasReadyFigure = figureExtraction.readyCount >= Math.min(3, figureExtraction.assetCount);
+    if (hasFigurePanelLayout && hasReadyFigure) {
       break;
     }
     await wait(500);
@@ -2395,9 +2396,10 @@ async function runWholePdfReaderScenario(client) {
   if (
     !figureExtraction?.hasPanel ||
     figureExtraction.assetCount < 1 ||
+    figureExtraction.readyCount < Math.min(3, figureExtraction.assetCount) ||
+    !figureExtraction.workspaceWithinViewport ||
     figureExtraction.hasHorizontalOverflow ||
-    (requireNativeFigureExtraction &&
-      (figureExtraction.readyCount < 1 || figureExtraction.nativeCount + figureExtraction.compositeCount < 1))
+    (requireNativeFigureExtraction && figureExtraction.readyCount < 1)
   ) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'whole-pdf-figures-failed.png'), Buffer.from(shot.data, 'base64'))
@@ -2408,6 +2410,53 @@ async function runWholePdfReaderScenario(client) {
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'whole-pdf-figures.png'), Buffer.from(shot.data, 'base64'))
   );
+  const extractedFigureDataUrls = await evaluateJson(client, `() => [...document.querySelectorAll('[data-figure-card] .figure-assets-thumbnail img')]
+    .slice(0, 3)
+    .map((image) => image.getAttribute('src') ?? '')`);
+  for (let index = 0; index < extractedFigureDataUrls.length; index += 1) {
+    const dataUrl = extractedFigureDataUrls[index];
+    if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')) continue;
+    await writeFile(
+      path.join(outputDir, `pdf-figure-extracted-${index + 1}.png`),
+      Buffer.from(dataUrl.slice('data:image/png;base64,'.length), 'base64')
+    );
+  }
+
+  const cropEditorOpened = await evaluateJson(client, `() => {
+    const readyCard = [...document.querySelectorAll('[data-figure-card]')]
+      .find((card) => card.querySelector('.figure-assets-thumbnail img'));
+    readyCard?.querySelector('.figure-assets-thumbnail')?.click();
+    const adjust = [...document.querySelectorAll('.figure-assets-inspector button')]
+      .find((button) => (button.textContent ?? '').includes('调整裁剪'));
+    if (!adjust || adjust.disabled) return false;
+    adjust.click();
+    return true;
+  }`);
+  if (cropEditorOpened) {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const cropReady = await evaluateJson(client, `() => Boolean(document.querySelector('[data-crop-editor] .figure-crop-selection'))`);
+      if (cropReady) break;
+      await wait(250);
+    }
+    const cropLayout = await evaluateJson(client, `() => {
+      const editor = document.querySelector('[data-crop-editor] .figure-crop-editor');
+      const selection = document.querySelector('[data-crop-editor] .figure-crop-selection');
+      const rect = editor?.getBoundingClientRect();
+      return {
+        visible: Boolean(editor && selection),
+        withinViewport: Boolean(rect && rect.left >= 0 && rect.right <= window.innerWidth && rect.top >= 0 && rect.bottom <= window.innerHeight),
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+      };
+    }`);
+    if (!cropLayout.visible || !cropLayout.withinViewport || cropLayout.hasHorizontalOverflow) {
+      throw new Error(`wholePdf: manual crop editor is clipped, got ${JSON.stringify(cropLayout)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'whole-pdf-figure-crop-editor.png'), Buffer.from(shot.data, 'base64'))
+    );
+    await evaluateJson(client, `() => document.querySelector('button[aria-label="关闭裁剪编辑器"]')?.click()`);
+  }
+  await evaluateJson(client, `() => document.querySelector('button[aria-label="关闭图表素材工作台"]')?.click()`);
   return {
     wholePdf,
     initialPdfCenter,
@@ -4242,6 +4291,13 @@ async function main() {
       const arxivSearch = await runArxivSearchScenario(client);
       client.close();
       console.log(JSON.stringify({ pdfPath, arxivSearch, outputDir }, null, 2));
+      return;
+    }
+
+    if (visualScenario === 'figure-assets') {
+      const wholePdfReader = await runWholePdfReaderScenario(client);
+      client.close();
+      console.log(JSON.stringify({ pdfPath, wholePdfReader, outputDir }, null, 2));
       return;
     }
 

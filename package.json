@@ -1,6 +1,6 @@
 {
   "name": "pdf-translation-reader",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "Local offline PDF original text and Chinese translation reader for Windows desktop.",
   "main": "dist-electron/main/main.js",
   "private": true,

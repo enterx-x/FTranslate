@@ -4,9 +4,11 @@ import type { PresentationFigureCropBox } from './presentationOutline';
 import {
   extractNativePdfImagesFromRenderedPage,
   findNonWhitePixelBounds,
+  buildNativeGuidedFigureCropBox,
   selectNativePdfImageForCropBox,
   selectNativePdfImagesForCropBox,
-  mergePdfFigureAssetUpdate
+  mergePdfFigureAssetUpdate,
+  mergeExtractedFigureAssetsIntoDraft
 } from './presentationFigureAssets';
 
 const cropBox: PresentationFigureCropBox = {
@@ -138,7 +140,7 @@ describe('presentationFigureAssets native image selection', () => {
         {
           id: 'panel-a',
           pageNumber: 1,
-          bbox: { x: 70, y: 150, width: 145, height: 110, pageWidth: 612, pageHeight: 792 },
+          bbox: { x: 70, y: 150, width: 72, height: 66, pageWidth: 612, pageHeight: 792 },
           dataUrl: 'data:image/png;base64,a',
           mimeType: 'image/png',
           pixelWidth: 640,
@@ -147,7 +149,7 @@ describe('presentationFigureAssets native image selection', () => {
         {
           id: 'panel-b',
           pageNumber: 1,
-          bbox: { x: 230, y: 150, width: 145, height: 110, pageWidth: 612, pageHeight: 792 },
+          bbox: { x: 230, y: 150, width: 72, height: 66, pageWidth: 612, pageHeight: 792 },
           dataUrl: 'data:image/png;base64,b',
           mimeType: 'image/png',
           pixelWidth: 640,
@@ -156,7 +158,7 @@ describe('presentationFigureAssets native image selection', () => {
         {
           id: 'panel-c',
           pageNumber: 1,
-          bbox: { x: 390, y: 150, width: 145, height: 110, pageWidth: 612, pageHeight: 792 },
+          bbox: { x: 390, y: 150, width: 72, height: 66, pageWidth: 612, pageHeight: 792 },
           dataUrl: 'data:image/png;base64,c',
           mimeType: 'image/png',
           pixelWidth: 640,
@@ -208,6 +210,95 @@ describe('presentationFigureAssets native image selection', () => {
     };
 
     expect(mergePdfFigureAssetUpdate(base, updated)).toEqual([base[0], updated]);
+  });
+
+  it('uses embedded photo panels to tighten a setup figure without dropping page-rendered labels', () => {
+    const guided = buildNativeGuidedFigureCropBox(
+      [
+        {
+          id: 'robot-a',
+          pageNumber: 6,
+          bbox: { x: 338, y: 282, width: 92, height: 126, pageWidth: 612, pageHeight: 792 },
+          dataUrl: 'data:image/png;base64,a',
+          mimeType: 'image/png',
+          pixelWidth: 600,
+          pixelHeight: 800
+        },
+        {
+          id: 'robot-b',
+          pageNumber: 6,
+          bbox: { x: 452, y: 284, width: 94, height: 124, pageWidth: 612, pageHeight: 792 },
+          dataUrl: 'data:image/png;base64,b',
+          mimeType: 'image/png',
+          pixelWidth: 620,
+          pixelHeight: 790
+        },
+        {
+          id: 'robot-c',
+          pageNumber: 6,
+          bbox: { x: 340, y: 438, width: 94, height: 126, pageWidth: 612, pageHeight: 792 },
+          dataUrl: 'data:image/png;base64,c',
+          mimeType: 'image/png',
+          pixelWidth: 610,
+          pixelHeight: 820
+        },
+        {
+          id: 'robot-d',
+          pageNumber: 6,
+          bbox: { x: 454, y: 440, width: 92, height: 124, pageWidth: 612, pageHeight: 792 },
+          dataUrl: 'data:image/png;base64,d',
+          mimeType: 'image/png',
+          pixelWidth: 600,
+          pixelHeight: 810
+        }
+      ],
+      { x: 420, y: 250, width: 170, height: 340, pageWidth: 612, pageHeight: 792 }
+    );
+
+    expect(guided).not.toBeNull();
+    expect(guided!.x).toBeGreaterThan(300);
+    expect(guided!.x).toBeLessThan(338);
+    expect(guided!.y).toBeGreaterThan(220);
+    expect(guided!.width).toBeGreaterThan(220);
+    expect(guided!.width).toBeLessThan(300);
+    expect(guided!.height).toBeLessThan(360);
+    expect(guided!.x + guided!.width).toBeGreaterThanOrEqual(546);
+    expect(guided!.y + guided!.height).toBeGreaterThanOrEqual(564);
+  });
+
+  it('reuses extracted image and user selection in the presentation draft', () => {
+    const figure = buildFigureCandidate('fig-1');
+    const extracted = {
+      ...figure,
+      selected: false,
+      imageDataUrl: 'data:image/png;base64,ready',
+      imageMimeType: 'image/png' as const,
+      imageExtractionMethod: 'page-crop' as const,
+      cropStatus: 'image-ready' as const
+    };
+    const draft = {
+      id: 'draft',
+      title: 'Draft',
+      subtitle: '',
+      createdAt: '',
+      targetSlideCount: 1,
+      sourcePapers: [],
+      figures: [figure],
+      slides: [{
+        id: 'slide-1',
+        type: 'method' as const,
+        title: 'Method',
+        bullets: [],
+        figures: [figure],
+        sourceRefs: [],
+        speakerNotes: ''
+      }]
+    };
+
+    const merged = mergeExtractedFigureAssetsIntoDraft(draft, [extracted]);
+
+    expect(merged.figures[0]).toMatchObject({ selected: false, cropStatus: 'image-ready' });
+    expect(merged.slides[0].figures[0].imageDataUrl).toBe('data:image/png;base64,ready');
   });
 });
 

@@ -17,7 +17,7 @@ import {
   type PdfZoomAnchor
 } from '../lib/pdfInteraction';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
-import { extractPdfBlocksFromCachedDocument } from '../lib/pdfOutlineExtraction';
+import { extractPdfBlocksFromData } from '../lib/pdfOutlineExtraction';
 import { buildHighlightOverlayLines, type HighlightRectLike } from '../lib/pdfHighlightOverlay';
 import { buildOfficialFindFragments } from '../lib/pdfFindQuery';
 import {
@@ -360,7 +360,7 @@ export function PdfViewer(props: PdfViewerProps) {
             if (propsRef.current.enableFullTextExtraction && propsRef.current.pdfData) {
               const extractionData = propsRef.current.pdfData;
               cancelScheduledTextExtraction = schedulePdfBackgroundWork(() => {
-                void extractPdfBlocksFromCachedDocument(extractionData, pdfDocument, () => cancelled)
+                void extractPdfBlocksFromData(extractionData, () => cancelled)
                   .then((outline) => {
                     if (!cancelled) {
                       propsRef.current.onExtractedTextReady?.(outline);

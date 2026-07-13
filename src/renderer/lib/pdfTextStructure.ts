@@ -335,7 +335,7 @@ function orderLinesForAcademicLayout<TItem extends PositionedPdfTextItem>(
 function classifyLine(text: string): ExtractedBlockType {
   const normalized = text.trim();
 
-  if (/^(fig\.|figure|table)\s*\d*[:.]/iu.test(normalized)) {
+  if (looksLikeCaptionStart(normalized)) {
     return 'caption';
   }
 
@@ -370,10 +370,15 @@ function shouldIncludeBlock(type: ExtractedBlockType, text: string): boolean {
   }
 
   if (type === 'caption') {
-    return /^((fig\.|figure|table)\s*\d+[:.])/iu.test(normalized);
+    return looksLikeCaptionStart(normalized);
   }
 
   return true;
+}
+
+function looksLikeCaptionStart(text: string): boolean {
+  return /^(?:supplementary\s+)?(?:fig(?:ure)?\.?|table|tab\.?)\s*(?:[a-z]?\d+[a-z]?|[ivxlcdm]+)(?:\s*\([a-z0-9]+\))?\s*[:.\-–—]/iu.test(text) ||
+    /^TABLE\s+[IVXLCDM]+\s+(?=[A-Z])/u.test(text);
 }
 
 function looksLikeAcademicParagraph(text: string): boolean {

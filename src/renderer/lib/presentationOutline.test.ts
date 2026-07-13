@@ -380,6 +380,58 @@ describe('presentationOutline', () => {
     expect(figures[2]).toMatchObject({ suggestedSlide: 'results' });
   });
 
+  it('recognizes supplementary, subfigure, and roman-numeral table labels and joins wrapped captions', () => {
+    const figures = extractFigureCandidates([
+      block({
+        type: 'caption',
+        section: 'Method',
+        page: 3,
+        original: 'Supplementary Fig. S1(a) – Architecture overview of the safety controller',
+        bounds: { x: 60, y: 620, width: 480, height: 14, pageWidth: 612, pageHeight: 792 }
+      }),
+      block({
+        type: 'paragraph',
+        section: 'Method',
+        page: 3,
+        original: 'with the learned dynamics model and CBF-QP safety filter.',
+        bounds: { x: 60, y: 635, width: 480, height: 14, pageWidth: 612, pageHeight: 792 }
+      }),
+      block({
+        type: 'caption',
+        section: 'Results',
+        page: 7,
+        original: 'TABLE IV Quantitative comparison across dynamic obstacle densities.',
+        bounds: { x: 70, y: 90, width: 470, height: 16, pageWidth: 612, pageHeight: 792 }
+      })
+    ]);
+
+    expect(figures).toHaveLength(2);
+    expect(figures[0]).toMatchObject({ figureLabel: 'Supplementary Fig. S1(a)', assetType: 'figure' });
+    expect(figures[0].caption).toContain('CBF-QP safety filter');
+    expect(figures[1]).toMatchObject({ figureLabel: 'TABLE IV', assetType: 'table', figureKind: 'result' });
+  });
+
+  it('does not treat prose references beginning with a figure label as new captions', () => {
+    const figures = extractFigureCandidates([
+      block({ type: 'paragraph', section: 'Results', page: 8, original: 'Fig. 7 for the tasks used in the main evaluation shows the same trend.' }),
+      block({ type: 'paragraph', section: 'Appendix', page: 20, original: 'Figure 20 compares joint-space and end-effector control.' }),
+      block({ type: 'caption', section: 'Results', page: 8, original: 'Fig. 7: Impact of prompt composition on success rate.' })
+    ]);
+
+    expect(figures).toHaveLength(1);
+    expect(figures[0].figureLabel).toBe('Fig. 7');
+  });
+
+  it('keeps the first source occurrence when the same numbered caption is repeated later', () => {
+    const figures = extractFigureCandidates([
+      block({ type: 'caption', section: 'Results', page: 8, original: 'Fig. 15: Coaching performance on long-horizon tasks.' }),
+      block({ type: 'caption', section: 'Appendix', page: 19, original: 'Fig. 15. Critically, none of the models use action-level supervision.' })
+    ]);
+
+    expect(figures).toHaveLength(1);
+    expect(figures[0]).toMatchObject({ pageNumber: 8, figureLabel: 'Fig. 15' });
+  });
+
   it('infers a wide real figure crop for full-width bottom method captions', () => {
     const crop = inferFigureCropBoxFromCaptionBlock(
       block({
@@ -404,6 +456,61 @@ describe('presentationOutline', () => {
     expect(crop!.y).toBeLessThan(430);
     expect(crop!.y + crop!.height).toBeLessThan(680);
     expect(crop!.height).toBeGreaterThan(250);
+  });
+
+  it('keeps a top-of-page figure crop above its caption instead of taking the paragraph below', () => {
+    const crop = inferFigureCropBoxFromCaptionBlock(
+      block({
+        type: 'caption',
+        section: 'Method',
+        page: 2,
+        original: 'Fig. 1. Overview of the proposed controller.',
+        bounds: { x: 72, y: 150, width: 468, height: 18, pageWidth: 612, pageHeight: 792 }
+      })
+    );
+
+    expect(crop).toBeDefined();
+    expect(crop!.y + crop!.height).toBeLessThanOrEqual(150);
+  });
+
+  it('uses the nearest preceding paragraph as a safe upper crop boundary', () => {
+    const caption = block({
+      type: 'caption',
+      section: 'Results',
+      page: 5,
+      original: 'Fig. 5. Success rate comparison under dynamic obstacles.',
+      bounds: { x: 70, y: 650, width: 470, height: 18, pageWidth: 612, pageHeight: 792 }
+    });
+    const preceding = block({
+      type: 'paragraph',
+      section: 'Results',
+      page: 5,
+      original: 'The following comparison summarizes the main evaluation.',
+      bounds: { x: 70, y: 330, width: 470, height: 55, pageWidth: 612, pageHeight: 792 }
+    });
+
+    const crop = inferFigureCropBoxFromCaptionBlock(caption, [preceding, caption]);
+
+    expect(crop).toBeDefined();
+    expect(crop!.y).toBeGreaterThan(385);
+    expect(crop!.y + crop!.height).toBeLessThan(650);
+  });
+
+  it('keeps a narrow setup figure inside its source column', () => {
+    const crop = inferFigureCropBoxFromCaptionBlock(
+      block({
+        type: 'caption',
+        section: 'Robot system details',
+        page: 6,
+        original: 'Fig. 4. Illustrations of some of the robots in our experiments.',
+        bounds: { x: 326, y: 724, width: 250, height: 18, pageWidth: 612, pageHeight: 792 }
+      })
+    );
+
+    expect(crop).toBeDefined();
+    expect(crop!.x).toBeGreaterThan(280);
+    expect(crop!.width).toBeLessThan(310);
+    expect(crop!.x + crop!.width).toBeLessThanOrEqual(612);
   });
 
   it('keeps source-grounded local bullets when AI enhancement returns generic claims', () => {

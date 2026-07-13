@@ -47,10 +47,14 @@ import { createPresentationPptxBuffer } from './lib/presentationPptx';
 import {
   enrichPresentationDraftWithPdfFigureCrops,
   extractPdfFigureAssets,
-  mergePdfFigureAssetUpdate
+  mergeExtractedFigureAssetsIntoDraft,
+  mergePdfFigureAssetUpdate,
+  renderPdfFigurePagePreview,
+  type FigureExtractionProgress,
+  type PdfFigurePagePreview
 } from './lib/presentationFigureAssets';
 import { NotesPanel } from './components/NotesPanel';
-import { PdfFigureAssetsPanel } from './components/PdfFigureAssetsPanel';
+import { PdfFigureAssetsPanel, PdfFigureWorkspaceDialog } from './components/PdfFigureAssetsPanel';
 import { PdfViewer } from './components/PdfViewer';
 import { extractPdfBlocksFromData } from './lib/pdfOutlineExtraction';
 import { decodeBase64ToUint8Array } from './lib/binary';
@@ -268,6 +272,8 @@ export default function App() {
   } = useReaderSidePanel();
   const [isPresentationGenerating, setIsPresentationGenerating] = useState(false);
   const [isPdfFigureExtracting, setIsPdfFigureExtracting] = useState(false);
+  const [isPdfFigureWorkspaceOpen, setIsPdfFigureWorkspaceOpen] = useState(false);
+  const [pdfFigureExtractionProgress, setPdfFigureExtractionProgress] = useState<FigureExtractionProgress | null>(null);
   const activePdfPathRef = useRef<string | null>(null);
   const displayedPdfPathRef = useRef<string | null>(null);
   const sourcePdfRef = useRef<PdfState | null>(null);
@@ -276,6 +282,7 @@ export default function App() {
   const extractedPdfBlocksReadyRef = useRef<(blocks: ExtractedPdfBlock[]) => void>(() => undefined);
   const pdfTranslationRunRef = useRef(0);
   const pdfFigureExtractionRunRef = useRef(0);
+  const pdfFigurePagePreviewCacheRef = useRef<Map<string, PdfFigurePagePreview>>(new Map());
   const presentationGenerationRunRef = useRef(0);
   const paperOpenRunRef = useRef(0);
   const paperLibraryRef = useRef(paperLibrary);
@@ -426,6 +433,9 @@ export default function App() {
     }
     setExtractedPdfBlocks([]);
     setPdfFigureAssets([]);
+    setIsPdfFigureWorkspaceOpen(false);
+    setPdfFigureExtractionProgress(null);
+    pdfFigurePagePreviewCacheRef.current.clear();
     setAiCacheDocument(null);
     setPdfViewportState(null);
     setCurrentPage(initialPage);
@@ -467,6 +477,23 @@ export default function App() {
         [paperId]: {
           figures: updates.figures ?? previous.figures,
           pdfTextSnippets: updates.pdfTextSnippets ?? previous.pdfTextSnippets
+        }
+      };
+    });
+  }
+
+  function updateRememberedPaperTutorFigures(
+    paperId: string | null | undefined,
+    update: (figures: PresentationFigureCandidate[]) => PresentationFigureCandidate[]
+  ): void {
+    if (!paperId) return;
+    setPaperTutorEvidenceByPaperId((current) => {
+      const previous = current[paperId] ?? { figures: [], pdfTextSnippets: [] };
+      return {
+        ...current,
+        [paperId]: {
+          ...previous,
+          figures: update(previous.figures)
         }
       };
     });
@@ -855,12 +882,13 @@ export default function App() {
     }
   }
 
-  async function handleExtractPdfFigures(): Promise<void> {
+  async function handleExtractPdfFigures(options: { rescan?: boolean } = {}): Promise<void> {
     if (!pdf) {
       setStatusMessage('请先打开原文 PDF，再提取文献图片。');
       return;
     }
 
+    setIsPdfFigureWorkspaceOpen(true);
     const extractionRunId = pdfFigureExtractionRunRef.current + 1;
     pdfFigureExtractionRunRef.current = extractionRunId;
     const sourcePdfPath = pdf.filePath;
@@ -893,43 +921,58 @@ export default function App() {
         setStatusMessage('没有在当前 PDF 中识别到 Figure/Table caption，暂未提取到图片。');
         return;
       }
-      const visibleCandidates = candidates.slice(0, 8);
-      setPdfFigureAssets(candidates);
+      const existingBySource = new Map(
+        pdfFigureAssets.map((figure) => [getFigureAssetSourceKey(figure), figure])
+      );
+      const baseFigures = (options.rescan || pdfFigureAssets.length === 0 ? candidates : pdfFigureAssets).map((figure) => {
+        if (!options.rescan) return figure;
+        const existing = existingBySource.get(getFigureAssetSourceKey(figure));
+        return existing ? { ...figure, selected: existing.selected } : figure;
+      });
+      const pendingFigures = baseFigures
+        .filter((figure) => figure.cropBox && !figure.imageDataUrl)
+        .slice(0, 24);
+      setPdfFigureAssets(baseFigures);
       rememberPaperTutorEvidence(evidencePaper?.id ?? activePaperId, {
-        figures: candidates,
+        figures: baseFigures,
         pdfTextSnippets: buildPaperTutorTextSnippets(blocks)
       });
 
-      const figures = await extractPdfFigureAssets(pdf.data, candidates, {
-        maxFigures: 8,
-        renderScale: 1.1,
+      if (pendingFigures.length === 0) {
+        setStatusMessage(`已识别 ${baseFigures.length} 个图表候选，当前没有待提取项。`);
+        return;
+      }
+
+      const extractedBatch = await extractPdfFigureAssets(pdf.data, pendingFigures, {
+        maxFigures: pendingFigures.length,
+        renderScale: 2.25,
         isCancelled: () => !isCurrentExtraction(),
+        onProgress: (progress) => {
+          if (isCurrentExtraction()) setPdfFigureExtractionProgress(progress);
+        },
         onFigureExtracted: (figure) => {
           if (!isCurrentExtraction()) {
             return;
           }
-          setPdfFigureAssets((currentFigures) =>
-            currentFigures.length > 0
-              ? mergePdfFigureAssetUpdate(currentFigures, figure)
-              : mergePdfFigureAssetUpdate(visibleCandidates, figure)
-          );
+          setPdfFigureAssets((currentFigures) => mergePdfFigureAssetUpdate(currentFigures, figure));
         }
       });
       if (!isCurrentExtraction()) {
         return;
       }
+      const extractedById = new Map(extractedBatch.map((figure) => [figure.imageId, figure]));
+      const figures = baseFigures.map((figure) => extractedById.get(figure.imageId) ?? figure);
       setPdfFigureAssets(figures);
       rememberPaperTutorEvidence(evidencePaper?.id ?? activePaperId, {
         figures,
         pdfTextSnippets: buildPaperTutorTextSnippets(blocks)
       });
       const imageReadyCount = figures.filter((figure) => figure.imageDataUrl).length;
-      const nativeImageCount = figures.filter((figure) => figure.imageExtractionMethod === 'native-image').length;
-      const nativeCompositeCount = figures.filter((figure) => figure.imageExtractionMethod === 'native-image-composite').length;
       const pageCropCount = figures.filter((figure) => figure.imageExtractionMethod === 'page-crop').length;
+      const remainingCount = figures.filter((figure) => figure.cropBox && !figure.imageDataUrl).length;
       setStatusMessage(
         imageReadyCount > 0
-          ? `已识别 ${figures.length} 个图表候选，提取 ${imageReadyCount} 张图像：PDF 内嵌图像 ${nativeImageCount} 张，PDF 内嵌组合 ${nativeCompositeCount} 张，页面裁剪兜底 ${pageCropCount} 张。`
+          ? `已识别 ${figures.length} 个图表候选，生成 ${imageReadyCount} 张完整图像（页面保真裁剪 ${pageCropCount} 张）${remainingCount > 0 ? `；还有 ${remainingCount} 项可继续提取或手动调整` : ''}。`
           : `已识别 ${figures.length} 个图表 caption，但未能可靠提取图像；仍可把 caption 提供给 AI。`
       );
     } catch (error) {
@@ -939,8 +982,122 @@ export default function App() {
     } finally {
       if (pdfFigureExtractionRunRef.current === extractionRunId) {
         setIsPdfFigureExtracting(false);
+        setPdfFigureExtractionProgress(null);
       }
     }
+  }
+
+  function handleOpenPdfFigureWorkspace(): void {
+    setIsPdfFigureWorkspaceOpen(true);
+    if (pdfFigureAssets.length === 0 && !isPdfFigureExtracting) {
+      void handleExtractPdfFigures();
+    }
+  }
+
+  function handleCancelPdfFigureExtraction(): void {
+    pdfFigureExtractionRunRef.current += 1;
+    setIsPdfFigureExtracting(false);
+    setPdfFigureExtractionProgress(null);
+    setStatusMessage('已取消当前图表提取；已完成的素材仍保留。');
+  }
+
+  function handleTogglePdfFigure(imageId: string, selected: boolean): void {
+    const update = (figures: PresentationFigureCandidate[]): PresentationFigureCandidate[] =>
+      figures.map((figure) => figure.imageId === imageId ? { ...figure, selected } : figure);
+    setPdfFigureAssets(update);
+    updateRememberedPaperTutorFigures(activePaperId, update);
+  }
+
+  function handleSetPdfFigureSelection(imageIds: string[], selected: boolean): void {
+    const ids = new Set(imageIds);
+    const update = (figures: PresentationFigureCandidate[]): PresentationFigureCandidate[] =>
+      figures.map((figure) => ids.has(figure.imageId) ? { ...figure, selected } : figure);
+    setPdfFigureAssets(update);
+    updateRememberedPaperTutorFigures(activePaperId, update);
+  }
+
+  function handleNavigateToPdfFigure(pageNumber: number): void {
+    setPdfViewMode('source');
+    setCurrentPage(pageNumber);
+    setIsPdfFigureWorkspaceOpen(false);
+    setStatusMessage(`已定位到图表来源：第 ${pageNumber} 页。`);
+  }
+
+  async function handleLoadPdfFigurePagePreview(pageNumber: number): Promise<PdfFigurePagePreview> {
+    if (!pdf) throw new Error('请先打开原文 PDF。');
+    const cacheKey = `${pdf.filePath}:${pageNumber}`;
+    const cached = pdfFigurePagePreviewCacheRef.current.get(cacheKey);
+    if (cached) return cached;
+    const preview = await renderPdfFigurePagePreview(pdf.data, pageNumber, 1.35);
+    pdfFigurePagePreviewCacheRef.current.set(cacheKey, preview);
+    return preview;
+  }
+
+  async function handleApplyPdfFigureCrop(
+    figure: PresentationFigureCandidate,
+    cropBox: NonNullable<PresentationFigureCandidate['cropBox']>
+  ): Promise<void> {
+    if (!pdf) return;
+    const extractionRunId = pdfFigureExtractionRunRef.current + 1;
+    pdfFigureExtractionRunRef.current = extractionRunId;
+    const sourcePdfPath = pdf.filePath;
+    setIsPdfFigureExtracting(true);
+    setStatusMessage(`正在按手动范围重新生成 ${figure.figureLabel ?? `第 ${figure.pageNumber} 页图表`}...`);
+    const updatedSource = {
+      ...figure,
+      cropBox,
+      cropManuallyAdjusted: true,
+      cropStatus: 'crop-ready' as const,
+      imageDataUrl: undefined,
+      imageMimeType: undefined,
+      imageExtractionMethod: undefined,
+      imagePixelWidth: undefined,
+      imagePixelHeight: undefined
+    };
+    try {
+      const [updatedFigure] = await extractPdfFigureAssets(pdf.data, [updatedSource], {
+        maxFigures: 1,
+        renderScale: 3.5,
+        isCancelled: () => pdfFigureExtractionRunRef.current !== extractionRunId || activePdfPathRef.current !== sourcePdfPath,
+        onProgress: setPdfFigureExtractionProgress
+      });
+      if (pdfFigureExtractionRunRef.current !== extractionRunId || !updatedFigure) return;
+      const update = (figures: PresentationFigureCandidate[]): PresentationFigureCandidate[] =>
+        mergePdfFigureAssetUpdate(figures, updatedFigure);
+      setPdfFigureAssets(update);
+      updateRememberedPaperTutorFigures(activePaperId, update);
+      setStatusMessage(`已按手动裁剪生成高清图：${updatedFigure.imagePixelWidth ?? 0} × ${updatedFigure.imagePixelHeight ?? 0}。`);
+    } finally {
+      if (pdfFigureExtractionRunRef.current === extractionRunId) {
+        setIsPdfFigureExtracting(false);
+        setPdfFigureExtractionProgress(null);
+      }
+    }
+  }
+
+  async function handleExportSelectedPdfFigures(): Promise<void> {
+    const figures = pdfFigureAssets.filter((figure) => figure.selected !== false && figure.imageDataUrl);
+    if (figures.length === 0) {
+      setStatusMessage('请先选择至少一张已提取图表。');
+      return;
+    }
+    const result = await window.electronAPI.exportFigureAssets({
+      defaultDirectoryName: `${(activePaper?.englishTitle || pdf?.fileName || 'paper').replace(/\.[^.]+$/u, '')}-figures`,
+      paperTitle: activePaper?.chineseTitle || activePaper?.englishTitle || pdf?.fileName || 'Untitled paper',
+      figures: figures.map((figure, index) => ({
+        fileName: buildFigureAssetFileName(figure, index),
+        contentBase64: figure.imageDataUrl!.replace(/^data:image\/[a-z0-9.+-]+;base64,/iu, ''),
+        pageNumber: figure.pageNumber,
+        figureLabel: figure.figureLabel,
+        caption: figure.caption,
+        assetType: figure.assetType,
+        extractionMethod: figure.imageExtractionMethod,
+        pixelWidth: figure.imagePixelWidth,
+        pixelHeight: figure.imagePixelHeight,
+        cropBox: figure.cropBox
+      }))
+    });
+    setStatusMessage(result ? `已导出 ${result.fileCount} 张图表和 metadata：${result.directoryPath}` : '已取消导出图表素材。');
   }
 
   async function handleGeneratePresentationFromCurrentPdf(): Promise<void> {
@@ -983,26 +1140,39 @@ export default function App() {
         blocks,
         targetSlideCount: 12
       });
+      draft = mergeExtractedFigureAssetsIntoDraft(draft, pdfFigureAssets);
 
-      try {
-        setStatusMessage('正在生成组会 PPT 大纲，并尝试裁剪关键图表...');
-        draft = await withPresentationCropTimeout(
-          draft,
-          enrichPresentationDraftWithPdfFigureCrops(draft, pdf.data, {
-            maxFigures: 4,
-            renderScale: 1.25,
-            isCancelled: () => !isCurrentPresentationGeneration()
-          }),
-          12000
-        );
-      } catch (figureError) {
-        console.warn('Failed to crop presentation figures from PDF pages.', figureError);
+      if (appSettings.presentation.extractOriginalFigures) {
+        try {
+          const missingSelectedFigures = draft.figures.filter(
+            (figure) => figure.selected !== false && figure.cropBox && !figure.imageDataUrl
+          ).length;
+          if (missingSelectedFigures > 0) {
+            setStatusMessage('正在生成组会 PPT 大纲，并补齐尚未提取的关键图表...');
+            draft = await withPresentationCropTimeout(
+              draft,
+              enrichPresentationDraftWithPdfFigureCrops(draft, pdf.data, {
+                maxFigures: Math.min(12, missingSelectedFigures),
+                renderScale: appSettings.presentation.preferOriginalFigures ? 2.25 : 1.6,
+                isCancelled: () => !isCurrentPresentationGeneration()
+              }),
+              24000
+            );
+          }
+        } catch (figureError) {
+          console.warn('Failed to crop presentation figures from PDF pages.', figureError);
+        }
       }
 
       if (!isCurrentPresentationGeneration()) {
         return;
       }
       setPresentationDraft(draft);
+      setPdfFigureAssets(draft.figures);
+      rememberPaperTutorEvidence(paper.id, {
+        figures: draft.figures,
+        pdfTextSnippets: buildPaperTutorTextSnippets(blocks)
+      });
       setStatusMessage(
         blocks.length > 0
           ? `已从当前 PDF 提取 ${blocks.length} 个正文/图表块，并生成 ${draft.slides.length} 页组会 PPT 草稿。`
@@ -1048,7 +1218,7 @@ export default function App() {
   async function handleExportPresentationJson(draft: PresentationDraft): Promise<void> {
     try {
       const result = await window.electronAPI.saveTextFile({
-        content: JSON.stringify(draft, null, 2),
+        content: JSON.stringify(stripPresentationImagePayloads(draft), null, 2),
         defaultFileName: buildPresentationExportFileName(draft.title, 'json'),
         extension: 'json'
       });
@@ -2626,18 +2796,23 @@ export default function App() {
                 <button
                   type="button"
                   className="secondary-button button-with-icon"
-                  disabled={!pdf || isPdfFigureExtracting}
-                  onClick={handleExtractPdfFigures}
+                  disabled={!pdf}
+                  onClick={handleOpenPdfFigureWorkspace}
                 >
                   <img className="button-icon" src={searchIcon} alt="" />
-                  <span>{isPdfFigureExtracting ? '正在提取...' : '提取 PDF 图表'}</span>
+                  <span>{isPdfFigureExtracting ? '查看提取进度' : pdfFigureAssets.length > 0 ? '管理图表素材' : '提取 PDF 图表'}</span>
                 </button>
                 <button type="button" className="ghost-button button-with-icon" disabled={isPdfTranslationBusy} onClick={handleCheckPdfTranslationEngine}>
                   <img className="button-icon" src={searchIcon} alt="" />
                   <span>检查引擎</span>
                 </button>
               </div>
-              <PdfFigureAssetsPanel figures={pdfFigureAssets} />
+              <PdfFigureAssetsPanel
+                figures={pdfFigureAssets}
+                isExtracting={isPdfFigureExtracting}
+                progress={pdfFigureExtractionProgress}
+                onOpen={handleOpenPdfFigureWorkspace}
+              />
               <p>
                 {pdfTranslationStatus ||
                   pdfTranslationEngine?.message ||
@@ -2857,6 +3032,26 @@ export default function App() {
         </section>
       </main>
 
+        <PdfFigureWorkspaceDialog
+          open={isPdfFigureWorkspaceOpen}
+          figures={pdfFigureAssets}
+          isExtracting={isPdfFigureExtracting}
+          progress={pdfFigureExtractionProgress}
+          onClose={() => setIsPdfFigureWorkspaceOpen(false)}
+          onToggleFigure={handleTogglePdfFigure}
+          onSetSelection={handleSetPdfFigureSelection}
+          onNavigateToPage={handleNavigateToPdfFigure}
+          onExtractPending={() => void handleExtractPdfFigures()}
+          onRescan={() => void handleExtractPdfFigures({ rescan: true })}
+          onCancelExtraction={handleCancelPdfFigureExtraction}
+          onExportSelected={() => void handleExportSelectedPdfFigures()}
+          onGeneratePresentation={() => {
+            setIsPdfFigureWorkspaceOpen(false);
+            void handleGeneratePresentationFromCurrentPdf();
+          }}
+          onLoadPagePreview={handleLoadPdfFigurePagePreview}
+          onApplyCrop={handleApplyPdfFigureCrop}
+        />
         <ConnectedStatusBar />
       </div>
     </div>
@@ -2888,6 +3083,35 @@ function buildPresentationExportFileName(title: string, extension: 'json' | 'md'
     .replace(/[. ]+$/gu, '')
     .slice(0, 80);
   return `${safeTitle || 'seminar-presentation'}-slides.${extension}`;
+}
+
+function getFigureAssetSourceKey(figure: PresentationFigureCandidate): string {
+  return `${figure.pageNumber}:${(figure.figureLabel ?? figure.caption).trim().toLowerCase()}`;
+}
+
+function buildFigureAssetFileName(figure: PresentationFigureCandidate, index: number): string {
+  const label = figure.figureLabel || `${figure.assetType === 'table' ? 'table' : 'figure'}-${index + 1}`;
+  const safeLabel = label
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/giu, '-')
+    .replace(/-+/gu, '-')
+    .replace(/^-|-$/gu, '')
+    .toLowerCase();
+  return `p${figure.pageNumber}-${safeLabel || 'figure'}-${String(index + 1).padStart(2, '0')}.png`;
+}
+
+function stripPresentationImagePayloads(draft: PresentationDraft): PresentationDraft {
+  const stripFigure = (figure: PresentationFigureCandidate): PresentationFigureCandidate => {
+    const { imageDataUrl: _imageDataUrl, ...metadata } = figure;
+    return metadata;
+  };
+  return {
+    ...draft,
+    figures: draft.figures.map(stripFigure),
+    slides: draft.slides.map((slide) => ({
+      ...slide,
+      figures: slide.figures.map(stripFigure)
+    }))
+  };
 }
 
 async function withPresentationCropTimeout(

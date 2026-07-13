@@ -36,6 +36,8 @@ export interface PresentationFigureCandidate {
   pageNumber: number;
   caption: string;
   source: 'pdf-caption';
+  figureLabel?: string;
+  assetType?: 'figure' | 'table';
   suggestedSlide: PresentationSlideType;
   figureKind?: PresentationFigureKind;
   selected?: boolean;
@@ -47,6 +49,7 @@ export interface PresentationFigureCandidate {
   imageExtractionMethod?: 'native-image' | 'native-image-composite' | 'page-crop';
   imagePixelWidth?: number;
   imagePixelHeight?: number;
+  cropManuallyAdjusted?: boolean;
 }
 
 export interface PresentationFigureCropBox {
@@ -202,7 +205,9 @@ const EXPERIMENT_SECTION_PATTERN = /experiment|evaluation|dataset|benchmark|sett
 const RESULT_SECTION_PATTERN = /result|quantitative|comparison|performance|结果|对比|性能/iu;
 const CONCLUSION_SECTION_PATTERN = /conclusion|discussion|future|总结|结论|讨论|未来/iu;
 const LIMITATION_SECTION_PATTERN = /limitation|failure|weakness|局限|不足|失败/iu;
-const CAPTION_PATTERN = /^(fig\.?|figure|table|tab\.?)\s*\d+/iu;
+const CAPTION_LABEL_PATTERN = /^(?:supplementary\s+)?(?:fig(?:ure)?\.?|table|tab\.?)\s*(?:[a-z]?\d+[a-z]?|[ivxlcdm]+)(?:\s*\([a-z0-9]+\))?/iu;
+const CAPTION_PATTERN = /^(?:supplementary\s+)?(?:fig(?:ure)?\.?|table|tab\.?)\s*(?:[a-z]?\d+[a-z]?|[ivxlcdm]+)(?:\s*\([a-z0-9]+\))?\s*[:.\-–—]/iu;
+const UPPERCASE_TABLE_CAPTION_PATTERN = /^TABLE\s+[IVXLCDM]+\s+(?=[A-Z])/u;
 
 export function buildPresentationDraft(input: BuildPresentationDraftInput): PresentationDraft {
   return buildLocalPresentationDraft(input);
@@ -704,30 +709,134 @@ function extractEvidenceTokens(text: string): string[] {
 export function extractFigureCandidates(blocks: ExtractedPdfBlock[]): PresentationFigureCandidate[] {
   let figureIndex = 0;
 
-  return blocks
-    .filter((block) => block.type === 'caption' || CAPTION_PATTERN.test(block.original.trim()))
+  const candidates = mergeFigureCaptionContinuations(blocks)
     .filter((block) => !isReferenceSection(block.section))
     .map((block) => {
       figureIndex += 1;
       const figureKind = classifyFigureKind(block.original);
       const suggestedSlide = suggestFigureSlide(block.original, figureKind);
-      const cropBox = inferFigureCropBoxFromCaptionBlock(block);
+      const cropBox = inferFigureCropBoxFromCaptionBlock(block, blocks);
+      const figureLabel = extractFigureLabel(block.original);
+      const assetType: PresentationFigureCandidate['assetType'] = /^\s*(?:supplementary\s+)?(?:table|tab\.?)\b/iu.test(block.original) ? 'table' : 'figure';
       return {
         imageId: `fig-${block.page}-${figureIndex}`,
         pageNumber: block.page,
         caption: normalizeInlineText(block.original, 240),
         source: 'pdf-caption' as const,
+        figureLabel,
+        assetType,
         suggestedSlide,
         figureKind,
         selected: true,
         suggestedReason: getFigureReason(suggestedSlide, figureKind),
         cropBox,
         cropStatus: cropBox ? 'crop-ready' : 'caption-only'
-      };
+      } satisfies PresentationFigureCandidate;
     });
+  const seenLabels = new Set<string>();
+  return candidates.filter((figure) => {
+    if (!figure.figureLabel) return true;
+    const key = `${figure.assetType}:${figure.figureLabel.toLowerCase()}`;
+    if (seenLabels.has(key)) return false;
+    seenLabels.add(key);
+    return true;
+  });
 }
 
-export function inferFigureCropBoxFromCaptionBlock(block: ExtractedPdfBlock): PresentationFigureCropBox | undefined {
+function mergeFigureCaptionContinuations(blocks: ExtractedPdfBlock[]): ExtractedPdfBlock[] {
+  const captions: ExtractedPdfBlock[] = [];
+
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (!looksLikeFigureCaptionStart(block.original)) {
+      continue;
+    }
+
+    let merged = block;
+    for (let continuationIndex = index + 1; continuationIndex < Math.min(blocks.length, index + 3); continuationIndex += 1) {
+      const continuation = blocks[continuationIndex];
+      if (!isLikelyCaptionContinuation(merged, continuation)) {
+        break;
+      }
+      merged = {
+        ...merged,
+        original: `${merged.original.trim()} ${continuation.original.trim()}`,
+        bounds: mergeFigureCaptionBounds(merged.bounds, continuation.bounds)
+      };
+      index = continuationIndex;
+    }
+    captions.push(merged);
+  }
+
+  return captions;
+}
+
+function isLikelyCaptionContinuation(caption: ExtractedPdfBlock, continuation: ExtractedPdfBlock): boolean {
+  if (
+    continuation.page !== caption.page ||
+    continuation.type !== 'paragraph' ||
+    continuation.section !== caption.section ||
+    looksLikeFigureCaptionStart(continuation.original) ||
+    /[.!?。！？][)\]"']*$/u.test(caption.original.trim())
+  ) {
+    return false;
+  }
+
+  const captionBounds = caption.bounds;
+  const continuationBounds = continuation.bounds;
+  if (!captionBounds || !continuationBounds) {
+    return /^[a-z(]/u.test(continuation.original.trim());
+  }
+
+  const captionBottom = captionBounds.y + captionBounds.height;
+  const verticalGap = continuationBounds.y - captionBottom;
+  const overlap = Math.max(
+    0,
+    Math.min(captionBounds.x + captionBounds.width, continuationBounds.x + continuationBounds.width) -
+      Math.max(captionBounds.x, continuationBounds.x)
+  );
+  const overlapRatio = overlap / Math.max(1, Math.min(captionBounds.width, continuationBounds.width));
+  return verticalGap >= -3 && verticalGap <= Math.max(18, captionBounds.height * 1.8) && overlapRatio >= 0.45;
+}
+
+function mergeFigureCaptionBounds(
+  first: ExtractedPdfBlock['bounds'],
+  second: ExtractedPdfBlock['bounds']
+): ExtractedPdfBlock['bounds'] {
+  if (!first) return second;
+  if (!second) return first;
+  const x = Math.min(first.x, second.x);
+  const y = Math.min(first.y, second.y);
+  const right = Math.max(first.x + first.width, second.x + second.width);
+  const bottom = Math.max(first.y + first.height, second.y + second.height);
+  return {
+    x,
+    y,
+    width: right - x,
+    height: bottom - y,
+    pageWidth: first.pageWidth ?? second.pageWidth,
+    pageHeight: first.pageHeight ?? second.pageHeight
+  };
+}
+
+function extractFigureLabel(caption: string): string | undefined {
+  const match = caption.trim().match(CAPTION_LABEL_PATTERN);
+  if (!match) return undefined;
+  return match[0]
+    .replace(/\s+/gu, ' ')
+    .replace(/\s+([.:])/gu, '$1')
+    .trim();
+}
+
+function looksLikeFigureCaptionStart(text: string): boolean {
+  const normalized = text.trim();
+  return CAPTION_PATTERN.test(normalized) || UPPERCASE_TABLE_CAPTION_PATTERN.test(normalized);
+}
+
+export function inferFigureCropBoxFromCaptionBlock(
+  block: ExtractedPdfBlock,
+  pageBlocks: ExtractedPdfBlock[] = []
+): PresentationFigureCropBox | undefined {
   const bounds = block.bounds;
   if (!bounds || !bounds.pageWidth || !bounds.pageHeight) {
     return undefined;
@@ -743,7 +852,10 @@ export function inferFigureCropBoxFromCaptionBlock(block: ExtractedPdfBlock): Pr
   const figurePadding = Math.max(8, pageHeight * 0.012);
   const captionTop = clamp(bounds.y, 0, pageHeight);
   const targetHeight = clamp(pageHeight * getFigureCropHeightRatio(figureKind, isTableCaption), pageHeight * 0.18, pageHeight * 0.5);
-  const captionLooksAboveVisual = isTableCaption || captionTop < pageHeight * 0.22;
+  // Figure captions are conventionally below the visual even near the top of a page.
+  // Tables are the opposite. Using a fixed y threshold here used to crop the paragraph
+  // below top-of-page figures instead of the actual figure above the caption.
+  const captionLooksAboveVisual = isTableCaption;
   const initialCropY = captionLooksAboveVisual
     ? clamp(captionTop + bounds.height + figurePadding, verticalMargin, pageHeight * 0.82)
     : clamp(captionTop - targetHeight - figurePadding, verticalMargin, Math.max(verticalMargin, captionTop - 30));
@@ -774,13 +886,55 @@ export function inferFigureCropBoxFromCaptionBlock(block: ExtractedPdfBlock): Pr
     captionLooksAboveVisual
   });
 
-  return {
+  const safeExpandedHeight = captionLooksAboveVisual
+    ? expandedCrop.height
+    : Math.min(
+        expandedCrop.height,
+        Math.max(1, captionTop - figurePadding - Math.max(10, pageHeight * 0.02) - expandedCrop.y)
+      );
+  const inferredCrop = {
     x: roundNumber(expandedCrop.x),
     y: roundNumber(expandedCrop.y),
     width: roundNumber(clamp(expandedCrop.width, 1, pageWidth - expandedCrop.x)),
-    height: roundNumber(clamp(expandedCrop.height, 1, pageHeight - expandedCrop.y)),
+    height: roundNumber(clamp(safeExpandedHeight, 1, pageHeight - expandedCrop.y)),
     pageWidth: roundNumber(pageWidth),
     pageHeight: roundNumber(pageHeight)
+  };
+  return captionLooksAboveVisual
+    ? inferredCrop
+    : constrainFigureCropAboveCaption(inferredCrop, block, pageBlocks);
+}
+
+function constrainFigureCropAboveCaption(
+  crop: PresentationFigureCropBox,
+  caption: ExtractedPdfBlock,
+  pageBlocks: ExtractedPdfBlock[]
+): PresentationFigureCropBox {
+  const captionBounds = caption.bounds;
+  if (!captionBounds || pageBlocks.length === 0) return crop;
+  const captionTop = captionBounds.y;
+  const cropRight = crop.x + crop.width;
+  const blockers = pageBlocks.filter((block) => {
+    if (block === caption || block.page !== caption.page || !block.bounds) return false;
+    if (block.type !== 'paragraph' && block.type !== 'heading') return false;
+    const bounds = block.bounds;
+    const bottom = bounds.y + bounds.height;
+    if (bottom >= captionTop - 10 || bottom <= crop.y) return false;
+    const overlap = Math.max(0, Math.min(cropRight, bounds.x + bounds.width) - Math.max(crop.x, bounds.x));
+    return overlap / Math.max(1, Math.min(crop.width, bounds.width)) >= 0.42;
+  });
+  const nearestBlockerBottom = blockers.reduce(
+    (nearest, block) => Math.max(nearest, (block.bounds?.y ?? 0) + (block.bounds?.height ?? 0)),
+    0
+  );
+  if (nearestBlockerBottom <= crop.y) return crop;
+  const nextY = Math.min(captionTop - 36, nearestBlockerBottom + Math.max(8, crop.pageHeight * 0.012));
+  const nextHeight = captionTop - Math.max(8, crop.pageHeight * 0.012) - nextY;
+  if (nextHeight < crop.pageHeight * 0.12) return crop;
+  return {
+    ...crop,
+    y: roundNumber(nextY),
+    height: roundNumber(nextHeight)
   };
 }
 
@@ -799,7 +953,7 @@ function expandLikelyPartialFigureCrop(input: {
     input.isTableCaption ||
     input.figureKind === 'result' ||
     input.figureKind === 'method' ||
-    input.width < input.pageWidth * 0.65;
+    input.width >= input.pageWidth * 0.65;
   const marginX = Math.max(18, input.pageWidth * 0.035);
   const marginY = Math.max(18, input.pageHeight * 0.025);
   const expandedX = needsFullWidth ? marginX : input.x;
@@ -2028,7 +2182,7 @@ function isUsablePresentationNarrativeBlock(block: ExtractedPdfBlock): boolean {
   }
 
   if (
-    CAPTION_PATTERN.test(text) ||
+    looksLikeFigureCaptionStart(text) ||
     looksLikePseudoCode(text) ||
     looksLikeFormulaFragment(text) ||
     looksLikeFigureLabel(text) ||

@@ -20,6 +20,7 @@ describe('registerFileIpcHandlers', () => {
         saveTranslationCache: noop,
         exportMarkdown: noop,
         exportPptx: noop,
+        exportFigureAssets: noop,
         exportResearchWorkbookToExcel: noop,
         importResearchWorkbookFromExcel: noop
       }

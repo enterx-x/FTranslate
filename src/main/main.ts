@@ -88,6 +88,11 @@ import { PlotFileImportService, type PlotDataFileReadRequest } from './plotFileI
 import { PlotRendererService } from './plotRenderer';
 import { PlotRuntimeManager } from './plotRuntimeManager';
 import { ScientificPlotStore } from './scientificPlotStore';
+import type {
+  FigureAssetExportItem,
+  FigureAssetsExportRequest,
+  FigureAssetsExportResult
+} from '../shared/figureAssets';
 
 interface PdfFilePayload {
   filePath: string;
@@ -304,6 +309,7 @@ const MAX_PDF_FILE_BYTES = 300 * 1024 * 1024;
 const MAX_TEXT_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_TEXT_EXPORT_BYTES = 25 * 1024 * 1024;
 const MAX_BINARY_EXPORT_BYTES = 200 * 1024 * 1024;
+const MAX_FIGURE_ASSET_EXPORT_ITEMS = 64;
 const AI_METADATA_FETCH_TIMEOUT_MS = 15_000;
 const AI_FILE_FETCH_TIMEOUT_MS = 120_000;
 const ACADEMIC_WEB_FETCH_TIMEOUT_MS = 6_500;
@@ -3268,6 +3274,62 @@ async function translateArxivPapersForIpc(
   });
 }
 
+async function exportFigureAssetsForIpc(
+  request: FigureAssetsExportRequest
+): Promise<FigureAssetsExportResult | null> {
+  const figures = Array.isArray(request.figures)
+    ? request.figures.slice(0, MAX_FIGURE_ASSET_EXPORT_ITEMS)
+    : [];
+  if (figures.length === 0) throw new Error('没有可导出的图表素材。');
+
+  const result = await dialog.showOpenDialog({
+    title: '选择图表素材导出目录',
+    defaultPath: sanitizeFigureExportName(request.defaultDirectoryName, 'figure-assets'),
+    properties: ['openDirectory', 'createDirectory']
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+
+  const directoryPath = normalizeSafeFilePath(result.filePaths[0]);
+  const metadata: Array<Omit<FigureAssetExportItem, 'contentBase64'> & { fileName: string }> = [];
+  let totalBytes = 0;
+  for (let index = 0; index < figures.length; index += 1) {
+    const figure = figures[index];
+    const contentBase64 = assertBase64ContentSize(
+      figure.contentBase64,
+      MAX_BINARY_EXPORT_BYTES,
+      `figure asset ${index + 1}`
+    );
+    const bytes = Buffer.from(contentBase64, 'base64');
+    totalBytes += bytes.byteLength;
+    if (totalBytes > MAX_BINARY_EXPORT_BYTES) throw new Error('图表素材总大小超过 200 MB 导出限制。');
+    const fileName = sanitizeFigureExportName(figure.fileName, `figure-${index + 1}.png`);
+    const targetPath = path.join(directoryPath, fileName.toLowerCase().endsWith('.png') ? fileName : `${fileName}.png`);
+    await fs.writeFile(targetPath, bytes);
+    const { contentBase64: _contentBase64, ...figureMetadata } = figure;
+    metadata.push({ ...figureMetadata, fileName: path.basename(targetPath) });
+  }
+
+  const metadataPath = path.join(directoryPath, 'figure-assets.json');
+  await fs.writeFile(metadataPath, JSON.stringify({
+    schemaVersion: 1,
+    paperTitle: String(request.paperTitle ?? '').slice(0, 500),
+    exportedAt: new Date().toISOString(),
+    figures: metadata
+  }, null, 2), 'utf8');
+  return { directoryPath, fileCount: metadata.length, metadataPath };
+}
+
+function sanitizeFigureExportName(value: unknown, fallback: string): string {
+  const safe = String(value ?? '')
+    .replace(/[\\/:*?"<>|\u0000-\u001f]+/gu, '-')
+    .replace(/\s+/gu, '-')
+    .replace(/-+/gu, '-')
+    .replace(/^-|-$/gu, '')
+    .replace(/[. ]+$/gu, '')
+    .slice(0, 120);
+  return safe || fallback;
+}
+
 async function downloadArxivPdfForIpc(request: ArxivDownloadPdfRequest): Promise<PdfFilePayload | null> {
   const result = await dialog.showSaveDialog({
     title: '下载 arXiv PDF',
@@ -3485,6 +3547,7 @@ function registerIpcHandlers(): void {
       saveTranslationCache: saveTranslationCacheForIpc,
       exportMarkdown: exportMarkdownForIpc,
       exportPptx: exportPptxForIpc,
+      exportFigureAssets: exportFigureAssetsForIpc,
       exportResearchWorkbookToExcel,
       importResearchWorkbookFromExcel
     },

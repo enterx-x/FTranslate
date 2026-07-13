@@ -18,16 +18,33 @@ interface RenderedPdfPage {
   nativeImages: PdfNativeImageAsset[];
 }
 
+export interface FigureExtractionProgress {
+  processed: number;
+  total: number;
+  pageNumber: number;
+  stage: 'rendering-page' | 'extracting-figure';
+}
+
+export interface PdfFigurePagePreview {
+  dataUrl: string;
+  pixelWidth: number;
+  pixelHeight: number;
+  pageWidth: number;
+  pageHeight: number;
+}
+
 interface FigureCropOptions {
   maxFigures?: number;
   renderScale?: number;
   isCancelled?: () => boolean;
   onFigureExtracted?: (figure: PresentationFigureCandidate) => void;
+  onProgress?: (progress: FigureExtractionProgress) => void;
 }
 
 const DEFAULT_RENDER_SCALE = 2;
 const DEFAULT_MAX_FIGURES = 10;
 const MIN_NATIVE_IMAGE_AREA_RATIO = 0.08;
+const MIN_NATIVE_IMAGE_PANEL_AREA_RATIO = 0.012;
 const MIN_NATIVE_IMAGE_CROP_OVERLAP_RATIO = 0.1;
 const MIN_NATIVE_IMAGE_PANEL_CROP_OVERLAP_RATIO = 0.025;
 const MIN_NATIVE_IMAGE_SELF_OVERLAP_RATIO = 0.55;
@@ -123,7 +140,7 @@ export async function enrichPresentationDraftWithPdfFigureCrops(
   }
 
   const candidates = draft.figures
-    .filter((figure) => figure.selected !== false && figure.cropBox)
+    .filter((figure) => figure.selected !== false && figure.cropBox && !figure.imageDataUrl)
     .slice(0, options.maxFigures ?? DEFAULT_MAX_FIGURES);
 
   if (candidates.length === 0) {
@@ -163,40 +180,89 @@ export async function extractPdfFigureAssets(
 
   const loadingTask = pdfjsLib.getDocument({ data: pdfData.slice() });
   let pdfDocument: PDFDocumentProxy | null = null;
-  const renderedPages = new Map<number, RenderedPdfPage>();
-
   try {
     pdfDocument = await loadingTask.promise;
     const updatedFigures = new Map<string, PresentationFigureCandidate>();
+    const candidatesByPage = groupFigureCandidatesByPage(candidates);
+    let processed = 0;
 
-    for (const figure of candidates) {
+    for (const [pageNumber, pageFigures] of candidatesByPage) {
       if (options.isCancelled?.()) {
         break;
       }
 
-      const cropBox = figure.cropBox;
-      if (!cropBox) {
-        continue;
-      }
+      options.onProgress?.({
+        processed,
+        total: candidates.length,
+        pageNumber,
+        stage: 'rendering-page'
+      });
+      const renderedPages = new Map<number, RenderedPdfPage>();
+      const page = await getRenderedPage(pdfDocument, renderedPages, pageNumber, options.renderScale);
+      try {
+        for (const figure of pageFigures) {
+          if (options.isCancelled?.()) {
+            break;
+          }
+          const cropBox = figure.cropBox;
+          if (!cropBox) {
+            processed += 1;
+            continue;
+          }
 
-      const page = await getRenderedPage(pdfDocument, renderedPages, figure.pageNumber, options.renderScale);
-      const figureImage = (await extractNativeFigureImage(page.nativeImages, cropBox)) ?? cropFigureFromPage(page, cropBox);
-      if (!figureImage) {
-        continue;
-      }
+          options.onProgress?.({
+            processed,
+            total: candidates.length,
+            pageNumber,
+            stage: 'extracting-figure'
+          });
+          // Scientific figures often combine vector labels, axes and raster panels.
+          // Photo-heavy setup/case figures use embedded panels only as geometry hints;
+          // the final export still comes from the rendered page and keeps vector labels.
+          const nativeGuidedCropBox =
+            figure.cropManuallyAdjusted !== true && (figure.figureKind === 'setup' || figure.figureKind === 'case')
+              ? buildNativeGuidedFigureCropBox(page.nativeImages, cropBox)
+              : null;
+          // Native images are reliable vertical anchors, but one PDF panel may not
+          // represent the complete multi-panel figure. Keep the caption-inferred
+          // column width and only use the native group to remove prose above/below.
+          const effectiveCropBox = nativeGuidedCropBox
+            ? alignCropToDetectedColumn(
+                {
+                  ...cropBox,
+                  y: nativeGuidedCropBox.y,
+                  height: nativeGuidedCropBox.height
+                },
+                page.pageWidth
+              )
+            : cropBox;
+          const figureImage = cropFigureFromPage(page, effectiveCropBox, {
+            expand: figure.cropManuallyAdjusted !== true && !nativeGuidedCropBox,
+            trim: figure.cropManuallyAdjusted !== true
+          }) ?? (await extractNativeFigureImage(page.nativeImages, effectiveCropBox));
+          processed += 1;
+          if (!figureImage) {
+            continue;
+          }
 
-      const updatedFigure = {
-        ...figure,
-        imageDataUrl: figureImage.dataUrl,
-        imageMimeType: figureImage.mimeType,
-        imageExtractionMethod: figureImage.extractionMethod,
-        imagePixelWidth: figureImage.pixelWidth,
-        imagePixelHeight: figureImage.pixelHeight,
-        cropStatus: 'image-ready'
-      } satisfies PresentationFigureCandidate;
-      updatedFigures.set(figure.imageId, updatedFigure);
-      if (!options.isCancelled?.()) {
-        options.onFigureExtracted?.(updatedFigure);
+          const updatedFigure = {
+            ...figure,
+            imageDataUrl: figureImage.dataUrl,
+            imageMimeType: figureImage.mimeType,
+            imageExtractionMethod: figureImage.extractionMethod,
+            imagePixelWidth: figureImage.pixelWidth,
+            imagePixelHeight: figureImage.pixelHeight,
+            cropBox: effectiveCropBox,
+            cropStatus: 'image-ready'
+          } satisfies PresentationFigureCandidate;
+          updatedFigures.set(figure.imageId, updatedFigure);
+          if (!options.isCancelled?.()) {
+            options.onFigureExtracted?.(updatedFigure);
+          }
+        }
+      } finally {
+        releaseRenderedPage(page);
+        renderedPages.clear();
       }
     }
 
@@ -206,7 +272,6 @@ export async function extractPdfFigureAssets(
 
     return figures.map((figure) => updatedFigures.get(figure.imageId) ?? figure);
   } finally {
-    renderedPages.clear();
     if (pdfDocument) {
       await pdfDocument.destroy();
     } else {
@@ -215,11 +280,108 @@ export async function extractPdfFigureAssets(
   }
 }
 
+export async function renderPdfFigurePagePreview(
+  pdfData: Uint8Array,
+  pageNumber: number,
+  renderScale = 1.25
+): Promise<PdfFigurePagePreview> {
+  const loadingTask = pdfjsLib.getDocument({ data: pdfData.slice() });
+  let pdfDocument: PDFDocumentProxy | null = null;
+  let canvas: HTMLCanvasElement | null = null;
+  try {
+    pdfDocument = await loadingTask.promise;
+    if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > pdfDocument.numPages) {
+      throw new Error(`PDF page ${pageNumber} is outside the document range.`);
+    }
+    const page = await pdfDocument.getPage(pageNumber);
+    const unitViewport = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: renderScale });
+    canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.ceil(viewport.width));
+    canvas.height = Math.max(1, Math.ceil(viewport.height));
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Cannot create canvas context for PDF page preview.');
+    await page.render({ canvas, canvasContext: context, viewport }).promise;
+    return {
+      dataUrl: canvas.toDataURL('image/jpeg', 0.88),
+      pixelWidth: canvas.width,
+      pixelHeight: canvas.height,
+      pageWidth: unitViewport.width,
+      pageHeight: unitViewport.height
+    };
+  } finally {
+    if (canvas) {
+      canvas.width = 1;
+      canvas.height = 1;
+    }
+    if (pdfDocument) await pdfDocument.destroy();
+    else await loadingTask.destroy();
+  }
+}
+
+function groupFigureCandidatesByPage(
+  candidates: PresentationFigureCandidate[]
+): Map<number, PresentationFigureCandidate[]> {
+  const grouped = new Map<number, PresentationFigureCandidate[]>();
+  for (const figure of candidates) {
+    const pageFigures = grouped.get(figure.pageNumber) ?? [];
+    pageFigures.push(figure);
+    grouped.set(figure.pageNumber, pageFigures);
+  }
+  return grouped;
+}
+
+function releaseRenderedPage(page: RenderedPdfPage): void {
+  page.canvas.width = 1;
+  page.canvas.height = 1;
+  page.nativeImages.length = 0;
+}
+
 export function mergePdfFigureAssetUpdate(
   figures: PresentationFigureCandidate[],
   updatedFigure: PresentationFigureCandidate
 ): PresentationFigureCandidate[] {
   return figures.map((figure) => (figure.imageId === updatedFigure.imageId ? updatedFigure : figure));
+}
+
+export function mergeExtractedFigureAssetsIntoDraft(
+  draft: PresentationDraft,
+  assets: PresentationFigureCandidate[]
+): PresentationDraft {
+  const assetsById = new Map(assets.map((figure) => [figure.imageId, figure]));
+  const assetsBySource = new Map(assets.map((figure) => [getFigureSourceKey(figure), figure]));
+  const mergeFigure = (figure: PresentationFigureCandidate): PresentationFigureCandidate => {
+    const asset = assetsById.get(figure.imageId) ?? assetsBySource.get(getFigureSourceKey(figure));
+    if (!asset) return figure;
+    return {
+      ...figure,
+      selected: asset.selected,
+      cropBox: asset.cropBox ?? figure.cropBox,
+      cropStatus: asset.cropStatus ?? figure.cropStatus,
+      imageDataUrl: asset.imageDataUrl,
+      imageMimeType: asset.imageMimeType,
+      imageExtractionMethod: asset.imageExtractionMethod,
+      imagePixelWidth: asset.imagePixelWidth,
+      imagePixelHeight: asset.imagePixelHeight,
+      figureLabel: asset.figureLabel ?? figure.figureLabel,
+      assetType: asset.assetType ?? figure.assetType,
+      cropManuallyAdjusted: asset.cropManuallyAdjusted ?? figure.cropManuallyAdjusted
+    };
+  };
+  const figures = draft.figures.map(mergeFigure);
+  const figureById = new Map(figures.map((figure) => [figure.imageId, figure]));
+  return {
+    ...draft,
+    figures,
+    slides: draft.slides.map((slide) => ({
+      ...slide,
+      figures: slide.figures.map((figure) => figureById.get(figure.imageId) ?? mergeFigure(figure))
+    }))
+  };
+}
+
+function getFigureSourceKey(figure: PresentationFigureCandidate): string {
+  return `${figure.pageNumber}:${(figure.figureLabel ?? figure.caption).trim().toLowerCase()}`;
 }
 
 function mergeFigureUpdatesIntoDraft(
@@ -409,8 +571,12 @@ function loadImageElement(dataUrl: string): Promise<HTMLImageElement | null> {
   });
 }
 
-function cropFigureFromPage(page: RenderedPdfPage, cropBox: PresentationFigureCropBox): ExtractedFigureImageAsset | null {
-  const safeCropBox = expandCropBoxForRendering(cropBox);
+function cropFigureFromPage(
+  page: RenderedPdfPage,
+  cropBox: PresentationFigureCropBox,
+  options: { expand?: boolean; trim?: boolean } = {}
+): ExtractedFigureImageAsset | null {
+  const safeCropBox = options.expand === false ? cropBox : expandCropBoxForRendering(cropBox);
   const sx = clamp(Math.round(safeCropBox.x * page.scale), 0, page.canvas.width - 1);
   const sy = clamp(Math.round(safeCropBox.y * page.scale), 0, page.canvas.height - 1);
   const sw = clamp(Math.round(safeCropBox.width * page.scale), 1, page.canvas.width - sx);
@@ -428,12 +594,23 @@ function cropFigureFromPage(page: RenderedPdfPage, cropBox: PresentationFigureCr
   }
 
   cropContext.drawImage(page.canvas, sx, sy, sw, sh, 0, 0, sw, sh);
-  const outputCanvas = trimCanvasToNonWhiteContent(cropCanvas, cropContext) ?? cropCanvas;
+  const outputCanvas = options.trim === false
+    ? cropCanvas
+    : trimCanvasToNonWhiteContent(cropCanvas, cropContext) ?? cropCanvas;
+  const dataUrl = outputCanvas.toDataURL('image/png');
+  const pixelWidth = outputCanvas.width;
+  const pixelHeight = outputCanvas.height;
+  cropCanvas.width = 1;
+  cropCanvas.height = 1;
+  if (outputCanvas !== cropCanvas) {
+    outputCanvas.width = 1;
+    outputCanvas.height = 1;
+  }
   return {
-    dataUrl: outputCanvas.toDataURL('image/png'),
+    dataUrl,
     mimeType: 'image/png',
-    pixelWidth: outputCanvas.width,
-    pixelHeight: outputCanvas.height,
+    pixelWidth,
+    pixelHeight,
     extractionMethod: 'page-crop'
   };
 }
@@ -565,10 +742,163 @@ export function selectNativePdfImagesForCropBox(
   images: PdfNativeImageAsset[],
   cropBox: PresentationFigureCropBox
 ): PdfNativeImageAsset[] {
-  return getNativeImageCropMatches(images, cropBox, MIN_NATIVE_IMAGE_PANEL_CROP_OVERLAP_RATIO)
+  return getNativeImageCropMatches(
+    images,
+    cropBox,
+    MIN_NATIVE_IMAGE_PANEL_CROP_OVERLAP_RATIO,
+    MIN_NATIVE_IMAGE_PANEL_AREA_RATIO
+  )
     .sort((a, b) => a.image.bbox.y - b.image.bbox.y || a.image.bbox.x - b.image.bbox.x)
     .slice(0, MAX_NATIVE_COMPOSITE_IMAGES)
     .map((match) => match.image);
+}
+
+export function buildNativeGuidedFigureCropBox(
+  images: PdfNativeImageAsset[],
+  cropBox: PresentationFigureCropBox
+): PresentationFigureCropBox | null {
+  const seedPanels = selectNativePdfImagesForCropBox(images, cropBox);
+  const panels = expandNativePanelGroup(images, seedPanels, cropBox);
+  if (panels.length === 0) {
+    return null;
+  }
+
+  const left = Math.min(...panels.map((panel) => panel.bbox.x));
+  const top = Math.min(...panels.map((panel) => panel.bbox.y));
+  const right = Math.max(...panels.map((panel) => panel.bbox.x + panel.bbox.width));
+  const bottom = Math.max(...panels.map((panel) => panel.bbox.y + panel.bbox.height));
+  const unionWidth = Math.max(1, right - left);
+  const unionHeight = Math.max(1, bottom - top);
+  if ((unionWidth * unionHeight) / Math.max(1, getBoxArea(cropBox)) < 0.08) {
+    return null;
+  }
+
+  // Keep nearby vector panel titles and callouts while excluding surrounding prose.
+  const marginX = clamp(unionWidth * 0.08, 10, cropBox.pageWidth * 0.04);
+  const marginTop = clamp(unionHeight * 0.12, 12, cropBox.pageHeight * 0.045);
+  const marginBottom = clamp(unionHeight * 0.1, 10, cropBox.pageHeight * 0.04);
+  const x = clamp(left - marginX, 0, cropBox.pageWidth - 1);
+  const y = clamp(top - marginTop, 0, cropBox.pageHeight - 1);
+  const maxRight = clamp(right + marginX, x + 1, cropBox.pageWidth);
+  const maxBottom = clamp(bottom + marginBottom, y + 1, cropBox.pageHeight);
+  return {
+    x: roundNumber(x),
+    y: roundNumber(y),
+    width: roundNumber(maxRight - x),
+    height: roundNumber(maxBottom - y),
+    pageWidth: cropBox.pageWidth,
+    pageHeight: cropBox.pageHeight
+  };
+}
+
+function expandNativePanelGroup(
+  images: PdfNativeImageAsset[],
+  seedPanels: PdfNativeImageAsset[],
+  cropBox: PresentationFigureCropBox
+): PdfNativeImageAsset[] {
+  if (seedPanels.length === 0) {
+    return [];
+  }
+
+  const selected = new Map(seedPanels.map((panel) => [panel.id, panel]));
+  const searchMarginX = cropBox.width * 0.65;
+  const searchMarginY = cropBox.height * 0.12;
+  const searchBox: PresentationFigureCropBox = {
+    x: Math.max(0, cropBox.x - searchMarginX),
+    y: Math.max(0, cropBox.y - searchMarginY),
+    width: Math.min(cropBox.pageWidth, cropBox.x + cropBox.width + cropBox.width * 0.2) - Math.max(0, cropBox.x - searchMarginX),
+    height: Math.min(cropBox.pageHeight, cropBox.y + cropBox.height + searchMarginY) - Math.max(0, cropBox.y - searchMarginY),
+    pageWidth: cropBox.pageWidth,
+    pageHeight: cropBox.pageHeight
+  };
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    const selectedPanels = [...selected.values()];
+    const groupBox = getUnionCropBox(selectedPanels.map((panel) => panel.bbox), cropBox);
+    let changed = false;
+    for (const image of images) {
+      if (selected.has(image.id) || !isMaterialNativePanel(image, searchBox)) {
+        continue;
+      }
+      const horizontalGap = getAxisGap(
+        groupBox.x,
+        groupBox.x + groupBox.width,
+        image.bbox.x,
+        image.bbox.x + image.bbox.width
+      );
+      const verticalGap = getAxisGap(
+        groupBox.y,
+        groupBox.y + groupBox.height,
+        image.bbox.y,
+        image.bbox.y + image.bbox.height
+      );
+      const maxHorizontalGap = Math.max(24, Math.min(groupBox.width, image.bbox.width) * 0.55);
+      const maxVerticalGap = Math.max(24, Math.min(groupBox.height, image.bbox.height) * 0.55);
+      if (horizontalGap <= maxHorizontalGap && verticalGap <= maxVerticalGap) {
+        selected.set(image.id, image);
+        changed = true;
+      }
+    }
+    if (!changed) {
+      break;
+    }
+  }
+
+  return [...selected.values()]
+    .sort((a, b) => a.bbox.y - b.bbox.y || a.bbox.x - b.bbox.x)
+    .slice(0, MAX_NATIVE_COMPOSITE_IMAGES);
+}
+
+function isMaterialNativePanel(image: PdfNativeImageAsset, searchBox: PresentationFigureCropBox): boolean {
+  const pixelArea = image.pixelWidth * image.pixelHeight;
+  const minDisplaySide = Math.min(image.bbox.width, image.bbox.height);
+  const overlapArea = getIntersectionArea(image.bbox, searchBox);
+  return (
+    pixelArea >= MIN_NATIVE_IMAGE_PIXELS &&
+    minDisplaySide >= MIN_NATIVE_IMAGE_DISPLAY_SIDE &&
+    overlapArea / Math.max(1, getBoxArea(image.bbox)) >= 0.5
+  );
+}
+
+function getUnionCropBox(
+  boxes: PresentationFigureCropBox[],
+  fallback: PresentationFigureCropBox
+): PresentationFigureCropBox {
+  if (boxes.length === 0) return fallback;
+  const x = Math.min(...boxes.map((box) => box.x));
+  const y = Math.min(...boxes.map((box) => box.y));
+  const right = Math.max(...boxes.map((box) => box.x + box.width));
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height));
+  return {
+    x,
+    y,
+    width: right - x,
+    height: bottom - y,
+    pageWidth: fallback.pageWidth,
+    pageHeight: fallback.pageHeight
+  };
+}
+
+function getAxisGap(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
+  return Math.max(0, aStart - bEnd, bStart - aEnd);
+}
+
+function alignCropToDetectedColumn(cropBox: PresentationFigureCropBox, pageWidth: number): PresentationFigureCropBox {
+  const center = cropBox.x + cropBox.width / 2;
+  const gutterCenter = pageWidth / 2;
+  const right = cropBox.x + cropBox.width;
+  const looksLikeRightColumn =
+    center > gutterCenter && cropBox.x < gutterCenter && cropBox.width <= pageWidth * 0.55;
+  if (!looksLikeRightColumn) {
+    return cropBox;
+  }
+
+  const x = gutterCenter + Math.max(4, pageWidth * 0.008);
+  return {
+    ...cropBox,
+    x: roundNumber(x),
+    width: roundNumber(Math.max(1, right - x))
+  };
 }
 
 interface NativeImageCropMatch {
@@ -579,7 +909,8 @@ interface NativeImageCropMatch {
 function getNativeImageCropMatches(
   images: PdfNativeImageAsset[],
   cropBox: PresentationFigureCropBox,
-  minOverlapCropRatio: number
+  minOverlapCropRatio: number,
+  minImageAreaRatio = MIN_NATIVE_IMAGE_AREA_RATIO
 ): NativeImageCropMatch[] {
   const cropArea = getBoxArea(cropBox);
   if (cropArea <= 0) {
@@ -600,7 +931,7 @@ function getNativeImageCropMatches(
       const overlapCropRatio = overlapArea / cropArea;
       const overlapSelfRatio = overlapArea / imageArea;
       if (
-        imageAreaRatio < MIN_NATIVE_IMAGE_AREA_RATIO ||
+        imageAreaRatio < minImageAreaRatio ||
         overlapCropRatio < minOverlapCropRatio ||
         overlapSelfRatio < MIN_NATIVE_IMAGE_SELF_OVERLAP_RATIO
       ) {
@@ -892,13 +1223,14 @@ function getIntersectionArea(a: PresentationFigureCropBox, b: PresentationFigure
 }
 
 function expandCropBoxForRendering(cropBox: PresentationFigureCropBox): PresentationFigureCropBox {
-  const marginX = clamp(cropBox.width * 0.04, 8, 28);
-  const marginY = clamp(cropBox.height * 0.06, 8, 34);
+  const marginX = clamp(cropBox.width * 0.025, 6, 18);
+  const marginTop = clamp(cropBox.height * 0.04, 8, 24);
+  const marginBottom = clamp(cropBox.height * 0.012, 4, 8);
   return {
     x: Math.max(0, cropBox.x - marginX),
-    y: Math.max(0, cropBox.y - marginY),
+    y: Math.max(0, cropBox.y - marginTop),
     width: cropBox.width + marginX * 2,
-    height: cropBox.height + marginY * 2,
+    height: cropBox.height + marginTop + marginBottom,
     pageWidth: cropBox.pageWidth,
     pageHeight: cropBox.pageHeight
   };

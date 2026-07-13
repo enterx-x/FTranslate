@@ -77,7 +77,10 @@ export function PresentationPage(props: PresentationPageProps) {
     .filter(Boolean) ?? [];
   const selectedPreviewBullets = selectedPlan ? buildPreviewBullets(selectedPlan.mainClaim, selectedPlan.bullets) : [];
   const selectedEditorBullets = selectedPlan?.bullets ?? selectedSlide?.bullets ?? [];
-  const showPreviewVisual = selectedPlan ? shouldShowPreviewVisual(selectedPlan.visual) : false;
+  const selectedPreviewFigure = selectedSlide?.figures.find(
+    (figure) => figure.selected !== false && figure.imageDataUrl
+  ) ?? null;
+  const showPreviewVisual = selectedPlan ? Boolean(selectedPreviewFigure) || shouldShowPreviewVisual(selectedPlan.visual) : false;
   const selectedPreviewEvidenceCards = selectedPlan ? buildPreviewEvidenceCards(selectedPlan, selectedPreviewBullets) : [];
 
   function updateSlide(patch: Partial<PresentationSlide>): void {
@@ -322,17 +325,26 @@ export function PresentationPage(props: PresentationPageProps) {
                   <section className={`ppt-export-main ${showPreviewVisual ? `ppt-export-${selectedPlan.visual.kind}` : 'ppt-export-none'}`}>
                     {showPreviewVisual ? (
                       <div className="ppt-export-visual">
-                        <span className="ppt-panel-label">{getVisualKindLabel(selectedPlan.visual.kind)}</span>
-                        <strong>{selectedPlan.visual.title}</strong>
-                        <p>{selectedPlan.visual.caption}</p>
-                        {selectedPlan.visual.steps.length > 0 ? (
+                        {selectedPreviewFigure ? (
+                          <figure className="presentation-real-figure">
+                            <img src={selectedPreviewFigure.imageDataUrl} alt={selectedPreviewFigure.caption} />
+                            <figcaption>{selectedPreviewFigure.figureLabel ?? `p.${selectedPreviewFigure.pageNumber}`} · {selectedPreviewFigure.caption}</figcaption>
+                          </figure>
+                        ) : (
+                          <>
+                            <span className="ppt-panel-label">{getVisualKindLabel(selectedPlan.visual.kind)}</span>
+                            <strong>{selectedPlan.visual.title}</strong>
+                            <p>{selectedPlan.visual.caption}</p>
+                          </>
+                        )}
+                        {!selectedPreviewFigure && selectedPlan.visual.steps.length > 0 ? (
                           <ol>
                             {selectedPlan.visual.steps.slice(0, 4).map((step, index) => (
                               <li key={`${selectedPlan.id}-step-${index}`}>{step}</li>
                             ))}
                           </ol>
                         ) : null}
-                        <small>{selectedPlan.visual.sourceLabel}</small>
+                        {!selectedPreviewFigure ? <small>{selectedPlan.visual.sourceLabel}</small> : null}
                       </div>
                     ) : null}
                     {showPreviewVisual ? (
@@ -447,8 +459,11 @@ export function PresentationPage(props: PresentationPageProps) {
                   <div className="presentation-figure-list">
                     {draft.figures.map((figure) => (
                       <article key={figure.imageId}>
-                        <strong>{buildFigureCardTitle(figure.caption)}</strong>
-                        <span>p. {figure.pageNumber} · 建议：{figure.suggestedReason ?? figure.suggestedSlide}</span>
+                        {figure.imageDataUrl ? <img src={figure.imageDataUrl} alt={figure.caption} /> : null}
+                        <div>
+                          <strong>{figure.figureLabel ?? buildFigureCardTitle(figure.caption)}</strong>
+                          <span>p. {figure.pageNumber} · {figure.imageDataUrl ? '真实图已就绪' : '仅图注'} · 建议：{figure.suggestedReason ?? figure.suggestedSlide}</span>
+                        </div>
                       </article>
                     ))}
                   </div>

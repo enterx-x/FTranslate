@@ -18,15 +18,17 @@ export function extractPdfBlocksFromData(
 ): Promise<ExtractedPdfBlock[]> {
   const completed = completedPdfBlockCache.get(pdfData);
   if (completed) {
-    return Promise.resolve(completed);
+    return Promise.resolve(isCancelled() ? [] : completed);
   }
-  return getOrCreatePdfBlockExtraction(pdfData, isCancelled, async () => {
+  const extraction = getOrCreatePdfBlockExtraction(pdfData, async () => {
     const loadingTask = pdfjsLib.getDocument({ data: pdfData.slice() });
     let pdfDocument: PDFDocumentProxy | null = null;
 
     try {
       pdfDocument = await loadingTask.promise;
-      return await extractPdfBlocksFromDocument(pdfDocument, isCancelled);
+      // This document is owned by the shared extraction job, not by a viewer.
+      // Let it finish once so reader, figure extraction, and PPT generation can reuse it.
+      return await extractPdfBlocksFromDocument(pdfDocument);
     } finally {
       if (pdfDocument) {
         await pdfDocument.destroy();
@@ -35,6 +37,7 @@ export function extractPdfBlocksFromData(
       }
     }
   });
+  return extraction.then((blocks) => (isCancelled() ? [] : blocks));
 }
 
 export function extractPdfBlocksFromCachedDocument(
@@ -115,7 +118,6 @@ function toPositionedTextItems(
 
 function getOrCreatePdfBlockExtraction(
   pdfData: Uint8Array,
-  isCancelled: () => boolean,
   create: () => Promise<ExtractedPdfBlock[]>
 ): Promise<ExtractedPdfBlock[]> {
   const existing = pdfBlockExtractionCache.get(pdfData);
@@ -126,11 +128,7 @@ function getOrCreatePdfBlockExtraction(
   pdfBlockExtractionCache.set(pdfData, extraction);
   void extraction.then(
     (blocks) => {
-      if (isCancelled()) {
-        pdfBlockExtractionCache.delete(pdfData);
-      } else {
-        completedPdfBlockCache.set(pdfData, blocks);
-      }
+      completedPdfBlockCache.set(pdfData, blocks);
     },
     () => pdfBlockExtractionCache.delete(pdfData)
   );

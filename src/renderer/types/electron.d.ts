@@ -17,6 +17,7 @@ import type {
   ScientificPlotSpec
 } from '../../shared/scientificPlot';
 import type { WordDictionaryLookupResult } from '../../shared/wordDictionary';
+import type { FigureAssetsExportRequest, FigureAssetsExportResult } from '../../shared/figureAssets';
 
 export interface PdfFilePayload {
   filePath: string;
@@ -360,6 +361,7 @@ export interface ElectronApi {
     contentBase64: string;
     defaultFileName: string;
   }) => Promise<SaveTextResult | null>;
+  exportFigureAssets: (request: FigureAssetsExportRequest) => Promise<FigureAssetsExportResult | null>;
   searchArxiv: (request: ArxivSearchRequest) => Promise<ArxivSearchServiceResult>;
   translateArxivTitleAbstract: (
     request: ArxivTitleAbstractTranslationRequest

@@ -53,6 +53,7 @@ describe('registerAppIpcHandlers', () => {
         saveTranslationCache: noop,
         exportMarkdown: noop,
         exportPptx: noop,
+        exportFigureAssets: noop,
         exportResearchWorkbookToExcel: noop,
         importResearchWorkbookFromExcel: noop
       },
@@ -125,6 +126,7 @@ describe('registerAppIpcHandlers', () => {
       'file:save-translation-cache',
       'file:export-markdown',
       'file:export-pptx',
+      'file:export-figure-assets',
       'research-workbook:export-excel',
       'research-workbook:import-excel',
       'arxiv:search',

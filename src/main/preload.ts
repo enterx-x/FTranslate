@@ -4,6 +4,7 @@ import type {
   ArxivTranslationBatchRequest
 } from '../shared/arxiv';
 import type { PlotDataTable, ScientificPlotSpec } from '../shared/scientificPlot';
+import type { FigureAssetsExportRequest } from '../shared/figureAssets';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   openPdf: () => ipcRenderer.invoke('dialog:open-pdf'),
@@ -113,6 +114,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('file:export-markdown', request),
   exportPptx: (request: { filePath?: string; contentBase64: string; defaultFileName: string }) =>
     ipcRenderer.invoke('file:export-pptx', request),
+  exportFigureAssets: (request: FigureAssetsExportRequest) =>
+    ipcRenderer.invoke('file:export-figure-assets', request),
   searchArxiv: (request: {
     searchQuery: string;
     queryMode?: 'strict' | 'balanced' | 'explore';
