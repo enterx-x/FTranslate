@@ -177,6 +177,8 @@
 
 ### 验证记录
 
+- 2026-07-13：GitHub Actions 首次云端构建成功（run `29223652350`，2 分 09 秒），已产出 `FTranslate-unsigned-ios` artifact；随后将 `checkout`、`setup-node`、`upload-artifact` 升级至 Node 24 对应的 v6，消除 Node 20 弃用告警。
+
 - `npm test`：测试入口已改为 `vitest run --dir src`，只扫描当前仓库根目录；79 个测试文件、462 个测试全部通过，不再误扫 `.worktrees/*/src`。
 - `npm run typecheck`：renderer 与 Electron main TypeScript 检查通过。
 - `npm run build:mobile`：通过；输出 `dist-mobile/`。PDF.js 主 chunk 约 699 kB，worker 约 2.33 MB，存在 Vite 大 chunk 警告但不阻断运行。
@@ -207,8 +209,8 @@
 
 ### 下一步
 
-1. 手动运行 GitHub Actions `Build unsigned iOS IPA`，确认 macOS 26/Xcode 26 能成功产生 artifact。
-2. 在 Windows 使用 Sideloadly 和专用免费 Apple ID 安装，验证首次 USB 安装、Wi-Fi 自动刷新和覆盖安装后的论文库保留情况。
+1. 在 Windows 使用 Sideloadly 和专用免费 Apple ID 安装，验证首次 USB 安装、Wi-Fi 自动刷新和覆盖安装后的论文库保留情况。
+2. 验证免费签名第一个 7 天周期内的自动刷新，并记录刷新失败时的恢复步骤。
 3. 用 50 MB、200 页和扫描型 PDF 做内存/首屏耗时压力测试，再决定是否按页懒解析。
 4. 如果后续需要公开分发，再转 Apple Developer Program、TestFlight 或 App Store；当前不使用 Ad Hoc 设备额度。
 5. 在移动 MVP 稳定后再定义三端同步协议；同步对象至少包括论文身份、文件版本、阅读位置、段落哈希和译文冲突策略。
