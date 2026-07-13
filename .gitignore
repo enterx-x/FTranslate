@@ -2,6 +2,9 @@ node_modules/
 dist/
 dist-renderer/
 dist-electron/
+dist-mobile/
+distribution/ios/public/*.ipa
+distribution/ios/public/manifest.plist
 
 .tmp*/
 .tmp-*/
