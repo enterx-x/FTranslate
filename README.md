@@ -62,6 +62,27 @@ bash scripts/build-ios-adhoc.sh
 
 移动端交互预览文件位于 `docs/mobile-preview/index.html`，可用任意静态 HTTP 服务器打开。
 
+### 免费个人自用：GitHub Actions + Sideloadly
+
+如果只安装到自己的 iPhone，可以不购买 Apple Developer Program。仓库提供手动工作流 `.github/workflows/ios-unsigned.yml`，使用 GitHub 的 macOS 26 runner 构建未签名 IPA：
+
+1. 打开 GitHub 仓库的 `Actions` 页面；
+2. 选择 `Build unsigned iOS IPA`；
+3. 点击 `Run workflow`，分支选择 `codex/ios-mobile-reader`；
+4. 构建完成后下载 `FTranslate-unsigned-ios` artifact；
+5. 解压后把 `FTranslate-unsigned.ipa` 拖入 Windows 版 Sideloadly，使用个人 Apple ID 签名并安装。
+
+免费 Apple ID 的签名有效期为 7 天。Sideloadly 可在电脑与 iPhone 通过 USB 或同一 Wi-Fi 可连接时自动刷新；必须保持相同 Apple ID 和 Bundle ID，并采用覆盖安装，不能先删除 App，否则本机论文库和译文缓存会随 App 沙盒一起删除。未签名 IPA 只用于个人自签，不能直接点开安装、上传 App Store 或公开分发。
+
+工作流同时输出 `FTranslate-unsigned.ipa.sha256`。本地有 macOS/Xcode 26 时，也可执行：
+
+```bash
+npm ci
+bash scripts/build-ios-unsigned.sh
+```
+
+输出位于 `ios/App/output/unsigned/`。
+
 FTranslate 是一个 Windows 桌面端科研论文工作台，面向论文阅读、PDF 翻译、研究表格整理、AI 大观分析、知识图谱、阅读笔记和组会 PPT 草稿生成。
 
 当前主流程是：
