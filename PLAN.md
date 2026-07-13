@@ -18,15 +18,19 @@
 
 ### 验证与视觉对抗式审查
 
-- 单元回归：`presentationOutline.test.ts` 与 `presentationFigureAssets.test.ts` 共 39 项通过；完整测试曾通过 97 个文件 / 622 项，最终安装包前仍按仓库门禁重跑 `npm run build`。
+- 单元回归：`presentationOutline.test.ts` 与 `presentationFigureAssets.test.ts` 共 39 项通过；合并移动端后完整测试为 99 个文件 / 630 项通过，`npm run build` 与 `npm run build:mobile` 均通过。
 - 源码定向视觉检查 `VISUAL_CHECK_SCENARIO=figure-assets` 通过；工作台在视口内，无横向溢出，裁剪编辑器可见且不越界。一次 PDF 首屏渲染超时，原命令重跑即通过，记录为剩余时序风险。
 - 人工逐图检查：架构图底部标签完整；prompt 图无图注；机器人四面板无正文、无缺块。工作台截图：`.tmp-visual-check/whole-pdf-figures.png`；裁剪截图：`.tmp-visual-check/whole-pdf-figure-crop-editor.png`。
+- 半栏图的质量徽标改用实际“输出像素 / PDF 裁剪点数”密度与最小尺寸判断，不再把 162 DPI 的完整窄图误标为低分辨率。移动端 `npm run visual:check:mobile` 也通过，覆盖空论文库、arXiv、导入 PDF、阅读与段落翻译。
+- 合并完成后的最终 `npm run dist` 通过，安装包内 `VISUAL_CHECK_PACKAGED=1 / VISUAL_CHECK_SCENARIO=figure-assets` 在独立端口 9666 通过。产物为 `dist/PDF Translation Reader Setup 0.1.20.exe`，大小 156,669,907 bytes，SHA256 为 `62AFE257027C9FDDCBCA02D269B032FEEBCD2595A63F244EB3404746832FDECB`。
 
 ### 问题台账与剩余风险
 
 - 自动 caption 推断无法覆盖所有出版社和跨页图；因此保留“定位原页 + 整页可视精裁”，不得把低置信候选静默当成最终素材。
 - 进行中图像 data URL 仍驻留于当前 renderer 会话；已通过分批、逐页释放和 JSON 去载荷降低峰值，后续可迁移为磁盘素材缓存。
-- 打包前只合并 2026-07-13 的其他代理提交；2026-07-12 的 `codex/arxiv-ui-night-optimization` 不在本轮合并范围。构建前需再次检查远端/本地分支时间。
+- 打包前检查发现 `codex/ios-mobile-reader` 在 2026-07-13 新增 `0cac751`。由于该分支基于旧基线，直接合并会回退当前桌面能力；已只移植该 13 号提交为 `77846d3`，保留移动端新增和当前桌面实现。2026-07-12 的其他提交不重复合并。
+- 安装包视觉检查首次被 Windows 遗留的 9333 幽灵监听端点阻塞；清理实际测试进程并改用 9444 后，0.1.20 安装包内图表定向视觉检查通过。后续视觉脚本应优先使用未占用端口并在超时后清理子进程。
+- Electron Builder 会提示当前工作树本地 `node_modules` 中找不到移动端 Capacitor 生产依赖路径；Windows 桌面 bundle 不加载移动 chunk，NSIS 构建与 packaged 图表视觉检查均通过。后续在 macOS/iOS 环境执行 `npm install` 与 `ios:sync` 时仍需按移动端文档验证原生依赖。
 
 ## 2026-07-13 PDF 阅读、arXiv 检索与论文库性能优化（0.1.19）
 
