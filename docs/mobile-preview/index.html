@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>FTranslate Mobile · iPhone 本地版预览</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Segoe UI", sans-serif;
+        --canvas: #e9eef5;
+        --surface: #f8fafc;
+        --paper: #ffffff;
+        --ink: #111a2a;
+        --muted: #5c687a;
+        --line: #d4dce7;
+        --accent: #3859a8;
+        --accent-soft: #e6ecfb;
+        --success: #315f53;
+        --warning: #795f28;
+        --nav: #182136;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        background: var(--canvas);
+      }
+
+      button, input { font: inherit; }
+      button { cursor: pointer; }
+
+      .preview-shell {
+        width: min(1480px, 100%);
+        margin: 0 auto;
+        padding: 40px clamp(20px, 4vw, 68px) 56px;
+      }
+
+      .preview-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 32px;
+        align-items: flex-end;
+        padding-bottom: 22px;
+        border-bottom: 1px solid #c9d2df;
+      }
+
+      .preview-header h1 {
+        max-width: 720px;
+        margin: 0;
+        font-size: clamp(28px, 4vw, 52px);
+        line-height: 1.03;
+        letter-spacing: -0.035em;
+        text-wrap: balance;
+      }
+
+      .preview-header p {
+        max-width: 460px;
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .scope-strip {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 18px;
+      }
+
+      .scope-strip span {
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid #c9d2df;
+        background: rgba(255,255,255,.48);
+        color: #344055;
+        font-size: 13px;
+      }
+
+      .scope-strip .excluded { color: #786375; }
+
+      .phone-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(300px, 1fr));
+        gap: clamp(20px, 3vw, 42px);
+        align-items: start;
+        padding: 38px 0;
+      }
+
+      .screen-column > h2 {
+        margin: 0 0 12px;
+        font-size: 15px;
+        font-weight: 650;
+        color: #3f4b5f;
+      }
+
+      .phone {
+        position: relative;
+        width: min(100%, 390px);
+        aspect-ratio: 390 / 844;
+        margin: 0 auto;
+        overflow: hidden;
+        border: 8px solid #111827;
+        border-radius: 42px;
+        background: var(--surface);
+        box-shadow: 0 8px 18px rgba(25, 37, 58, .16);
+      }
+
+      .dynamic-island {
+        position: absolute;
+        z-index: 10;
+        top: 8px;
+        left: 50%;
+        width: 104px;
+        height: 27px;
+        transform: translateX(-50%);
+        border-radius: 999px;
+        background: #080b12;
+      }
+
+      .screen {
+        display: flex;
+        height: 100%;
+        flex-direction: column;
+        padding-top: 36px;
+      }
+
+      .app-header {
+        display: flex;
+        min-height: 58px;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 16px;
+        background: rgba(248,250,252,.94);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .app-title strong { display: block; font-size: 17px; letter-spacing: -.015em; }
+      .app-title span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+
+      .icon-button, .small-button, .primary-button {
+        border: 0;
+        border-radius: 9px;
+      }
+
+      .icon-button {
+        display: grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 20px;
+      }
+
+      .screen-body {
+        min-height: 0;
+        flex: 1;
+        overflow: hidden auto;
+        padding: 16px;
+      }
+
+      .summary-line {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: 14px;
+      }
+
+      .summary-line strong { font-size: 22px; letter-spacing: -.025em; }
+      .summary-line span { color: var(--muted); font-size: 12px; }
+
+      .continue-reading {
+        padding: 14px;
+        border-radius: 12px;
+        background: var(--nav);
+        color: white;
+      }
+
+      .continue-reading small { color: #aebbd0; }
+      .continue-reading h3 { margin: 8px 0 12px; font-size: 16px; line-height: 1.35; }
+      .progress { height: 4px; overflow: hidden; border-radius: 999px; background: #39455e; }
+      .progress::after { display: block; width: 38%; height: 100%; content: ""; background: #9eb8ff; }
+
+      .section-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 20px 0 8px;
+      }
+
+      .section-title h3 { margin: 0; font-size: 14px; }
+      .section-title span { color: var(--muted); font-size: 11px; }
+
+      .paper-row {
+        display: grid;
+        grid-template-columns: 42px 1fr auto;
+        gap: 11px;
+        align-items: center;
+        padding: 11px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .paper-mark {
+        display: grid;
+        width: 42px;
+        height: 52px;
+        place-items: center;
+        border-radius: 5px;
+        background: #e7ebf1;
+        color: #5a6678;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .paper-copy { min-width: 0; }
+      .paper-copy strong { display: -webkit-box; overflow: hidden; font-size: 13px; line-height: 1.35; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+      .paper-copy span { display: block; overflow: hidden; margin-top: 5px; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+      .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #7088c4; }
+
+      .bottom-nav {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        min-height: 64px;
+        padding-bottom: 7px;
+        border-top: 1px solid var(--line);
+        background: rgba(255,255,255,.96);
+      }
+
+      .nav-item {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        align-items: center;
+        justify-content: center;
+        color: #687387;
+        font-size: 10px;
+      }
+
+      .nav-item b { font-size: 18px; line-height: 1; }
+      .nav-item.active { color: var(--accent); font-weight: 650; }
+
+      .search-box {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .search-box input {
+        min-width: 0;
+        flex: 1;
+        height: 40px;
+        padding: 0 12px;
+        border: 1px solid #bbc6d5;
+        border-radius: 9px;
+        outline: none;
+        background: white;
+        color: var(--ink);
+      }
+
+      .primary-button {
+        padding: 0 14px;
+        background: var(--nav);
+        color: white;
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .filter-row { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 12px; scrollbar-width: none; }
+      .filter-row span { flex: 0 0 auto; padding: 6px 9px; border: 1px solid var(--line); border-radius: 999px; background: white; color: #536074; font-size: 10px; }
+      .filter-row .active { border-color: #9dadd5; background: var(--accent-soft); color: var(--accent); }
+
+      .result-row {
+        padding: 14px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .result-row:first-of-type { border-top: 0; }
+      .result-meta { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 10px; }
+      .result-meta em { padding: 3px 6px; border-radius: 999px; background: #e7edf4; color: #415069; font-style: normal; }
+      .result-row h3 { margin: 8px 0 6px; font-size: 14px; line-height: 1.38; }
+      .result-row p { display: -webkit-box; overflow: hidden; margin: 0; color: #536074; font-size: 11px; line-height: 1.55; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+      .result-actions { display: flex; gap: 8px; margin-top: 10px; }
+      .small-button { padding: 7px 10px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 650; }
+      .small-button.secondary { background: #e9edf2; color: #4a566a; }
+
+      .reader-screen { background: #bfc6d0; }
+      .reader-header { background: #f8fafc; }
+      .reader-header .app-title { text-align: center; max-width: 220px; }
+      .reader-header .app-title strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+
+      .reader-tools {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        justify-content: center;
+        min-height: 38px;
+        padding: 5px 10px;
+        border-bottom: 1px solid #cbd3de;
+        background: #eef1f5;
+      }
+
+      .reader-tools span { padding: 5px 8px; border-radius: 7px; background: white; color: #455166; font-size: 10px; }
+      .reader-tools .active { background: var(--nav); color: white; }
+
+      .pdf-canvas {
+        position: relative;
+        flex: 1;
+        overflow: hidden auto;
+        padding: 14px 20px 110px;
+      }
+
+      .pdf-page {
+        min-height: 520px;
+        padding: 28px 24px;
+        background: white;
+        box-shadow: 0 2px 7px rgba(18, 27, 43, .18);
+        color: #20242b;
+      }
+
+      .pdf-page h4 { margin: 0 0 16px; font: 700 17px/1.25 Georgia, serif; }
+      .pdf-page p { margin: 0 0 11px; font: 10px/1.55 Georgia, serif; text-align: justify; }
+      .equation { margin: 14px 0; padding: 9px; border-block: 1px solid #d9dde3; text-align: center; font: italic 11px Georgia, serif; }
+      .highlight { background: #e7edff; box-shadow: 0 0 0 2px #e7edff; }
+
+      .inline-translation {
+        margin: -2px 0 13px;
+        padding: 9px 10px;
+        border-radius: 7px;
+        background: #edf2fb;
+        color: #24324a;
+        font: 10px/1.65 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+        text-align: left;
+      }
+
+      .inline-translation span {
+        display: block;
+        margin-bottom: 4px;
+        color: #526caa;
+        font-size: 8px;
+        font-weight: 700;
+      }
+
+      .selection-popover {
+        position: absolute;
+        z-index: 4;
+        right: 18px;
+        bottom: 85px;
+        width: 220px;
+        padding: 10px;
+        border-radius: 9px;
+        background: #172033;
+        color: white;
+        box-shadow: 0 5px 14px rgba(18, 28, 47, .25);
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
+      .selection-popover strong { display: block; margin-bottom: 5px; color: #b7c9f5; }
+
+      .translation-sheet {
+        position: absolute;
+        right: 10px;
+        bottom: 70px;
+        left: 10px;
+        padding: 13px 14px 15px;
+        border-radius: 14px;
+        background: rgba(248,250,252,.98);
+        box-shadow: 0 5px 15px rgba(25,37,58,.22);
+      }
+
+      .sheet-handle { width: 34px; height: 4px; margin: 0 auto 10px; border-radius: 999px; background: #c7cfdb; }
+      .translation-sheet header { display: flex; justify-content: space-between; align-items: center; }
+      .translation-sheet header strong { font-size: 12px; }
+      .translation-sheet header span { color: var(--success); font-size: 10px; }
+      .translation-sheet p { margin: 8px 0 0; color: #384459; font-size: 11px; line-height: 1.55; }
+
+      .flow-panel {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr auto 1fr;
+        gap: 16px;
+        align-items: center;
+        padding: 24px;
+        border-top: 1px solid #c9d2df;
+        border-bottom: 1px solid #c9d2df;
+      }
+
+      .flow-step { min-height: 90px; padding: 14px; border-radius: 10px; background: rgba(255,255,255,.5); }
+      .flow-step strong { display: block; margin-bottom: 7px; font-size: 14px; }
+      .flow-step span { color: var(--muted); font-size: 12px; line-height: 1.55; }
+      .flow-arrow { color: #7b879a; font-size: 20px; }
+
+      .footnote { margin: 18px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+      @media (max-width: 980px) {
+        .preview-header { align-items: flex-start; flex-direction: column; }
+        .phone-grid { grid-template-columns: 1fr; }
+        .screen-column { display: grid; grid-template-columns: 120px minmax(280px, 390px); gap: 18px; justify-content: center; align-items: start; }
+        .screen-column > h2 { position: sticky; top: 20px; }
+      }
+
+      @media (max-width: 560px) {
+        .preview-shell { padding: 18px 10px 30px; }
+        .preview-header { padding: 12px 8px 18px; }
+        .preview-header h1 { font-size: 30px; }
+        .screen-column { display: block; }
+        .screen-column > h2 { margin-left: 8px; }
+        .phone { border-width: 5px; border-radius: 34px; }
+        .flow-panel { grid-template-columns: 1fr; }
+        .flow-arrow { transform: rotate(90deg); text-align: center; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="preview-shell">
+      <header class="preview-header">
+        <div>
+          <h1>把桌面工作台收敛成随身论文阅读闭环</h1>
+          <div class="scope-strip">
+            <span>iPhone 优先</span><span>PDF 阅读 / 翻译</span><span>arXiv 检索</span><span>本地论文库</span><span class="excluded">暂不：账号 / 云同步 / App Store</span>
+          </div>
+        </div>
+        <p>手机端不是桌面侧栏的缩小版。首版只保留一个可完成的路径：找到论文、存入本地、立即阅读，并在阅读上下文中查看翻译。</p>
+      </header>
+
+      <section class="phone-grid" aria-label="三屏移动端预览">
+        <article class="screen-column">
+          <h2>01 · 本地论文库</h2>
+          <div class="phone">
+            <div class="dynamic-island"></div>
+            <div class="screen">
+              <header class="app-header">
+                <div class="app-title"><strong>论文库</strong><span>仅保存在这台 iPhone</span></div>
+                <button class="icon-button" aria-label="导入 PDF">＋</button>
+              </header>
+              <div class="screen-body">
+                <div class="summary-line"><strong>12</strong><span>3 篇有双语版本</span></div>
+                <section class="continue-reading">
+                  <small>继续阅读 · 第 6 / 18 页</small>
+                  <h3>Safe Reinforcement Learning via Control Barrier Functions</h3>
+                  <div class="progress"></div>
+                </section>
+                <div class="section-title"><h3>最近论文</h3><span>按最后阅读排序</span></div>
+                <div class="paper-row"><div class="paper-mark">PDF</div><div class="paper-copy"><strong>Physics-Informed Policy Learning for Robot Navigation</strong><span>Chen et al. · 2026 · 24 页</span></div><i class="status-dot"></i></div>
+                <div class="paper-row"><div class="paper-mark">中英</div><div class="paper-copy"><strong>Model Predictive Safety Filters: A Review</strong><span>Garcia et al. · 2025 · 31 页</span></div><i class="status-dot"></i></div>
+                <div class="paper-row"><div class="paper-mark">PDF</div><div class="paper-copy"><strong>Neural CBFs for Dynamic Obstacle Avoidance</strong><span>Wang et al. · 2025 · 16 页</span></div><i class="status-dot"></i></div>
+              </div>
+              <nav class="bottom-nav"><span class="nav-item active"><b>▤</b>论文库</span><span class="nav-item"><b>⌕</b>检索</span><span class="nav-item"><b>▯</b>阅读</span></nav>
+            </div>
+          </div>
+        </article>
+
+        <article class="screen-column">
+          <h2>02 · arXiv 检索</h2>
+          <div class="phone">
+            <div class="dynamic-island"></div>
+            <div class="screen">
+              <header class="app-header">
+                <div class="app-title"><strong>arXiv 检索</strong><span>找到后直接存入本地论文库</span></div>
+                <button class="icon-button" aria-label="历史记录">↺</button>
+              </header>
+              <div class="screen-body">
+                <div class="search-box"><input value="safe reinforcement learning" aria-label="检索词" /><button class="primary-button">检索</button></div>
+                <div class="filter-row"><span class="active">综合</span><span>最新</span><span>cs.RO</span><span>cs.LG</span><span>2024–2026</span></div>
+                <article class="result-row">
+                  <div class="result-meta"><em>cs.RO</em><span>2026-07-08 · 8 authors</span></div>
+                  <h3>Safe Policy Optimization with Learned Control Barrier Functions</h3>
+                  <p>We introduce a policy optimization framework that jointly learns a control barrier function and constrains exploration...</p>
+                  <div class="result-actions"><button class="small-button">存入论文库</button><button class="small-button secondary">查看中文摘要</button></div>
+                </article>
+                <article class="result-row">
+                  <div class="result-meta"><em>cs.LG</em><span>2026-06-26 · 5 authors</span></div>
+                  <h3>Physics-Guided Reinforcement Learning for Navigation under Uncertainty</h3>
+                  <p>A dynamics-aware residual objective improves sample efficiency while preserving constraint satisfaction...</p>
+                  <div class="result-actions"><button class="small-button">存入论文库</button><button class="small-button secondary">查看中文摘要</button></div>
+                </article>
+              </div>
+              <nav class="bottom-nav"><span class="nav-item"><b>▤</b>论文库</span><span class="nav-item active"><b>⌕</b>检索</span><span class="nav-item"><b>▯</b>阅读</span></nav>
+            </div>
+          </div>
+        </article>
+
+        <article class="screen-column">
+          <h2>03 · PDF 阅读 / 翻译</h2>
+          <div class="phone">
+            <div class="dynamic-island"></div>
+            <div class="screen reader-screen">
+              <header class="app-header reader-header">
+                <button class="icon-button" aria-label="返回">‹</button>
+                <div class="app-title"><strong>Safe Policy Optimization with Learned CBFs</strong><span>第 6 / 18 页</span></div>
+                <button class="icon-button" aria-label="更多">•••</button>
+              </header>
+              <div class="reader-tools"><span>－</span><span>100%</span><span>＋</span><span class="active">原文</span><span>双语</span></div>
+              <div class="pdf-canvas">
+                <article class="pdf-page">
+                  <h4>3. Safety-constrained policy optimization</h4>
+                  <p>We formulate safe exploration as a constrained Markov decision process and introduce a continuously differentiable barrier certificate.</p>
+                  <p class="highlight">The policy update is projected onto a feasible action set at every environment step, ensuring forward invariance under bounded disturbances.</p>
+                  <div class="inline-translation"><span>中文 · 已缓存在本机</span>策略更新在每个环境步都被投影到可行的动作集合中，从而在有界扰动下保证前向不变性。</div>
+                  <div class="equation">a* = arg min || a − π(s) ||² &nbsp; s.t. &nbsp; ḣ(s, a) + αh(s) ≥ 0</div>
+                  <p>Unlike reward-penalty approaches, the proposed layer separates task performance from safety feasibility and exposes constraint violations explicitly.</p>
+                  <div class="inline-translation"><span>中文</span>与奖励惩罚方法不同，该安全层将任务性能与安全可行性分离，并明确暴露约束违反情况。</div>
+                  <p>Experiments are evaluated across static and dynamic obstacle densities using success rate, collision rate, path efficiency, and intervention frequency.</p>
+                </article>
+                <aside class="selection-popover"><strong>forward invariance</strong>前向不变性 · 仅在选词或短语后显示</aside>
+              </div>
+              <nav class="bottom-nav"><span class="nav-item"><b>▤</b>论文库</span><span class="nav-item"><b>⌕</b>检索</span><span class="nav-item active"><b>▯</b>阅读</span></nav>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="flow-panel" aria-label="移动端数据流">
+        <div class="flow-step"><strong>检索或导入</strong><span>arXiv API 返回元数据与 PDF，或从 iOS“文件”选择本地 PDF。</span></div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step"><strong>本地持久化</strong><span>PDF 写入 App 沙盒；论文元数据、阅读进度和翻译缓存保存在设备。</span></div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step"><strong>阅读与翻译</strong><span>PDF.js 连续阅读；段落翻译按来源和内容哈希缓存，断网时仍可查看已缓存结果。</span></div>
+      </section>
+      <p class="footnote">边界说明：首版不运行 Windows 的 pdf2zh/Python sidecar；手机端采用段落翻译与“导入已有双语 PDF”。整本重排双语 PDF、账号体系和三端同步留到后续阶段。</p>
+    </main>
+  </body>
+</html>

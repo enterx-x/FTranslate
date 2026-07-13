@@ -1,5 +1,67 @@
 # PDF Translation Reader / FTranslate
 
+## iPhone 本地论文阅读版（`codex/ios-mobile-reader`）
+
+项目现在提供独立的 Capacitor iOS 构建目标。首版不是把整个 Windows 科研工作台压缩到手机，而是只迁移一个可完成的移动闭环：
+
+1. 从 iOS“文件”导入 PDF，或通过 arXiv 检索后下载；
+2. PDF 与论文元数据写入 App 本地沙盒；
+3. 在论文库恢复最近阅读位置；
+4. 使用 PDF.js 阅读原始 PDF；
+5. 在“段落双语”模式中把中文译文直接放在对应英文段落下方；
+6. 只有长按或选择词语、短语时才显示翻译浮层；
+7. 可以导入已有中文/双语 PDF 并绑定到原论文。
+
+当前明确不包含账号、云同步、桌面/手机数据互通、Android 工程、App Store 上架和 Windows `pdf2zh` Python sidecar。手机段落翻译使用用户配置的 OpenAI 兼容接口；`Base URL` 与模型名保存在本机，API Key 只保存在当前运行内存，退出 App 后需要重新填写。
+
+### 移动端开发与验证
+
+在 Windows 或 macOS 上运行移动 Web 预览：
+
+```bash
+npm install
+npm run dev:mobile
+```
+
+构建移动 Web 资源并运行 iPhone 尺寸视觉回归：
+
+```bash
+npm run build:mobile
+npm run visual:check:mobile
+```
+
+截图和溢出审计输出到 `.tmp-mobile-visual-check/`。
+
+iOS 原生工程已经位于 `ios/App/App.xcodeproj`。每次修改移动端源码后同步到原生工程：
+
+```bash
+npm run ios:sync
+```
+
+`ios:add` 只用于尚未存在 `ios/` 工程的首次初始化；当前仓库不需要再次执行。Capacitor 8 当前要求 iOS 15+，最终模拟器、真机和签名验证需要 macOS、Xcode 与 Apple Developer 账号。
+
+### 不上架 App Store 的 iPhone 下载
+
+当前交付方式是 Ad Hoc `.ipa`，不会公开上架 App Store。目标 iPhone 的 UDID 必须先登记到 Apple Developer 账号并包含在 Provisioning Profile 中；每个产品家族每个会员年度最多登记 100 台设备。安装后设备需要启用开发者模式。
+
+在 macOS 上配置好 Xcode 登录与证书后执行：
+
+```bash
+DEVELOPMENT_TEAM=YOUR_TEAM_ID bash scripts/build-ios-adhoc.sh
+```
+
+如果同时准备了 HTTPS 下载地址，可生成一键安装页所需文件：
+
+```bash
+DEVELOPMENT_TEAM=YOUR_TEAM_ID \
+PUBLIC_BASE_URL=https://download.example.com/ftranslate \
+bash scripts/build-ios-adhoc.sh
+```
+
+生成的 `.ipa` 位于 `ios/App/output/adhoc/`；HTTPS 下载页模板位于 `distribution/ios/public/`。也可以用 Xcode 或 Apple Configurator 通过 USB 安装 `.ipa`。Windows 环境无法完成 Apple 签名或产出可安装真机的最终 `.ipa`。
+
+移动端交互预览文件位于 `docs/mobile-preview/index.html`，可用任意静态 HTTP 服务器打开。
+
 FTranslate 是一个 Windows 桌面端科研论文工作台，面向论文阅读、PDF 翻译、研究表格整理、AI 大观分析、知识图谱、阅读笔记和组会 PPT 草稿生成。
 
 当前主流程是：

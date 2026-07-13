@@ -1,5 +1,60 @@
 # PLAN.md
 
+## 2026-07-13：iPhone 本地论文阅读版
+
+### 当前结论
+
+- 已从 `codex/arxiv-ui-night-optimization` 创建 `codex/ios-mobile-reader` 分支。
+- 已新增独立移动端构建入口和 Capacitor 8 iOS 工程，首版范围严格限制为论文库、arXiv 检索、PDF 阅读与翻译。
+- 移动端采用本地沙盒数据，不实现账号、云同步、桌面互通或 Android；后续三端同步不得反向污染当前本地 MVP。
+- 不进行 App Store 上架。已准备 Ad Hoc `.ipa` 构建脚本、ExportOptions 和 HTTPS 安装页模板；最终签名、真机安装与 IPA 产出仍需要 macOS + Xcode + Apple Developer 证书和已登记 UDID。
+
+### 已落地能力
+
+- `src/renderer/mobile/`：独立的三入口移动 App、论文库、arXiv、PDF/段落双语阅读和平台存储/网络适配层。
+- 论文 PDF 存入 Capacitor Filesystem；论文索引存入 Preferences；段落译文按论文写入独立缓存文件。
+- PDF 阅读复用 PDF.js；段落双语模式复用现有论文结构提取逻辑，把中文直接放在英文段落下面。
+- 用户选择单词或短语后才显示翻译浮层；长文本限制在视口内。
+- 支持导入已有中文/双语 PDF；不把 Windows `pdf2zh`/Python sidecar 迁入 iOS。
+- arXiv 使用共享查询构造与 Atom 解析逻辑，通过 Capacitor HTTP 请求，带 24 小时本机缓存和最小请求间隔；PDF 使用 File Transfer 下载到 App 沙盒。
+- `ios/`：iOS 15+ 原生工程与 Swift Package 插件声明；Windows 生成的反斜杠路径通过 `scripts/normalize-capacitor-spm-paths.mjs` 自动修复。
+- `distribution/ios/`：Ad Hoc 导出配置、OTA manifest 模板和 iPhone HTTPS 安装页。
+
+### 验证记录
+
+- `npm test -- --run src/renderer/mobile`：实际运行全仓 268 个测试文件、1673 个测试，全部通过。
+- `npm run typecheck`：renderer 与 Electron main TypeScript 检查通过。
+- `npm run build:mobile`：通过；输出 `dist-mobile/`。PDF.js 主 chunk 约 699 kB，worker 约 2.33 MB，存在 Vite 大 chunk 警告但不阻断运行。
+- `npm run visual:check:mobile`：通过；自动完成本地 PDF 导入、段落解析、会话翻译、内联译文和选词浮层，`audit.json` 显示 390px 视口下 body/root `scrollWidth` 均为 390，未发现越界元素。
+- `npm audit --omit=dev --json`：生产依赖 0 个漏洞。已把 Vite 定向更新到同主版本补丁 `7.3.6`、`concurrently` 更新到 `9.2.4`；开发工具链仍有 5 个传递依赖告警，不进入移动 App 生产包，未执行大范围 `npm audit fix`。
+- `$env:VISUAL_CHECK_PORT='9334'; npm run visual:check`：桌面源码视觉回归通过；默认 `9333` 端口曾被异常退出的 Windows 调试句柄占用，改用独立端口后覆盖全部既有页面并通过。
+- `npm run dist`：Windows NSIS 安装包重建成功；`dist/PDF Translation Reader Setup 0.1.12.exe` 为 144,261,678 bytes，SHA-256 为 `5E946251485AF3947713036FFE9F6291CBB464440DDC4F99DC6D51F41A76ABB7`。
+- `$env:VISUAL_CHECK_PACKAGED='1'; $env:VISUAL_CHECK_PORT='9335'; npm run visual:check`：打包后的 Windows 应用视觉回归通过，确认移动入口改造没有破坏安装包内桌面界面。
+- 视觉截图：`.tmp-mobile-visual-check/01-library-empty-390x844.png`、`02-arxiv-idle-390x844.png`、`03-reader-inline-translation-390x844.png`、`04-reader-selection-popover-390x844.png`、`05-reader-selection-popover-430x932.png`。
+
+### 视觉对抗式审查
+
+- 第一轮发现 arXiv 空区域出现离屏合成黑块、双语页底部分页显示 `1 / ?`、选词浮层长文本靠近关闭按钮。
+- 已为移动滚动面板补实体背景、从段落最大页码同步页数、对选词源文本启用单行截断；视觉脚本改用前台软件光栅并限制为当前设备视口，排除 Chromium 超视口截图的合成黑块。
+- 最终复验确认：论文库和 arXiv 页面无黑块；段落中文位于英文下方；分页显示 `1 / 1`；选词浮层在 390×844 和 430×932 下均无横向越界；底部导航和阅读状态栏未遮挡主要动作。
+
+### 问题与风险
+
+- 当前机器是 Windows，不能运行 Xcode、iOS Simulator、Apple 代码签名或真机安装，因此不能声称 `.ipa` 已签名可下载。
+- Ad Hoc 分发必须有 Apple Developer Program、分发证书、App ID、包含目标 UDID 的 Provisioning Profile；设备数量受 Apple 年度上限约束。
+- 手机段落翻译需要网络和用户自己的 OpenAI 兼容接口；已缓存译文可离线阅读，但尚未集成设备端本地大模型。
+- 整本重排双语 PDF 仍由桌面 `pdf2zh` 流程承担；手机端只提供段落双语和导入已有双语 PDF。
+- 移动构建仍会产出少量桌面分支引用的 KaTeX/品牌资源；不影响功能，但后续可拆为完全独立 HTML 入口以减小 IPA。
+- 目前未做 iOS 原生 UI 测试、真实弱网 arXiv 请求、超大 PDF 内存压力和 100+ 论文库性能测试。
+
+### 下一步
+
+1. 在 macOS/Xcode 中执行 `npm run ios:sync`，选择真实 Team 并运行 iPhone 模拟器。
+2. 登记目标 iPhone UDID，执行 `scripts/build-ios-adhoc.sh` 产出第一份签名 IPA。
+3. 将 `distribution/ios/public/` 部署到 HTTPS，实际验证 Safari 一键安装、更新覆盖和签名过期提示。
+4. 用 50 MB、200 页和扫描型 PDF 做内存/首屏耗时压力测试，再决定是否按页懒解析。
+5. 在移动 MVP 稳定后再定义三端同步协议；同步对象至少包括论文身份、文件版本、阅读位置、段落哈希和译文冲突策略。
+
 本文件用于记录 FTranslate 的长期计划、当前阶段目标、问题台账和防重复犯错事项。每次操作前必须先阅读本文件、`README.md` 和 `DESIGN.md`。
 
 ## 1. 产品定位
