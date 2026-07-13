@@ -25,6 +25,7 @@
 ### 验证记录
 
 - 2026-07-13：GitHub Actions 首次云端构建成功（run `29223652350`，2 分 09 秒），已产出 `FTranslate-unsigned-ios` artifact；随后将 `checkout`、`setup-node`、`upload-artifact` 升级至 Node 24 对应的 v6，消除 Node 20 弃用告警。
+- 2026-07-13：升级后的云端构建再次成功（run `29223837787`，1 分 32 秒，无 annotation）；下载后的 `FTranslate-unsigned.ipa` 为 2,859,203 字节，SHA-256 为 `f16c647771999ab1159c8d2dbbaeb300807b459cb57cc1fe8ae3f17b2c629692`，与随附校验文件一致，且归档中存在 `Payload/App.app/App` 与根 `Info.plist`。
 
 - `npm test`：测试入口已改为 `vitest run --dir src`，只扫描当前仓库根目录；79 个测试文件、462 个测试全部通过，不再误扫 `.worktrees/*/src`。
 - `npm run typecheck`：renderer 与 Electron main TypeScript 检查通过。
