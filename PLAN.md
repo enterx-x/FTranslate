@@ -161,6 +161,7 @@
 - 已新增独立移动端构建入口和 Capacitor 8 iOS 工程，首版范围严格限制为论文库、arXiv 检索、PDF 阅读与翻译。
 - 移动端采用本地沙盒数据，不实现账号、云同步、桌面互通或 Android；后续三端同步不得反向污染当前本地 MVP。
 - 不进行 App Store 上架。已准备 Ad Hoc `.ipa` 构建脚本、ExportOptions 和 HTTPS 安装页模板；最终签名、真机安装与 IPA 产出仍需要 macOS + Xcode + Apple Developer 证书和已登记 UDID。
+- 用户已选择免费个人自用路线：GitHub Actions 的 macOS 26 runner 生成未签名 IPA，再由 Windows Sideloadly 使用个人 Apple ID 重签并安装；不购买开发者会员。
 
 ### 已落地能力
 
@@ -172,16 +173,18 @@
 - arXiv 使用共享查询构造与 Atom 解析逻辑，通过 Capacitor HTTP 请求，带 24 小时本机缓存和最小请求间隔；PDF 使用 File Transfer 下载到 App 沙盒。
 - `ios/`：iOS 15+ 原生工程与 Swift Package 插件声明；Windows 生成的反斜杠路径通过 `scripts/normalize-capacitor-spm-paths.mjs` 自动修复。
 - `distribution/ios/`：Ad Hoc 导出配置、OTA manifest 模板和 iPhone HTTPS 安装页。
+- `.github/workflows/ios-unsigned.yml` 与 `scripts/build-ios-unsigned.sh`：手动云端构建未签名 IPA，并输出 SHA-256，供 Sideloadly 个人自签。
 
 ### 验证记录
 
-- `npm test -- --run src/renderer/mobile`：实际运行全仓 268 个测试文件、1673 个测试，全部通过。
+- `npm test`：测试入口已改为 `vitest run --dir src`，只扫描当前仓库根目录；79 个测试文件、462 个测试全部通过，不再误扫 `.worktrees/*/src`。
 - `npm run typecheck`：renderer 与 Electron main TypeScript 检查通过。
 - `npm run build:mobile`：通过；输出 `dist-mobile/`。PDF.js 主 chunk 约 699 kB，worker 约 2.33 MB，存在 Vite 大 chunk 警告但不阻断运行。
+- `npm run ios:sync`：通过；移动 Web 资源、Capacitor 插件和本地 Swift Package 路径已同步。
 - `npm run visual:check:mobile`：通过；自动完成本地 PDF 导入、段落解析、会话翻译、内联译文和选词浮层，`audit.json` 显示 390px 视口下 body/root `scrollWidth` 均为 390，未发现越界元素。
 - `npm audit --omit=dev --json`：生产依赖 0 个漏洞。已把 Vite 定向更新到同主版本补丁 `7.3.6`、`concurrently` 更新到 `9.2.4`；开发工具链仍有 5 个传递依赖告警，不进入移动 App 生产包，未执行大范围 `npm audit fix`。
 - `$env:VISUAL_CHECK_PORT='9334'; npm run visual:check`：桌面源码视觉回归通过；默认 `9333` 端口曾被异常退出的 Windows 调试句柄占用，改用独立端口后覆盖全部既有页面并通过。
-- `npm run dist`：Windows NSIS 安装包重建成功；`dist/PDF Translation Reader Setup 0.1.12.exe` 为 144,261,678 bytes，SHA-256 为 `5E946251485AF3947713036FFE9F6291CBB464440DDC4F99DC6D51F41A76ABB7`。
+- `npm run dist`：Windows NSIS 安装包重建成功；`dist/PDF Translation Reader Setup 0.1.12.exe` 为 144,261,682 bytes，SHA-256 为 `ABDC9168839A196152B1471DE545B09C04E0240AE7D060933CCBEC4D688D424C`。
 - `$env:VISUAL_CHECK_PACKAGED='1'; $env:VISUAL_CHECK_PORT='9335'; npm run visual:check`：打包后的 Windows 应用视觉回归通过，确认移动入口改造没有破坏安装包内桌面界面。
 - 视觉截图：`.tmp-mobile-visual-check/01-library-empty-390x844.png`、`02-arxiv-idle-390x844.png`、`03-reader-inline-translation-390x844.png`、`04-reader-selection-popover-390x844.png`、`05-reader-selection-popover-430x932.png`。
 
@@ -199,13 +202,15 @@
 - 整本重排双语 PDF 仍由桌面 `pdf2zh` 流程承担；手机端只提供段落双语和导入已有双语 PDF。
 - 移动构建仍会产出少量桌面分支引用的 KaTeX/品牌资源；不影响功能，但后续可拆为完全独立 HTML 入口以减小 IPA。
 - 目前未做 iOS 原生 UI 测试、真实弱网 arXiv 请求、超大 PDF 内存压力和 100+ 论文库性能测试。
+- 免费个人签名每 7 天过期一次；只有在电脑和 iPhone 可连接时 Sideloadly 才能自动刷新。错过刷新后 App 暂时无法打开，但使用同一 Apple ID 与 Bundle ID 覆盖安装可继续使用；删除 App 会删除本地沙盒论文数据。
+- 原 `vitest run src` 会把 `.worktrees/*/src` 也当作位置过滤结果，导致其它分支测试污染当前构建；已改为 `vitest run --dir src`，后续不得恢复为模糊位置参数。
 
 ### 下一步
 
-1. 在 macOS/Xcode 中执行 `npm run ios:sync`，选择真实 Team 并运行 iPhone 模拟器。
-2. 登记目标 iPhone UDID，执行 `scripts/build-ios-adhoc.sh` 产出第一份签名 IPA。
-3. 将 `distribution/ios/public/` 部署到 HTTPS，实际验证 Safari 一键安装、更新覆盖和签名过期提示。
-4. 用 50 MB、200 页和扫描型 PDF 做内存/首屏耗时压力测试，再决定是否按页懒解析。
+1. 手动运行 GitHub Actions `Build unsigned iOS IPA`，确认 macOS 26/Xcode 26 能成功产生 artifact。
+2. 在 Windows 使用 Sideloadly 和专用免费 Apple ID 安装，验证首次 USB 安装、Wi-Fi 自动刷新和覆盖安装后的论文库保留情况。
+3. 用 50 MB、200 页和扫描型 PDF 做内存/首屏耗时压力测试，再决定是否按页懒解析。
+4. 如果后续需要公开分发，再转 Apple Developer Program、TestFlight 或 App Store；当前不使用 Ad Hoc 设备额度。
 5. 在移动 MVP 稳定后再定义三端同步协议；同步对象至少包括论文身份、文件版本、阅读位置、段落哈希和译文冲突策略。
 
 本文件用于记录 FTranslate 的长期计划、当前阶段目标、问题台账和防重复犯错事项。每次操作前必须先阅读本文件、`README.md` 和 `DESIGN.md`。
