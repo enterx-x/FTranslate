@@ -29,6 +29,7 @@ import {
 import {
   buildPdfSelectionPopoverPosition,
   formatDictionaryPartOfSpeech,
+  getPdfSelectionCaptureDelay,
   isPdfSelectionRectVisible,
   normalizePdfSelectionText,
   resolvePdfSelectionTranslationDirection,
@@ -128,7 +129,9 @@ export function PdfViewer(props: PdfViewerProps) {
   const selectionRangeRef = useRef<Range | null>(null);
   const selectionPopoverRef = useRef<HTMLElement | null>(null);
   const selectionPopoverFrameRef = useRef<number | null>(null);
+  const selectionCaptureDebounceRef = useRef<number | null>(null);
   const selectionTranslationDebounceRef = useRef<number | null>(null);
+  const selectionPointerActiveRef = useRef(false);
   const [documentProxy, setDocumentProxy] = useState<PDFDocumentProxy | null>(null);
   const [findReadyToken, setFindReadyToken] = useState(0);
   const [isRendering, setIsRendering] = useState(false);
@@ -541,7 +544,20 @@ export function PdfViewer(props: PdfViewerProps) {
     }
 
     function handlePointerDown(event: PointerEvent): void {
-      if (!selectionRangeRef.current || !(event.target instanceof Node)) {
+      if (!(event.target instanceof Node)) {
+        return;
+      }
+      const targetElement = event.target.nodeType === Node.ELEMENT_NODE
+        ? event.target as Element
+        : event.target.parentElement;
+      selectionPointerActiveRef.current = Boolean(
+        event.isPrimary &&
+        event.button === 0 &&
+        !isSpacePressedRef.current &&
+        targetElement?.closest('.textLayer') &&
+        viewerElementRef.current?.contains(event.target)
+      );
+      if (!selectionRangeRef.current) {
         return;
       }
       if (selectionPopoverRef.current?.contains(event.target)) {
@@ -550,32 +566,38 @@ export function PdfViewer(props: PdfViewerProps) {
       closeSelectionTranslation();
     }
 
+    function handlePointerUp(): void {
+      if (!selectionPointerActiveRef.current) {
+        return;
+      }
+      selectionPointerActiveRef.current = false;
+      scheduleTextSelectionCapture('pointerup');
+    }
+
+    function handlePointerCancel(): void {
+      selectionPointerActiveRef.current = false;
+      clearSelectionCaptureDebounce();
+    }
+
     function handleSelectionChange(): void {
-      window.setTimeout(() => {
-        const activeElement = document.activeElement;
-        if (activeElement && selectionPopoverRef.current?.contains(activeElement)) {
-          return;
-        }
-        const selection = window.getSelection();
-        if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
-          if (selectionRangeRef.current) {
-            closeSelectionTranslation(false);
-          }
-          return;
-        }
-        captureTextSelection();
-      }, 0);
+      scheduleTextSelectionCapture('selectionchange');
     }
 
     container.addEventListener('scroll', handleSelectionViewportChange, { passive: true });
     window.addEventListener('resize', handleSelectionViewportChange);
     document.addEventListener('pointerdown', handlePointerDown, true);
+    document.addEventListener('pointerup', handlePointerUp, true);
+    document.addEventListener('pointercancel', handlePointerCancel, true);
     document.addEventListener('selectionchange', handleSelectionChange);
     return () => {
       container.removeEventListener('scroll', handleSelectionViewportChange);
       window.removeEventListener('resize', handleSelectionViewportChange);
       document.removeEventListener('pointerdown', handlePointerDown, true);
+      document.removeEventListener('pointerup', handlePointerUp, true);
+      document.removeEventListener('pointercancel', handlePointerCancel, true);
       document.removeEventListener('selectionchange', handleSelectionChange);
+      selectionPointerActiveRef.current = false;
+      clearSelectionCaptureDebounce();
     };
   }, [documentProxy]);
 
@@ -693,11 +715,51 @@ export function PdfViewer(props: PdfViewerProps) {
     setIsPanning(true);
   }
 
-  function handleTextSelection(): void {
-    if (isPanning) {
+  function handleTextDoubleClick(event: React.MouseEvent<HTMLDivElement>): void {
+    if (!(event.target instanceof Node) || isSpacePressedRef.current) {
       return;
     }
-    window.setTimeout(captureTextSelection, 0);
+    const targetElement = event.target.nodeType === Node.ELEMENT_NODE
+      ? event.target as Element
+      : event.target.parentElement;
+    if (!targetElement?.closest('.textLayer') || !viewerElementRef.current?.contains(event.target)) {
+      return;
+    }
+
+    // Chromium has completed its native word selection before `dblclick` fires.
+    // Capture that stable range immediately and cancel the slower pointer-up capture.
+    selectionPointerActiveRef.current = false;
+    scheduleTextSelectionCapture('doubleclick');
+  }
+
+  function clearSelectionCaptureDebounce(): void {
+    if (selectionCaptureDebounceRef.current !== null) {
+      window.clearTimeout(selectionCaptureDebounceRef.current);
+      selectionCaptureDebounceRef.current = null;
+    }
+  }
+
+  function scheduleTextSelectionCapture(trigger: 'selectionchange' | 'pointerup' | 'doubleclick'): void {
+    const delay = getPdfSelectionCaptureDelay(trigger, selectionPointerActiveRef.current);
+    clearSelectionCaptureDebounce();
+    if (delay === null || isPanning) {
+      return;
+    }
+    selectionCaptureDebounceRef.current = window.setTimeout(() => {
+      selectionCaptureDebounceRef.current = null;
+      const activeElement = document.activeElement;
+      if (activeElement && selectionPopoverRef.current?.contains(activeElement)) {
+        return;
+      }
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+        if (selectionRangeRef.current) {
+          closeSelectionTranslation(false);
+        }
+        return;
+      }
+      captureTextSelection();
+    }, delay);
   }
 
   function captureTextSelection(): void {
@@ -899,6 +961,7 @@ export function PdfViewer(props: PdfViewerProps) {
   function closeSelectionTranslation(clearNativeSelection = true): void {
     selectionTranslationRequestRef.current += 1;
     selectionRangeRef.current = null;
+    clearSelectionCaptureDebounce();
     if (selectionTranslationDebounceRef.current !== null) {
       window.clearTimeout(selectionTranslationDebounceRef.current);
       selectionTranslationDebounceRef.current = null;
@@ -1361,7 +1424,7 @@ export function PdfViewer(props: PdfViewerProps) {
             }
           }}
           onMouseDown={handleMouseDown}
-          onMouseUp={handleTextSelection}
+          onDoubleClick={handleTextDoubleClick}
           onWheel={handleWheel}
         >
           <div className="pdfViewer" ref={viewerElementRef} />

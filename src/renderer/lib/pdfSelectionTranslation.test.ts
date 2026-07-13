@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPdfSelectionPopoverPosition,
   formatDictionaryPartOfSpeech,
+  getPdfSelectionCaptureDelay,
   isPdfSelectionRectVisible,
   normalizePdfSelectionText,
   resolvePdfSelectionTranslationDirection
@@ -55,5 +56,12 @@ describe('pdfSelectionTranslation', () => {
   it('renders familiar Chinese labels without hiding the source part of speech', () => {
     expect(formatDictionaryPartOfSpeech('noun')).toBe('名词 · noun');
     expect(formatDictionaryPartOfSpeech('particle')).toBe('particle');
+  });
+
+  it('waits for pointer selection to finish before opening the translation card', () => {
+    expect(getPdfSelectionCaptureDelay('selectionchange', true)).toBeNull();
+    expect(getPdfSelectionCaptureDelay('pointerup', false)).toBe(40);
+    expect(getPdfSelectionCaptureDelay('doubleclick', false)).toBe(0);
+    expect(getPdfSelectionCaptureDelay('selectionchange', false)).toBe(140);
   });
 });

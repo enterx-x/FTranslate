@@ -22,6 +22,7 @@ const pdfPath =
 const outputDir = path.join(root, '.tmp-visual-check');
 const visualUserDataDir = path.join(outputDir, 'user-data');
 const port = Number(process.env.VISUAL_CHECK_PORT ?? 9333);
+const disableGpu = process.env.VISUAL_CHECK_DISABLE_GPU === '1';
 const defaultPdfPath = path.join('D:\\', 'GPT浏览器下载', '2604.15483v2.pdf');
 
 function wait(ms) {
@@ -376,6 +377,7 @@ async function waitForPdfCanvas(client) {
       svgLayerCount: svgLayers.length,
       imageLayerCount: imageLayers.length,
       textSpanCount: textSpans.length,
+      firstPageHtml: pages[0]?.innerHTML?.slice(0, 1600) ?? '',
       pdfText: document.querySelector('.pdf-pane')?.textContent?.slice(0, 500) ?? '',
       panelText: document.querySelector('.whole-pdf-panel')?.textContent ?? ''
     };
@@ -383,7 +385,7 @@ async function waitForPdfCanvas(client) {
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'whole-pdf-canvas-timeout.png'), Buffer.from(shot.data, 'base64'))
   );
-  throw new Error(`wholePdf: PDF canvas did not render: ${JSON.stringify(snapshot)}`);
+  throw new Error(`wholePdf: PDF canvas did not render: ${JSON.stringify({ snapshot, events: client.events.slice(-12) })}`);
 }
 
 async function waitForExtractedPdfBlocks(client) {
@@ -2372,6 +2374,9 @@ async function runWholePdfReaderScenario(client) {
       const readyAssets = assets.filter((asset) => Boolean(asset.querySelector('.figure-assets-thumbnail img')));
       const panelText = workspace?.textContent ?? '';
       const workspaceRect = workspace?.getBoundingClientRect();
+      const layoutRect = workspace?.querySelector('.figure-assets-layout')?.getBoundingClientRect();
+      const firstCardRect = assets[0]?.getBoundingClientRect();
+      const inspectorPreviewRect = workspace?.querySelector('.figure-assets-preview')?.getBoundingClientRect();
       return {
         hasPanel: Boolean(workspace),
         assetCount: assets.length,
@@ -2382,10 +2387,19 @@ async function runWholePdfReaderScenario(client) {
         panelText,
         statusText: document.body.textContent ?? '',
         workspaceWithinViewport: Boolean(workspaceRect && workspaceRect.left >= 0 && workspaceRect.right <= window.innerWidth && workspaceRect.top >= 0 && workspaceRect.bottom <= window.innerHeight),
+        contentVisible: Boolean(
+          workspaceRect &&
+          layoutRect &&
+          firstCardRect &&
+          inspectorPreviewRect &&
+          layoutRect.height >= Math.min(320, workspaceRect.height * 0.5) &&
+          firstCardRect.height >= 120 &&
+          inspectorPreviewRect.height >= 160
+        ),
         hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3 || Boolean(workspace && workspace.scrollWidth > workspace.clientWidth + 3)
       };
     }`);
-    const hasFigurePanelLayout = figureExtraction.hasPanel && figureExtraction.assetCount >= 1 && figureExtraction.workspaceWithinViewport && !figureExtraction.hasHorizontalOverflow;
+    const hasFigurePanelLayout = figureExtraction.hasPanel && figureExtraction.assetCount >= 1 && figureExtraction.workspaceWithinViewport && figureExtraction.contentVisible && !figureExtraction.hasHorizontalOverflow;
     const hasReadyFigure = figureExtraction.readyCount >= Math.min(3, figureExtraction.assetCount);
     if (hasFigurePanelLayout && hasReadyFigure) {
       break;
@@ -2398,6 +2412,7 @@ async function runWholePdfReaderScenario(client) {
     figureExtraction.assetCount < 1 ||
     figureExtraction.readyCount < Math.min(3, figureExtraction.assetCount) ||
     !figureExtraction.workspaceWithinViewport ||
+    !figureExtraction.contentVisible ||
     figureExtraction.hasHorizontalOverflow ||
     (requireNativeFigureExtraction && figureExtraction.readyCount < 1)
   ) {
@@ -2421,6 +2436,46 @@ async function runWholePdfReaderScenario(client) {
       Buffer.from(dataUrl.slice('data:image/png;base64,'.length), 'base64')
     );
   }
+
+  await evaluateJson(client, `() => {
+    const cancel = [...document.querySelectorAll('.figure-assets-header-actions button')]
+      .find((button) => (button.textContent ?? '').trim() === '取消');
+    cancel?.click();
+    return Boolean(cancel);
+  }`);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const isIdle = await evaluateJson(client, `() => document.querySelector('.figure-assets-progress')?.classList.contains('idle') ?? false`);
+    if (isIdle) break;
+    await wait(150);
+  }
+  const idleFigureLayout = await evaluateJson(client, `() => {
+    const workspace = document.querySelector('[data-testid="pdf-figure-workspace"]');
+    const workspaceRect = workspace?.getBoundingClientRect();
+    const layoutRect = workspace?.querySelector('.figure-assets-layout')?.getBoundingClientRect();
+    const firstCardRect = workspace?.querySelector('[data-figure-card]')?.getBoundingClientRect();
+    const inspectorPreviewRect = workspace?.querySelector('.figure-assets-preview')?.getBoundingClientRect();
+    return {
+      isIdle: workspace?.querySelector('.figure-assets-progress')?.classList.contains('idle') ?? false,
+      contentVisible: Boolean(
+        workspaceRect &&
+        layoutRect &&
+        firstCardRect &&
+        inspectorPreviewRect &&
+        layoutRect.height >= Math.min(320, workspaceRect.height * 0.5) &&
+        firstCardRect.height >= 120 &&
+        inspectorPreviewRect.height >= 160
+      ),
+      layoutHeight: layoutRect?.height ?? 0,
+      firstCardHeight: firstCardRect?.height ?? 0,
+      inspectorPreviewHeight: inspectorPreviewRect?.height ?? 0
+    };
+  }`);
+  if (!idleFigureLayout.isIdle || !idleFigureLayout.contentVisible) {
+    throw new Error(`wholePdf: idle figure workspace collapsed, got ${JSON.stringify(idleFigureLayout)}`);
+  }
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'whole-pdf-figures-idle.png'), Buffer.from(shot.data, 'base64'))
+  );
 
   const cropEditorOpened = await evaluateJson(client, `() => {
     const readyCard = [...document.querySelectorAll('[data-figure-card]')]
@@ -2541,6 +2596,14 @@ async function runPdfSelectionTranslationScenario(client) {
     const lastSpan = phraseSpan ?? visibleSpans[Math.min(2, visibleSpans.length - 1)];
     const container = firstSpan?.closest('.pdf-js-viewer-container');
     if (!firstSpan || !lastSpan || !container) return { ok: false };
+    firstSpan.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      button: 0,
+      buttons: 1,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: 'mouse'
+    }));
     const range = document.createRange();
     if (phraseSpan) {
       range.selectNodeContents(phraseSpan);
@@ -2551,7 +2614,7 @@ async function runPdfSelectionTranslationScenario(client) {
     const selection = window.getSelection();
     selection?.removeAllRanges();
     selection?.addRange(range);
-    container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+    document.dispatchEvent(new Event('selectionchange'));
     const rect = range.getBoundingClientRect();
     return {
       ok: true,
@@ -2561,6 +2624,26 @@ async function runPdfSelectionTranslationScenario(client) {
     };
   }`);
   if (!selected?.ok) throw new Error('pdfSelection: selectable PDF text was not found');
+  await wait(220);
+  const openedDuringDrag = await evaluateJson(client, `() => Boolean(document.querySelector('[data-testid="pdf-selection-translation"]'))`);
+  if (openedDuringDrag) {
+    throw new Error('pdfSelection: translation card opened before the pointer selection finished');
+  }
+  await evaluateJson(client, `() => {
+    const selection = window.getSelection();
+    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    const ancestor = range?.commonAncestorContainer;
+    const target = ancestor?.nodeType === Node.ELEMENT_NODE ? ancestor : ancestor?.parentElement;
+    target?.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true,
+      button: 0,
+      buttons: 0,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: 'mouse'
+    }));
+    return Boolean(target);
+  }`);
 
   let snapshot = null;
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -2655,13 +2738,36 @@ async function runPdfSelectionTranslationScenario(client) {
         const match = pattern.exec(text);
         const container = span.closest('.pdf-js-viewer-container');
         if (!textNode || !match || !container || typeof match.index !== 'number') continue;
+        span.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          isPrimary: true,
+          pointerId: 2,
+          pointerType: 'mouse'
+        }));
         const range = document.createRange();
         range.setStart(textNode, match.index);
         range.setEnd(textNode, match.index + match[0].length);
         const selection = window.getSelection();
         selection?.removeAllRanges();
         selection?.addRange(range);
-        container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+        document.dispatchEvent(new Event('selectionchange'));
+        span.dispatchEvent(new PointerEvent('pointerup', {
+          bubbles: true,
+          button: 0,
+          buttons: 0,
+          isPrimary: true,
+          pointerId: 2,
+          pointerType: 'mouse'
+        }));
+        span.dispatchEvent(new MouseEvent('dblclick', {
+          bubbles: true,
+          button: 0,
+          detail: 2,
+          clientX: range.getBoundingClientRect().left + 2,
+          clientY: range.getBoundingClientRect().top + 2
+        }));
         return match[0];
       }
     }
@@ -4241,9 +4347,10 @@ async function main() {
   );
 
   const appCommand = usePackagedApp ? packagedExe : electronExe;
+  const debugFlags = [`--remote-debugging-port=${port}`, ...(disableGpu ? ['--disable-gpu'] : [])];
   const appArgs = usePackagedApp
-    ? [`--remote-debugging-port=${port}`]
-    : [`--remote-debugging-port=${port}`, electronMainEntry];
+    ? debugFlags
+    : [...debugFlags, electronMainEntry];
 
   const appProcess = spawn(appCommand, appArgs, {
     env: {

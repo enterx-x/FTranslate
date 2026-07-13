@@ -951,6 +951,10 @@ button:disabled {
   background: #e5eaf1;
 }
 
+.figure-assets-progress.idle {
+  background: transparent;
+}
+
 .figure-assets-progress span {
   display: block;
   height: 100%;

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import type { PresentationFigureCandidate } from '../lib/presentationOutline';
-import { summarizePdfFigureAssets } from './PdfFigureAssetsPanel';
+import { PdfFigureWorkspaceDialog, summarizePdfFigureAssets } from './PdfFigureAssetsPanel';
 
 describe('summarizePdfFigureAssets', () => {
   it('counts ready, native, composite, and crop figure assets in one pass', () => {
@@ -18,6 +20,39 @@ describe('summarizePdfFigureAssets', () => {
       compositeCount: 1,
       cropCount: 1
     });
+  });
+});
+
+describe('PdfFigureWorkspaceDialog', () => {
+  it('keeps the progress track mounted while idle so the content remains in the third grid row', () => {
+    const markup = renderToStaticMarkup(createElement(PdfFigureWorkspaceDialog, {
+      open: true,
+      figures: [buildFigure('a', 'page-crop')],
+      isExtracting: false,
+      progress: null,
+      onClose: () => undefined,
+      onToggleFigure: () => undefined,
+      onSetSelection: () => undefined,
+      onNavigateToPage: () => undefined,
+      onExtractPending: () => undefined,
+      onRescan: () => undefined,
+      onCancelExtraction: () => undefined,
+      onExportSelected: () => undefined,
+      onGeneratePresentation: () => undefined,
+      onLoadPagePreview: async () => ({
+        pageNumber: 1,
+        pageWidth: 100,
+        pageHeight: 100,
+        pixelWidth: 350,
+        pixelHeight: 350,
+        dataUrl: 'data:image/png;base64,a'
+      }),
+      onApplyCrop: async () => undefined
+    }));
+
+    expect(markup).toContain('class="figure-assets-progress idle"');
+    expect(markup).toContain('aria-hidden="true"');
+    expect(markup).toContain('class="figure-assets-layout"');
   });
 });
 

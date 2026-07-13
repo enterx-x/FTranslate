@@ -1,5 +1,37 @@
 # PLAN.md
 
+## 2026-07-14 图表工作台空白与划词闪烁修复（0.1.21）
+
+### 当前结论
+
+- 图表素材数据没有丢失。工作台使用 `auto / 3px / minmax(0, 1fr)` 三行网格，但空闲时条件删除了进度条节点，浏览器把主体自动排入第二行的 3px 轨道，第三行因此成为整块空白。
+- PDF 划词闪烁来自重复捕获：`selectionchange` 在拖动每改变一个字符时立即创建卡片，容器 `mouseup` 又捕获一次；每次捕获还会重置翻译请求和位置，造成连续弹出与闪烁。
+- 最小闭环是保留稳定网格槽位，并把选区捕获绑定到“完成选择”而不是“选区正在变化”：指针拖选只跟踪，释放后捕获一次；键盘扩选使用稳定防抖；双击则复用浏览器已经生成的原生整词选区并立即捕获。
+
+### 已完成
+
+- `PdfFigureWorkspaceDialog` 始终渲染 3px 进度轨道，空闲态使用 `idle` 隐藏填充，不再改变主体所在网格行；新增服务端渲染回归测试锁定空闲轨道节点。
+- 图表视觉脚本新增真实可见高度断言，并主动取消提取进入空闲态复查；空闲态工作台主体、21 个候选卡片和右侧预览均完整可见。
+- `PdfViewer` 新增指针选择生命周期：拖选期间忽略 `selectionchange`，`pointerup` 后 40ms 捕获；无指针的键盘选区变化使用 140ms 防抖。移除重复的 React `mouseup` 捕获入口，关闭卡片时同步取消待执行捕获。
+- 双击文字层中的英文单词时保留 Chromium 原生整词选区并以 0ms 捕获；该捕获会取消此前第二次 `pointerup` 的 40ms 任务，因此只创建一次词典卡。
+- 新增选区时序测试，明确拖选中返回 `null`、指针释放返回 40ms、双击返回 0ms、键盘扩选返回 140ms。
+
+### 验证与视觉对抗式审查
+
+- 定向测试：`PdfFigureAssetsPanel.test.ts` 与 `pdfSelectionTranslation.test.ts` 共 8 项通过；双击时序用例先得到 140ms 的预期失败，再由新增 `doubleclick` 分支修复为 0ms。
+- 最终 `npm run dist` 通过：99 个测试文件、632 项测试通过，TypeScript、Vite renderer、Electron main 和 NSIS 构建全部完成。
+- 安装包为 `dist/PDF Translation Reader Setup 0.1.21.exe`，157,068,459 bytes，SHA-256 `E19144E2DC833EF3461B3119B92FEB41518936336B8C97D2C897FDF48B2C4E3A`。
+- 已从 `dist/win-unpacked/PDF Translation Reader.exe` 启动 0.1.21 热预览，使用被 Git 忽略的隔离目录 `.tmp-visual-check/hot-preview-final-0.1.21`；现有 `D:/FTranslate_app` 安装版进程保持不变，避免预览污染用户论文库。
+- 打包前检查并移植 `codex/ios-mobile-reader` 在 2026-07-13 新增的 3 个提交：未签名 IPA GitHub Actions、Node 24 actions 更新及成功产物记录；没有合并 2026-07-12 的其他分支。
+- `VISUAL_CHECK_SCENARIO=figure-assets` 源码检查通过；0.1.21 首次安装版在独立端口 9792 也通过，新增空闲态截图 `.tmp-visual-check/whole-pdf-figures-idle.png` 经人工检查，无主体空白、遮挡、横向溢出或卡片压缩。其后只增加 PDF 双击事件，不改变图表工作台布局。
+- 最终安装包的 PDF 划词专项在端口 9794/9795、图表复核在 9796，均在进入本轮交互断言前被既有 PDF.js 首屏时序阻塞：75 个页面容器已创建，但首个 `canvasWrapper` 为空且没有文字层。使用修复前提交 `f25e7a4` 做隔离对照，以及改用 1 页小 PDF、禁用 GPU，均出现同一空 `canvasWrapper`，证明不是本轮选区事件或双击处理引入。
+
+### 问题台账与剩余风险
+
+- 当前真实 25 页 PDF 的源码视觉脚本存在独立的首屏 canvas 被清空时序问题；必须继续保留失败截图 `.tmp-visual-check/whole-pdf-canvas-timeout.png`，不能把屏幕残留上一帧误当成 DOM 已可选择文本。
+- 扫描版 PDF 没有文字层时仍不能划词；本轮只修复有 PDF.js text layer 的鼠标、触控和键盘选择时序。
+- `npm ci` 仍报告 5 个既有依赖审计项（1 low、2 moderate、2 high）；本轮没有执行会大范围升级依赖的 `npm audit fix`，避免破坏已锁定的 Electron/PDF/Univer 组合。
+
 ## 2026-07-13 PDF 图表高质量提取与素材闭环（0.1.20）
 
 ### 当前结论

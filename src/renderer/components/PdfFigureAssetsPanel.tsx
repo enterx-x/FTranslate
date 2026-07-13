@@ -192,11 +192,19 @@ export function PdfFigureWorkspaceDialog(props: PdfFigureWorkspaceDialogProps) {
           </div>
         </header>
 
-        {props.isExtracting && props.progress ? (
-          <div className="figure-assets-progress" aria-label="图表提取进度">
-            <span style={{ width: `${Math.max(4, props.progress.total > 0 ? (props.progress.processed / props.progress.total) * 100 : 0)}%` }} />
-          </div>
-        ) : null}
+        <div
+          className={`figure-assets-progress${props.isExtracting && props.progress ? '' : ' idle'}`}
+          aria-label={props.isExtracting && props.progress ? '图表提取进度' : undefined}
+          aria-hidden={props.isExtracting && props.progress ? undefined : true}
+        >
+          <span
+            style={{
+              width: props.isExtracting && props.progress
+                ? `${Math.max(4, props.progress.total > 0 ? (props.progress.processed / props.progress.total) * 100 : 0)}%`
+                : '0%'
+            }}
+          />
+        </div>
 
         <div className="figure-assets-layout">
           <aside className="figure-assets-filters" aria-label="图表筛选">

@@ -18,6 +18,8 @@ export interface PdfSelectionPopoverPosition {
   top: number;
 }
 
+export type PdfSelectionCaptureTrigger = 'selectionchange' | 'pointerup' | 'doubleclick';
+
 const PART_OF_SPEECH_LABELS: Record<string, string> = {
   noun: '名词',
   verb: '动词',
@@ -41,6 +43,19 @@ export function normalizePdfSelectionText(value: string, maxLength = 2_000): str
     .replace(/\s+/gu, ' ')
     .trim();
   return normalized.slice(0, Math.max(1, maxLength));
+}
+
+export function getPdfSelectionCaptureDelay(
+  trigger: PdfSelectionCaptureTrigger,
+  pointerActive: boolean
+): number | null {
+  if (trigger === 'selectionchange' && pointerActive) {
+    return null;
+  }
+  if (trigger === 'doubleclick') {
+    return 0;
+  }
+  return trigger === 'pointerup' ? 40 : 140;
 }
 
 export function resolvePdfSelectionTranslationDirection(
