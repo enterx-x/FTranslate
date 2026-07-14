@@ -2774,58 +2774,66 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className="secondary-button button-with-icon"
-                  disabled={!pdf || isPdfTranslationBusy}
-                  onClick={() => handleGenerateBilingualPdf(true)}
-                >
-                  <img className="button-icon" src={refreshIcon} alt="" />
-                  <span>重新生成</span>
-                </button>
-                <button type="button" className="secondary-button button-with-icon" disabled={!pdf || isPdfTranslationBusy} onClick={handleImportTranslatedPdf}>
-                  <img className="button-icon" src={uploadIcon} alt="" />
-                  <span>导入中文/双语 PDF</span>
-                </button>
-                <button type="button" className="secondary-button button-with-icon" disabled={!translatedPdf || isPdfTranslationBusy} onClick={handleExportTranslatedPdf}>
-                  <img className="button-icon" src={downloadIcon} alt="" />
-                  <span>导出双语 PDF</span>
-                </button>
-                <button type="button" className="secondary-button button-with-icon" disabled={!pdf || isPresentationGenerating} onClick={handleGeneratePresentationFromCurrentPdf}>
-                  <img className="button-icon" src={translateIcon} alt="" />
-                  <span>{isPresentationGenerating ? '正在生成 PPT...' : '生成组会 PPT'}</span>
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button button-with-icon"
+                  className="secondary-button button-with-icon pdf-figure-action"
                   disabled={!pdf}
                   onClick={handleOpenPdfFigureWorkspace}
                 >
                   <img className="button-icon" src={searchIcon} alt="" />
                   <span>{isPdfFigureExtracting ? '查看提取进度' : pdfFigureAssets.length > 0 ? '管理图表素材' : '提取 PDF 图表'}</span>
                 </button>
-                <button type="button" className="ghost-button button-with-icon" disabled={isPdfTranslationBusy} onClick={handleCheckPdfTranslationEngine}>
-                  <img className="button-icon" src={searchIcon} alt="" />
-                  <span>检查引擎</span>
-                </button>
+                <details className="pdf-secondary-actions" data-testid="pdf-secondary-actions">
+                  <summary>
+                    <span>更多 PDF 操作</span>
+                    <small>导入、导出、PPT、引擎</small>
+                  </summary>
+                  <div className="pdf-secondary-actions-grid">
+                    <button
+                      type="button"
+                      className="secondary-button button-with-icon"
+                      disabled={!pdf || isPdfTranslationBusy}
+                      onClick={() => handleGenerateBilingualPdf(true)}
+                    >
+                      <img className="button-icon" src={refreshIcon} alt="" />
+                      <span>重新生成</span>
+                    </button>
+                    <button type="button" className="secondary-button button-with-icon" disabled={!pdf || isPdfTranslationBusy} onClick={handleImportTranslatedPdf}>
+                      <img className="button-icon" src={uploadIcon} alt="" />
+                      <span>导入中文/双语 PDF</span>
+                    </button>
+                    <button type="button" className="secondary-button button-with-icon" disabled={!translatedPdf || isPdfTranslationBusy} onClick={handleExportTranslatedPdf}>
+                      <img className="button-icon" src={downloadIcon} alt="" />
+                      <span>导出双语 PDF</span>
+                    </button>
+                    <button type="button" className="secondary-button button-with-icon" disabled={!pdf || isPresentationGenerating} onClick={handleGeneratePresentationFromCurrentPdf}>
+                      <img className="button-icon" src={translateIcon} alt="" />
+                      <span>{isPresentationGenerating ? '正在生成 PPT...' : '生成组会 PPT'}</span>
+                    </button>
+                    <button type="button" className="ghost-button button-with-icon" disabled={isPdfTranslationBusy} onClick={handleCheckPdfTranslationEngine}>
+                      <img className="button-icon" src={searchIcon} alt="" />
+                      <span>检查引擎</span>
+                    </button>
+                  </div>
+                  {!pdfTranslationEngine?.available ? (
+                    <p className="engine-hint">
+                      安装命令：<code>{pdfTranslationEngine?.installCommand ?? 'uv tool install pdf2zh'}</code>
+                    </p>
+                  ) : null}
+                  <p className="reference-strategy-hint">
+                    参考文献策略：{describeReferenceStrategy(appSettings.pdf.referenceTranslationStrategy)}
+                  </p>
+                </details>
               </div>
+              <p className="pdf-translation-status" role="status" aria-live="polite">
+                {pdfTranslationStatus ||
+                  pdfTranslationEngine?.message ||
+                  '使用 PDFMathTranslate 生成整本文档的双语 PDF，完成后会直接在左侧显示。'}
+              </p>
               <PdfFigureAssetsPanel
                 figures={pdfFigureAssets}
                 isExtracting={isPdfFigureExtracting}
                 progress={pdfFigureExtractionProgress}
                 onOpen={handleOpenPdfFigureWorkspace}
               />
-              <p>
-                {pdfTranslationStatus ||
-                  pdfTranslationEngine?.message ||
-                  '使用 PDFMathTranslate 生成整本文档的双语 PDF，完成后会直接在左侧显示。'}
-              </p>
-              {!pdfTranslationEngine?.available ? (
-                <p className="engine-hint">
-                  安装命令：<code>{pdfTranslationEngine?.installCommand ?? 'uv tool install pdf2zh'}</code>
-                </p>
-              ) : null}
-              <p className="reference-strategy-hint">
-                参考文献策略：{describeReferenceStrategy(appSettings.pdf.referenceTranslationStrategy)}
-              </p>
             </section>
             <details
               className="pdf-ai-settings"

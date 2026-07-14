@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -174,7 +174,9 @@ async function createCdpClient(webSocketUrl) {
       });
     },
     close() {
-      socket.close();
+      if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
     },
     events
   };
@@ -442,13 +444,29 @@ async function clickSidebarItem(client, title) {
 }
 
 async function clickSidebarSection(client, section) {
-  const clicked = await evaluateJson(client, `() => {
+  let result = await evaluateJson(client, `() => {
     const section = ${JSON.stringify(section)};
     const button = document.querySelector(\`.app-sidebar-link[data-sidebar-section="\${section}"]\`);
+    if (button && button.getClientRects().length === 0) {
+      const moreToggle = document.querySelector('[data-sidebar-more-toggle]');
+      moreToggle?.click();
+      return moreToggle ? 'opened-more' : 'hidden';
+    }
     button?.click();
-    return Boolean(button);
+    return button ? 'clicked' : 'missing';
   }`);
-  if (!clicked) {
+
+  if (result === 'opened-more') {
+    await wait(180);
+    result = await evaluateJson(client, `() => {
+      const section = ${JSON.stringify(section)};
+      const button = document.querySelector(\`.app-sidebar-link[data-sidebar-section="\${section}"]\`);
+      button?.click();
+      return button && button.getClientRects().length > 0 ? 'clicked' : 'missing';
+    }`);
+  }
+
+  if (result !== 'clicked') {
     throw new Error(`Sidebar section not found: ${section}`);
   }
   await wait(700);
@@ -1570,6 +1588,15 @@ async function runHomeScenario(client) {
     nextActions: [...document.querySelectorAll('.research-next-action')].map((item) => item.textContent?.trim()),
     riskItems: [...document.querySelectorAll('.research-risk-list article')].map((item) => item.textContent?.trim()),
     commandTexts: [...document.querySelectorAll('.research-command-strip button')].map((button) => button.textContent?.trim()),
+    sidebarDisclosure: {
+      visibleSections: [...document.querySelectorAll('.app-sidebar-link[data-sidebar-section]')]
+        .filter((button) => button.getClientRects().length > 0)
+        .map((button) => button.getAttribute('data-sidebar-section')),
+      hiddenSections: [...document.querySelectorAll('.app-sidebar-link[data-sidebar-section]')]
+        .filter((button) => button.getClientRects().length === 0)
+        .map((button) => button.getAttribute('data-sidebar-section')),
+      moreExpanded: document.querySelector('[data-sidebar-more-toggle]')?.getAttribute('aria-expanded') === 'true'
+    },
     hasPaperTable: Boolean(document.querySelector('.paper-table')),
     hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
     adversarialLayout: (() => {
@@ -1900,6 +1927,10 @@ async function runHomeScenario(client) {
     hub.hasLegacyObjectPanel ||
     hub.hasLegacyPipelinePanel ||
     hub.hasPaperTable ||
+    hub.sidebarDisclosure.moreExpanded ||
+    hub.sidebarDisclosure.visibleSections.join(',') !==
+      'workspace,arxiv,library,reader,experimentMatrix,researchSheet,plot,settings' ||
+    hub.sidebarDisclosure.hiddenSections.join(',') !== 'knowledgeGraph,presentation,paperTutor,ai' ||
     hub.hasHorizontalOverflow
   ) {
     throw new Error(`home: expected workflow board workbench before entering a module, got ${JSON.stringify(hub)}`);
@@ -2283,6 +2314,9 @@ async function runWholePdfReaderScenario(client) {
     hasDualToggle: [...document.querySelectorAll('.pdf-view-toggle button')]
       .some((button) => /双语 PDF/.test(button.textContent ?? '')),
     pdfCanvasCount: ${JSON.stringify(pdfCanvasStatus.canvasCount)},
+    secondaryActionsCollapsed: !document.querySelector('[data-testid="pdf-secondary-actions"]')?.open,
+    visibleActionButtonCount: [...document.querySelectorAll('.whole-pdf-actions button')]
+      .filter((button) => button.getClientRects().length > 0).length,
     hasGenerateButton: [...document.querySelectorAll('.whole-pdf-panel button')]
       .some((button) => /生成双语 PDF/.test(button.textContent ?? '')),
     hasImportButton: [...document.querySelectorAll('.whole-pdf-panel button')]
@@ -2296,7 +2330,9 @@ async function runWholePdfReaderScenario(client) {
     !wholePdf.hasPdfCanvas ||
     !wholePdf.hasDualToggle ||
     !wholePdf.hasGenerateButton ||
-    !wholePdf.hasImportButton
+    !wholePdf.hasImportButton ||
+    !wholePdf.secondaryActionsCollapsed ||
+    wholePdf.visibleActionButtonCount !== 5
   ) {
     throw new Error(`wholePdf: expected source-first PDF reading surface, got ${JSON.stringify(wholePdf)}`);
   }
@@ -2673,6 +2709,18 @@ async function runWholePdfReaderScenario(client) {
     postExtractionPdf,
     requireNativeFigureExtraction
   };
+}
+
+function terminateAppProcessTree(appProcess) {
+  if (!appProcess?.pid) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(appProcess.pid), '/T', '/F'], {
+      windowsHide: true,
+      stdio: 'ignore'
+    });
+    return;
+  }
+  appProcess.kill('SIGTERM');
 }
 
 async function runEarlyFigureExtractionScenario(client) {
@@ -4652,8 +4700,9 @@ async function main() {
     stdio: 'ignore'
   });
 
+  let client = null;
   try {
-    const client = await createCdpClient(await waitForWebSocketUrl());
+    client = await createCdpClient(await waitForWebSocketUrl());
     await client.send('Runtime.enable');
     await client.send('Page.enable');
     await loadPaperRecord(client, translationPath, {
@@ -4730,7 +4779,8 @@ async function main() {
       )
     );
   } finally {
-    appProcess.kill();
+    client?.close();
+    terminateAppProcessTree(appProcess);
     await wait(500);
   }
 }

@@ -39,6 +39,29 @@ describe('AppSidebar navigation targets', () => {
     expect(labels).not.toContain('AI 问答');
   });
 
+  it('keeps the research loop visible and moves low-frequency modules behind progressive disclosure', () => {
+    const items = getSidebarNavigationItems();
+
+    expect(items.filter((item) => item.tier === 'core').map((item) => item.section)).toEqual([
+      'workspace',
+      'arxiv',
+      'library',
+      'reader',
+      'experimentMatrix',
+      'researchSheet',
+      'plot'
+    ]);
+    expect(items.filter((item) => item.tier === 'more').map((item) => item.section)).toEqual([
+      'knowledgeGraph',
+      'presentation',
+      'paperTutor',
+      'ai'
+    ]);
+    expect(items.filter((item) => item.tier === 'utility').map((item) => item.section)).toEqual([
+      'settings'
+    ]);
+  });
+
   it('dispatches each section through the configured handler map', () => {
     const calls: AppSidebarSection[] = [];
     const handlers = createSidebarNavigationHandlers({
