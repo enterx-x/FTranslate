@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPdfCanvasDimensions } from './pdfRenderGeometry';
+import { buildPdfCanvasDimensions, isPdfRenderSurfaceReady } from './pdfRenderGeometry';
 
 describe('PDF render geometry', () => {
   it('keeps CSS size stable while increasing canvas pixels for HiDPI screens', () => {
@@ -20,5 +20,23 @@ describe('PDF render geometry', () => {
       cssHeight: 200,
       outputScale: 1
     });
+  });
+
+  it('does not treat a PDF.js loaded-page marker as a completed render', () => {
+    expect(isPdfRenderSurfaceReady({
+      loadedPageCount: 1,
+      canvasSizes: [],
+      svgCount: 0,
+      imageSizes: []
+    })).toBe(false);
+  });
+
+  it('recognizes a real rendered surface', () => {
+    expect(isPdfRenderSurfaceReady({
+      loadedPageCount: 1,
+      canvasSizes: [{ width: 1224, height: 1584 }],
+      svgCount: 0,
+      imageSizes: []
+    })).toBe(true);
   });
 });

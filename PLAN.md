@@ -1,5 +1,34 @@
 # PLAN.md
 
+## 2026-07-14 PDF 首屏永久等待修复（0.1.24）
+
+### 当前结论
+
+- 用户等待超过一分钟并不是 15 MB PDF 的正常解析时间，而是首屏恢复被错误完成条件永久中止。
+- 现场诊断为 12 个页面对象、1 个 `data-loaded=true` 页面、0 个 canvas，首个页面只有空的 `canvasWrapper`；状态一直停在 `document-ready`。旧 `hasRenderedPdfPage()` 看到 `data-loaded` 后立即返回 `true`，因此 16 次有界恢复一次都没有执行。
+- 最小修复是不改变 PDF.js、全文抽取或翻译链路，只把“完成证据”收紧为真实正尺寸渲染面，并用同一份用户 PDF 做源码和安装包冷启动回归。
+
+### 已完成操作
+
+1. 在 `pdfRenderGeometry.test.ts` 先加入失败回归：loaded page marker 存在但没有 canvas/SVG/image 时必须返回未完成；确认旧实现缺少该能力后再实现修复。
+2. 新增 `isPdfRenderSurfaceReady()`，统一检查正尺寸 canvas、SVG 或图像；`loadedPageCount` 只进入诊断快照，不参与完成判定。
+3. `PdfViewer` 不再因 `.page[data-loaded="true"]` 提前取消恢复，首次调度丢失时会继续执行现有的有界 `update + forceRendering`。
+4. 版本更新为 0.1.24。打包前检查三个工作树：当前分支最新提交为 2026-07-14，另外两个工作树最新提交均为 2026-07-13；按用户规则未混入不对应的旧分支改动。
+
+### 验证与视觉对抗式审查
+
+- 回归测试按预期先失败，报错为 `isPdfRenderSurfaceReady is not a function`；实现后 `pdfRenderGeometry.test.ts` 4/4 通过。
+- `npm run dist` 通过：99 个测试文件、635 项测试通过，TypeScript、Vite renderer、Electron main 和 NSIS 均构建成功。
+- 用真实 `Tactile-WAM 2026.6.25.pdf`（15,047,010 bytes、12 页）运行源码 `pdf-selection` 场景约 10.4 秒通过；0.1.24 安装包在两个全新用户目录中连续冷启动，分别约 10.4 秒和 10.1 秒通过。验证包含真实 PDF 渲染面、首屏适宽居中、左右无隐藏、选区卡跟随和双击单词卡。
+- 人工检查 `.tmp-visual-check/pdf-word-dictionary.png`：页面内容完整，左右边界同时可见，单词卡、PDF 和右侧栏没有重叠、截断或横向溢出。
+- 安装包：`dist/PDF Translation Reader Setup 0.1.24.exe`，157,074,187 bytes，SHA-256 `7ED607AAC3ED605E1169D123D5B0DE73C256F12F2605F42E64899B57A78AE563`。
+
+### 问题台账与剩余风险
+
+- 当前修复针对已确认的“占位标记误判完成”时序，不改变加密 PDF、损坏 PDF、扫描件无文字层等独立失败路径；这些场景仍应显示明确解析错误或降级状态。
+- Vite 仍报告既有大 chunk 警告，Electron Builder 仍报告既有重复依赖引用；本轮没有新增运行时依赖，也没有把首屏缺陷扩大为无关分包重构。
+- 功能精简与信息架构审查在本次紧急首屏缺陷期间暂停，后续继续时应基于真实科研闭环删除冗余入口，而不是与渲染修复混在同一提交。
+
 ## 2026-07-14 图表提取加载反馈与空白防回归（0.1.23）
 
 ### 当前结论

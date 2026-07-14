@@ -26,6 +26,7 @@ import {
   buildPdfViewportState,
   type PdfViewportState
 } from '../lib/pdfViewportSync';
+import { isPdfRenderSurfaceReady } from '../lib/pdfRenderGeometry';
 import {
   buildPdfSelectionPopoverPosition,
   formatDictionaryPartOfSpeech,
@@ -744,9 +745,14 @@ export function PdfViewer(props: PdfViewerProps) {
   function hasRenderedPdfPage(): boolean {
     const viewerElement = viewerElementRef.current;
     if (!viewerElement) return false;
-    if (viewerElement.querySelector('.page[data-loaded="true"]')) return true;
-    return [...viewerElement.querySelectorAll<HTMLCanvasElement>('.page canvas')]
-      .some((canvas) => canvas.width > 0 && canvas.height > 0);
+    return isPdfRenderSurfaceReady({
+      loadedPageCount: viewerElement.querySelectorAll('.page[data-loaded="true"]').length,
+      canvasSizes: [...viewerElement.querySelectorAll<HTMLCanvasElement>('.page canvas')]
+        .map((canvas) => ({ width: canvas.width, height: canvas.height })),
+      svgCount: viewerElement.querySelectorAll('.page .canvasWrapper svg').length,
+      imageSizes: [...viewerElement.querySelectorAll<HTMLImageElement>('.page .canvasWrapper img')]
+        .map((image) => ({ width: image.naturalWidth, height: image.naturalHeight }))
+    });
   }
 
   function cancelInitialRenderRecovery(): void {

@@ -1,5 +1,12 @@
 # PDF Translation Reader / FTranslate
 
+## 2026-07-14 PDF 首屏永久等待修复（0.1.24）
+
+- 修复真实 PDF 偶发等待一分钟仍没有首屏的问题。根因不是文件过大，而是 PDF.js 会先创建页面并写入 `data-loaded=true`，此时 `canvasWrapper` 仍可能为空；旧逻辑误把这个占位标记当成已渲染，提前停止了 `update + forceRendering` 恢复。
+- 首屏恢复现在只接受有正尺寸的 canvas、SVG 或图像作为渲染面证据；页面占位和 `data-loaded` 只保留用于诊断，不能再结束恢复。新增回归测试覆盖“1 个 loaded page、0 个真实渲染面”必须保持未完成，以及真实 canvas 才能完成。
+- 使用用户实际的 `Tactile-WAM 2026.6.25.pdf`（15,047,010 bytes、12 页）验证：源码场景约 10.4 秒完成“启动、打开、首屏、适宽居中与选词”；0.1.24 安装包连续两次全新用户目录冷启动分别约 10.4 秒和 10.1 秒完成同一场景。
+- 人工复查 `.tmp-visual-check/pdf-word-dictionary.png`：PDF 内容真实可见、左右边界完整、侧栏和单词卡无遮挡。Windows 安装包为 `dist/PDF Translation Reader Setup 0.1.24.exe`，157,074,187 bytes，SHA-256 `7ED607AAC3ED605E1169D123D5B0DE73C256F12F2605F42E64899B57A78AE563`。
+
 ## 2026-07-14 图表提取加载反馈与空白防回归（0.1.23）
 
 - 修复“点击提取图表后像是整页空白”的体验问题。根因是 caption 尚未解析完成时就打开了空的三栏工作台，虽然 PDF 数据仍在，但大面积无内容区域会被误认为页面被清空或程序卡死。
