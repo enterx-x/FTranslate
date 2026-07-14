@@ -1,5 +1,12 @@
 # PDF Translation Reader / FTranslate
 
+## 2026-07-14 PDF 首屏 3 秒性能门禁（0.1.25）
+
+- 将首屏指标拆离整套视觉场景：计时从点击论文库“继续阅读”开始，到首个真实 canvas/SVG/image 可见为止，不把后续划词、词典和截图耗时算进首屏。
+- 0.1.24 安装版在全新应用用户目录中的实测基线已经达到目标：`Tactile-WAM 2026.6.25.pdf`（15,047,010 bytes、12 页）为 636 ms；`2604.15483v2.pdf`（15,587,236 bytes、25 页）为 1,687 ms。因此本版不冒险改写已满足目标的 PDF.js 主链路，而是把 3,000 ms 固化为自动回归预算。
+- `pdf-selection` 专项场景和默认完整 PDF 场景都会输出 `firstRenderMs`；超过预算立即失败。可通过 `VISUAL_CHECK_PDF_FIRST_RENDER_BUDGET_MS` 调整测试预算，默认值为 3000。
+- 0.1.25 安装包内重新验证为 599 ms 和 1,651 ms。安装包为 `dist/PDF Translation Reader Setup 0.1.25.exe`，157,074,002 bytes，SHA-256 `EC2AA306B9872E69DDEFDADFC22F91922B6DC24BECAB96A4458D8DBF2F760AE1`。
+
 ## 2026-07-14 PDF 首屏永久等待修复（0.1.24）
 
 - 修复真实 PDF 偶发等待一分钟仍没有首屏的问题。根因不是文件过大，而是 PDF.js 会先创建页面并写入 `data-loaded=true`，此时 `canvasWrapper` 仍可能为空；旧逻辑误把这个占位标记当成已渲染，提前停止了 `update + forceRendering` 恢复。

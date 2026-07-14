@@ -23,6 +23,10 @@ const outputDir = path.join(root, '.tmp-visual-check');
 const visualUserDataDir = path.join(outputDir, 'user-data');
 const port = Number(process.env.VISUAL_CHECK_PORT ?? 9333);
 const disableGpu = process.env.VISUAL_CHECK_DISABLE_GPU === '1';
+const pdfFirstRenderBudgetMs = Math.max(
+  250,
+  Number(process.env.VISUAL_CHECK_PDF_FIRST_RENDER_BUDGET_MS ?? 3000) || 3000
+);
 const defaultPdfPath = path.join('D:\\', 'GPT浏览器下载', '2604.15483v2.pdf');
 
 function wait(ms) {
@@ -331,6 +335,7 @@ async function waitForPdfCanvas(client) {
         return rect.width > 120 && rect.height > 120;
       });
       return {
+        observedAt: performance.now(),
         hasCanvas,
         hasRenderablePdf: hasLoadedPage && (hasCanvas || hasVisibleTextLayer || hasVisibleSvgLayer || hasVisibleImageLayer),
         canvasCount: canvases.length,
@@ -2241,14 +2246,20 @@ async function runWholePdfReaderScenario(client) {
   await wait(350);
   const openedFromLibrary = await evaluateJson(client, `() => {
     const resume = document.querySelector('[data-paper-library-resume]');
-    if (resume && !resume.disabled) resume.click();
-    return Boolean(resume && !resume.disabled);
+    const opened = Boolean(resume && !resume.disabled);
+    const startedAt = performance.now();
+    if (opened) resume.click();
+    return { opened, startedAt };
   }`);
-  if (!openedFromLibrary) {
+  if (!openedFromLibrary.opened) {
     throw new Error('wholePdf: paper library resume action not found');
   }
   await waitForAppReady(client);
   const pdfCanvasStatus = await waitForPdfCanvas(client);
+  const firstRenderMs = Math.max(0, Math.round(pdfCanvasStatus.observedAt - openedFromLibrary.startedAt));
+  if (firstRenderMs > pdfFirstRenderBudgetMs) {
+    throw new Error(`wholePdf: first PDF render exceeded ${pdfFirstRenderBudgetMs} ms budget, got ${firstRenderMs} ms`);
+  }
   const initialPdfCenter = await readPdfInitialCenterLayout(client, 'initial-reader');
   if (
     !initialPdfCenter.hasPage ||
@@ -2649,6 +2660,8 @@ async function runWholePdfReaderScenario(client) {
   }
   return {
     wholePdf,
+    firstRenderMs,
+    firstRenderBudgetMs: pdfFirstRenderBudgetMs,
     initialPdfCenter,
     legacyPanels,
     parallelSidebar,
@@ -2797,12 +2810,18 @@ async function runPdfSelectionTranslationScenario(client) {
   await wait(350);
   const openedFromLibrary = await evaluateJson(client, `() => {
     const resume = document.querySelector('[data-paper-library-resume]');
-    if (resume && !resume.disabled) resume.click();
-    return Boolean(resume && !resume.disabled);
+    const opened = Boolean(resume && !resume.disabled);
+    const startedAt = performance.now();
+    if (opened) resume.click();
+    return { opened, startedAt };
   }`);
-  if (!openedFromLibrary) throw new Error('pdfSelection: paper library resume action not found');
+  if (!openedFromLibrary.opened) throw new Error('pdfSelection: paper library resume action not found');
   await waitForAppReady(client);
-  await waitForPdfCanvas(client);
+  const pdfCanvasStatus = await waitForPdfCanvas(client);
+  const firstRenderMs = Math.max(0, Math.round(pdfCanvasStatus.observedAt - openedFromLibrary.startedAt));
+  if (firstRenderMs > pdfFirstRenderBudgetMs) {
+    throw new Error(`pdfSelection: first PDF render exceeded ${pdfFirstRenderBudgetMs} ms budget, got ${firstRenderMs} ms`);
+  }
   const initialFit = await readPdfInitialCenterLayout(client, 'pdf-selection-reader');
   if (!initialFit.hasPage || !initialFit.fullyVisibleHorizontally || !initialFit.isFitWidth || initialFit.hiddenDelta > 4) {
     throw new Error(`pdfSelection: initial PDF should fit width and remain centered, got ${JSON.stringify(initialFit)}`);
@@ -3072,7 +3091,16 @@ async function runPdfSelectionTranslationScenario(client) {
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'pdf-word-dictionary.png'), Buffer.from(shot.data, 'base64'))
   );
-  return { ...snapshot, initialFit, followedSelection: true, dismissed, selectedWord, wordSnapshot };
+  return {
+    ...snapshot,
+    firstRenderMs,
+    firstRenderBudgetMs: pdfFirstRenderBudgetMs,
+    initialFit,
+    followedSelection: true,
+    dismissed,
+    selectedWord,
+    wordSnapshot
+  };
 }
 
 async function runPresentationScenario(client) {
