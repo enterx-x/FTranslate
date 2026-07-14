@@ -13,7 +13,7 @@ export function buildMobileWebPdfUrl(pdfUrl: string, pageUrl = window.location.h
     return upstream.toString();
   }
   const directPdfPath = upstream.pathname.replace(/\.pdf$/iu, '');
-  const proxy = new URL(`/api/arxiv-pdf${directPdfPath}`, pageUrl);
-  proxy.search = upstream.search;
-  return proxy.toString();
+  const direct = new URL(directPdfPath, 'https://arxiv.org');
+  direct.search = upstream.search;
+  return direct.toString();
 }

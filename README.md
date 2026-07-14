@@ -1,8 +1,23 @@
 # PDF Translation Reader / FTranslate
 
-## iPhone 局域网网页阅读（当前首选）
+## iPhone 公网网页阅读（当前首选）
 
-当前先使用免费、无需签名的本地网页方案：Windows 电脑负责提供网页并转发 arXiv 请求，iPhone 使用 Safari 打开；PDF、论文索引、阅读进度和段落译文保存在 iPhone 当前 Safari 的浏览器存储中，不上传到 FTranslate 服务器。
+当前首选方案是把独立移动网页部署到 Vercel：iPhone 使用 Safari 打开固定的 HTTPS 地址，无需 App Store、签名或保持 Windows 电脑开机。Vercel 只托管静态网页并转发受限的 arXiv Atom 检索请求；arXiv PDF 由浏览器直接下载。PDF、论文索引、阅读进度和段落译文保存在当前 Safari 的浏览器存储中，不上传到 FTranslate 或 Vercel 数据库。
+
+仓库根目录已提供 `vercel.json`，首次部署执行：
+
+```bash
+npx vercel login
+npx vercel --prod
+```
+
+部署完成后，终端会返回一个 `https://*.vercel.app` 地址。用 iPhone Safari 打开后，可通过“分享 → 添加到主屏幕”获得接近独立 App 的入口。不要使用无痕模式，也不要清除该网址的网站数据；同一套论文库不会自动出现在其他浏览器、其他域名或桌面端。
+
+手机段落翻译由浏览器直接请求用户配置的 OpenAI 兼容 HTTPS 接口。API Key 只保留在当前页面内存，不写入 Vercel；该接口必须允许浏览器跨域访问。免费域名由 Vercel 自动提供 HTTPS，个人使用不需要购买域名。
+
+## iPhone 局域网网页阅读（离线备用）
+
+没有公网或不想部署时，可以使用免费、无需签名的局域网网页方案：Windows 电脑负责提供网页并转发 arXiv 请求，iPhone 使用 Safari 打开。
 
 电脑和 iPhone 连接同一个 Wi-Fi 后，在 Windows 执行：
 
@@ -19,7 +34,7 @@ http://192.168.0.104:4174/
 
 在 iPhone Safari 输入该地址即可使用论文库、arXiv 检索、PDF 阅读、段落内联翻译和选词翻译。第一次启动时，如果 Windows 防火墙询问是否允许 Node.js/Vite 访问网络，只允许“专用网络”。电脑必须保持开机且该命令持续运行；停止命令后网页暂时无法访问，再次以相同 IP 和端口启动即可恢复。
 
-网页论文库与访问地址的协议、IP、端口绑定。不要使用 Safari 无痕模式，不要清除该地址的网站数据；如果电脑局域网 IP 改变，旧地址的浏览器论文库不会自动出现在新地址，长期使用应在路由器中为电脑保留固定 IP。API Key 只保留在当前网页内存，并直接发送到用户配置的 HTTPS 翻译接口；兼容接口必须允许浏览器跨域请求。
+网页论文库与访问地址的协议、IP、端口绑定。如果电脑局域网 IP 改变，旧地址的浏览器论文库不会自动出现在新地址，长期使用应在路由器中为电脑保留固定 IP。
 
 ## iPhone 本地论文阅读版（`codex/ios-mobile-reader`）
 

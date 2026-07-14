@@ -13,10 +13,10 @@ describe('mobile web proxy URLs', () => {
     );
   });
 
-  it('routes arXiv PDFs through the fixed local proxy', () => {
+  it('uses the redirect-free CORS-enabled arXiv PDF address', () => {
     expect(
       buildMobileWebPdfUrl('https://arxiv.org/pdf/1706.03762.pdf', 'http://192.168.1.23:4174/')
-    ).toBe('http://192.168.1.23:4174/api/arxiv-pdf/pdf/1706.03762');
+    ).toBe('https://arxiv.org/pdf/1706.03762');
   });
 
   it('does not proxy unrelated PDF hosts', () => {

@@ -594,3 +594,30 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - `npm run build` 通过：169 个测试文件、1043 个测试全部通过，TypeScript、renderer 和 Electron build 通过。
 - `npm run visual:check` 通过；人工查看 `home.png`、`whole-pdf-reader.png` 和 `ai-assistant.png`，未发现重叠、遮挡、关键操作裁切或页面横向溢出。
 - 视觉脚本修正了装饰性光晕被 `overflow-x: hidden` 裁剪时的假阳性；仅真实可见或可滚动的横向溢出才判失败。
+
+## 17. 2026-07-15 iPhone 公网网页部署
+
+### 第一性原理与设计决策
+
+- 真实问题是让个人 iPhone 随时打开论文阅读器，而不是继续处理 iOS 签名、App Store 或要求 Windows 电脑常开。
+- 最小闭环仍限定为论文库、arXiv 检索、PDF 阅读、英文段落下方内联中文翻译和选词翻译；账号、云同步、Android 与三端互通继续留在后续阶段。
+- 采用 Vercel Hobby 托管独立 Vite 移动网页，并由单个 `/api/arxiv` Serverless Function 转发 arXiv Atom 检索。接口固定上游域名，只允许受限查询参数和最多 50 条结果，避免形成开放代理。
+- arXiv PDF 改用无重定向且允许跨域的 `https://arxiv.org/pdf/<id>` 地址由 Safari 直接加载，避免把大 PDF 经由 Serverless Function 转发。
+- PDF、论文元数据、阅读位置和译文仍存入当前浏览器的 IndexedDB / localStorage；翻译 API Key 只保留在页面内存。Vercel 不承担用户数据同步或密钥保存。
+- 公网域名与原局域网地址属于不同浏览器 Origin，因此原局域网页中的论文库不会自动迁移到公网网址；首版接受重新导入 PDF，后续三端互通阶段再设计正式迁移与同步协议。
+
+### 本轮验证状态
+
+- 已新增 Vercel 构建配置、受限 arXiv 查询代理和参数校验测试；移动端 arXiv PDF URL 已改为浏览器直连。
+- `npm run ios:sync` 已通过，最新移动网页资源已同步到 Capacitor iOS 工程；`npm run visual:check:mobile` 已通过并刷新 `.tmp-mobile-visual-check/`。
+- 已人工查看论文库、arXiv、段落内联翻译和选词浮层截图；390px / 430px 宽度下未发现明显重叠、遮挡或横向溢出，中文译文位于对应英文段落下方，选词浮层只在选中文本后出现。
+- `$env:NODE_OPTIONS='--max-old-space-size=4096'; npm run dist` 已通过：81 个测试文件、468 个测试全部通过，TypeScript、renderer、Electron build 和 NSIS 安装包构建成功；安装包为 `dist/PDF Translation Reader Setup 0.1.12.exe`。
+- 桌面 `npm run visual:check` 已执行但未形成全量通过：默认 15.6 MB 外部论文在 10 分钟门限内未完成；改用可控短 PDF 后首页、实验矩阵、研究表格和 PDF 阅读/图表页面完成截图，随后被组会 PPT 的内容质量门拒绝。人工复查本轮生成的 `home.png`、`whole-pdf-reader.png` 和 `whole-pdf-figures.png` 未见明显布局回归；本次代码未修改桌面 UI，但全量视觉门仍记为待恢复问题，不能声称通过。
+- 公网生产网址需要在本机完成一次 Vercel OAuth 授权后才能创建；授权完成后必须实际检查首页、`/api/arxiv` 和 iPhone 尺寸页面，再把最终 HTTPS 地址记录到本文与 README。
+
+### 问题台账
+
+| 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
+| --- | --- | --- | --- | --- |
+| 2026-07-15 | Vercel CLI 尚未获得部署授权 | 本机没有既有 Vercel 凭据，首次部署必须由用户完成 OAuth 登录 | 部署代码和配置已完成，生产地址待授权创建 | 完成 `npx vercel login` 后运行 `npx vercel --prod`，再验证公网首页与 arXiv 检索 |
+| 2026-07-15 | 桌面视觉脚本未全量通过 | 默认外部论文在 10 分钟门限内未完成；可控短 PDF 能快速验证布局，但生成的 PPT 内容不足以通过来源与中文 bullet 质量门 | 首页、研究表格、实验矩阵、PDF 阅读和图表截图已生成并人工复查；移动端视觉检查独立通过 | 后续为桌面视觉脚本维护一份小型、内容完备、可通过 PPT 质量门的固定 PDF fixture，移除对个人下载目录大论文的依赖 |
