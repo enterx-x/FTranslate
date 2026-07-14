@@ -349,7 +349,7 @@ describe('ArxivSearchPage result display', () => {
     expect(preview.hiddenCount).toBe(2);
   });
 
-  it('automatically previews only the first six papers as interruptible jobs', () => {
+  it('automatically previews only the first three papers as interruptible jobs', () => {
     const papers = Array.from({ length: 20 }, (_, index) => ({
       ...paper,
       id: `${paper.id}-${index}`,
@@ -357,7 +357,7 @@ describe('ArxivSearchPage result display', () => {
     }));
 
     expect(buildArxivPreviewTranslationBatches(papers)).toEqual(
-      papers.slice(0, 6).map((item) => [item])
+      papers.slice(0, 3).map((item) => [item])
     );
   });
 
@@ -392,15 +392,15 @@ describe('ArxivSearchPage result display', () => {
       .not.toBe(strictInsight);
   });
 
-  it('never expands preview translation beyond the first six results when those are cached', () => {
+  it('never expands preview translation beyond the first three results when those are cached', () => {
     const papers = Array.from({ length: 20 }, (_, index) => ({
       ...paper,
       id: `${paper.id}-${index}`,
       stableId: `2601.${String(index).padStart(5, '0')}`
     }));
 
-    expect(buildArxivPreviewTranslationBatches(papers, (_, index) => index >= 6)).toEqual([]);
-    expect(buildArxivPreviewTranslationBatches(papers, (_, index) => index === 5)).toEqual([[papers[5]]]);
+    expect(buildArxivPreviewTranslationBatches(papers, (_, index) => index >= 3)).toEqual([]);
+    expect(buildArxivPreviewTranslationBatches(papers, (_, index) => index === 2)).toEqual([[papers[2]]]);
   });
 
   it('splits preview translations into interruptible single-paper jobs', () => {
@@ -411,7 +411,7 @@ describe('ArxivSearchPage result display', () => {
     }));
 
     expect(buildArxivPreviewTranslationBatches(papers)).toEqual(
-      papers.slice(0, 6).map((item) => [item])
+      papers.slice(0, 3).map((item) => [item])
     );
   });
 

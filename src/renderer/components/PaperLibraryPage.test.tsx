@@ -92,6 +92,8 @@ describe('PaperLibraryPage', () => {
 
     expect(html).toContain('还没有论文记录');
     expect(html).toContain('导入第一篇论文');
+    expect(html).toContain('data-paper-library-empty-create-project');
+    expect(html).toContain('新建研究项目');
     expect(html).toContain('data-paper-library-create-project');
     expect(html).toContain('新建项目');
     expect(html).not.toContain('data-paper-library-row');

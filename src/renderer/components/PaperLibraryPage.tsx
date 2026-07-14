@@ -536,10 +536,20 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
         <section className={styles.emptyState}>
           <span className={styles.emptyIcon}>▤</span>
           <h2>还没有论文记录</h2>
-          <p>导入 PDF 后即可使用标签、项目、排序和阅读进度持续整理研究资料。</p>
-          <button type="button" className={styles.primaryButton} onClick={props.onNewProject}>
-            导入第一篇论文
-          </button>
+          <p>可以先建立研究项目，也可以直接导入 PDF；两条路径互不依赖。</p>
+          <div className={styles.emptyActions}>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              data-paper-library-empty-create-project
+              onClick={openProjectDialog}
+            >
+              新建研究项目
+            </button>
+            <button type="button" className={styles.primaryButton} onClick={props.onNewProject}>
+              导入第一篇论文
+            </button>
+          </div>
           <div className={styles.emptyProjectList} aria-label="已有研究项目">
             <span>已有 {props.projects.length} 个项目</span>
             {props.projects.map((project) => <small key={project.id}>{project.name}</small>)}

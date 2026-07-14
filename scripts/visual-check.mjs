@@ -475,6 +475,15 @@ async function clickSidebarSection(client, section) {
 async function clickArxivLayoutButton(client, label) {
   const clicked = await evaluateJson(client, `() => {
     const label = ${JSON.stringify(label)};
+    const select = document.querySelector('[data-arxiv-layout-select]');
+    const option = select
+      ? [...select.options].find((item) => (item.textContent ?? '').trim() === label)
+      : null;
+    if (select && option) {
+      select.value = option.value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
     const button = [...document.querySelectorAll('.arxiv-layout-switch button, .arxiv-view-switch button')]
       .find((item) => (item.textContent ?? '').trim() === label);
     button?.click();
@@ -1566,7 +1575,96 @@ async function capturePaperLibraryResponsiveWidths(client) {
       writeFile(path.join(outputDir, 'paper-library-inspector-collapsed.png'), Buffer.from(shot.data, 'base64'))
     );
 
-    return { snapshots, batchSnapshot, projectDialog, projectCreation, noResults, missingPath, collapsed };
+    const libraryStorage = await evaluateJson(client, `() => ({
+      paperLibrary: localStorage.getItem('pdfTranslationReader:paperLibrary'),
+      researchProjects: localStorage.getItem('pdfTranslationReader:researchProjects'),
+      paperLibraryView: localStorage.getItem('pdfTranslationReader:paperLibraryView')
+    })`);
+    await client.send('Runtime.evaluate', {
+      expression: `
+        localStorage.setItem('pdfTranslationReader:paperLibrary', '[]');
+      `
+    });
+    await client.send('Page.reload', { ignoreCache: true });
+    await wait(800);
+    await waitForAppReady(client);
+    await clickSidebarSection(client, 'library');
+    await wait(450);
+    const emptyLibrary = await evaluateJson(client, `() => {
+      const page = document.querySelector('[data-paper-library-page]');
+      const createProject = document.querySelector('[data-paper-library-empty-create-project]');
+      const actions = createProject?.parentElement;
+      const actionButtons = [...(actions?.querySelectorAll('button') ?? [])];
+      const pageRect = page?.getBoundingClientRect();
+      return {
+        hasPage: Boolean(page),
+        hasEmptyMessage: /还没有论文记录/.test(page?.textContent ?? ''),
+        hasIndependentPathCopy: /两条路径互不依赖/.test(page?.textContent ?? ''),
+        hasCreateProject: Boolean(createProject && createProject.getClientRects().length > 0),
+        hasImportPaper: actionButtons.some((button) => /导入第一篇论文/.test(button.textContent ?? '')),
+        actionsFit: actionButtons.every((button) => button.scrollWidth <= button.clientWidth + 3),
+        pageWithinViewport: Boolean(pageRect && pageRect.left >= 0 && pageRect.right <= window.innerWidth),
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+      };
+    }`);
+    if (
+      !emptyLibrary.hasPage ||
+      !emptyLibrary.hasEmptyMessage ||
+      !emptyLibrary.hasIndependentPathCopy ||
+      !emptyLibrary.hasCreateProject ||
+      !emptyLibrary.hasImportPaper ||
+      !emptyLibrary.actionsFit ||
+      !emptyLibrary.pageWithinViewport ||
+      emptyLibrary.hasHorizontalOverflow
+    ) {
+      throw new Error(`paperLibrary: empty-state project entry failed: ${JSON.stringify(emptyLibrary)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'paper-library-empty.png'), Buffer.from(shot.data, 'base64'))
+    );
+    const emptyProjectDialogOpened = await evaluateJson(client, `() => {
+      document.querySelector('[data-paper-library-empty-create-project]')?.click();
+      return Boolean(document.querySelector('[data-paper-library-empty-create-project]'));
+    }`);
+    await wait(220);
+    const emptyProjectDialog = await evaluateJson(client, `() => {
+      const dialog = document.querySelector('[data-paper-library-create-project-dialog]');
+      return {
+        opened: Boolean(dialog),
+        hasNoForcedPaperSelection: !dialog?.querySelector('input[type="checkbox"]'),
+        hasProjectFields: Boolean(dialog?.querySelector('#paper-project-name') && dialog?.querySelector('#paper-project-description')),
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+      };
+    }`);
+    if (!emptyProjectDialogOpened || !emptyProjectDialog.opened || !emptyProjectDialog.hasNoForcedPaperSelection || !emptyProjectDialog.hasProjectFields || emptyProjectDialog.hasHorizontalOverflow) {
+      throw new Error(`paperLibrary: empty-state create-project dialog failed: ${JSON.stringify(emptyProjectDialog)}`);
+    }
+    await evaluateJson(client, `() => document.querySelector('button[aria-label="关闭新建项目"]')?.click()`);
+
+    await client.send('Runtime.evaluate', {
+      expression: `
+        localStorage.setItem('pdfTranslationReader:paperLibrary', ${JSON.stringify(libraryStorage.paperLibrary)});
+        localStorage.setItem('pdfTranslationReader:researchProjects', ${JSON.stringify(libraryStorage.researchProjects)});
+        localStorage.setItem('pdfTranslationReader:paperLibraryView', ${JSON.stringify(libraryStorage.paperLibraryView)});
+      `
+    });
+    await client.send('Page.reload', { ignoreCache: true });
+    await wait(800);
+    await waitForAppReady(client);
+    await clickSidebarSection(client, 'library');
+    await wait(350);
+
+    return {
+      snapshots,
+      batchSnapshot,
+      projectDialog,
+      projectCreation,
+      noResults,
+      missingPath,
+      collapsed,
+      emptyLibrary,
+      emptyProjectDialog
+    };
   } finally {
     await client.send('Emulation.clearDeviceMetricsOverride');
   }
@@ -3833,10 +3931,12 @@ async function runArxivSearchScenario(client) {
       ? queueButtonRects.filter((rect) => Math.abs(rect.top - firstQueueTop) <= 4).length
       : 0;
     const activeSidebar = document.querySelector('.app-sidebar-link.active');
-    const queryModeSelect = [...document.querySelectorAll('.arxiv-query-row select')]
+    const queryModeSelect = [...document.querySelectorAll('.arxiv-search-card select')]
       .find((select) => [...select.options].some((option) => option.value === 'explore'));
     const advancedToggle = document.querySelector('.arxiv-advanced-toggle');
     const advancedFilters = document.querySelector('.arxiv-query-options');
+    const runtimeDetails = document.querySelector('[data-arxiv-runtime-details]');
+    const runtimeStatus = document.querySelector('.arxiv-runtime-status');
     return {
       hasPage: Boolean(page),
       hasSearchCard: Boolean(searchCard),
@@ -3865,7 +3965,12 @@ async function runArxivSearchScenario(client) {
         Boolean(advancedFilters) &&
         getComputedStyle(advancedFilters).display === 'none',
       advancedControlsLinked: advancedToggle?.getAttribute('aria-controls') === advancedFilters?.id,
-      hasRuntimeStatus: Boolean(document.querySelector('.arxiv-runtime-status')),
+      hasRuntimeStatus: Boolean(runtimeStatus),
+      runtimeDetailsCollapsed:
+        Boolean(runtimeDetails) &&
+        !runtimeDetails.hasAttribute('open') &&
+        Boolean(runtimeStatus) &&
+        getComputedStyle(runtimeStatus).display === 'none',
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
       inputs,
       searchText: text.slice(0, 1200)
@@ -3896,6 +4001,7 @@ async function runArxivSearchScenario(client) {
     !snapshot.advancedCollapsed ||
     !snapshot.advancedControlsLinked ||
     !snapshot.hasRuntimeStatus ||
+    !snapshot.runtimeDetailsCollapsed ||
     snapshot.hasHorizontalOverflow
   ) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
@@ -4050,9 +4156,6 @@ async function runArxivSearchScenario(client) {
           const style = getComputedStyle(item ?? document.body);
           return [style.backgroundColor, style.color, style.borderTopColor, style.borderLeftColor, style.boxShadow];
         };
-        const headerEyebrow = document.querySelector('.arxiv-page-header .eyebrow');
-        const headerEyebrowStyle = getComputedStyle(headerEyebrow ?? document.body);
-        const headerEyebrowBeforeStyle = getComputedStyle(headerEyebrow ?? document.body, '::before');
         const pageText = document.querySelector('.arxiv-page')?.textContent ?? '';
         const cardActionGroups = [...document.querySelectorAll('.arxiv-card-actions--primary')];
         const cardActionTexts = cardActionGroups.map((group) => group.textContent?.trim() ?? '');
@@ -4060,18 +4163,11 @@ async function runArxivSearchScenario(client) {
           ...document.querySelectorAll('.arxiv-detail-actions, .arxiv-detail-secondary-actions')
         ].map((group) => group.textContent ?? '').join(' ');
         const runtimeStatus = document.querySelector('.arxiv-runtime-status');
-        const runtimeQuery = document.querySelector('.arxiv-runtime-query');
-        const runtimeQueryRect = runtimeQuery?.getBoundingClientRect();
+        const runtimeDetails = document.querySelector('[data-arxiv-runtime-details]');
         const legacyAccentValues = [
           ...readStyles('.arxiv-search-primary-row .primary-button'),
-          ...readStyles('.arxiv-page-header .eyebrow'),
-          headerEyebrowStyle.color,
-          headerEyebrowBeforeStyle.backgroundColor,
-          headerEyebrowBeforeStyle.boxShadow,
           ...readStyles('.arxiv-detail-panel .panel-title-row .eyebrow'),
           ...readStyles('.arxiv-reading-queue-overflow'),
-          ...readStyles('.arxiv-api-status'),
-          ...readStyles('.arxiv-api-status span'),
           ...readStyles('.arxiv-paper-card.is-selected'),
           ...readStyles('.arxiv-page .priority-pill'),
           ...readStyles('.arxiv-page .accent-badge'),
@@ -4102,11 +4198,11 @@ async function runArxivSearchScenario(client) {
           detailHasPpt: /PPT/.test(detailActionText),
           detailHasExport: /导出/.test(detailActionText),
           hasRuntimeStatus: Boolean(runtimeStatus),
-          runtimeQueryEllipsized:
-            Boolean(runtimeQueryRect) &&
-            runtimeQuery.scrollWidth > runtimeQuery.clientWidth + 2 &&
-            getComputedStyle(runtimeQuery).overflow === 'hidden' &&
-            getComputedStyle(runtimeQuery).textOverflow === 'ellipsis',
+          runtimeDetailsCollapsed:
+            Boolean(runtimeDetails) &&
+            !runtimeDetails.hasAttribute('open') &&
+            Boolean(runtimeStatus) &&
+            getComputedStyle(runtimeStatus).display === 'none',
           legacyAccentValues,
           legacyAccentMaxChannelDelta: legacyAccentValues.reduce(
             (max, value) => Math.max(max, channelDelta(value)),
@@ -4137,7 +4233,7 @@ async function runArxivSearchScenario(client) {
       !resultsSnapshot.detailHasPpt ||
       !resultsSnapshot.detailHasExport ||
       !resultsSnapshot.hasRuntimeStatus ||
-      !resultsSnapshot.runtimeQueryEllipsized ||
+      !resultsSnapshot.runtimeDetailsCollapsed ||
       resultsSnapshot.legacyAccentMaxChannelDelta > 80 ||
       resultsSnapshot.legacyAccentMaxChannelDelta < 35
     ) {

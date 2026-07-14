@@ -1013,6 +1013,13 @@
   line-height: 1.6;
 }
 
+.emptyActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
 .emptyIcon {
   display: grid;
   width: 48px;

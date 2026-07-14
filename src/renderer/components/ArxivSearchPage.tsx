@@ -3,6 +3,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   useEffect,
   useMemo,
+  useRef,
   useState
 } from 'react';
 import {
@@ -99,7 +100,7 @@ export const DEFAULT_ARXIV_SEARCH_QUERY = '';
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
 const OFFLINE_TRANSLATION_BATCH_SIZE = 4;
 const OFFLINE_TRANSLATION_BATCH_CONCURRENCY = 1;
-const ARXIV_PREVIEW_TRANSLATION_LIMIT = 6;
+const ARXIV_PREVIEW_TRANSLATION_LIMIT = 3;
 
 const CATEGORY_OPTIONS = [
   { value: '', label: '全部分类' },
@@ -542,11 +543,20 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   } | null>(null);
   const [executedRequest, setExecutedRequest] = useState<ArxivSearchRequest | null>(null);
   const [translationQueue, setTranslationQueue] = useState<ArxivTranslationQueueState | null>(null);
+  const scheduledPreviewTranslationRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const activePageSize = executedRequest?.maxResults ?? pageSize;
     setPageJump(String(Math.floor(start / Math.max(1, activePageSize)) + 1));
   }, [executedRequest?.maxResults, pageSize, start]);
+
+  useEffect(
+    () => () => {
+      scheduledPreviewTranslationRef.current?.();
+      scheduledPreviewTranslationRef.current = null;
+    },
+    []
+  );
 
   useEffect(() => {
     if (!isReadingQueueOpen) {
@@ -713,6 +723,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       : buildArxivSearchRequestForUi(request, effectiveSearchQuery, nextStart, options);
 
     try {
+      cancelScheduledPreviewTranslations();
       setIsSearching(true);
       setTranslationQueue(null);
       setTranslatingId(null);
@@ -777,7 +788,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       setStatus('success');
       const rangeText = formatArxivResultRange(nextStart, result.papers.length, result.totalResults ?? result.papers.length);
       const queryNotice = result.queryNotice ? `${result.queryNotice}。` : '';
-      void queuePreviewTranslations(result.papers, searchSessionId);
+      schedulePreviewTranslations(result.papers, searchSessionId);
       if (result.warning) {
         setMessage(`${queryNotice}${result.warning} 当前显示：${rangeText}。`);
       } else if (result.cacheHit) {
@@ -919,6 +930,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     }
 
     try {
+      cancelScheduledPreviewTranslations();
       setTranslatingId(paper.id);
       setMessage('正在使用本地离线引擎翻译标题和摘要，并写入 SQLite 缓存；优先 NLLB，失败回退 Argos，不会调用 AI API。');
       const result = await translatePaperMetadata(paper, false, translationSessionId);
@@ -955,6 +967,40 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     await queueTranslationBatches(batches, 'preview', translationSessionId, 'preview');
   }
 
+  function cancelScheduledPreviewTranslations(): void {
+    scheduledPreviewTranslationRef.current?.();
+    scheduledPreviewTranslationRef.current = null;
+  }
+
+  function schedulePreviewTranslations(
+    nextPapers: ArxivPaper[],
+    translationSessionId: number
+  ): void {
+    cancelScheduledPreviewTranslations();
+    let cancelled = false;
+    const run = (): void => {
+      scheduledPreviewTranslationRef.current = null;
+      if (!cancelled && searchSessionController.isCurrent(translationSessionId)) {
+        void queuePreviewTranslations(nextPapers, translationSessionId);
+      }
+    };
+
+    if (typeof window.requestIdleCallback === 'function') {
+      const idleId = window.requestIdleCallback(run, { timeout: 900 });
+      scheduledPreviewTranslationRef.current = () => {
+        cancelled = true;
+        window.cancelIdleCallback(idleId);
+      };
+      return;
+    }
+
+    const timerId = window.setTimeout(run, 500);
+    scheduledPreviewTranslationRef.current = () => {
+      cancelled = true;
+      window.clearTimeout(timerId);
+    };
+  }
+
   async function handleTranslatePage(): Promise<void> {
     const translationSessionId = searchSessionController.current();
     if (!canStartArxivManualTranslation(isSearching, translationSessionId)) {
@@ -969,6 +1015,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       setMessage('当前页标题和摘要已有可用中文缓存。');
       return;
     }
+    cancelScheduledPreviewTranslations();
     const batches = buildArxivTranslationBatches(missing, OFFLINE_TRANSLATION_BATCH_SIZE);
     setMessage(`已将当前页 ${missing.length} 篇待翻译论文加入用户翻译队列。`);
     await queueTranslationBatches(batches, 'foreground', translationSessionId, 'page');
@@ -1228,6 +1275,21 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const totalPages = Math.max(1, Math.ceil(totalResults / Math.max(1, activePageSize)));
   const resultRangeText =
     papers.length > 0 ? formatArxivResultRange(start, papers.length, totalResults || papers.length) : '暂无结果';
+  const hasActiveSearchFilters = Boolean(
+    category ||
+      queryMode !== 'balanced' ||
+      sortBy !== 'comprehensive' ||
+      sortOrder !== 'descending' ||
+      yearFrom ||
+      yearTo ||
+      pageSize !== 50 ||
+      yearFilter !== 'all' ||
+      tagFilter !== 'all' ||
+      favoriteOnly ||
+      queuedOnly ||
+      translatedOnly ||
+      scoredOnly
+  );
 
   return (
     <main
@@ -1237,15 +1299,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     >
       <header className="page-header compact-page-header arxiv-page-header">
         <div>
-          <span className="eyebrow">Official arXiv API</span>
           <h1>arXiv 检索</h1>
-          <p>检索、筛选、翻译摘要、评分并加入 PPT 候选列表。</p>
+          <p>检索论文，阅读摘要，并将需要的 PDF 保存到论文库。</p>
         </div>
         <div className="arxiv-header-actions">
-          <span className="arxiv-api-status">
-            <span aria-hidden="true" />
-            API 状态
-          </span>
           <button type="button" className="secondary-button" onClick={props.onBackHome}>
             返回工作台
           </button>
@@ -1299,19 +1356,54 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             </select>
           </label>
           <label>
-            <span>查询模式</span>
-            <select value={queryMode} onChange={(event) => setQueryMode(event.target.value as ArxivQueryMode)}>
-              {QUERY_MODE_OPTIONS.map((option) => (
+            <span>排序</span>
+            <select value={sortBy} onChange={(event) => setSortBy(event.target.value as ArxivSortBy)}>
+              {SORT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
               ))}
             </select>
           </label>
+          <button
+            type="button"
+            className="secondary-button arxiv-advanced-toggle"
+            aria-expanded={showAdvancedFilters}
+            aria-controls="arxiv-advanced-filters"
+            onClick={() => setShowAdvancedFilters((value) => !value)}
+          >
+            更多筛选
+          </button>
+          {hasActiveSearchFilters ? (
+            <button
+              type="button"
+              className="ghost-button arxiv-clear-filters"
+              onClick={() => {
+                setYearFrom('');
+                setYearTo('');
+                setCategory('');
+                setQueryMode('balanced');
+                setSortBy('comprehensive');
+                setSortOrder('descending');
+                setPageSize(50);
+                setYearFilter('all');
+                setTagFilter('all');
+                setFavoriteOnly(false);
+                setQueuedOnly(false);
+                setTranslatedOnly(false);
+                setScoredOnly(false);
+              }}
+            >
+              重置筛选
+            </button>
+          ) : null}
+        </div>
+
+        <div id="arxiv-advanced-filters" className={`arxiv-query-options ${showAdvancedFilters ? 'is-open' : ''}`}>
           <label>
-            <span>排序</span>
-            <select value={sortBy} onChange={(event) => setSortBy(event.target.value as ArxivSortBy)}>
-              {SORT_OPTIONS.map((option) => (
+            <span>查询模式</span>
+            <select value={queryMode} onChange={(event) => setQueryMode(event.target.value as ArxivQueryMode)}>
+              {QUERY_MODE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -1328,39 +1420,6 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               ))}
             </select>
           </label>
-          <button
-            type="button"
-            className="secondary-button arxiv-advanced-toggle"
-            aria-expanded={showAdvancedFilters}
-            aria-controls="arxiv-advanced-filters"
-            onClick={() => setShowAdvancedFilters((value) => !value)}
-          >
-            高级筛选
-          </button>
-          <button
-            type="button"
-            className="ghost-button arxiv-clear-filters"
-            onClick={() => {
-              setYearFrom('');
-              setYearTo('');
-              setCategory('');
-              setQueryMode('balanced');
-              setSortBy('comprehensive');
-              setSortOrder('descending');
-              setPageSize(50);
-              setYearFilter('all');
-              setTagFilter('all');
-              setFavoriteOnly(false);
-              setQueuedOnly(false);
-              setTranslatedOnly(false);
-              setScoredOnly(false);
-            }}
-          >
-            清空筛选
-          </button>
-        </div>
-
-        <div id="arxiv-advanced-filters" className={`arxiv-query-options ${showAdvancedFilters ? 'is-open' : ''}`}>
           <label>
             <span>起始年份</span>
             <input
@@ -1440,13 +1499,30 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             不做自动无限抓取，可把每页设为 200 后用“下一页”继续浏览全部结果。列表日期显示官方 API 的 UTC 提交/更新日期，
             arXiv 网站 new/recent 公告日可能晚一天。
           </p>
+          {history.length > 0 ? (
+            <div className="arxiv-history arxiv-search-history" aria-label="最近搜索">
+              <span>最近搜索</span>
+              {history.slice(0, 5).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  className="pill-button"
+                  onClick={() => {
+                    setQuery(item);
+                    setMessage(`已填入历史关键词：${item}。点击搜索后才会请求 arXiv。`);
+                  }}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className={`arxiv-message is-${status}`}>
           <span>{message}</span>
           <div className="arxiv-status-badges">
             <span className="badge">{describeLocalTranslationStatus(localTranslationStatus)}</span>
-            <span className="badge">title / abstract</span>
           </div>
           {isOfflineTranslationNotice ? (
             <div className="arxiv-history">
@@ -1474,63 +1550,56 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               <code>argos-translate</code> 可以在 PATH 中运行。
             </div>
           ) : null}
-          {history.length > 0 ? (
-            <div className="arxiv-history">
-              {history.slice(0, 5).map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  className="pill-button"
-                  onClick={() => {
-                    setQuery(item);
-                    setMessage(`已填入历史关键词：${item}。点击搜索后才会请求 arXiv。`);
-                  }}
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-          ) : null}
         </div>
-        <div className="arxiv-runtime-status" aria-label="arXiv 当前检索与翻译状态">
-          <span className="badge">
-            {searchMetadata
-              ? searchMetadata.cacheHit
-                ? searchMetadata.cacheStale
-                  ? '过期缓存'
-                  : '本地缓存'
-                : 'arXiv 新请求'
-              : '等待搜索'}
-          </span>
-          <span className="badge">模式：{translateArxivQueryMode(searchMetadata?.queryMode ?? queryMode)}</span>
-          <span className="badge">排序：{getArxivRankingScopeLabel(searchMetadata?.sortBy ?? sortBy)}</span>
-          <span
-            className="badge"
-            title={
-              searchMetadata
-                ? `最近请求间隔 ${searchMetadata.lastRequestGapMs} ms；队列 ${searchMetadata.queueSize}`
-                : '尚未发起 arXiv 请求'
-            }
-          >
-            {getArxivWaitStateLabel(searchMetadata, isSearching)}
-          </span>
-          <span className="badge arxiv-runtime-query" title={searchMetadata?.effectiveQuery || '尚无已执行查询'}>
-            规范化：{searchMetadata?.effectiveQuery || '—'}
-          </span>
-          {searchMetadata?.originalQuery && searchMetadata.originalQuery !== searchMetadata.effectiveQuery ? (
-            <span className="badge arxiv-runtime-query" title={searchMetadata.originalQuery}>
-              原始：{searchMetadata.originalQuery}
+        <details className="arxiv-runtime-details" data-arxiv-runtime-details>
+          <summary>
+            <span>运行状态</span>
+            <small>
+              {getArxivWaitStateLabel(searchMetadata, isSearching)} · {translationQueue
+                ? `${translationQueue.kind === 'preview' ? '预览' : '本页'} ${translationQueue.completed}/${translationQueue.total}`
+                : describeLocalTranslationStatus(localTranslationStatus)}
+            </small>
+          </summary>
+          <div className="arxiv-runtime-status" aria-label="arXiv 当前检索与翻译状态">
+            <span className="badge">
+              {searchMetadata
+                ? searchMetadata.cacheHit
+                  ? searchMetadata.cacheStale
+                    ? '过期缓存'
+                    : '本地缓存'
+                  : 'arXiv 新请求'
+                : '等待搜索'}
             </span>
-          ) : null}
-          <span className="badge">
-            翻译：{translationQueue
-              ? `${translationQueue.kind === 'preview' ? '预览' : '本页'} ${translationQueue.completed}/${translationQueue.total}`
-              : '空闲'} · {describeLocalTranslationStatus(localTranslationStatus)}
-          </span>
-          <span className="badge" title={selectedMeta.translationMessage || '尚无当前论文的质量门禁结果'}>
-            {getArxivTranslationQualityLabel(selectedMeta)}
-          </span>
-        </div>
+            <span className="badge">模式：{translateArxivQueryMode(searchMetadata?.queryMode ?? queryMode)}</span>
+            <span className="badge">排序：{getArxivRankingScopeLabel(searchMetadata?.sortBy ?? sortBy)}</span>
+            <span
+              className="badge"
+              title={
+                searchMetadata
+                  ? `最近请求间隔 ${searchMetadata.lastRequestGapMs} ms；队列 ${searchMetadata.queueSize}`
+                  : '尚未发起 arXiv 请求'
+              }
+            >
+              {getArxivWaitStateLabel(searchMetadata, isSearching)}
+            </span>
+            <span className="badge arxiv-runtime-query" title={searchMetadata?.effectiveQuery || '尚无已执行查询'}>
+              规范化：{searchMetadata?.effectiveQuery || '—'}
+            </span>
+            {searchMetadata?.originalQuery && searchMetadata.originalQuery !== searchMetadata.effectiveQuery ? (
+              <span className="badge arxiv-runtime-query" title={searchMetadata.originalQuery}>
+                原始：{searchMetadata.originalQuery}
+              </span>
+            ) : null}
+            <span className="badge">
+              翻译：{translationQueue
+                ? `${translationQueue.kind === 'preview' ? '预览' : '本页'} ${translationQueue.completed}/${translationQueue.total}`
+                : '空闲'} · {describeLocalTranslationStatus(localTranslationStatus)}
+            </span>
+            <span className="badge" title={selectedMeta.translationMessage || '尚无当前论文的质量门禁结果'}>
+              {getArxivTranslationQualityLabel(selectedMeta)}
+            </span>
+          </div>
+        </details>
       </section>
 
       <section
@@ -1546,7 +1615,6 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         >
           <div className="panel-title-row arxiv-results-toolbar">
             <div>
-              <span className="eyebrow">Results</span>
               <h2>论文列表</h2>
               <p className="arxiv-result-summary">
                 {papers.length > 0
@@ -1570,37 +1638,26 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   ? `翻译本页 ${translationQueue.completed}/${translationQueue.total}`
                   : '翻译本页'}
               </button>
-              <div className="arxiv-view-switch" aria-label="论文卡片列数">
-                {RESULT_COLUMN_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    title={option.title}
-                    className={columnMode === option.value ? 'segmented-active' : ''}
-                    onClick={() => {
-                      setColumnMode(option.value);
-                      window.localStorage.setItem(ARXIV_LAYOUT_STORAGE_KEY, option.value);
-                      window.localStorage.removeItem(ARXIV_OLD_LAYOUT_STORAGE_KEY);
-                    }}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-              <label className="arxiv-page-size-control">
-                <span>每页</span>
-                <select value={pageSize} onChange={(event) => handlePageSizeChange(Number(event.target.value))}>
-                  {PAGE_SIZE_OPTIONS.map((size) => (
-                    <option key={size} value={size}>
-                      {size}
+              <label className="arxiv-layout-select">
+                <span>布局</span>
+                <select
+                  value={columnMode}
+                  data-arxiv-layout-select
+                  aria-label="论文卡片列数"
+                  onChange={(event) => {
+                    const nextMode = event.target.value as ResultColumnMode;
+                    setColumnMode(nextMode);
+                    window.localStorage.setItem(ARXIV_LAYOUT_STORAGE_KEY, nextMode);
+                    window.localStorage.removeItem(ARXIV_OLD_LAYOUT_STORAGE_KEY);
+                  }}
+                >
+                  {RESULT_COLUMN_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value} title={option.title}>
+                      {option.label}
                     </option>
                   ))}
                 </select>
               </label>
-              <div className="arxiv-count-badges">
-                <span className="badge accent-badge">PPT 候选 {pptQueue.length}</span>
-                {readingQueue.length === 0 ? <span className="badge success-badge">备选 0</span> : null}
-              </div>
               {readingQueue.length > 0 ? (
                 <button
                   type="button"
