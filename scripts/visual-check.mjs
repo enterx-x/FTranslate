@@ -305,9 +305,7 @@ async function waitForResearchSheetCanvas(client) {
 async function waitForPdfCanvas(client) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => {
-      const roots = [
-        ...document.querySelectorAll('.pdf-js-viewer-container, .pdf-viewer-shell, .pdf-pane')
-      ].filter((root) => {
+      const roots = [...document.querySelectorAll('.pdf-js-viewer-container')].filter((root) => {
         const rect = root.getBoundingClientRect();
         const style = window.getComputedStyle(root);
         return rect.width > 120 && rect.height > 120 && style.display !== 'none' && style.visibility !== 'hidden';
@@ -357,9 +355,7 @@ async function waitForPdfCanvas(client) {
   }
 
   const snapshot = await evaluateJson(client, `() => {
-    const roots = [
-      ...document.querySelectorAll('.pdf-js-viewer-container, .pdf-viewer-shell, .pdf-pane')
-    ].filter((root) => {
+    const roots = [...document.querySelectorAll('.pdf-js-viewer-container')].filter((root) => {
       const rect = root.getBoundingClientRect();
       const style = window.getComputedStyle(root);
       return rect.width > 120 && rect.height > 120 && style.display !== 'none' && style.visibility !== 'hidden';
@@ -1417,6 +1413,73 @@ async function capturePaperLibraryResponsiveWidths(client) {
     await evaluateJson(client, `() => document.querySelector('button[aria-label="关闭标签管理"]')?.click()`);
     await wait(180);
 
+    const projectDialogOpened = await evaluateJson(client, `() => {
+      document.querySelector('[data-paper-library-create-project]')?.click();
+      return Boolean(document.querySelector('[data-paper-library-create-project]'));
+    }`);
+    await wait(220);
+    const projectDialog = await evaluateJson(client, `() => {
+      const dialog = document.querySelector('[data-paper-library-create-project-dialog]');
+      const nameInput = dialog?.querySelector('#paper-project-name');
+      const descriptionInput = dialog?.querySelector('#paper-project-description');
+      const seedInput = dialog?.querySelector('input[type="checkbox"]');
+      const rect = dialog?.getBoundingClientRect();
+      return {
+        opened: Boolean(dialog),
+        hasNameInput: Boolean(nameInput),
+        hasDescriptionInput: Boolean(descriptionInput),
+        seedChecked: Boolean(seedInput?.checked),
+        hasCreateAction: /创建项目/.test(dialog?.textContent ?? ''),
+        withinViewport: Boolean(rect && rect.left >= 0 && rect.right <= window.innerWidth && rect.top >= 0 && rect.bottom <= window.innerHeight),
+        hasHorizontalOverflow: dialog ? dialog.scrollWidth > dialog.clientWidth + 3 : false
+      };
+    }`);
+    if (!projectDialogOpened || !projectDialog.opened || !projectDialog.hasNameInput || !projectDialog.hasDescriptionInput || !projectDialog.seedChecked || !projectDialog.hasCreateAction || !projectDialog.withinViewport || projectDialog.hasHorizontalOverflow) {
+      throw new Error(`paperLibrary: create-project dialog failed: ${JSON.stringify(projectDialog)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'paper-library-create-project-dialog.png'), Buffer.from(shot.data, 'base64'))
+    );
+    const submittedProject = await evaluateJson(client, `() => {
+      const dialog = document.querySelector('[data-paper-library-create-project-dialog]');
+      const nameInput = dialog?.querySelector('#paper-project-name');
+      const descriptionInput = dialog?.querySelector('#paper-project-description');
+      if (!dialog || !nameInput || !descriptionInput) return false;
+      const inputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      const textareaSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      inputSetter?.call(nameInput, '视觉回归新项目');
+      nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+      textareaSetter?.call(descriptionInput, '验证新建、论文归档和本地持久化闭环。');
+      descriptionInput.dispatchEvent(new Event('input', { bubbles: true }));
+      dialog.querySelector('form')?.requestSubmit();
+      return true;
+    }`);
+    await wait(350);
+    const projectCreation = await evaluateJson(client, `() => {
+      const projects = JSON.parse(localStorage.getItem('pdfTranslationReader:researchProjects') ?? '[]');
+      const created = projects.find((project) => project.name === '视觉回归新项目');
+      const projectButton = [...document.querySelectorAll('[data-paper-library-navigator] button')]
+        .find((button) => (button.textContent ?? '').includes('视觉回归新项目'));
+      return {
+        submitted: ${submittedProject},
+        dialogClosed: !document.querySelector('[data-paper-library-create-project-dialog]'),
+        persisted: Boolean(created),
+        linkedCurrentPaper: Boolean(created?.paperIds?.includes('visual-check-paper')),
+        appearsInNavigator: Boolean(projectButton),
+        selectedProjectRowCount: document.querySelectorAll('[data-paper-library-row]').length,
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+      };
+    }`);
+    if (!projectCreation.submitted || !projectCreation.dialogClosed || !projectCreation.persisted || !projectCreation.linkedCurrentPaper || !projectCreation.appearsInNavigator || projectCreation.selectedProjectRowCount !== 1 || projectCreation.hasHorizontalOverflow) {
+      throw new Error(`paperLibrary: project creation persistence failed: ${JSON.stringify(projectCreation)}`);
+    }
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'paper-library-project-created.png'), Buffer.from(shot.data, 'base64'))
+    );
+    await evaluateJson(client, `() => [...document.querySelectorAll('[data-paper-library-navigator] button')]
+      .find((button) => (button.textContent ?? '').includes('视觉回归新项目'))?.click()`);
+    await wait(220);
+
     await evaluateJson(client, `() => {
       const input = document.querySelector('input[placeholder^="搜索标题"]');
       if (!input) return false;
@@ -1480,7 +1543,7 @@ async function capturePaperLibraryResponsiveWidths(client) {
       writeFile(path.join(outputDir, 'paper-library-inspector-collapsed.png'), Buffer.from(shot.data, 'base64'))
     );
 
-    return { snapshots, batchSnapshot, noResults, missingPath, collapsed };
+    return { snapshots, batchSnapshot, projectDialog, projectCreation, noResults, missingPath, collapsed };
   } finally {
     await client.send('Emulation.clearDeviceMetricsOverride');
   }
@@ -4379,6 +4442,13 @@ async function main() {
       translatedModel: 'kimi-k2.5'
     });
     await waitForAppReady(client);
+
+    if (visualScenario === 'paper-library') {
+      const home = await runHomeScenario(client);
+      client.close();
+      console.log(JSON.stringify({ pdfPath, home, outputDir }, null, 2));
+      return;
+    }
 
     if (visualScenario === 'scientific-plot') {
       const scientificPlot = await runScientificPlotScenario(client);

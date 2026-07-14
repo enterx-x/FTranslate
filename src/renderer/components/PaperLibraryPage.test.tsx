@@ -74,6 +74,8 @@ describe('PaperLibraryPage', () => {
 
     expect(html).toContain('data-paper-library-page');
     expect(html).toContain('data-paper-library-navigator');
+    expect(html).toContain('data-paper-library-create-project');
+    expect(html).toContain('新建项目');
     expect(html).toContain('data-paper-library-sort');
     expect(html).toContain('aria-keyshortcuts="Control+K Meta+K"');
     expect(html).toContain('最近活动');
@@ -90,6 +92,8 @@ describe('PaperLibraryPage', () => {
 
     expect(html).toContain('还没有论文记录');
     expect(html).toContain('导入第一篇论文');
+    expect(html).toContain('data-paper-library-create-project');
+    expect(html).toContain('新建项目');
     expect(html).not.toContain('data-paper-library-row');
     expect(html).not.toContain('data-paper-library-inspector');
   });

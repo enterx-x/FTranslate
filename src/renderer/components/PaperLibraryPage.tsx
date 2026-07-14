@@ -32,6 +32,7 @@ import {
   type PaperRecord
 } from '../lib/papers';
 import {
+  createResearchProject,
   updateProjectPaperMembership,
   type ResearchProject
 } from '../lib/researchProjects';
@@ -102,6 +103,10 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
   const [managedTagDraft, setManagedTagDraft] = useState('');
   const [confirmTagDeletion, setConfirmTagDeletion] = useState(false);
   const [pathAvailable, setPathAvailable] = useState<boolean | null>(null);
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectDescription, setNewProjectDescription] = useState('');
+  const [includeProjectPaperSelection, setIncludeProjectPaperSelection] = useState(true);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -385,6 +390,118 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
     setEditingMetadata(false);
   }
 
+  function openProjectDialog(): void {
+    setNewProjectName('');
+    setNewProjectDescription('');
+    setIncludeProjectPaperSelection(true);
+    setProjectDialogOpen(true);
+  }
+
+  function closeProjectDialog(): void {
+    setProjectDialogOpen(false);
+    setNewProjectName('');
+    setNewProjectDescription('');
+    setIncludeProjectPaperSelection(true);
+  }
+
+  function saveNewProject(event: FormEvent): void {
+    event.preventDefault();
+    const candidatePaperIds = batchSelectedIds.size > 0
+      ? [...batchSelectedIds]
+      : selectedPaper
+        ? [selectedPaper.id]
+        : [];
+    const project = createResearchProject(props.projects, {
+      name: newProjectName,
+      description: newProjectDescription,
+      paperIds: includeProjectPaperSelection ? candidatePaperIds : []
+    });
+    if (!project) return;
+
+    props.onProjectsChange([...props.projects, project]);
+    setProjectId(project.paperIds.length > 0 ? project.id : null);
+    setBulkProjectId(project.id);
+    closeProjectDialog();
+  }
+
+  const projectNameExists = props.projects.some(
+    (project) => project.name.trim().toLocaleLowerCase() === newProjectName.trim().toLocaleLowerCase()
+  );
+  const projectPaperSelectionCount = batchSelectedIds.size > 0
+    ? batchSelectedIds.size
+    : selectedPaper
+      ? 1
+      : 0;
+  const createProjectDialog = projectDialogOpen ? (
+    <div
+      className={styles.modalBackdrop}
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) closeProjectDialog();
+      }}
+    >
+      <section
+        className={`${styles.confirmDialog} ${styles.projectDialog}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="paper-project-create-title"
+        data-paper-library-create-project-dialog
+      >
+        <div className={styles.tagDialogHeading}>
+          <div>
+            <span>项目文件夹</span>
+            <h2 id="paper-project-create-title">新建研究项目</h2>
+          </div>
+          <button type="button" className={styles.iconButton} aria-label="关闭新建项目" onClick={closeProjectDialog}>×</button>
+        </div>
+        <p>项目用于把论文、复现记录与实验资产归到同一条研究主线；创建后可继续批量加入论文。</p>
+        <form className={styles.projectDialogForm} onSubmit={saveNewProject}>
+          <label htmlFor="paper-project-name">项目名称</label>
+          <input
+            id="paper-project-name"
+            value={newProjectName}
+            maxLength={48}
+            autoFocus
+            placeholder="例如：安全强化学习复现"
+            onChange={(event) => setNewProjectName(event.target.value)}
+          />
+          <label htmlFor="paper-project-description">研究目标（可选）</label>
+          <textarea
+            id="paper-project-description"
+            value={newProjectDescription}
+            maxLength={180}
+            rows={3}
+            placeholder="记录问题、baseline 或预期验证目标"
+            onChange={(event) => setNewProjectDescription(event.target.value)}
+          />
+          {projectPaperSelectionCount > 0 ? (
+            <label className={styles.projectSeedOption}>
+              <input
+                type="checkbox"
+                checked={includeProjectPaperSelection}
+                onChange={(event) => setIncludeProjectPaperSelection(event.target.checked)}
+              />
+              <span>
+                将{batchSelectedIds.size > 0 ? `已选 ${projectPaperSelectionCount} 篇论文` : '当前论文'}加入新项目
+              </span>
+            </label>
+          ) : null}
+          {projectNameExists ? <small className={styles.formWarning}>已有同名项目，请换一个更具体的名称。</small> : null}
+          <div className={styles.dialogActions}>
+            <button type="button" onClick={closeProjectDialog}>取消</button>
+            <button
+              type="submit"
+              className={styles.primaryDialogAction}
+              disabled={!newProjectName.trim() || projectNameExists}
+            >
+              创建项目
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  ) : null;
+
   if (props.papers.length === 0) {
     return (
       <main className={styles.page} data-paper-library-page>
@@ -397,7 +514,8 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
           inspectorCollapsed={preferences.inspectorCollapsed}
           searchInputRef={searchInputRef}
           onBackHome={props.onBackHome}
-          onNewProject={props.onNewProject}
+          onImportPaper={props.onNewProject}
+          onCreateProject={openProjectDialog}
           onSearchChange={() => undefined}
           onSearchKeyDown={() => undefined}
           onSortChange={(sortKey) => updatePreferences({ sortKey })}
@@ -422,7 +540,12 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
           <button type="button" className={styles.primaryButton} onClick={props.onNewProject}>
             导入第一篇论文
           </button>
+          <div className={styles.emptyProjectList} aria-label="已有研究项目">
+            <span>已有 {props.projects.length} 个项目</span>
+            {props.projects.map((project) => <small key={project.id}>{project.name}</small>)}
+          </div>
         </section>
+        {createProjectDialog}
       </main>
     );
   }
@@ -446,7 +569,8 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
         inspectorCollapsed={preferences.inspectorCollapsed}
         searchInputRef={searchInputRef}
         onBackHome={props.onBackHome}
-        onNewProject={props.onNewProject}
+        onImportPaper={props.onNewProject}
+        onCreateProject={openProjectDialog}
         onSearchChange={setSearchInput}
         onSearchKeyDown={(event) => {
           if (event.key === 'Escape') clearFilters();
@@ -521,7 +645,7 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
             ))}
           </NavigatorSection>
 
-          <NavigatorSection title="项目文件夹">
+          <NavigatorSection title="项目文件夹" actionLabel="＋ 新建" onAction={openProjectDialog}>
             {props.projects.map((project) => (
               <button
                 type="button"
@@ -840,6 +964,8 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
         </section>
       ) : null}
 
+      {createProjectDialog}
+
       {managedTag ? (
         <div className={styles.modalBackdrop} role="presentation">
           <section
@@ -934,7 +1060,8 @@ function LibraryToolbar(props: {
   inspectorCollapsed: boolean;
   searchInputRef: RefObject<HTMLInputElement | null>;
   onBackHome: () => void;
-  onNewProject: () => void;
+  onImportPaper: () => void;
+  onCreateProject: () => void;
   onSearchChange: (value: string) => void;
   onSearchKeyDown: (event: ReactKeyboardEvent<HTMLInputElement>) => void;
   onSortChange: (sortKey: PaperLibrarySortKey) => void;
@@ -970,15 +1097,37 @@ function LibraryToolbar(props: {
       <button type="button" className={styles.iconButton} onClick={props.onDirectionChange} title={props.sortDirection === 'desc' ? '当前降序' : '当前升序'}>{props.sortDirection === 'desc' ? '↓' : '↑'}</button>
       <button type="button" className={styles.iconButton} onClick={props.onDensityChange} title={`当前${props.density === 'compact' ? '紧凑' : '舒适'}密度`}>{props.density === 'compact' ? '≡' : '☷'}</button>
       <button type="button" className={styles.iconButton} onClick={props.onInspectorToggle} title={props.inspectorCollapsed ? '展开详情' : '折叠详情'}>{props.inspectorCollapsed ? '◧' : '▣'}</button>
-      <button type="button" className={styles.primaryButton} onClick={props.onNewProject}>＋ 导入论文</button>
+      <button
+        type="button"
+        className={styles.secondaryButton}
+        data-paper-library-create-project
+        onClick={props.onCreateProject}
+      >
+        ＋ 新建项目
+      </button>
+      <button type="button" className={styles.primaryButton} onClick={props.onImportPaper}>＋ 导入论文</button>
     </header>
   );
 }
 
-function NavigatorSection(props: { title: string; actionLabel?: string; children: React.ReactNode }) {
+function NavigatorSection(props: {
+  title: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <section className={styles.navigatorSection}>
-      <header><span>{props.title}</span>{props.actionLabel ? <small>{props.actionLabel}</small> : null}</header>
+      <header>
+        <span>{props.title}</span>
+        {props.actionLabel ? (
+          props.onAction ? (
+            <button type="button" className={styles.navigatorAction} onClick={props.onAction}>
+              {props.actionLabel}
+            </button>
+          ) : <small>{props.actionLabel}</small>
+        ) : null}
+      </header>
       {props.children}
     </section>
   );

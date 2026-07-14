@@ -1,5 +1,14 @@
 # PDF Translation Reader / FTranslate
 
+## 2026-07-14 论文库项目创建与 PDF 首屏自恢复（0.1.22）
+
+- 论文库现在把“新建项目”和“导入论文”作为两个独立动作。用户可在顶部工具栏或左侧“项目文件夹”直接新建研究项目，填写项目名称与可选研究目标，并选择把当前论文或批量选中的论文立即加入项目。
+- 新建项目会写入现有 `pdfTranslationReader:researchProjects` 本地项目模型，重名会给出明确提示，项目 ID 在同一毫秒内连续创建时也不会冲突。空论文库仍可先创建项目，不再被“必须先导入 PDF”卡住。
+- PDF.js 首屏渲染新增有界恢复：当页面容器已建立但首个 canvas/text layer 尚未出现时，阅读器会重新触发可见页更新与渲染；容器尺寸变化也会刷新渲染队列，成功后由真实 `pagerendered` 事件结束恢复，避免界面长期停在空白页。
+- 视觉回归脚本只统计真实 `.pdf-js-viewer-container`，不再把外层嵌套容器重复算成多个阅读器；新增论文库创建项目的打开、校验、持久化、论文关联和多桌面宽度检查。
+
+安装版已验证论文库创建项目、真实 25 页 PDF 首屏适宽居中、选区浮层跟随滚动与双击单词词典卡。截图位于 `.tmp-visual-check/paper-library-create-project-dialog.png`、`.tmp-visual-check/paper-library-project-created.png`、`.tmp-visual-check/pdf-selection-translation.png` 和 `.tmp-visual-check/pdf-word-dictionary.png`。Windows 安装包为 `dist/PDF Translation Reader Setup 0.1.22.exe`。
+
 ## 2026-07-14 图表工作台与 PDF 划词稳定性修复（0.1.21）
 
 - 修复图表提取结束后“PDF 图表素材”工作台只露出顶部几像素、主体变成整块空白的问题。根因是三行 CSS Grid 在空闲时条件删除了第二行进度条，导致主体被自动放进固定 3px 的进度行；现在进度轨道始终保留，空闲时仅隐藏填充，筛选、素材卡片和右侧检查器保持完整可见。

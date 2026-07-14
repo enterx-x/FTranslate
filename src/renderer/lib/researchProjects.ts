@@ -35,6 +35,12 @@ export interface ProjectWorkspaceSnapshot {
   nextActions: string[];
 }
 
+export interface CreateResearchProjectInput {
+  name: string;
+  description?: string;
+  paperIds?: readonly string[];
+}
+
 export function buildDefaultResearchProject(
   papers: PaperRecord[],
   now = Date.now()
@@ -65,6 +71,41 @@ export function ensureResearchProjects(
   }
 
   return [buildDefaultResearchProject(papers, now)];
+}
+
+export function createResearchProject(
+  projects: readonly ResearchProject[],
+  input: CreateResearchProjectInput,
+  now = Date.now()
+): ResearchProject | null {
+  const name = input.name.trim();
+  if (!name) {
+    return null;
+  }
+
+  const timestamp = new Date(now).toISOString();
+  const baseId = `research-project-${now.toString(36)}`;
+  const existingIds = new Set(projects.map((project) => project.id));
+  let id = baseId;
+  let suffix = 2;
+  while (existingIds.has(id)) {
+    id = `${baseId}-${suffix}`;
+    suffix += 1;
+  }
+
+  return {
+    id,
+    name,
+    description: input.description?.trim() ?? '',
+    status: 'active',
+    paperIds: mergeUniqueValues([...(input.paperIds ?? [])]),
+    codeRepositoryPaths: [],
+    experimentIds: [],
+    runtimeTaskIds: [],
+    decisionLog: [],
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
 }
 
 export function updateProjectPaperMembership(

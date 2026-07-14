@@ -116,6 +116,8 @@ export function PdfViewer(props: PdfViewerProps) {
   const hasAppliedInitialHorizontalCenterRef = useRef(false);
   const hasAppliedInitialFitWidthRef = useRef(false);
   const pendingInitialCenterFrameRef = useRef<number | null>(null);
+  const initialRenderRecoveryTimerRef = useRef<number | null>(null);
+  const viewerResizeFrameRef = useRef<number | null>(null);
   const isSpacePressedRef = useRef(false);
   const panStateRef = useRef<{
     startX: number;
@@ -195,6 +197,14 @@ export function PdfViewer(props: PdfViewerProps) {
       });
       scheduleInitialHorizontalCenter(8);
       schedulePendingZoomAnchor();
+      scheduleInitialRenderRecovery(16);
+    }
+
+    function handlePageRendered(): void {
+      if (!hasRenderedPdfPage()) return;
+      cancelInitialRenderRecovery();
+      const activeContainer = containerRef.current;
+      if (activeContainer) activeContainer.dataset.pdfRenderPhase = 'ready';
     }
 
     function handleTextLayerRendered(): void {
@@ -266,6 +276,7 @@ export function PdfViewer(props: PdfViewerProps) {
     eventBus.on('updatefindcontrolstate', handleFindControlState);
     eventBus.on('updatetextlayermatches', scheduleHighlightOverlayPaint);
     eventBus.on('textlayerrendered', handleTextLayerRendered);
+    eventBus.on('pagerendered', handlePageRendered);
 
     eventBusRef.current = eventBus;
     linkServiceRef.current = linkService;
@@ -280,6 +291,8 @@ export function PdfViewer(props: PdfViewerProps) {
       eventBus.off('updatefindcontrolstate', handleFindControlState);
       eventBus.off('updatetextlayermatches', scheduleHighlightOverlayPaint);
       eventBus.off('textlayerrendered', handleTextLayerRendered);
+      eventBus.off('pagerendered', handlePageRendered);
+      cancelInitialRenderRecovery();
       pdfViewer.setDocument(null as unknown as PDFDocumentProxy);
       linkService.setDocument(null);
       findController.setDocument(null as unknown as PDFDocumentProxy);
@@ -292,6 +305,7 @@ export function PdfViewer(props: PdfViewerProps) {
 
   useEffect(() => {
     if (!props.pdfData) {
+      cancelInitialRenderRecovery();
       hasAppliedInitialFitWidthRef.current = false;
       selectionTranslationRequestRef.current += 1;
       selectionRangeRef.current = null;
@@ -309,6 +323,8 @@ export function PdfViewer(props: PdfViewerProps) {
       pdfViewerRef.current?.setDocument(null as unknown as PDFDocumentProxy);
       linkServiceRef.current?.setDocument(null);
       findControllerRef.current?.setDocument(null as unknown as PDFDocumentProxy);
+      const activeContainer = containerRef.current;
+      if (activeContainer) activeContainer.dataset.pdfRenderPhase = 'idle';
       return;
     }
 
@@ -316,6 +332,8 @@ export function PdfViewer(props: PdfViewerProps) {
     let loadedDocument: PDFDocumentProxy | null = null;
     let cancelScheduledTextExtraction: (() => void) | null = null;
     const loadingTask = pdfjsLib.getDocument({ data: props.pdfData.slice() });
+    const activeContainer = containerRef.current;
+    if (activeContainer) activeContainer.dataset.pdfRenderPhase = 'loading';
     setIsRendering(true);
     hasAppliedInitialFitWidthRef.current = false;
     selectionTranslationRequestRef.current += 1;
@@ -351,11 +369,17 @@ export function PdfViewer(props: PdfViewerProps) {
         linkService.setDocument(pdfDocument, null);
         viewer.setDocument(pdfDocument);
         findController.setDocument(pdfDocument);
+        const activeContainer = containerRef.current;
+        if (activeContainer) activeContainer.dataset.pdfRenderPhase = 'document-ready';
+        scheduleInitialRenderRecovery(16);
         setDocumentProxy(pdfDocument);
         propsRef.current.onDocumentLoad(pdfDocument.numPages);
         propsRef.current.onStatusChange(`PDF 结构已加载，共 ${pdfDocument.numPages} 页；正在渲染首屏。`);
         void viewer.onePageRendered?.then(() => {
           if (!cancelled) {
+            cancelInitialRenderRecovery();
+            const activeContainer = containerRef.current;
+            if (activeContainer) activeContainer.dataset.pdfRenderPhase = 'ready';
             setIsRendering(false);
             setFindReadyToken((value) => value + 1);
             scheduleInitialHorizontalCenter(8);
@@ -381,6 +405,9 @@ export function PdfViewer(props: PdfViewerProps) {
       })
       .catch((error) => {
         if (!cancelled) {
+          cancelInitialRenderRecovery();
+          const activeContainer = containerRef.current;
+          if (activeContainer) activeContainer.dataset.pdfRenderPhase = 'error';
           setIsRendering(false);
           propsRef.current.onStatusChange(`PDF 加载失败：${String(error)}`);
         }
@@ -388,6 +415,7 @@ export function PdfViewer(props: PdfViewerProps) {
 
     return () => {
       cancelled = true;
+      cancelInitialRenderRecovery();
       cancelScheduledTextExtraction?.();
       cancelScheduledTextExtraction = null;
       selectionTranslationRequestRef.current += 1;
@@ -417,6 +445,33 @@ export function PdfViewer(props: PdfViewerProps) {
       }
     };
   }, [props.pdfData]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !documentProxy) return;
+
+    const refreshViewerLayout = (): void => {
+      if (viewerResizeFrameRef.current !== null) return;
+      viewerResizeFrameRef.current = window.requestAnimationFrame(() => {
+        viewerResizeFrameRef.current = null;
+        const viewer = pdfViewerRef.current;
+        if (!viewer) return;
+        viewer.update();
+        viewer.forceRendering(undefined);
+      });
+    };
+    const observer = new ResizeObserver(refreshViewerLayout);
+    observer.observe(container);
+    refreshViewerLayout();
+
+    return () => {
+      observer.disconnect();
+      if (viewerResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(viewerResizeFrameRef.current);
+        viewerResizeFrameRef.current = null;
+      }
+    };
+  }, [documentProxy]);
 
   useEffect(() => {
     const viewer = pdfViewerRef.current;
@@ -685,6 +740,51 @@ export function PdfViewer(props: PdfViewerProps) {
       isApplyingViewportSyncRef.current = false;
     }, 80);
   }, [props.viewportState, props.viewportSyncId, props.scale, documentProxy]);
+
+  function hasRenderedPdfPage(): boolean {
+    const viewerElement = viewerElementRef.current;
+    if (!viewerElement) return false;
+    if (viewerElement.querySelector('.page[data-loaded="true"]')) return true;
+    return [...viewerElement.querySelectorAll<HTMLCanvasElement>('.page canvas')]
+      .some((canvas) => canvas.width > 0 && canvas.height > 0);
+  }
+
+  function cancelInitialRenderRecovery(): void {
+    if (initialRenderRecoveryTimerRef.current === null) return;
+    window.clearTimeout(initialRenderRecoveryTimerRef.current);
+    initialRenderRecoveryTimerRef.current = null;
+  }
+
+  function scheduleInitialRenderRecovery(remainingAttempts: number): void {
+    if (remainingAttempts <= 0 || initialRenderRecoveryTimerRef.current !== null || hasRenderedPdfPage()) {
+      return;
+    }
+
+    initialRenderRecoveryTimerRef.current = window.setTimeout(() => {
+      initialRenderRecoveryTimerRef.current = null;
+      if (hasRenderedPdfPage()) return;
+
+      const container = containerRef.current;
+      const viewer = pdfViewerRef.current;
+      if (!container || !viewer || viewer.pagesCount <= 0) return;
+      const rect = container.getBoundingClientRect();
+      if (rect.width > 120 && rect.height > 120) {
+        const targetPage = Math.min(viewer.pagesCount, Math.max(1, propsRef.current.currentPage));
+        if (viewer.currentPageNumber !== targetPage) viewer.currentPageNumber = targetPage;
+        viewer.update();
+        viewer.forceRendering(undefined);
+      }
+
+      if (hasRenderedPdfPage()) return;
+      if (remainingAttempts > 1) {
+        scheduleInitialRenderRecovery(remainingAttempts - 1);
+        return;
+      }
+
+      container.dataset.pdfRenderPhase = 'stalled';
+      propsRef.current.onStatusChange('PDF 页面结构已加载，但首屏渲染仍未完成；请切换页码或缩放后重试。');
+    }, remainingAttempts === 16 ? 240 : 450);
+  }
 
   function handleWheel(event: React.WheelEvent<HTMLDivElement>): void {
     if (!event.ctrlKey) {

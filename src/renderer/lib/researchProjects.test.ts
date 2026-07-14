@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDefaultResearchProject,
   buildProjectWorkspaceSnapshot,
+  createResearchProject,
   ensureResearchProjects,
   linkCodeRepositoryPath,
   parseResearchProjects,
@@ -34,6 +35,38 @@ function makePaper(id: string, overrides: Partial<PaperRecord> = {}): PaperRecor
 }
 
 describe('research project workspace model', () => {
+  it('creates an independent project with normalized fields and a collision-safe id', () => {
+    const existing = {
+      ...buildDefaultResearchProject([], Date.UTC(2026, 0, 1)),
+      id: 'research-project-mrkd2bk0'
+    };
+
+    expect(
+      createResearchProject(
+        [existing],
+        {
+          name: '  安全强化学习复现  ',
+          description: '  对比 CBF 与 MPC 安全层  ',
+          paperIds: ['paper-a', 'paper-a', '  paper-b  ']
+        },
+        Date.parse('2026-07-14T08:00:00.000Z')
+      )
+    ).toEqual({
+      id: 'research-project-mrkd2bk0-2',
+      name: '安全强化学习复现',
+      description: '对比 CBF 与 MPC 安全层',
+      status: 'active',
+      paperIds: ['paper-a', 'paper-b'],
+      codeRepositoryPaths: [],
+      experimentIds: [],
+      runtimeTaskIds: [],
+      decisionLog: [],
+      createdAt: '2026-07-14T08:00:00.000Z',
+      updatedAt: '2026-07-14T08:00:00.000Z'
+    });
+    expect(createResearchProject([], { name: '   ' }, 1)).toBeNull();
+  });
+
   it('creates a default local research project that links existing papers', () => {
     const papers = [
       makePaper('paper-a', { notes: 'method notes' }),

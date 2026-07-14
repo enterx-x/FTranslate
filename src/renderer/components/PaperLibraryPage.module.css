@@ -176,6 +176,24 @@
   white-space: nowrap;
 }
 
+.secondaryButton {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #aeb9c6;
+  border-radius: 6px;
+  color: #33465c;
+  background: #fff;
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.secondaryButton:hover {
+  border-color: #71849a;
+  background: #f2f5f8;
+}
+
 .primaryButton:hover,
 .resumeButton:hover {
   background: #172334;
@@ -233,6 +251,24 @@
   font-size: 8px;
   font-weight: 500;
   letter-spacing: 0;
+}
+
+.navigatorAction {
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  color: #536b82;
+  background: transparent;
+  font: inherit;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.navigatorAction:hover {
+  color: #263b51;
+  background: #e8edf2;
 }
 
 .tagNavRow {
@@ -989,6 +1025,34 @@
   font-size: 22px;
 }
 
+.emptyProjectList {
+  display: flex;
+  max-width: min(560px, 80vw);
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.emptyProjectList > span {
+  color: #7d8998;
+  font-size: 10px;
+}
+
+.emptyProjectList > small {
+  max-width: 180px;
+  overflow: hidden;
+  padding: 4px 8px;
+  border: 1px solid #d4dce5;
+  border-radius: 999px;
+  color: #536579;
+  background: #fff;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .bulkBar {
   z-index: 8;
   display: flex;
@@ -1143,7 +1207,8 @@
 }
 
 .tagDialogHeading span,
-.tagDialogForm label {
+.tagDialogForm label,
+.projectDialogForm label {
   color: #7b8797;
   font-size: 9px;
   font-weight: 700;
@@ -1170,6 +1235,69 @@
   background: #fff;
   font: inherit;
   font-size: 12px;
+}
+
+.projectDialog {
+  width: min(500px, 92vw);
+}
+
+.projectDialogForm {
+  display: grid;
+  gap: 7px;
+  padding-top: 4px;
+}
+
+.projectDialogForm > input,
+.projectDialogForm > textarea {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #bbc6d2;
+  border-radius: 6px;
+  outline: 0;
+  color: #2f3c4d;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+}
+
+.projectDialogForm > input:focus,
+.projectDialogForm > textarea:focus {
+  border-color: #7189a2;
+  box-shadow: 0 0 0 2px rgba(92, 118, 143, 0.13);
+}
+
+.projectDialogForm > textarea {
+  min-height: 74px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.projectSeedOption {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid #d5dce4;
+  border-radius: 6px;
+  color: #526276 !important;
+  background: #f7f9fb;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0 !important;
+  cursor: pointer;
+}
+
+.projectSeedOption input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #31465e;
+}
+
+.formWarning {
+  color: #8a5b5f;
+  font-size: 9px;
 }
 
 .tagDeleteZone {
