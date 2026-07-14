@@ -3,6 +3,21 @@ import { defineConfig } from 'vite';
 
 export default defineConfig(({ mode }) => {
   const isMobileBuild = mode === 'mobile';
+  const mobileProxy = {
+    '/api/arxiv-pdf': {
+      target: 'https://arxiv.org',
+      changeOrigin: true,
+      secure: true,
+      rewrite: (path: string) => path.replace(/^\/api\/arxiv-pdf/u, '')
+    },
+    '/api/arxiv': {
+      target: 'https://export.arxiv.org',
+      changeOrigin: true,
+      secure: true,
+      headers: { Accept: 'application/atom+xml' },
+      rewrite: (path: string) => path.replace(/^\/api\/arxiv/u, '/api/query')
+    }
+  };
   return {
     base: './',
     plugins: [react()],
@@ -29,8 +44,16 @@ export default defineConfig(({ mode }) => {
       }
     },
     server: {
+      host: isMobileBuild ? '0.0.0.0' : '127.0.0.1',
       port: isMobileBuild ? 5174 : 5173,
-      strictPort: true
+      strictPort: true,
+      proxy: isMobileBuild ? mobileProxy : undefined
+    },
+    preview: {
+      host: '0.0.0.0',
+      port: 4174,
+      strictPort: true,
+      proxy: isMobileBuild ? mobileProxy : undefined
     }
   };
 });

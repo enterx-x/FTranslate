@@ -1,4 +1,4 @@
-import { CapacitorHttp } from '@capacitor/core';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
 import {
   buildArxivApiUrl,
@@ -7,6 +7,7 @@ import {
   type ArxivSearchRequest,
   type ArxivSearchServiceResult
 } from '../../shared/arxiv';
+import { buildMobileWebArxivSearchUrl } from './mobileWeb';
 
 const ARXIV_CACHE_PREFIX = 'pdfTranslationReader:mobileArxivCache:v1:';
 const MIN_REQUEST_GAP_MS = 3200;
@@ -32,17 +33,13 @@ export async function searchMobileArxiv(request: ArxivSearchRequest): Promise<Ar
 
   try {
     lastRequestAt = Date.now();
-    const response = await CapacitorHttp.get({
-      url: buildArxivApiUrl(request),
-      responseType: 'text',
-      connectTimeout: 15_000,
-      readTimeout: 30_000,
-      headers: { Accept: 'application/atom+xml' }
-    });
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(`HTTP ${response.status}`);
+    const apiUrl = buildArxivApiUrl(request);
+    const { status, xmlText } = Capacitor.isNativePlatform()
+      ? await requestNativeArxiv(apiUrl)
+      : await requestWebArxiv(apiUrl);
+    if (status < 200 || status >= 300) {
+      throw new Error(`HTTP ${status}`);
     }
-    const xmlText = typeof response.data === 'string' ? response.data : String(response.data ?? '');
     const parsed = parseArxivSearchResult(xmlText);
     const result: ArxivSearchServiceResult = {
       ...parsed,
@@ -63,6 +60,27 @@ export async function searchMobileArxiv(request: ArxivSearchRequest): Promise<Ar
     }
     throw new Error(`arXiv 检索失败：${formatError(error)}`);
   }
+}
+
+async function requestNativeArxiv(url: string): Promise<{ status: number; xmlText: string }> {
+  const response = await CapacitorHttp.get({
+    url,
+    responseType: 'text',
+    connectTimeout: 15_000,
+    readTimeout: 30_000,
+    headers: { Accept: 'application/atom+xml' }
+  });
+  return {
+    status: response.status,
+    xmlText: typeof response.data === 'string' ? response.data : String(response.data ?? '')
+  };
+}
+
+async function requestWebArxiv(url: string): Promise<{ status: number; xmlText: string }> {
+  const response = await fetch(buildMobileWebArxivSearchUrl(url), {
+    headers: { Accept: 'application/atom+xml' }
+  });
+  return { status: response.status, xmlText: await response.text() };
 }
 
 async function readCache(key: string): Promise<CachedArxivResult | null> {

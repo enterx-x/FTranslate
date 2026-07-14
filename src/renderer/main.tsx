@@ -3,6 +3,10 @@ import ReactDOM from 'react-dom/client';
 
 const isMobileRuntime = import.meta.env.VITE_APP_TARGET === 'mobile';
 document.documentElement.classList.toggle('mobile-runtime', isMobileRuntime);
+if (isMobileRuntime) {
+  document.title = 'FTranslate 移动阅读';
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#f7f9fc');
+}
 
 async function loadRuntimeApp() {
   if (isMobileRuntime) {

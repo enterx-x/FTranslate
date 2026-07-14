@@ -1,5 +1,26 @@
 # PDF Translation Reader / FTranslate
 
+## iPhone 局域网网页阅读（当前首选）
+
+当前先使用免费、无需签名的本地网页方案：Windows 电脑负责提供网页并转发 arXiv 请求，iPhone 使用 Safari 打开；PDF、论文索引、阅读进度和段落译文保存在 iPhone 当前 Safari 的浏览器存储中，不上传到 FTranslate 服务器。
+
+电脑和 iPhone 连接同一个 Wi-Fi 后，在 Windows 执行：
+
+```bash
+npm install
+npm run serve:mobile
+```
+
+终端会显示 `Network` 地址，例如：
+
+```text
+http://192.168.0.104:4174/
+```
+
+在 iPhone Safari 输入该地址即可使用论文库、arXiv 检索、PDF 阅读、段落内联翻译和选词翻译。第一次启动时，如果 Windows 防火墙询问是否允许 Node.js/Vite 访问网络，只允许“专用网络”。电脑必须保持开机且该命令持续运行；停止命令后网页暂时无法访问，再次以相同 IP 和端口启动即可恢复。
+
+网页论文库与访问地址的协议、IP、端口绑定。不要使用 Safari 无痕模式，不要清除该地址的网站数据；如果电脑局域网 IP 改变，旧地址的浏览器论文库不会自动出现在新地址，长期使用应在路由器中为电脑保留固定 IP。API Key 只保留在当前网页内存，并直接发送到用户配置的 HTTPS 翻译接口；兼容接口必须允许浏览器跨域请求。
+
 ## iPhone 本地论文阅读版（`codex/ios-mobile-reader`）
 
 项目现在提供独立的 Capacitor iOS 构建目标。首版不是把整个 Windows 科研工作台压缩到手机，而是只迁移一个可完成的移动闭环：
@@ -16,12 +37,14 @@
 
 ### 移动端开发与验证
 
-在 Windows 或 macOS 上运行移动 Web 预览：
+在 Windows 或 macOS 上运行移动 Web 开发服务：
 
 ```bash
 npm install
 npm run dev:mobile
 ```
+
+`dev:mobile` 同样监听局域网；日常手机阅读优先使用完成构建后再启动的 `npm run serve:mobile`。
 
 构建移动 Web 资源并运行 iPhone 尺寸视觉回归：
 

@@ -311,7 +311,7 @@ function TranslationSettingsDialog({
       <section className="mobile-translation-dialog" role="dialog" aria-modal="true" aria-label="翻译设置" onClick={(event) => event.stopPropagation()}>
         <div className="mobile-dialog-handle" />
         <header><strong>段落翻译设置</strong><button type="button" onClick={onClose}>关闭</button></header>
-        <p>支持 OpenAI 兼容接口。API Key 只保存在当前运行内存，退出 App 后不会写入设备。</p>
+        <p>支持允许浏览器访问的 OpenAI 兼容接口。API Key 只保存在当前网页内存，刷新或关闭网页后不会写入设备。</p>
         <label>Base URL<input value={form.baseURL} onChange={(event) => setForm((value) => ({ ...value, baseURL: event.target.value }))} /></label>
         <label>Model<input value={form.model} onChange={(event) => setForm((value) => ({ ...value, model: event.target.value }))} /></label>
         <label>API Key<input type="password" value={form.apiKey} onChange={(event) => setForm((value) => ({ ...value, apiKey: event.target.value }))} placeholder="仅本次会话" /></label>

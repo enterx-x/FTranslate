@@ -6,7 +6,8 @@
   "private": true,
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && npm run build:electron && electron dist-electron/main/main.js\"",
-    "dev:mobile": "vite --mode mobile --host 127.0.0.1",
+    "dev:mobile": "vite --mode mobile --host 0.0.0.0",
+    "serve:mobile": "npm run build:mobile && vite preview --mode mobile --host 0.0.0.0 --port 4174",
     "test": "vitest run --dir src",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
     "build:renderer": "vite build",

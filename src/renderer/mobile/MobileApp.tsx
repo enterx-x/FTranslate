@@ -63,7 +63,7 @@ export default function MobileApp() {
       })
       .catch((error) => {
         if (!cancelled) {
-          setNotice(`读取本地资料失败：${formatError(error)}`);
+          setNotice(`读取当前设备资料失败：${formatError(error)}`);
         }
       });
     return () => {
@@ -163,7 +163,7 @@ export default function MobileApp() {
   }
 
   async function handleRemovePaper(paper: MobilePaper): Promise<void> {
-    if (!window.confirm(`从本机论文库移除“${paper.title}”？这会删除 App 沙盒中的 PDF 和翻译缓存。`)) {
+    if (!window.confirm(`从本机论文库移除“${paper.title}”？这会删除当前浏览器中的 PDF 和翻译缓存。`)) {
       return;
     }
     setBusy(true);

@@ -1,5 +1,49 @@
 # PLAN.md
 
+## 2026-07-14：iPhone 局域网网页阅读
+
+### 当前结论
+
+- 当前交付优先级已从 IPA 自签切换为局域网网页：Windows 本机启动移动 Web，iPhone Safari 通过同一 Wi-Fi 访问，不需要 App Store、Apple Developer 账号、Sideloadly 或 7 天续签。
+- 最小闭环仍严格限制为 PDF 阅读与段落/选词翻译、arXiv 检索、浏览器本地论文库；不做账号、云同步、桌面互通或 Android。
+- Windows 只提供静态网页并同源转发 arXiv Atom/PDF 请求；论文文件、阅读进度和译文由 Capacitor Web 存储保存在当前 Safari。翻译 API Key 不经过 arXiv 代理，只在当前网页内存中使用。
+- 现有 Capacitor iOS/IPA 代码和工作流保留，但不是当前使用入口，避免将来需要原生包装时返工。
+
+### 已落地能力
+
+- `npm run serve:mobile`：构建 `dist-mobile/` 后在 `0.0.0.0:4174` 启动局域网网页；`npm run dev:mobile` 也已允许同网段手机访问。
+- `vite.config.ts`：仅在 mobile 模式提供固定目标的 `/api/arxiv` 与 `/api/arxiv-pdf` 代理，解决 Safari 无法直接跨域访问 arXiv Atom API、带 `.pdf` 地址重定向的问题。
+- `mobileWeb.ts`：把 arXiv 查询与 PDF 地址映射到当前网页同源代理；非 arXiv PDF 不会被任意转发。
+- 移动端提示已从“App 沙盒”改为“当前浏览器”，明确 Safari 存储边界与 API Key 生命周期。
+- 移动视觉脚本支持加载真实 HTTP 地址，可在网页源环境验证 IndexedDB/Preferences、本地 PDF 导入和翻译交互。
+
+### 验证记录
+
+- `mobileWeb.test.ts`：3 个代理地址测试通过，覆盖查询参数保留、arXiv PDF 固定转发和非 arXiv 地址不代理。
+- `npm run typecheck`：通过。
+- `npm run build:mobile`：通过；PDF.js 主 chunk 约 699 kB，仍有大 chunk 警告。
+- `npm run ios:sync`：通过；网页适配改动已同步到保留的 Capacitor iOS 工程，未破坏 3 个原生插件声明。
+- `npm run dist`：通过；全部 80 个测试文件、465 个测试通过，TypeScript、桌面 renderer/Electron 和 NSIS 打包均成功。安装包为 144,261,714 字节，SHA-256 为 `DC9FD6CCE8BA8862F89278D8A240DF25B151EB2304FE33C90004DBC4FE73709A`。
+- `$env:VISUAL_CHECK_PORT='9336'; npm run visual:check`：桌面全页面视觉回归通过，确认移动网页入口和共享 `index.html` meta 调整未破坏桌面界面。
+- 本地 HTTP 烟雾验证：`/` 返回 200；`/api/arxiv` 返回 200 `application/atom+xml` 且包含论文条目；`/api/arxiv-pdf/pdf/1706.03762` 返回 200 `application/pdf`，长度 2,215,244 字节。
+- `$env:FTRANSLATE_MOBILE_VISUAL_URL='http://127.0.0.1:4174/'; npm run visual:check:mobile`：通过；真实网页源下完成浏览器 PDF 存储、段落解析、内联翻译与选词浮层。390px 审计中 body/root 宽度均为 390，无越界元素。
+- 人工查看 `.tmp-mobile-visual-check/` 全部 5 张截图：论文库、arXiv、长标题、中文内联段落、选词浮层和底部状态栏没有明显重叠、遮挡、截断或横向滚动；截图透明合成显示已用像素抽样复核，内容背景实际为 `#f7f9fc/#f8fafc`。
+- 当前机器 WLAN 地址为 `192.168.0.104`，本轮服务已在 `http://192.168.0.104:4174/` 监听；该地址只作为本轮真机入口，后续以 Windows 实际输出为准。
+
+### 问题与风险
+
+- 电脑必须开机、服务必须运行且手机与电脑在同一局域网；这不是公网网站。
+- Safari 浏览器数据按 origin 隔离；电脑 IP 或端口变化会形成新论文库视图。清除网站数据、使用无痕模式或系统存储压力也可能导致论文丢失，必须保留原 PDF。
+- 当前是 HTTP 局域网页面，翻译 Key 只允许由浏览器直连用户配置的 HTTPS 接口；若第三方 OpenAI 兼容接口未开放 CORS，网页翻译会失败，当前不通过不加密的局域网代理转发密钥。
+- 尚未在用户真实 iPhone Safari 上验证 Windows 防火墙、路由器客户端隔离、Safari 存储配额和大 PDF 内存表现。
+
+### 下一步
+
+1. 用户用 iPhone Safari 打开本轮局域网地址，完成一次“导入 PDF → 阅读 → 翻译一段 → 关闭并重新打开网页”的真机验证。
+2. 在路由器为 Windows 电脑设置 DHCP 地址保留，避免浏览器 origin 因 IP 变化而切换。
+3. 用 50 MB、200 页 PDF 做 Safari 内存压力测试，并增加论文库导出/恢复，降低浏览器数据被清理的风险。
+4. 只有需要离开同一 Wi-Fi 访问时，再增加 HTTPS 公网部署和受控服务端代理；暂不恢复 IPA 自签为首选路径。
+
 ## 2026-07-13：iPhone 本地论文阅读版
 
 ### 当前结论
@@ -27,14 +71,14 @@
 - 2026-07-13：GitHub Actions 首次云端构建成功（run `29223652350`，2 分 09 秒），已产出 `FTranslate-unsigned-ios` artifact；随后将 `checkout`、`setup-node`、`upload-artifact` 升级至 Node 24 对应的 v6，消除 Node 20 弃用告警。
 - 2026-07-13：升级后的云端构建再次成功（run `29223837787`，1 分 32 秒，无 annotation）；下载后的 `FTranslate-unsigned.ipa` 为 2,859,203 字节，SHA-256 为 `f16c647771999ab1159c8d2dbbaeb300807b459cb57cc1fe8ae3f17b2c629692`，与随附校验文件一致，且归档中存在 `Payload/App.app/App` 与根 `Info.plist`。
 
-- `npm test`：测试入口已改为 `vitest run --dir src`，只扫描当前仓库根目录；79 个测试文件、462 个测试全部通过，不再误扫 `.worktrees/*/src`。
+- `npm test`：测试入口已改为 `vitest run --dir src`，只扫描当前仓库根目录；当前 80 个测试文件、465 个测试全部通过，不再误扫 `.worktrees/*/src`。
 - `npm run typecheck`：renderer 与 Electron main TypeScript 检查通过。
 - `npm run build:mobile`：通过；输出 `dist-mobile/`。PDF.js 主 chunk 约 699 kB，worker 约 2.33 MB，存在 Vite 大 chunk 警告但不阻断运行。
 - `npm run ios:sync`：通过；移动 Web 资源、Capacitor 插件和本地 Swift Package 路径已同步。
 - `npm run visual:check:mobile`：通过；自动完成本地 PDF 导入、段落解析、会话翻译、内联译文和选词浮层，`audit.json` 显示 390px 视口下 body/root `scrollWidth` 均为 390，未发现越界元素。
 - `npm audit --omit=dev --json`：生产依赖 0 个漏洞。已把 Vite 定向更新到同主版本补丁 `7.3.6`、`concurrently` 更新到 `9.2.4`；开发工具链仍有 5 个传递依赖告警，不进入移动 App 生产包，未执行大范围 `npm audit fix`。
 - `$env:VISUAL_CHECK_PORT='9334'; npm run visual:check`：桌面源码视觉回归通过；默认 `9333` 端口曾被异常退出的 Windows 调试句柄占用，改用独立端口后覆盖全部既有页面并通过。
-- `npm run dist`：Windows NSIS 安装包重建成功；`dist/PDF Translation Reader Setup 0.1.12.exe` 为 144,261,682 bytes，SHA-256 为 `ABDC9168839A196152B1471DE545B09C04E0240AE7D060933CCBEC4D688D424C`。
+- `npm run dist`：Windows NSIS 安装包重建成功；`dist/PDF Translation Reader Setup 0.1.12.exe` 当前为 144,261,714 bytes，SHA-256 为 `DC9FD6CCE8BA8862F89278D8A240DF25B151EB2304FE33C90004DBC4FE73709A`。
 - `$env:VISUAL_CHECK_PACKAGED='1'; $env:VISUAL_CHECK_PORT='9335'; npm run visual:check`：打包后的 Windows 应用视觉回归通过，确认移动入口改造没有破坏安装包内桌面界面。
 - 视觉截图：`.tmp-mobile-visual-check/01-library-empty-390x844.png`、`02-arxiv-idle-390x844.png`、`03-reader-inline-translation-390x844.png`、`04-reader-selection-popover-390x844.png`、`05-reader-selection-popover-430x932.png`。
 

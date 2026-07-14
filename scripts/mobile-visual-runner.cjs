@@ -22,7 +22,12 @@ app.whenReady().then(async () => {
       backgroundThrottling: false
     }
   });
-  await window.loadFile(path.join(root, 'dist-mobile', 'index.html'));
+  const targetUrl = process.env.FTRANSLATE_MOBILE_VISUAL_URL;
+  if (targetUrl) {
+    await window.loadURL(targetUrl);
+  } else {
+    await window.loadFile(path.join(root, 'dist-mobile', 'index.html'));
+  }
 });
 
 app.on('window-all-closed', () => app.quit());

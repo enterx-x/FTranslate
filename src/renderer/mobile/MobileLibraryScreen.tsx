@@ -42,7 +42,7 @@ export function MobileLibraryScreen({
       <header className="mobile-screen-header">
         <div>
           <strong>论文库</strong>
-          <span>仅保存在这台设备</span>
+          <span>仅保存在当前浏览器</span>
         </div>
         <button type="button" className="mobile-square-button" disabled={busy} onClick={() => inputRef.current?.click()} aria-label="导入 PDF">
           ＋
@@ -77,7 +77,7 @@ export function MobileLibraryScreen({
         ) : (
           <div className="mobile-library-empty">
             <strong>先放入第一篇论文</strong>
-            <p>从“文件”导入 PDF，或前往 arXiv 检索并下载到本机。</p>
+            <p>从“文件”导入 PDF，或前往 arXiv 检索并保存到当前 Safari。</p>
             <button type="button" onClick={() => inputRef.current?.click()}>导入本地 PDF</button>
           </div>
         )}

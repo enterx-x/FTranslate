@@ -11,6 +11,7 @@ import {
   type MobileStoredPdf,
   type MobileTranslationEntry
 } from './mobileTypes';
+import { buildMobileWebPdfUrl } from './mobileWeb';
 
 const MOBILE_LIBRARY_KEY = 'pdfTranslationReader:mobileLibrary:v1';
 const MOBILE_TRANSLATION_PREFERENCES_KEY = 'pdfTranslationReader:mobileTranslationPreferences:v1';
@@ -70,7 +71,7 @@ export async function downloadPdfFile(input: {
     return { path, fileName, kind: 'source', byteLength: Number(stat.size) || 0 };
   }
 
-  const response = await fetch(input.url);
+  const response = await fetch(buildMobileWebPdfUrl(input.url));
   if (!response.ok) {
     throw new Error(`PDF 下载失败：HTTP ${response.status}`);
   }
