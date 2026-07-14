@@ -107,6 +107,8 @@ export function PdfFigureWorkspaceDialog(props: PdfFigureWorkspaceDialogProps) {
     });
   }, [filter, props.figures, query]);
   const activeFigure = props.figures.find((figure) => figure.imageId === activeId) ?? filteredFigures[0] ?? null;
+  const isDiscoveringCandidates = props.isExtracting && props.figures.length === 0;
+  const hasNoCandidates = !props.isExtracting && props.figures.length === 0;
 
   useEffect(() => {
     if (!props.open) return;
@@ -151,8 +153,10 @@ export function PdfFigureWorkspaceDialog(props: PdfFigureWorkspaceDialogProps) {
     }
   }
 
-  const progressText = props.isExtracting && props.progress
-    ? `${props.progress.stage === 'rendering-page' ? '渲染页面' : '生成裁剪'} · ${Math.min(props.progress.processed + 1, props.progress.total)}/${props.progress.total} · 第 ${props.progress.pageNumber} 页`
+  const progressText = props.isExtracting
+    ? props.progress
+      ? `${props.progress.stage === 'rendering-page' ? '渲染页面' : '生成裁剪'} · ${Math.min(props.progress.processed + 1, props.progress.total)}/${props.progress.total} · 第 ${props.progress.pageNumber} 页`
+      : '正在扫描论文结构与 Figure / Table 图注'
     : `候选 ${summary.totalCount} · 可用 ${summary.readyCount} · 已选 ${selectedCount}`;
 
   return (
@@ -193,19 +197,51 @@ export function PdfFigureWorkspaceDialog(props: PdfFigureWorkspaceDialogProps) {
         </header>
 
         <div
-          className={`figure-assets-progress${props.isExtracting && props.progress ? '' : ' idle'}`}
-          aria-label={props.isExtracting && props.progress ? '图表提取进度' : undefined}
-          aria-hidden={props.isExtracting && props.progress ? undefined : true}
+          className={`figure-assets-progress${props.isExtracting ? (props.progress ? '' : ' indeterminate') : ' idle'}`}
+          aria-label={props.isExtracting ? '图表提取进度' : undefined}
+          aria-hidden={props.isExtracting ? undefined : true}
         >
           <span
             style={{
-              width: props.isExtracting && props.progress
-                ? `${Math.max(4, props.progress.total > 0 ? (props.progress.processed / props.progress.total) * 100 : 0)}%`
+              width: props.isExtracting
+                ? props.progress
+                  ? `${Math.max(4, props.progress.total > 0 ? (props.progress.processed / props.progress.total) * 100 : 0)}%`
+                  : '28%'
                 : '0%'
             }}
           />
         </div>
 
+        {isDiscoveringCandidates ? (
+          <section className="figure-assets-loading" data-testid="pdf-figure-loading" aria-live="polite">
+            <div className="figure-assets-loading-visual" aria-hidden="true">
+              <div className="figure-assets-loading-document">
+                <span />
+                <span />
+                <span />
+                <i />
+              </div>
+            </div>
+            <div className="figure-assets-loading-copy">
+              <span className="figure-assets-loading-kicker">论文结构扫描</span>
+              <h2>正在识别图注与图表所在页</h2>
+              <p>先建立 Figure / Table、页码和正文的对应关系；识别到候选后会立即进入图表工作台。</p>
+              <ol className="figure-assets-loading-steps">
+                <li className="active"><span>1</span><div><strong>解析文字与版面</strong><small>定位图注、页码和阅读顺序</small></div></li>
+                <li><span>2</span><div><strong>识别图表边界</strong><small>区分图像、表格与组合面板</small></div></li>
+                <li><span>3</span><div><strong>生成高清素材</strong><small>按原页坐标进行保真裁剪</small></div></li>
+              </ol>
+              <p className="figure-assets-loading-note">解析期间 PDF 没有被清空；可随时点击右上角“取消”返回阅读。</p>
+            </div>
+          </section>
+        ) : hasNoCandidates ? (
+          <section className="figure-assets-no-results" aria-live="polite">
+            <div aria-hidden="true">FIG</div>
+            <strong>没有识别到可提取的图表候选</strong>
+            <p>这篇 PDF 可能没有标准 Figure / Table 图注，或文字层不可读取。你可以重新扫描，PDF 原文不会受影响。</p>
+            <button type="button" className="secondary-button" onClick={props.onRescan}>重新扫描</button>
+          </section>
+        ) : (
         <div className="figure-assets-layout">
           <aside className="figure-assets-filters" aria-label="图表筛选">
             <label>
@@ -293,6 +329,7 @@ export function PdfFigureWorkspaceDialog(props: PdfFigureWorkspaceDialogProps) {
             ) : <div className="figure-assets-empty">选择一个图表查看详情。</div>}
           </aside>
         </div>
+        )}
 
         {cropEditor ? (
           <FigureCropEditor

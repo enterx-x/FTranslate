@@ -2281,7 +2281,7 @@ async function runWholePdfReaderScenario(client) {
   if (
     !wholePdf.hasPanel ||
     wholePdf.activeToggle !== '原文 PDF' ||
-    !/2604\.15483v2\.pdf|visual-check-fallback\.pdf/.test(wholePdf.displayedStatus) ||
+    !wholePdf.displayedStatus.includes(path.basename(pdfPath)) ||
     !wholePdf.hasPdfCanvas ||
     !wholePdf.hasDualToggle ||
     !wholePdf.hasGenerateButton ||
@@ -2500,6 +2500,37 @@ async function runWholePdfReaderScenario(client) {
     );
   }
 
+  let completedFigureExtraction = null;
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    completedFigureExtraction = await evaluateJson(client, `() => {
+      const workspace = document.querySelector('[data-testid="pdf-figure-workspace"]');
+      const actions = [...(workspace?.querySelectorAll('.figure-assets-header-actions button') ?? [])];
+      const isExtracting = actions.some((button) => (button.textContent ?? '').trim() === '取消');
+      const cards = [...(workspace?.querySelectorAll('[data-figure-card]') ?? [])];
+      const readyCount = cards.filter((card) => card.querySelector('.figure-assets-thumbnail img')).length;
+      const workspaceRect = workspace?.getBoundingClientRect();
+      const layoutRect = workspace?.querySelector('.figure-assets-layout')?.getBoundingClientRect();
+      return {
+        isExtracting,
+        cardCount: cards.length,
+        readyCount,
+        progressText: workspace?.querySelector('.figure-assets-header > div:first-child span')?.textContent ?? '',
+        contentVisible: Boolean(workspaceRect && layoutRect && workspaceRect.height > 400 && layoutRect.height > 300),
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3 || Boolean(workspace && workspace.scrollWidth > workspace.clientWidth + 3)
+      };
+    }`);
+    if (!completedFigureExtraction.isExtracting) break;
+    await wait(500);
+  }
+  if (
+    !completedFigureExtraction ||
+    completedFigureExtraction.isExtracting ||
+    !completedFigureExtraction.contentVisible ||
+    completedFigureExtraction.hasHorizontalOverflow
+  ) {
+    throw new Error(`wholePdf: completed figure extraction did not keep the workspace usable, got ${JSON.stringify(completedFigureExtraction)}`);
+  }
+
   await evaluateJson(client, `() => {
     const cancel = [...document.querySelectorAll('.figure-assets-header-actions button')]
       .find((button) => (button.textContent ?? '').trim() === '取消');
@@ -2575,6 +2606,47 @@ async function runWholePdfReaderScenario(client) {
     await evaluateJson(client, `() => document.querySelector('button[aria-label="关闭裁剪编辑器"]')?.click()`);
   }
   await evaluateJson(client, `() => document.querySelector('button[aria-label="关闭图表素材工作台"]')?.click()`);
+  await wait(500);
+  const postExtractionPdf = await evaluateJson(client, `() => {
+    const root = document.querySelector('.pdf-js-viewer-container');
+    const canvases = [...(root?.querySelectorAll('.page canvas') ?? [])]
+      .filter((canvas) => canvas.width > 0 && canvas.height > 0);
+    const canvas = canvases.find((item) => item.closest('.page')?.dataset.loaded === 'true') ?? canvases[0];
+    if (!root || !canvas) {
+      return {
+        hasRoot: Boolean(root),
+        canvasCount: canvases.length,
+        paintedPixelCount: 0,
+        renderPhase: root?.dataset.pdfRenderPhase ?? ''
+      };
+    }
+    const sample = document.createElement('canvas');
+    sample.width = 64;
+    sample.height = 64;
+    const context = sample.getContext('2d', { willReadFrequently: true });
+    context?.drawImage(canvas, 0, 0, 64, 64);
+    const pixels = context?.getImageData(0, 0, 64, 64).data ?? new Uint8ClampedArray();
+    let paintedPixelCount = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      if (pixels[index + 3] > 0 && (pixels[index] < 245 || pixels[index + 1] < 245 || pixels[index + 2] < 245)) {
+        paintedPixelCount += 1;
+      }
+    }
+    return {
+      hasRoot: true,
+      canvasCount: canvases.length,
+      canvasWidth: canvas.width,
+      canvasHeight: canvas.height,
+      paintedPixelCount,
+      renderPhase: root.dataset.pdfRenderPhase ?? ''
+    };
+  }`);
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'whole-pdf-after-figure-extraction.png'), Buffer.from(shot.data, 'base64'))
+  );
+  if (!postExtractionPdf.hasRoot || postExtractionPdf.canvasCount < 1 || postExtractionPdf.paintedPixelCount < 8) {
+    throw new Error(`wholePdf: figure extraction left the PDF page blank, got ${JSON.stringify(postExtractionPdf)}`);
+  }
   return {
     wholePdf,
     initialPdfCenter,
@@ -2584,8 +2656,133 @@ async function runWholePdfReaderScenario(client) {
     wideSidebar,
     collapsedSidebar,
     figureExtraction,
+    completedFigureExtraction,
+    postExtractionPdf,
     requireNativeFigureExtraction
   };
+}
+
+async function runEarlyFigureExtractionScenario(client) {
+  await clickSidebarSection(client, 'library');
+  await wait(350);
+  const preparedLibrarySelection = await evaluateJson(client, `() => {
+    document.querySelector('[data-paper-library-row]')?.click();
+    document.querySelector('button[title="展开详情"]')?.click();
+    return Boolean(document.querySelector('[data-paper-library-row]'));
+  }`);
+  if (!preparedLibrarySelection) throw new Error('earlyFigureExtraction: paper library row not found');
+  await wait(350);
+  const openedFromLibrary = await evaluateJson(client, `() => {
+    const resume = document.querySelector('[data-paper-library-resume]');
+    if (resume && !resume.disabled) resume.click();
+    return Boolean(resume && !resume.disabled);
+  }`);
+  if (!openedFromLibrary) throw new Error('earlyFigureExtraction: paper library resume action not found');
+  await waitForAppReady(client);
+  await waitForPdfCanvas(client);
+
+  const extractionOpened = await evaluateJson(client, `() => {
+    const button = [...document.querySelectorAll('.whole-pdf-panel button')]
+      .find((item) => (item.textContent ?? '').includes('提取 PDF 图表'));
+    if (!button || button.disabled) return false;
+    button.click();
+    return true;
+  }`);
+  if (!extractionOpened) throw new Error('earlyFigureExtraction: extraction action not found');
+
+  let firstFrame = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    firstFrame = await evaluateJson(client, `() => {
+      const workspace = document.querySelector('[data-testid="pdf-figure-workspace"]');
+      const workspaceRect = workspace?.getBoundingClientRect();
+      const loadingRect = workspace?.querySelector('[data-testid="pdf-figure-loading"]')?.getBoundingClientRect();
+      const layoutRect = workspace?.querySelector('.figure-assets-layout')?.getBoundingClientRect();
+      const filtersRect = workspace?.querySelector('.figure-assets-filters')?.getBoundingClientRect();
+      const resultsRect = workspace?.querySelector('.figure-assets-results')?.getBoundingClientRect();
+      const inspectorRect = workspace?.querySelector('.figure-assets-inspector')?.getBoundingClientRect();
+      return {
+        hasWorkspace: Boolean(workspace),
+        hasLoadingState: Boolean(workspace?.querySelector('[data-testid="pdf-figure-loading"]')),
+        loadingHeight: loadingRect?.height ?? 0,
+        loadingText: workspace?.querySelector('[data-testid="pdf-figure-loading"]')?.textContent?.trim() ?? '',
+        isExtracting: [...(workspace?.querySelectorAll('.figure-assets-header-actions button') ?? [])]
+          .some((button) => (button.textContent ?? '').trim() === '取消'),
+        workspaceHeight: workspaceRect?.height ?? 0,
+        layoutHeight: layoutRect?.height ?? 0,
+        filtersHeight: filtersRect?.height ?? 0,
+        resultsHeight: resultsRect?.height ?? 0,
+        inspectorHeight: inspectorRect?.height ?? 0,
+        resultsText: workspace?.querySelector('.figure-assets-results')?.textContent?.trim() ?? '',
+        inspectorText: workspace?.querySelector('.figure-assets-inspector')?.textContent?.trim() ?? '',
+        hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3 || Boolean(workspace && workspace.scrollWidth > workspace.clientWidth + 3)
+      };
+    }`);
+    if (firstFrame.hasWorkspace && (firstFrame.loadingHeight > 300 || firstFrame.layoutHeight > 300)) break;
+    await wait(50);
+  }
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'whole-pdf-figures-early-frame.png'), Buffer.from(shot.data, 'base64'))
+  );
+  if (
+    !firstFrame?.hasWorkspace ||
+    !firstFrame.hasLoadingState ||
+    firstFrame.workspaceHeight < 400 ||
+    firstFrame.loadingHeight < 300 ||
+    !/正在|扫描|解析/.test(firstFrame.loadingText) ||
+    firstFrame.hasHorizontalOverflow
+  ) {
+    throw new Error(`earlyFigureExtraction: first frame is blank or collapsed, got ${JSON.stringify(firstFrame)}`);
+  }
+
+  let completion = null;
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    completion = await evaluateJson(client, `() => {
+      const workspace = document.querySelector('[data-testid="pdf-figure-workspace"]');
+      const cards = [...(workspace?.querySelectorAll('[data-figure-card]') ?? [])];
+      return {
+        hasWorkspace: Boolean(workspace),
+        isExtracting: [...(workspace?.querySelectorAll('.figure-assets-header-actions button') ?? [])]
+          .some((button) => (button.textContent ?? '').trim() === '取消'),
+        cardCount: cards.length,
+        readyCount: cards.filter((card) => card.querySelector('.figure-assets-thumbnail img')).length,
+        bodyText: workspace?.textContent?.trim() ?? ''
+      };
+    }`);
+    if (completion.hasWorkspace && !completion.isExtracting) break;
+    await wait(500);
+  }
+  if (!completion?.hasWorkspace || completion.isExtracting || !completion.bodyText) {
+    throw new Error(`earlyFigureExtraction: extraction did not finish in a usable workspace, got ${JSON.stringify(completion)}`);
+  }
+
+  await evaluateJson(client, `() => document.querySelector('button[aria-label="关闭图表素材工作台"]')?.click()`);
+  await wait(500);
+  const postExtractionPdf = await evaluateJson(client, `() => {
+    const root = document.querySelector('.pdf-js-viewer-container');
+    const canvases = [...(root?.querySelectorAll('.page canvas') ?? [])]
+      .filter((canvas) => canvas.width > 0 && canvas.height > 0);
+    const canvas = canvases.find((item) => item.closest('.page')?.dataset.loaded === 'true') ?? canvases[0];
+    if (!root || !canvas) return { hasRoot: Boolean(root), canvasCount: canvases.length, paintedPixelCount: 0 };
+    const sample = document.createElement('canvas');
+    sample.width = 64;
+    sample.height = 64;
+    const context = sample.getContext('2d', { willReadFrequently: true });
+    context?.drawImage(canvas, 0, 0, 64, 64);
+    const pixels = context?.getImageData(0, 0, 64, 64).data ?? new Uint8ClampedArray();
+    let paintedPixelCount = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      if (pixels[index + 3] > 0 && (pixels[index] < 245 || pixels[index + 1] < 245 || pixels[index + 2] < 245)) paintedPixelCount += 1;
+    }
+    return { hasRoot: true, canvasCount: canvases.length, paintedPixelCount };
+  }`);
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'whole-pdf-after-early-figure-extraction.png'), Buffer.from(shot.data, 'base64'))
+  );
+  if (!postExtractionPdf.hasRoot || postExtractionPdf.canvasCount < 1 || postExtractionPdf.paintedPixelCount < 8) {
+    throw new Error(`earlyFigureExtraction: extraction left the PDF page blank, got ${JSON.stringify(postExtractionPdf)}`);
+  }
+
+  return { firstFrame, completion, postExtractionPdf };
 }
 
 async function runPdfSelectionTranslationScenario(client) {
@@ -4475,6 +4672,13 @@ async function main() {
       const wholePdfReader = await runWholePdfReaderScenario(client);
       client.close();
       console.log(JSON.stringify({ pdfPath, wholePdfReader, outputDir }, null, 2));
+      return;
+    }
+
+    if (visualScenario === 'figure-assets-early') {
+      const earlyFigureExtraction = await runEarlyFigureExtractionScenario(client);
+      client.close();
+      console.log(JSON.stringify({ pdfPath, earlyFigureExtraction, outputDir }, null, 2));
       return;
     }
 
