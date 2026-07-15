@@ -19,7 +19,11 @@ import {
   type AiReasoningEffort,
   type AiThinkingMode
 } from '../shared/aiTranslation';
-import { formatPdfTranslationProgressMessage } from '../shared/pdfTranslation';
+import {
+  formatPdfTranslationProgressMessage,
+  normalizeChinesePdfTranslationRecord,
+  resolveChinesePdfPath
+} from '../shared/pdfTranslation';
 import type { AiAssistantFocus } from './components/AiAssistantPage';
 import { AppSidebar, type AppSidebarSection } from './components/AppSidebar';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -445,11 +449,11 @@ export default function App() {
     return nextPdf;
   }
 
-  function applyTranslatedPdfPayload(payload: PdfFilePayload, monoPayload?: PdfFilePayload | null): PdfState {
+  function applyChinesePdfPayload(payload: PdfFilePayload): PdfState {
     const nextPdf = buildPdfState(payload);
 
-    setTranslatedPdf(nextPdf);
-    setTranslatedMonoPdf(monoPayload ? buildPdfState(monoPayload) : null);
+    setTranslatedPdf(null);
+    setTranslatedMonoPdf(nextPdf);
     setPdfViewMode('translated');
     setPdfViewportState(null);
     setPageCount(0);
@@ -637,9 +641,8 @@ export default function App() {
       setReaderMode('manual');
       setIsPdfAiSettingsOpen(false);
       setView('reader');
-      const hasSidecars = Boolean(
-        paper.translationPath || paper.aiCachePath || paper.translatedPdfPath || paper.translatedMonoPdfPath
-      );
+      const chinesePdfPath = resolveChinesePdfPath(paper);
+      const hasSidecars = Boolean(paper.translationPath || paper.aiCachePath || chinesePdfPath);
       if (!hasSidecars) {
         setStatusMessage(`已打开论文：${paper.chineseTitle || paper.englishTitle}`);
         return;
@@ -650,12 +653,10 @@ export default function App() {
         sourcePdfPath: paper.pdfPath,
         translationPath: paper.translationPath,
         aiCachePath: paper.aiCachePath,
-        translatedPdfPath: isSamePdfFilePath(paper.translatedPdfPath, paper.pdfPath)
+        translatedPdfPath: undefined,
+        translatedMonoPdfPath: isSamePdfFilePath(chinesePdfPath, paper.pdfPath)
           ? undefined
-          : paper.translatedPdfPath,
-        translatedMonoPdfPath: isSamePdfFilePath(paper.translatedMonoPdfPath, paper.pdfPath)
-          ? undefined
-          : paper.translatedMonoPdfPath
+          : chinesePdfPath
       });
       if (paperOpenRunRef.current !== openRunId) {
         return;
@@ -671,22 +672,14 @@ export default function App() {
           resourceWarnings.push('AI 缓存不是 JSON 翻译数组，已只打开手动翻译文件。');
         }
       }
-      if (resourceResult.translatedPdf || resourceResult.translatedMonoPdf) {
-        setTranslatedPdf(
-          resourceResult.translatedPdf ? buildPdfState(resourceResult.translatedPdf) : null
-        );
-        setTranslatedMonoPdf(
-          resourceResult.translatedMonoPdf ? buildPdfState(resourceResult.translatedMonoPdf) : null
-        );
+      if (resourceResult.translatedMonoPdf) {
+        setTranslatedPdf(null);
+        setTranslatedMonoPdf(buildPdfState(resourceResult.translatedMonoPdf));
       }
       const loadedLabels = [
         resourceResult.translation ? '手动译文' : '',
         resourceResult.aiCache ? 'AI 缓存' : '',
-        resourceResult.translatedMonoPdf
-          ? '中文 PDF'
-          : resourceResult.translatedPdf
-            ? '翻译 PDF'
-            : ''
+        resourceResult.translatedMonoPdf ? '中文 PDF' : ''
       ].filter(Boolean);
       const openedMessage = loadedLabels.length > 0
         ? `论文已打开，后台资源已就绪：${loadedLabels.join('、')}`
@@ -791,18 +784,20 @@ export default function App() {
       const result = await window.electronAPI.translatePdf({
         paperId: paper.id,
         pdfPath: sourcePdf.filePath,
-        outputMode: 'dual',
+        outputMode: 'mono',
         force
       });
 
       if (!isCurrentTranslation()) {
         return;
       }
-      if (!result.pdf) {
-        throw new Error('翻译任务没有返回可显示的 PDF 数据。');
+      const chineseResult = normalizeChinesePdfTranslationRecord(result);
+      const chinesePdf = result.monoPdf ?? (result.translatedPdfMode === 'mono' ? result.pdf : null);
+      if (!chineseResult || !chinesePdf) {
+        throw new Error('翻译任务没有返回纯中文 PDF，已拒绝使用双语或原文文件代替。');
       }
-      applyTranslatedPdfPayload(result.pdf, result.monoPdf);
-      rememberTranslatedPdfResult(paper.id, result);
+      applyChinesePdfPayload(chinesePdf);
+      rememberTranslatedPdfResult(paper.id, chineseResult);
       setStatusMessage(result.message);
       setPdfTranslationStatus(result.message);
     } catch (error) {
@@ -842,7 +837,7 @@ export default function App() {
         return;
       }
 
-      applyTranslatedPdfPayload(payload);
+      applyChinesePdfPayload(payload);
       const paper = ensureActivePaperForCurrentPdf();
       if (paper) {
         setPaperLibrary((library) =>
@@ -867,7 +862,7 @@ export default function App() {
   }
 
   async function handleExportTranslatedPdf(): Promise<void> {
-    const exportPdf = translatedMonoPdf ?? translatedPdf;
+    const exportPdf = translatedMonoPdf;
     if (!exportPdf?.filePath) {
       setStatusMessage('当前没有可导出的中文 PDF，请先生成或导入中文 PDF。');
       return;
@@ -1345,20 +1340,25 @@ export default function App() {
   }
 
   function rememberTranslatedPdfResult(paperId: string, result: PdfTranslationResult): void {
+    const chineseResult = normalizeChinesePdfTranslationRecord(result);
+    if (!chineseResult) {
+      return;
+    }
+
     setPaperLibrary((library) =>
       library.map((paper) =>
         paper.id === paperId
           ? updatePaperRecord(paper, {
-              translatedPdfPath: result.translatedPdfPath,
-              translatedPdfName: result.translatedPdfName,
-              translatedMonoPdfPath: result.translatedMonoPdfPath,
-              translatedMonoPdfName: result.translatedMonoPdfName,
-              translatedPdfMode: result.translatedPdfMode,
-              translationEngine: result.translationEngine,
-              translationSourceHash: result.translationSourceHash,
-              translatedAt: result.translatedAt,
-              translatedProvider: result.translatedProvider,
-              translatedModel: result.translatedModel
+              translatedPdfPath: undefined,
+              translatedPdfName: undefined,
+              translatedMonoPdfPath: chineseResult.translatedMonoPdfPath,
+              translatedMonoPdfName: chineseResult.translatedMonoPdfName,
+              translatedPdfMode: 'mono',
+              translationEngine: chineseResult.translationEngine,
+              translationSourceHash: chineseResult.translationSourceHash,
+              translatedAt: chineseResult.translatedAt,
+              translatedProvider: chineseResult.translatedProvider,
+              translatedModel: chineseResult.translatedModel
             })
           : paper
       )
@@ -2765,7 +2765,7 @@ export default function App() {
                   <button
                     type="button"
                     className={pdfViewMode === 'translated' ? 'active' : ''}
-                    disabled={!translatedMonoPdf && !translatedPdf}
+                    disabled={!translatedMonoPdf}
                     onClick={() => setPdfViewMode('translated')}
                   >
                     中文 PDF
@@ -2808,7 +2808,7 @@ export default function App() {
                       <img className="button-icon" src={uploadIcon} alt="" />
                       <span>导入中文 PDF</span>
                     </button>
-                    <button type="button" className="secondary-button button-with-icon" disabled={(!translatedMonoPdf && !translatedPdf) || isPdfTranslationBusy} onClick={handleExportTranslatedPdf}>
+                    <button type="button" className="secondary-button button-with-icon" disabled={!translatedMonoPdf || isPdfTranslationBusy} onClick={handleExportTranslatedPdf}>
                       <img className="button-icon" src={downloadIcon} alt="" />
                       <span>导出中文 PDF</span>
                     </button>

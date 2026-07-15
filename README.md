@@ -1,5 +1,13 @@
 # PDF Translation Reader / FTranslate
 
+## 2026-07-15 纯中文 PDF 语义闭环（0.1.32）
+
+- “中文 PDF”现在是严格的数据约束，不只是按钮文案：单篇生成、重新生成和论文库批量任务统一请求 `mono`；中文阅读、左右双语、导出和论文库资产统计只接受真实中文单语文件。
+- 删除所有静默回退：缺少中文单语文件时，不再用交替页 dual PDF 或原文顶替。对应视图与导出按钮保持不可用，并给出明确错误。
+- 旧版 dual 缓存如果同时存在真实 `-mono.pdf` sidecar，会零 token 迁移并复用该中文文件；只有 dual 而没有 mono 的旧缓存不会被标记为中文 PDF，也不会触发错误显示。
+- “左右双语”只表示两个独立阅读器并排显示“原文 PDF + 中文 PDF”；桌面首页、设置、论文库与移动阅读文案不再提供名为“独立双语 PDF”的第三类资产。
+- 完整构建通过 102 个测试文件、663 项测试；源码/安装包内 PDF 首屏分别为 2.64 秒/2.60 秒，左右双语会等待两侧真实渲染完成。Windows 安装包为 `dist/PDF Translation Reader Setup 0.1.32.exe`（157,107,482 bytes，SHA-256 `09447E4E77549852D31D6818821B6F548186DC0B341110D80F02D3DDB6FB2D5E`）。
+
 ## 2026-07-15 中文 PDF 校正、批量并发与进度反馈（0.1.31）
 
 - PDF 阅读的第三种模式统一为“中文 PDF”：主按钮生成中文单语 PDF，完成后默认直接显示中文；双语阅读只保留“左右双语”，由原文与中文 PDF 同步翻页、缩放和滚动。导入、导出及论文库资产文案同步收敛，不再把单语文件误称为双语 PDF。
@@ -50,7 +58,7 @@
 ## 2026-07-14 导航与 PDF 命令层级收敛（0.1.26）
 
 - 桌面侧栏不再把 12 个模块分成 6 组全部常驻。项目空间、arXiv、论文库、PDF 阅读、实验矩阵、研究表格和科研绘图构成默认研究主路径；证据图谱、组会 PPT、论文导师和 AI 助手收进“更多工具”，设置仍保持独立可见。进入任一折叠模块后会自动展开对应区域，不删除功能或路由。
-- PDF 阅读右栏默认只显示三种视图、生成双语 PDF 和提取图表。重新生成、导入/导出双语 PDF、生成组会 PPT、检查引擎、安装提示与参考文献策略移入“更多 PDF 操作”，把常驻可见按钮从 10 个降到 5 个。
+- PDF 阅读右栏默认只显示三种视图、生成中文 PDF 和提取图表。重新生成、导入/导出中文 PDF、生成组会 PPT、检查引擎、安装提示与参考文献策略移入“更多 PDF 操作”，把常驻可见按钮从 10 个降到 5 个。
 - 视觉回归增加功能层级断言：默认侧栏必须是 8 个可见入口与 4 个折叠入口；PDF 高级操作必须真实隐藏而不是只改变 `open` 属性。异常退出时测试会主动关闭调试连接并终止 Electron 进程树，避免残留进程锁住下一次检查。
 - 真实 25 页论文 `2604.15483v2.pdf` 的首屏为 1,621 ms；PDF 右栏在 280px、505px 和完全收起三种宽度下均无按钮/面板横向溢出，图表提取后仍检测到真实 PDF canvas 像素。截图见 `.tmp-visual-check/home.png`、`paper-library-1366.png`、`whole-pdf-reader.png` 和 `whole-pdf-narrow-sidebar.png`。
 - 源码与安装包内完整视觉场景均通过。Windows 安装包为 `dist/PDF Translation Reader Setup 0.1.26.exe`，157,075,583 bytes，SHA-256 `7019A5EE4D4F08A18A9F4E674AFA5BF7F1BB99451C93C5A3DACC45E3BED468C4`。
@@ -125,7 +133,7 @@ Windows 安装包为 `dist/PDF Translation Reader Setup 0.1.23.exe`。安装版�
 - 科研绘图新增可选字体、标题对齐/颜色/字重、折线样式、标记、透明度、画布边距、图例位置/排列/自定义坐标/字号/间距/符号尺寸/边框与背景，以及坐标轴线、刻度、标题和标签颜色。所有公共参数统一写入 PlotSpec，并映射到 ECharts、Python、R 与 MATLAB。
 - Python、R、MATLAB 真实渲染统一读取 UTF-8 BOM 数据并优先选择可显示中文的已安装字体；R 修复坐标范围字段的部分匹配问题，MATLAB 修复百分比刻度和轴标题被裁切的问题。
 - arXiv 搜索后的前 6 篇后台预翻译改为可抢占的单篇任务。卡片在后台翻译时仍可点击“优先翻译”，前台请求会获得更高优先级；空 IPC 结果会显示明确错误，不再静默无响应。
-- PDF 阅读器现在可以直接在 PDF.js 文字层选中单词、短语或段落。选区旁会出现“选中翻译”卡片，自动判断英→中/中→英，使用现有本地 NLLB/Argos，支持重新翻译、复制译文和关闭；无需先生成整篇双语 PDF。
+- PDF 阅读器现在可以直接在 PDF.js 文字层选中单词、短语或段落。选区旁会出现“选中翻译”卡片，自动判断英→中/中→英，使用现有本地 NLLB/Argos，支持重新翻译、复制译文和关闭；无需先生成整篇中文 PDF。
 - PDF 阅读器首次打开论文时自动按可用宽度显示并水平居中，页面左右边界完整可见；用户之后仍可继续缩放、滚动和恢复阅读位置。
 - AI 全文翻译保留每一段完整原文和术语上下文，不采用“机翻后选择性润色”。为降低重复消耗，系统会按翻译引擎、模型和原文哈希复用完全一致的已成功译文，并压缩固定指令中的重复表述；强制重译会绕过缓存。
 
@@ -148,7 +156,7 @@ AI 译文缓存保存在应用用户数据目录的 `ai-translation-cache.json`�
 4. 使用 PDF.js 阅读原始 PDF；
 5. 在“段落双语”模式中把中文译文直接放在对应英文段落下方；
 6. 只有长按或选择词语、短语时才显示翻译浮层；
-7. 可以导入已有中文/双语 PDF 并绑定到原论文。
+7. 可以导入已有纯中文 PDF 并绑定到原论文。
 
 当前明确不包含账号、云同步、桌面/手机数据互通、Android 工程、App Store 上架和 Windows `pdf2zh` Python sidecar。手机段落翻译使用用户配置的 OpenAI 兼容接口；`Base URL` 与模型名保存在本机，API Key 只保存在当前运行内存，退出 App 后需要重新填写。
 
@@ -227,7 +235,7 @@ FTranslate 是一个 Windows 桌面端科研论文工作台，面向论文阅读
 
 1. 导入英文论文 PDF；
 2. 使用本地 PDF.js 阅读；
-3. 可用 PDFMathTranslate / pdf2zh 生成双语 PDF；
+3. 可用 PDFMathTranslate / pdf2zh 生成纯中文 PDF，并按需与原文组成左右双语阅读；
 4. 在论文库、研究表格、AI 助手、知识图谱和阅读笔记中整理研究信息；
 5. 可基于当前 PDF 提取文本与图表候选，生成组会 PPT 草稿，并导出 Markdown / JSON / 可编辑 PPTX。
 
@@ -235,7 +243,7 @@ FTranslate 是一个 Windows 桌面端科研论文工作台，面向论文阅读
 
 - Electron + React + TypeScript + Vite
 - PDF.js 本地渲染 PDF
-- PDFMathTranslate / pdf2zh 作为双语 PDF sidecar
+- PDFMathTranslate / pdf2zh 作为中文 PDF sidecar
 - Univer 作为独立研究表格
 - KaTeX + Markdown 渲染公式与研究笔记
 - PptxGenJS 生成可编辑 PowerPoint `.pptx`
@@ -252,7 +260,7 @@ FTranslate 的长期方向是本地化 AI 科创研发工作台，而不是单�
 当前第一阶段已把首页和左侧导航从“PDF 翻译器入口集合”迁移为“本地 AI 科创研发项目空间”：
 
 - 左侧导航优先展示“项目空间 / 实验矩阵 / 证据图谱 / 组会 PPT”，旧的论文库、研究表格、PDF 阅读、论文导师、AI 助手和设置仍保留为兼容入口。
-- 首页展示当前本地项目、论文对象、证据数量、双语 PDF、研发闭环阶段、下一步动作和风险队列。
+- 首页展示当前本地项目、论文对象、证据数量、中文 PDF、研发闭环阶段、下一步动作和风险队列。
 - 首页视觉已回到克制的卡片化研发工作台：中心保留 4 张真实流程对象卡，项目 KPI 合并为分段指标块，右侧焦点 / 下一步 / 风险合并为连续 Inspector；状态色采用低饱和灰绿、雾灰蓝和蓝灰，避免亮蓝/亮绿/亮黄塑料感，也避免棕色旧纸感。
 - 左侧 App Shell 选中态已收敛为石墨 / 蓝灰，不再使用高饱和紫蓝描边；视觉检查会拦截侧栏选中态颜色通道差过高的回潮。
 - 新增项目空间本地数据模型，存储键为 `pdfTranslationReader:researchProjects`；首次创建默认项目时会接入当前论文，后续论文与项目的归属由用户显式管理，不再自动吞并所有新论文。
@@ -351,7 +359,7 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 
 首页采用浅色高密度研发工作台，当前布局是“项目概览 + 研发流程看板 + Inspector”，不是入口卡片集合。主要区域包括：
 
-- 左侧：当前本地项目、项目状态、论文 / 证据 / 双语 PDF 计数和最近论文；项目计数使用单个分段指标块，不再拆成四张装饰 KPI 卡；
+- 左侧：当前本地项目、项目状态、论文 / 证据 / 中文 PDF 计数和最近论文；项目计数使用单个分段指标块，不再拆成四张装饰 KPI 卡；
 - 中间：Workflow Board 以 2x2 流程列展示 Paper-to-Method、Paper-to-Code、实验矩阵和 Runtime Center，每列只保留一张可执行对象卡，并用低饱和状态线、轻量流程轨迹和 badge 表达阶段；
 - 右侧：Current Focus、Next Actions 和 Decision Queue 统一放入一个连续 Inspector，三条下一步动作必须完整可见，避免三张右侧卡片继续堆叠或互相挤压；
 - 底部/导航：实验矩阵、证据图谱、组会 PPT、论文库、研究表格、PDF 阅读、论文导师、AI 助手和设置等兼容入口。
@@ -394,22 +402,22 @@ Paper-to-Method 是阶段 2 的核心研发对象，不是参赛材料生成器�
 
 研究表格继续作为自由整理和人工编辑区域；实验矩阵作为结构化的“实验设计层”，二者后续可以互相跳转，但不能互相替代。
 
-### PDF 阅读与双语 PDF
+### PDF 阅读、中文 PDF 与左右双语
 
 - 打开本地 PDF；
 - 连续滚动阅读；
 - 缩放、翻页、页码跳转；
-- 原文 PDF / 左右双语 / 双语 PDF 文件切换；
-- 导入已有中文或双语 PDF；
-- 导出已绑定双语 PDF；
+- 原文 PDF / 左右双语 / 中文 PDF 切换；
+- 导入已有纯中文 PDF；
+- 导出已绑定的纯中文 PDF；
 - 从当前 PDF 的 Figure / Table caption 推断图表区域，提取文献图片缩略图，并把图片/caption 提供给 AI 辅助理解；
 - 基于当前 PDF 生成组会 PPT 草稿。
 
 PDFMathTranslate sidecar 会优先查找系统中的 `pdf2zh` / `pdf2zh_next`。如果找不到，会尝试在 Electron 用户数据目录中创建私有 Python 翻译环境。
 
-生成双语 PDF 时，应用会为 pdf2zh 写入一个本地学术翻译 prompt，用来约束模型保留公式占位符、引用编号、Fig./Table 编号、DOI、URL 和 References / Bibliography 条目结构。Windows 子进程会强制使用 UTF-8 环境，减少进度条和接口错误在界面中显示乱码。
+生成中文 PDF 时，应用会为 pdf2zh 写入一个本地学术翻译 prompt，用来约束模型保留公式占位符、引用编号、Fig./Table 编号、DOI、URL 和 References / Bibliography 条目结构。Windows 子进程会强制使用 UTF-8 环境，减少进度条和接口错误在界面中显示乱码。
 
-默认双语 PDF 缓存位置：
+默认中文 PDF 缓存位置：
 
 ```text
 %APPDATA%\pdf-translation-reader\translations\<paperId>\
@@ -500,7 +508,7 @@ FTranslate 现在支持本地 `NLLB-200 distilled 600M + CTranslate2 int8` 翻�
 - JSON / 段落翻译队列的本地批量翻译；
 - Argos 翻译质量不足时的高质量离线替代。
 
-它不会替换 PDFMathTranslate / pdf2zh 的整篇双语 PDF 引擎。整篇 PDF 排版翻译仍由 PDFMathTranslate 处理；NLLB 主要负责标题、摘要和段落级文本。
+它不会替换 PDFMathTranslate / pdf2zh 的整篇中文 PDF 引擎。整篇 PDF 排版翻译仍由 PDFMathTranslate 处理；NLLB 主要负责标题、摘要和段落级文本。
 
 默认安装位置在空间较大的 `E:\FTranslateTools\`：
 
@@ -608,7 +616,7 @@ AI 助手集中管理：
 - 中间高密度列表稳定显示标题、作者、来源、年份、标签与阅读进度；置顶论文始终优先，同值排序保持原顺序，缺失值始终放在末尾。
 - 右侧 Inspector 提供阅读进度、继续阅读、标签、项目归属、本地资产、笔记、关联关系和元数据编辑；PDF 路径失效时禁用阅读按钮并给出重新定位 / 导入入口。
 - 标签管理使用应用内对话框，重命名会显示受影响论文数；删除标签需要二次确认。批量栏支持添加 / 移除标签、加入 / 移出项目、置顶、标记完成和移除记录。
-- 从论文库移除记录只删除本地索引，不会删除 PDF、翻译文件、AI 缓存或双语 PDF。
+- 从论文库移除记录只删除本地索引，不会删除 PDF、翻译文件、AI 缓存或中文 PDF。
 - `PaperRecord` 会兼容迁移旧记录并保留标签、置顶、导入 / 更新时间、总页数和完成状态；损坏的本地存储在用户明确修改前不会被空数据静默覆盖。
 
 视图偏好保存在 `pdfTranslationReader:paperLibraryView`，包括排序字段、排序方向、紧凑 / 舒适密度和 Inspector 折叠状态；搜索词、临时筛选和勾选状态不会持久化。复杂的创新点、局限点、方法和实验计划仍放到研究表格、方法卡和实验矩阵中继续整理。
@@ -679,7 +687,7 @@ PDF 阅读页包含轻量笔记编辑器：
 
 - 默认导出路径；
 - PDF 导出路径；
-- 双语 PDF 导出路径；
+- 中文 PDF 导出路径；
 - 翻译 JSON 导出路径；
 - 知识图谱图片导出路径；
 - 知识图谱 JSON 导出路径；
@@ -714,7 +722,7 @@ OpenAI provider 会显示 OpenAI 推理强度选项；其他 provider 不显示�
 - 翻译参考文献标题；
 - 跳过参考文献翻译。
 
-如果 PDFMathTranslate 输出质量不稳定，建议保持参考文献原文，或导入外部已校对的中文 / 双语 PDF。
+如果 PDFMathTranslate 输出质量不稳定，建议保持参考文献原文，或导入外部已校对的纯中文 PDF。
 
 ## 视觉检查
 
@@ -769,7 +777,7 @@ npm run visual:check
 
 当前代码已经开始从早期的单文件集中状态拆分为可组合的领域模块：
 
-- `src/renderer/hooks/`：承载 PDF 会话、论文库、研究表格、AI 设置、AI 翻译、双语 PDF 生成、状态队列、阅读器侧栏和视图切换等状态逻辑；
+- `src/renderer/hooks/`：承载 PDF 会话、论文库、研究表格、AI 设置、AI 翻译、中文 PDF 生成、状态队列、阅读器侧栏和视图切换等状态逻辑；
 - `src/renderer/contexts/`：提供 PDF 会话、论文库、AI 翻译和 UI 状态的 Context 边界，减少跨页面 prop drilling；
 - `src/main/ipc/handlers/`：按 AI、arXiv、PDF、文件导出和项目加载拆分 IPC handler 注册入口；
 - `src/main/runtimeCenter.ts`：生成本地 AI runtime 快照、能力状态、任务队列和可复制 next actions，不暴露 API key、完整 prompt 或缓存内容；
@@ -822,7 +830,7 @@ src/
       useCodeRepositories.ts 代码仓库扫描结果的项目级本地持久化
       useResearchWorkbook.ts 研究表格、绑定和导入导出状态
       useAiTranslation.ts   段落翻译、AI cache 和批量翻译状态
-      usePdfTranslation.ts  双语 PDF 生成进度和 sidecar 状态
+      usePdfTranslation.ts  中文 PDF 生成进度和 sidecar 状态
       useReaderSidePanel.ts PDF 阅读侧栏宽度、折叠和持久化
       useStatusQueue.ts     多条状态消息队列
       useViewTransition.ts  轻量视图切换过渡

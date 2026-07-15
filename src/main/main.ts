@@ -37,8 +37,10 @@ import {
   buildPdfTranslationSourceHash,
   findReusablePdfTranslationRecord,
   formatPdfTranslationProgressMessage,
+  normalizeChinesePdfTranslationRecord,
   normalizePdfTranslationRecordFields,
   patchPdf2zhOpenAiTemperatureSource,
+  resolvePdfTranslationOutputMode,
   sanitizePdfTranslationLog,
   type PdfTranslationInvocation,
   type PdfTranslationOutputMode
@@ -723,7 +725,7 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
     throw new Error('请先在 AI 设置中保存 API Key，再生成中文 PDF。');
   }
 
-  const outputMode = request.outputMode ?? 'dual';
+  const outputMode = resolvePdfTranslationOutputMode(request.outputMode);
   const stats = await fs.stat(request.pdfPath);
   const sourceHash = buildPdfTranslationSourceHash({
     pdfPath: request.pdfPath,
@@ -738,22 +740,24 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
   const expectedOutputPath = outputMode === 'dual' ? outputPaths.dualPdfPath : outputPaths.monoPdfPath;
   const cachedMetadata = await readPdfTranslationMetadata(request.paperId);
 
-  if (
-    !request.force &&
-    cachedMetadata?.translationSourceHash === sourceHash &&
-    cachedMetadata.translatedPdfMode === outputMode &&
-    cachedMetadata.translatedPdfPath &&
-    (await pathExists(cachedMetadata.translatedPdfPath))
-  ) {
+  const cachedCandidate = cachedMetadata?.translationSourceHash === sourceHash
+    ? outputMode === 'mono'
+      ? normalizeChinesePdfTranslationRecord(cachedMetadata)
+      : cachedMetadata.translatedPdfMode === 'dual'
+        ? cachedMetadata
+        : null
+    : null;
+
+  if (!request.force && cachedCandidate?.translatedPdfPath && (await pathExists(cachedCandidate.translatedPdfPath))) {
     const cachedMonoPath = await resolveOptionalMonoPdfPath(
-      cachedMetadata.translatedMonoPdfPath,
+      cachedCandidate.translatedMonoPdfPath,
       outputPaths.monoPdfPath
     );
     const postprocessedMetadata = await ensurePdfTranslationPostprocessed({
       paperId: request.paperId,
       sourcePdfPath: request.pdfPath,
       metadata: {
-        ...cachedMetadata,
+        ...cachedCandidate,
         translatedMonoPdfPath: cachedMonoPath,
         translatedMonoPdfName: cachedMonoPath ? path.basename(cachedMonoPath) : undefined
       },
@@ -832,22 +836,30 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
   const translatedMonoPdfPath = await resolveTranslatedPdfPath(outputPaths.monoPdfPath, outputDir, 'mono');
   const translatedMonoPdfName = translatedMonoPdfPath ? path.basename(translatedMonoPdfPath) : undefined;
 
+  const generatedMetadata: PdfTranslationMetadata = {
+    translatedPdfPath,
+    translatedPdfName: path.basename(translatedPdfPath),
+    translatedMonoPdfPath: translatedMonoPdfPath ?? undefined,
+    translatedMonoPdfName,
+    translatedPdfMode: outputMode,
+    translationEngine: 'pdfmathtranslate',
+    translationSourceHash: sourceHash,
+    translatedAt: new Date().toISOString(),
+    translatedProvider: settings.provider,
+    translatedModel: settings.model
+  };
+  const modeMetadata = outputMode === 'mono'
+    ? normalizeChinesePdfTranslationRecord(generatedMetadata)
+    : generatedMetadata;
+  if (!modeMetadata) {
+    throw new Error('PDFMathTranslate 已结束，但没有找到纯中文 PDF，已拒绝使用双语或原文文件代替。');
+  }
+
   const metadata = await ensurePdfTranslationPostprocessed({
     paperId: request.paperId,
     sourcePdfPath: request.pdfPath,
     monoPdfPath: translatedMonoPdfPath,
-    metadata: {
-      translatedPdfPath,
-      translatedPdfName: path.basename(translatedPdfPath),
-      translatedMonoPdfPath: translatedMonoPdfPath ?? undefined,
-      translatedMonoPdfName,
-      translatedPdfMode: outputMode,
-      translationEngine: 'pdfmathtranslate',
-      translationSourceHash: sourceHash,
-      translatedAt: new Date().toISOString(),
-      translatedProvider: settings.provider,
-      translatedModel: settings.model
-    }
+    metadata: modeMetadata
   });
 
   await writePdfTranslationMetadata(request.paperId, metadata);
@@ -1347,9 +1359,12 @@ async function findReusablePdfTranslationMetadata(
       records.filter((record): record is PdfTranslationMetadata => Boolean(record)),
       { sourceHash, outputMode }
     );
+    const reusableForMode = reusable && outputMode === 'mono'
+      ? normalizeChinesePdfTranslationRecord(reusable)
+      : reusable;
 
-    if (reusable?.translatedPdfPath && (await pathExists(reusable.translatedPdfPath))) {
-      return reusable;
+    if (reusableForMode?.translatedPdfPath && (await pathExists(reusableForMode.translatedPdfPath))) {
+      return reusableForMode;
     }
   } catch {
     return null;

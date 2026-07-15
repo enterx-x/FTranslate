@@ -1,4 +1,5 @@
 import type { PaperRecord } from './papers';
+import { resolveChinesePdfPath } from '../../shared/pdfTranslation';
 
 export const RESEARCH_PROJECTS_KEY = 'pdfTranslationReader:researchProjects';
 
@@ -30,7 +31,7 @@ export interface ProjectWorkspaceSnapshot {
   projectCount: number;
   linkedPaperCount: number;
   evidenceCount: number;
-  dualPdfCount: number;
+  chinesePdfCount: number;
   projectStatusText: string;
   nextActions: string[];
 }
@@ -158,18 +159,18 @@ export function buildProjectWorkspaceSnapshot(
     (count, paper) =>
       count +
       (paper.notes.trim() ? 1 : 0) +
-      (paper.translatedPdfPath ? 1 : 0) +
+      (resolveChinesePdfPath(paper) ? 1 : 0) +
       (paper.aiCachePath ? 1 : 0),
     0
   );
-  const dualPdfCount = linkedPapers.filter((paper) => paper.translatedPdfPath).length;
+  const chinesePdfCount = linkedPapers.filter((paper) => resolveChinesePdfPath(paper)).length;
 
   return {
     activeProject,
     projectCount: ensuredProjects.length,
     linkedPaperCount: linkedPapers.length,
     evidenceCount,
-    dualPdfCount,
+    chinesePdfCount,
     projectStatusText: toProjectStatusText(activeProject.status),
     nextActions: buildNextActions({
       linkedPaperCount: linkedPapers.length,

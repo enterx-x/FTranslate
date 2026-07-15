@@ -150,13 +150,13 @@ export default function MobileApp() {
       const translatedPdf = await savePdfFile({ paperId: activePaper.id, file, kind: 'translated' });
       const nextLibrary = await commitLibrary((current) => updateMobilePaper(current, activePaper.id, { translatedPdf }));
       setTranslatedPdfData(await readPdfBytes(translatedPdf));
-      setNotice(`已绑定双语 PDF：${file.name}`);
+      setNotice(`已绑定中文 PDF：${file.name}`);
       const updated = nextLibrary.find((paper) => paper.id === activePaper.id);
       if (updated) {
         setActivePaperId(updated.id);
       }
     } catch (error) {
-      setNotice(`导入双语 PDF 失败：${formatError(error)}`);
+      setNotice(`导入中文 PDF 失败：${formatError(error)}`);
     } finally {
       setBusy(false);
     }

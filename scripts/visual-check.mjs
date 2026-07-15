@@ -98,9 +98,9 @@ async function resolveVisualCheckPdfPath() {
 }
 
 async function prepareVisualTranslatedPdf(sourcePdfPath) {
-  const translatedPdfPath = path.join(outputDir, 'visual-check-dual.pdf');
-  await copyFile(sourcePdfPath, translatedPdfPath);
-  return translatedPdfPath;
+  const translatedMonoPdfPath = path.join(outputDir, 'visual-check-mono.pdf');
+  await copyFile(sourcePdfPath, translatedMonoPdfPath);
+  return translatedMonoPdfPath;
 }
 
 async function fetchJson(url) {
@@ -308,7 +308,7 @@ async function waitForResearchSheetCanvas(client) {
   );
 }
 
-async function waitForPdfCanvas(client) {
+async function waitForPdfCanvas(client, minReadyRootCount = 1) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => {
       const roots = [...document.querySelectorAll('.pdf-js-viewer-container')].filter((root) => {
@@ -321,6 +321,17 @@ async function waitForPdfCanvas(client) {
       const textSpans = roots.flatMap((root) => [...root.querySelectorAll('.textLayer span')]);
       const svgLayers = roots.flatMap((root) => [...root.querySelectorAll('.page svg')]);
       const imageLayers = roots.flatMap((root) => [...root.querySelectorAll('.page img')]);
+      const readyRootCount = roots.filter((root) => {
+        const loadedPage = Boolean(root.querySelector('.page[data-loaded="true"]'));
+        const hasCanvas = [...root.querySelectorAll('canvas')].some((canvas) => canvas.width > 0 && canvas.height > 0);
+        const hasText = [...root.querySelectorAll('.textLayer span')]
+          .some((span) => (span.textContent ?? '').trim().length > 0);
+        const hasSvg = [...root.querySelectorAll('.page svg')]
+          .some((svg) => svg.getBoundingClientRect().width > 120 && svg.getBoundingClientRect().height > 120);
+        const hasImage = [...root.querySelectorAll('.page img')]
+          .some((image) => image.getBoundingClientRect().width > 120 && image.getBoundingClientRect().height > 120);
+        return loadedPage && (hasCanvas || hasText || hasSvg || hasImage);
+      }).length;
       const hasCanvas = canvases.some((canvas) => canvas.width > 0 && canvas.height > 0);
       const hasVisiblePage = pages.some((page) => {
         const rect = page.getBoundingClientRect();
@@ -339,7 +350,8 @@ async function waitForPdfCanvas(client) {
       return {
         observedAt: performance.now(),
         hasCanvas,
-        hasRenderablePdf: hasLoadedPage && (hasCanvas || hasVisibleTextLayer || hasVisibleSvgLayer || hasVisibleImageLayer),
+        hasRenderablePdf: readyRootCount >= ${JSON.stringify(minReadyRootCount)},
+        readyRootCount,
         canvasCount: canvases.length,
         pageCount: pages.length,
         hasVisiblePage,
@@ -2403,7 +2415,7 @@ async function runResearchSheetScenario(client) {
   return snapshot;
 }
 
-async function runWholePdfReaderScenario(client) {
+async function runWholePdfReaderScenario(client, { includeFigureExtraction = true } = {}) {
   await clickSidebarSection(client, 'library');
   await wait(350);
   const preparedLibrarySelection = await evaluateJson(client, `() => {
@@ -2499,7 +2511,7 @@ async function runWholePdfReaderScenario(client) {
       .find((button) => button.classList.contains('active'))?.textContent?.trim() ?? '',
     displayedStatus: document.querySelector('.whole-pdf-header > span')?.textContent?.trim() ?? ''
   })`);
-  if (dualSnapshot.activeToggle !== '中文 PDF' || !/visual-check-dual\.pdf/.test(dualSnapshot.displayedStatus)) {
+  if (dualSnapshot.activeToggle !== '中文 PDF' || !/visual-check-mono\.pdf/.test(dualSnapshot.displayedStatus)) {
     throw new Error(`wholePdf: Chinese PDF did not switch after background load, got ${JSON.stringify(dualSnapshot)}`);
   }
 
@@ -2522,7 +2534,7 @@ async function runWholePdfReaderScenario(client) {
   }
 
   await clickButtonByText(client, '左右双语');
-  await waitForPdfCanvas(client);
+  await waitForPdfCanvas(client, 2);
   const parallelSidebar = await readWholePdfSidebarLayout(client, 'parallel-expanded');
   if (
     parallelSidebar.activeToggle !== '左右双语' ||
@@ -2615,6 +2627,20 @@ async function runWholePdfReaderScenario(client) {
   await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
     writeFile(path.join(outputDir, 'whole-pdf-reader.png'), Buffer.from(shot.data, 'base64'))
   );
+
+  if (!includeFigureExtraction) {
+    return {
+      wholePdf,
+      firstRenderMs,
+      firstRenderBudgetMs: pdfFirstRenderBudgetMs,
+      initialPdfCenter,
+      legacyPanels,
+      parallelSidebar,
+      narrowSidebar,
+      wideSidebar,
+      collapsedSidebar
+    };
+  }
 
   await waitForExtractedPdfBlocks(client);
   await clickButtonByText(client, '提取 PDF 图表');
@@ -4936,7 +4962,7 @@ async function main() {
   await rm(visualUserDataDir, { recursive: true, force: true });
   await mkdir(visualUserDataDir, { recursive: true });
   const pdfPath = await resolveVisualCheckPdfPath();
-  const translatedPdfPath = await prepareVisualTranslatedPdf(pdfPath);
+  const translatedMonoPdfPath = await prepareVisualTranslatedPdf(pdfPath);
 
   const translationPath = path.join(outputDir, 'visual-check.json');
   await writeFile(
@@ -4979,9 +5005,9 @@ async function main() {
     await client.send('Runtime.enable');
     await client.send('Page.enable');
     await loadPaperRecord(client, translationPath, {
-      translatedPdfPath,
-      translatedPdfName: 'visual-check-dual.pdf',
-      translatedPdfMode: 'dual',
+      translatedMonoPdfPath,
+      translatedMonoPdfName: 'visual-check-mono.pdf',
+      translatedPdfMode: 'mono',
       translationEngine: 'pdfmathtranslate',
       translationSourceHash: 'visual-check-source',
       translatedAt: new Date().toISOString(),
@@ -5020,6 +5046,13 @@ async function main() {
 
     if (visualScenario === 'figure-assets') {
       const wholePdfReader = await runWholePdfReaderScenario(client);
+      client.close();
+      console.log(JSON.stringify({ pdfPath, wholePdfReader, outputDir }, null, 2));
+      return;
+    }
+
+    if (visualScenario === 'pdf-reader') {
+      const wholePdfReader = await runWholePdfReaderScenario(client, { includeFigureExtraction: false });
       client.close();
       console.log(JSON.stringify({ pdfPath, wholePdfReader, outputDir }, null, 2));
       return;

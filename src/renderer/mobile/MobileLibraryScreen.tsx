@@ -35,7 +35,7 @@ export function MobileLibraryScreen({
     );
   }, [papers, query]);
   const continuePaper = visiblePapers.find((paper) => paper.id === activePaperId) ?? visiblePapers[0];
-  const bilingualCount = papers.filter((paper) => paper.translatedPdf).length;
+  const chinesePdfCount = papers.filter((paper) => paper.translatedPdf).length;
 
   return (
     <section className="mobile-screen mobile-library-screen" aria-label="本地论文库">
@@ -65,7 +65,7 @@ export function MobileLibraryScreen({
       <div className="mobile-screen-scroll">
         <div className="mobile-library-summary">
           <strong>{papers.length}</strong>
-          <span>{bilingualCount} 篇绑定双语 PDF</span>
+          <span>{chinesePdfCount} 篇绑定中文 PDF</span>
         </div>
 
         {continuePaper ? (

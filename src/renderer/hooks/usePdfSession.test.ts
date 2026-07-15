@@ -21,15 +21,15 @@ describe('usePdfSession helpers', () => {
 
     expect(resolveDisplayedPdf('source', source, translated, mono)).toBe(source);
     expect(resolveDisplayedPdf('translated', source, translated, mono)).toBe(mono);
-    expect(resolveDisplayedPdf('translated', source, translated, null)).toBe(translated);
-    expect(resolveDisplayedPdf('translated', source, null, null)).toBe(source);
+    expect(resolveDisplayedPdf('translated', source, translated, null)).toBeNull();
+    expect(resolveDisplayedPdf('translated', source, null, null)).toBeNull();
   });
 
-  it('prefers mono translation for parallel mode fallback', () => {
+  it('requires a Chinese-only PDF for parallel mode', () => {
     const translated = makePdf('translated.pdf');
     const mono = makePdf('mono.pdf');
 
     expect(resolveParallelTranslationPdf(mono, translated)).toBe(mono);
-    expect(resolveParallelTranslationPdf(null, translated)).toBe(translated);
+    expect(resolveParallelTranslationPdf(null, translated)).toBeNull();
   });
 });

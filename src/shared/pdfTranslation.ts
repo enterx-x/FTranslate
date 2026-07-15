@@ -46,6 +46,40 @@ export interface PdfTranslationRecordFields {
   translatedModel?: string;
 }
 
+export function resolvePdfTranslationOutputMode(
+  outputMode?: PdfTranslationOutputMode
+): PdfTranslationOutputMode {
+  return outputMode ?? 'mono';
+}
+
+export function resolveChinesePdfPath(record: PdfTranslationRecordFields): string | undefined {
+  return record.translatedMonoPdfPath ||
+    (record.translatedPdfMode === 'mono' ? record.translatedPdfPath : undefined);
+}
+
+export function normalizeChinesePdfTranslationRecord<T extends PdfTranslationRecordFields>(
+  record: T
+): T | null {
+  const translatedPdfPath = resolveChinesePdfPath(record);
+  if (!translatedPdfPath) {
+    return null;
+  }
+
+  const translatedPdfName =
+    record.translatedMonoPdfName ||
+    (record.translatedPdfMode === 'mono' ? record.translatedPdfName : undefined) ||
+    getOptionalPdfBaseName(translatedPdfPath);
+
+  return {
+    ...record,
+    translatedPdfPath,
+    translatedPdfName,
+    translatedMonoPdfPath: translatedPdfPath,
+    translatedMonoPdfName: translatedPdfName,
+    translatedPdfMode: 'mono'
+  };
+}
+
 export function findReusablePdfTranslationRecord<T extends PdfTranslationRecordFields>(
   records: T[],
   input: {
@@ -53,11 +87,17 @@ export function findReusablePdfTranslationRecord<T extends PdfTranslationRecordF
     outputMode: PdfTranslationOutputMode;
   }
 ): T | null {
-  return records.find((record) =>
-    record.translationSourceHash === input.sourceHash &&
-    record.translatedPdfMode === input.outputMode &&
-    Boolean(record.translatedPdfPath)
-  ) ?? null;
+  return records.find((record) => {
+    if (record.translationSourceHash !== input.sourceHash) {
+      return false;
+    }
+
+    if (input.outputMode === 'mono') {
+      return Boolean(resolveChinesePdfPath(record));
+    }
+
+    return record.translatedPdfMode === 'dual' && Boolean(record.translatedPdfPath);
+  }) ?? null;
 }
 
 export function normalizePdfTranslationRecordFields<T extends PdfTranslationRecordFields>(record: T): T {

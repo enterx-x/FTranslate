@@ -214,7 +214,7 @@ export function describeAiRuntimeOptions(settings: AiProviderSettings): string {
 
   if (isKimiK2Model(normalizedSettings)) {
     return runtime.thinkingMode === 'enabled'
-      ? 'Kimi K2 系列开启思考时使用 temperature=1，适合复杂分析；生成双语 PDF 会同步传给 pdf2zh。'
+      ? 'Kimi K2 系列开启思考时使用 temperature=1，适合复杂分析；生成中文 PDF 时会同步传给 pdf2zh。'
       : 'Kimi K2 系列关闭思考时使用 temperature=0.6、top_p=0.95，避免 invalid temperature，并会向 API 传 thinking disabled。';
   }
 

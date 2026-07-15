@@ -35,18 +35,19 @@ describe('buildHomePageMetrics', () => {
       lastOpenedAt: '2026-01-01T00:00:00.000Z'
     });
     const latest = makePaper('latest', {
-      translatedPdfPath: 'C:/papers/latest-zh.pdf',
+      translatedMonoPdfPath: 'C:/papers/latest-mono.pdf',
       lastOpenedAt: '2026-02-01T00:00:00.000Z'
     });
     const ignoredNotes = makePaper('blank-notes', {
       notes: '   ',
-      translatedPdfPath: 'C:/papers/blank-zh.pdf'
+      translatedPdfPath: 'C:/papers/legacy-dual.pdf',
+      translatedPdfMode: 'dual'
     });
 
     expect(buildHomePageMetrics([oldest, latest, ignoredNotes])).toEqual({
       latestPaper: latest,
       notedPaperCount: 1,
-      dualPdfCount: 2
+      chinesePdfCount: 1
     });
   });
 
@@ -68,7 +69,7 @@ describe('buildResearchWorkspaceOverview', () => {
     const papers = [
       makePaper('method-paper', {
         notes: 'method card notes',
-        translatedPdfPath: 'C:/papers/method-paper-bilingual.pdf',
+        translatedMonoPdfPath: 'C:/papers/method-paper-mono.pdf',
         lastOpenedAt: '2026-02-01T00:00:00.000Z'
       }),
       makePaper('baseline-paper')
@@ -84,7 +85,7 @@ describe('buildResearchWorkspaceOverview', () => {
       expect.objectContaining({ key: 'papers', value: '2', status: 'Ready' }),
       expect.objectContaining({ key: 'evidenceGraph', value: '8', status: 'Ready' }),
       expect.objectContaining({ key: 'notes', value: '1', status: 'Ready' }),
-      expect.objectContaining({ key: 'bilingualAssets', value: '1', status: 'Cached' })
+      expect.objectContaining({ key: 'chinesePdfAssets', value: '1', status: 'Cached' })
     ]);
     expect(overview.pipeline.map((stage) => [stage.key, stage.status])).toEqual([
       ['method', 'Ready'],

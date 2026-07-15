@@ -7,6 +7,7 @@ import graphIcon from '../assets/icons/duotone/analysis.svg';
 import pdfReaderIcon from '../assets/icons/duotone/pdf-reader.svg';
 import type { PaperRecord } from '../lib/papers';
 import type { ProjectWorkspaceSnapshot, ResearchProject } from '../lib/researchProjects';
+import { resolveChinesePdfPath } from '../../shared/pdfTranslation';
 import { PaperLibraryPage } from './PaperLibraryPage';
 
 interface HomePageProps {
@@ -39,7 +40,7 @@ type ResearchObjectStatus = 'Ready' | 'Cached' | 'Setup needed' | 'Evidence miss
 type ResearchPipelineStatus = 'Ready' | 'Draftable' | 'Needs paper' | 'Needs evidence' | 'Planned';
 
 interface ResearchWorkspaceObjectCard {
-  key: 'papers' | 'evidenceGraph' | 'notes' | 'bilingualAssets';
+  key: 'papers' | 'evidenceGraph' | 'notes' | 'chinesePdfAssets';
   label: string;
   value: string;
   detail: string;
@@ -104,7 +105,7 @@ export interface ResearchWorkspaceOverview {
 export function buildHomePageMetrics(papers: PaperRecord[]): {
   latestPaper: PaperRecord | undefined;
   notedPaperCount: number;
-  dualPdfCount: number;
+  chinesePdfCount: number;
 } {
   return {
     latestPaper: [...papers].sort((left, right) => {
@@ -113,7 +114,7 @@ export function buildHomePageMetrics(papers: PaperRecord[]): {
       return rightTime - leftTime;
     })[0],
     notedPaperCount: papers.filter((paper) => paper.notes?.trim()).length,
-    dualPdfCount: papers.filter((paper) => paper.translatedPdfPath).length
+    chinesePdfCount: papers.filter((paper) => resolveChinesePdfPath(paper)).length
   };
 }
 
@@ -121,14 +122,14 @@ export function buildResearchWorkspaceOverview(
   papers: PaperRecord[],
   knowledgeGraphStats: KnowledgeGraphStats
 ): ResearchWorkspaceOverview {
-  const { latestPaper, notedPaperCount, dualPdfCount } = buildHomePageMetrics(papers);
+  const { latestPaper, notedPaperCount, chinesePdfCount } = buildHomePageMetrics(papers);
   const paperCount = papers.length;
   const graphNodeCount = Math.max(knowledgeGraphStats.nodeCount, 0);
   const graphEdgeCount = Math.max(knowledgeGraphStats.edgeCount, 0);
   const hasPapers = paperCount > 0;
   const hasEvidenceGraph = graphNodeCount > 0 || graphEdgeCount > 0;
   const hasNotes = notedPaperCount > 0;
-  const hasBilingualAssets = dualPdfCount > 0;
+  const hasChinesePdfAssets = chinesePdfCount > 0;
   const latestPaperTitle = latestPaper
     ? latestPaper.chineseTitle || latestPaper.englishTitle || latestPaper.pdfName
     : '';
@@ -157,11 +158,11 @@ export function buildResearchWorkspaceOverview(
         detail: hasNotes ? '可作为方法卡和实验设计线索' : '尚未沉淀阅读判断'
       },
       {
-        key: 'bilingualAssets',
-        label: '双语资产',
-        value: String(dualPdfCount),
-        status: hasBilingualAssets ? 'Cached' : 'Setup needed',
-        detail: hasBilingualAssets ? '已有整体双语 PDF 缓存' : '尚未绑定可复用双语 PDF'
+        key: 'chinesePdfAssets',
+        label: '中文 PDF',
+        value: String(chinesePdfCount),
+        status: hasChinesePdfAssets ? 'Cached' : 'Setup needed',
+        detail: hasChinesePdfAssets ? '已有纯中文 PDF 缓存' : '尚未生成可复用的纯中文 PDF'
       }
     ],
     pipeline: [
@@ -255,7 +256,7 @@ export function buildResearchWorkspaceOverview(
 }
 
 export const HomePage = memo(function HomePage(props: HomePageProps) {
-  const { latestPaper, notedPaperCount, dualPdfCount } = useMemo(
+  const { latestPaper, notedPaperCount, chinesePdfCount } = useMemo(
     () => buildHomePageMetrics(props.papers),
     [props.papers]
   );
@@ -266,7 +267,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
   const papersObject = workspaceOverview.objectCards.find((card) => card.key === 'papers')!;
   const evidenceObject = workspaceOverview.objectCards.find((card) => card.key === 'evidenceGraph')!;
   const notesObject = workspaceOverview.objectCards.find((card) => card.key === 'notes')!;
-  const bilingualObject = workspaceOverview.objectCards.find((card) => card.key === 'bilingualAssets')!;
+  const chinesePdfObject = workspaceOverview.objectCards.find((card) => card.key === 'chinesePdfAssets')!;
   const methodStage = workspaceOverview.pipeline.find((stage) => stage.key === 'method')!;
   const codeStage = workspaceOverview.pipeline.find((stage) => stage.key === 'code')!;
   const experimentStage = workspaceOverview.pipeline.find((stage) => stage.key === 'experiment')!;
@@ -340,8 +341,8 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
           key: 'runtime-assets',
           label: '本地运行资产',
           detail: runtimeStage.detail,
-          metricLabel: bilingualObject.label,
-          metricValue: String(dualPdfCount),
+          metricLabel: chinesePdfObject.label,
+          metricValue: String(chinesePdfCount),
           status: runtimeStage.status,
           actionKey: props.papers.length > 0 ? 'continue-reading' : 'import-paper',
           actionLabel: props.papers.length > 0 ? '检查资产' : '导入论文'
@@ -425,8 +426,8 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                   <dd>{props.projectWorkspaceSnapshot.evidenceCount}</dd>
                 </div>
                 <div>
-                  <dt>双语 PDF</dt>
-                  <dd>{props.projectWorkspaceSnapshot.dualPdfCount}</dd>
+                  <dt>中文 PDF</dt>
+                  <dd>{props.projectWorkspaceSnapshot.chinesePdfCount}</dd>
                 </div>
                 <div>
                   <dt>项目</dt>
@@ -480,7 +481,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                 <div className="research-workflow-board-meta" aria-label="本地研发对象概览">
                   <span>{papersObject.value} 论文</span>
                   <span>{evidenceObject.value} 证据节点</span>
-                  <span>{bilingualObject.value} 双语资产</span>
+                  <span>{chinesePdfObject.value} 份中文 PDF</span>
                   <em>Local only</em>
                 </div>
               </div>

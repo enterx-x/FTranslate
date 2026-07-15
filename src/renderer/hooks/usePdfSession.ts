@@ -12,17 +12,17 @@ export type PdfViewMode = 'source' | 'parallel' | 'translated';
 export function resolveDisplayedPdf(
   pdfViewMode: PdfViewMode,
   pdf: PdfState | null,
-  translatedPdf: PdfState | null,
+  _translatedPdf: PdfState | null,
   translatedMonoPdf: PdfState | null
 ): PdfState | null {
-  return pdfViewMode === 'translated' ? translatedMonoPdf ?? translatedPdf ?? pdf : pdf;
+  return pdfViewMode === 'translated' ? translatedMonoPdf : pdf;
 }
 
 export function resolveParallelTranslationPdf(
   translatedMonoPdf: PdfState | null,
-  translatedPdf: PdfState | null
+  _translatedPdf: PdfState | null
 ): PdfState | null {
-  return translatedMonoPdf ?? translatedPdf;
+  return translatedMonoPdf;
 }
 
 export function usePdfSession() {

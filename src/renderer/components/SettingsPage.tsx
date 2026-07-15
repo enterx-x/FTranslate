@@ -44,14 +44,14 @@ const categories: Array<{ id: SettingsCategory; title: string; caption: string }
   { id: 'notes', title: '笔记设置', caption: 'Markdown、公式和自动关联' },
   { id: 'graph', title: '知识图谱设置', caption: '默认来源、节点和标签策略' },
   { id: 'presentation', title: '组会 PPT 设置', caption: '学术组会风格、页数、语言、图表和导出偏好' },
-  { id: 'export', title: '导出与路径', caption: 'PDF、双语 PDF、图谱、PPT 和笔记路径' },
+  { id: 'export', title: '导出与路径', caption: '原文 PDF、中文 PDF、图谱、PPT 和笔记路径' },
   { id: 'data', title: '数据与缓存', caption: '本地存储、缓存和危险操作' }
 ];
 
 const exportPathFields: Array<{ key: keyof ExportPathSettings; label: string; hint: string }> = [
   { key: 'defaultExportPath', label: '默认导出路径', hint: '未指定时继续使用系统保存对话框' },
   { key: 'pdfExportPath', label: 'PDF 导出路径', hint: '原文 PDF 或副本导出目录' },
-  { key: 'bilingualPdfExportPath', label: '双语 PDF 导出路径', hint: 'PDFMathTranslate 输出或手动导出的目录' },
+  { key: 'bilingualPdfExportPath', label: '中文 PDF 导出路径', hint: '纯中文 PDF 输出或手动导出的目录' },
   { key: 'translationJsonExportPath', label: '翻译 JSON 导出路径', hint: 'AI 缓存和段落译文 JSON' },
   { key: 'knowledgeGraphImageExportPath', label: '知识图谱图片导出路径', hint: 'SVG/PNG 图谱图片' },
   { key: 'knowledgeGraphJsonExportPath', label: '知识图谱 JSON 导出路径', hint: '图谱节点和边数据' },
@@ -276,7 +276,7 @@ export function SettingsPage(props: SettingsPageProps) {
                   >
                     <option value="source">原文 PDF</option>
                     <option value="parallel">左右双语</option>
-                    <option value="translated">双语 PDF</option>
+                    <option value="translated">中文 PDF</option>
                   </select>
                 </label>
                 <label>

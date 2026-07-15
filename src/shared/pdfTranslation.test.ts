@@ -5,7 +5,9 @@ import {
   buildPdfTranslationSourceHash,
   findReusablePdfTranslationRecord,
   formatPdfTranslationProgressMessage,
+  normalizeChinesePdfTranslationRecord,
   parsePdfTranslationProgress,
+  resolvePdfTranslationOutputMode,
   normalizePdfTranslationRecordFields,
   patchPdf2zhOpenAiTemperatureSource,
   sanitizePdfTranslationLog
@@ -291,8 +293,8 @@ describe('PDFMathTranslate command helpers', () => {
       currentPage: 15,
       totalPages: 39
     });
-    expect(parsePdfTranslationProgress('正在准备生成双语 PDF...')).toEqual({
-      message: '正在准备生成双语 PDF...',
+    expect(parsePdfTranslationProgress('正在准备生成中文 PDF...')).toEqual({
+      message: '正在准备生成中文 PDF...',
       percent: null,
       currentPage: null,
       totalPages: null
@@ -353,5 +355,43 @@ describe('PDFMathTranslate command helpers', () => {
         }
       )
     ).toBeNull();
+  });
+
+  it('defaults every unspecified PDF translation request to a Chinese-only PDF', () => {
+    expect(resolvePdfTranslationOutputMode()).toBe('mono');
+    expect(resolvePdfTranslationOutputMode('mono')).toBe('mono');
+    expect(resolvePdfTranslationOutputMode('dual')).toBe('dual');
+  });
+
+  it('reuses only a real mono sidecar when converting a legacy dual cache to Chinese PDF', () => {
+    const legacyDual = {
+      translationSourceHash: 'same-source',
+      translatedPdfMode: 'dual' as const,
+      translatedPdfPath: 'C:/cache/paper-dual.pdf',
+      translatedPdfName: 'paper-dual.pdf',
+      translatedMonoPdfPath: 'C:/cache/paper-mono.pdf',
+      translatedMonoPdfName: 'paper-mono.pdf'
+    };
+    const dualWithoutMono = {
+      translationSourceHash: 'same-source',
+      translatedPdfMode: 'dual' as const,
+      translatedPdfPath: 'C:/cache/other-dual.pdf'
+    };
+
+    expect(
+      findReusablePdfTranslationRecord([dualWithoutMono, legacyDual], {
+        sourceHash: 'same-source',
+        outputMode: 'mono'
+      })
+    ).toBe(legacyDual);
+    expect(normalizeChinesePdfTranslationRecord(legacyDual)).toEqual({
+      ...legacyDual,
+      translatedPdfMode: 'mono',
+      translatedPdfPath: 'C:/cache/paper-mono.pdf',
+      translatedPdfName: 'paper-mono.pdf',
+      translatedMonoPdfPath: 'C:/cache/paper-mono.pdf',
+      translatedMonoPdfName: 'paper-mono.pdf'
+    });
+    expect(normalizeChinesePdfTranslationRecord(dualWithoutMono)).toBeNull();
   });
 });

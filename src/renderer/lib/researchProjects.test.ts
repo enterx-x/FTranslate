@@ -90,17 +90,18 @@ describe('research project workspace model', () => {
 
   it('builds a workspace snapshot that connects project, papers, evidence and next actions', () => {
     const papers = [
-      makePaper('with-notes', { notes: '复现计划', translatedPdfPath: 'C:/papers/with-notes-zh.pdf' }),
-      makePaper('plain')
+      makePaper('with-notes', { notes: '复现计划', translatedMonoPdfPath: 'C:/papers/with-notes-mono.pdf' }),
+      makePaper('plain', { translatedPdfPath: 'C:/papers/plain-dual.pdf', translatedPdfMode: 'dual' }),
+      makePaper('mono-only', { translatedMonoPdfPath: 'C:/papers/mono-only.pdf' })
     ];
     const project = buildDefaultResearchProject(papers, Date.UTC(2026, 0, 1));
 
     expect(buildProjectWorkspaceSnapshot([project], papers)).toEqual({
       activeProject: project,
       projectCount: 1,
-      linkedPaperCount: 2,
-      evidenceCount: 2,
-      dualPdfCount: 1,
+      linkedPaperCount: 3,
+      evidenceCount: 3,
+      chinesePdfCount: 2,
       projectStatusText: 'Active',
       nextActions: [
         '生成 Paper-to-Method 方法卡',

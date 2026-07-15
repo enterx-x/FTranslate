@@ -1,5 +1,36 @@
 # PLAN.md
 
+## 2026-07-15 纯中文 PDF 语义闭环（0.1.32）
+
+### 当前结论
+
+- 0.1.31 虽然把按钮改名为“中文 PDF”，但实现仍在单篇与批量入口请求 `dual`，并在阅读器、左右双语、导出和资产统计中用 `translatedPdf` 回退；因此缺少 mono 时会把交替页 PDF 甚至原文冒充中文 PDF。
+- 不可压缩约束是“中文 PDF = 只含中文的 mono 产物”；左右双语只能由原文与该 mono 产物并排组成。没有 mono 就必须不可用，不能靠界面文案掩盖数据类型混用。
+- 最小闭环为“所有用户入口只请求 mono → 结果按 mono 校验 → 阅读/并排/导出只消费 mono → 旧 dual 只复用真实 mono sidecar → 首页、设置和论文库只统计中文资产”。
+
+### 已完成操作
+
+1. PDF 翻译默认输出与单篇/批量显式请求统一为 `mono`；结果缺少纯中文产物时明确失败。
+2. 中文阅读、左右双语与导出移除 dual/原文回退；导入的中文文件进入独立 mono 状态，论文记录不再把 generic dual 字段当作中文资产。
+3. 新增旧缓存兼容：dual 记录存在 `translatedMonoPdfPath` 时可零 token 规范化为 mono；只有 dual 文件时拒绝复用。
+4. 首页项目指标、论文库资产、设置与移动端文案统一为“中文 PDF”；“左右双语”保留为阅读布局，不再作为独立文件类型。
+5. 打包前确认当前分支为 `codex/scientific-plot-axis-controls`，不是用户所说的 13 号分支，因此未跨分支合并，也未触碰两个受保护的 `.superpowers/brainstorm/` 未跟踪目录。
+
+### 验证与视觉对抗式审查
+
+- 回归测试先稳定复现 4 条错误回退，再由实现修复；当前定向 4 个测试文件、33 项测试与两套 TypeScript 检查通过。
+- `npm run dist` 内的完整构建通过 102 个测试文件、663 项测试、两套 TypeScript、Vite renderer 与 Electron main；仅保留既有的大 chunk 警告。
+- 论文库专项在 1366/1440/1920px 通过，批量栏明确显示“批量生成中文 PDF”与并发选择，项目创建、空状态、路径失效和详情收起均无重叠、遮挡或横向溢出；人工复核 `.tmp-visual-check/paper-library-batch.png` 与 `.tmp-visual-check/home.png` 结论一致。
+- 源码与安装包内的 PDF 阅读专项均通过：首屏分别为 2,636 ms 与 2,595 ms，低于 3,000 ms 门禁；初始页面适宽居中、左右边界完整，“中文 PDF”只显示 mono 资源，“左右双语”会等待原文与中文两个阅读器都产生真实渲染面，窄/宽/收起侧栏均无横向溢出。人工复核 `.tmp-visual-check/whole-pdf-parallel-reader.png` 无空白、错位或控件遮挡。
+- NSIS 首次封装因系统 C 盘只剩约 0.12 GB、无法创建 173 MB 临时映射而失败；未清理用户文件，改用工作区 D 盘临时目录复用已验证的 `win-unpacked` 后成功。最终安装包为 `dist/PDF Translation Reader Setup 0.1.32.exe`（157,107,482 bytes，SHA-256 `09447E4E77549852D31D6818821B6F548186DC0B341110D80F02D3DDB6FB2D5E`），0.1.31 安装器、旧 blockmap 与 NSIS 中间文件已清理。
+- 已从最新 `dist/win-unpacked` 启动独立可见热预览（PID 37648，调试端口 9452，独立 profile `.tmp-visual-check/hot-preview-0.1.32-20260715`）；进程路径指向本分支 0.1.32 产物，窗口处于响应状态，未停止用户原有安装版进程。
+
+### 问题台账与剩余风险
+
+- 旧记录若只有 `translatedPdfPath` 且没有 `translatedPdfMode: mono` 或 mono sidecar，无法安全判断它是纯中文还是交替页文件，因此按严格策略不显示为中文；用户可重新生成或手动导入已确认的纯中文 PDF。
+- `dual` 类型和旧文件路径暂时保留在底层协议用于读取历史缓存，但没有任何当前中文 PDF 入口会请求或回退到它；后续数据迁移稳定后再评估是否删除兼容字段。
+- 完整图表提取视觉场景本轮有一次在 21 个候选仍处于逐页渲染阶段时超出等待门禁（0 个候选已就绪）；PDF 阅读与本轮中文产物语义没有回归，但图表提取长文档的吞吐与“自动可用”比例仍需作为独立问题继续压测，不能把这次 PDF 专项通过当成图表质量已完全解决。
+
 ## 2026-07-15 中文 PDF 校正、批量并发与 AI 助手 UI（0.1.31）
 
 ### 当前结论
@@ -140,7 +171,7 @@
 
 - `AppSidebar` 新增 `core / more / utility` 分级。默认常驻项目空间、arXiv 检索、论文库、PDF 阅读、实验矩阵、研究表格、科研绘图和设置；证据图谱、组会 PPT、论文导师、AI 助手进入“更多工具”。
 - 侧栏组标题从 6 个收敛为“项目 / 论文工作流 / 实验与分析”3 个；折叠模块成为当前页面时自动展开，键盘焦点、标题、原路由处理和 active 状态均保留。
-- PDF 右栏只常驻显示模式、生成双语 PDF 和图表提取；重新生成、导入、导出、PPT、引擎检测、安装命令和参考文献策略进入原生 `details`。补充显式关闭态隐藏规则，避免作者样式覆盖 Chromium 的 `details` 默认折叠行为。
+- PDF 右栏只常驻显示模式、生成中文 PDF 和图表提取；重新生成、导入、导出、PPT、引擎检测、安装命令和参考文献策略进入原生 `details`。补充显式关闭态隐藏规则，避免作者样式覆盖 Chromium 的 `details` 默认折叠行为。
 - 视觉脚本会在点击隐藏侧栏模块前先展开“更多工具”，并断言默认可见/隐藏模块集合、PDF 高级操作关闭态和 5 个可见按钮。异常路径会关闭 CDP WebSocket 并在 Windows 终止整个 Electron 进程树，避免端口和用户目录残留。
 
 ### 验证与视觉对抗式审查
@@ -490,7 +521,7 @@
 - 论文 PDF 存入 Capacitor Filesystem；论文索引存入 Preferences；段落译文按论文写入独立缓存文件。
 - PDF 阅读复用 PDF.js；段落双语模式复用现有论文结构提取逻辑，把中文直接放在英文段落下面。
 - 用户选择单词或短语后才显示翻译浮层；长文本限制在视口内。
-- 支持导入已有中文/双语 PDF；不把 Windows `pdf2zh`/Python sidecar 迁入 iOS。
+- 支持导入已有纯中文 PDF；不把 Windows `pdf2zh`/Python sidecar 迁入 iOS。
 - arXiv 使用共享查询构造与 Atom 解析逻辑，通过 Capacitor HTTP 请求，带 24 小时本机缓存和最小请求间隔；PDF 使用 File Transfer 下载到 App 沙盒。
 - `ios/`：iOS 15+ 原生工程与 Swift Package 插件声明；Windows 生成的反斜杠路径通过 `scripts/normalize-capacitor-spm-paths.mjs` 自动修复。
 - `distribution/ios/`：Ad Hoc 导出配置、OTA manifest 模板和 iPhone HTTPS 安装页。
@@ -523,7 +554,7 @@
 - 当前机器是 Windows，不能运行 Xcode、iOS Simulator、Apple 代码签名或真机安装，因此不能声称 `.ipa` 已签名可下载。
 - Ad Hoc 分发必须有 Apple Developer Program、分发证书、App ID、包含目标 UDID 的 Provisioning Profile；设备数量受 Apple 年度上限约束。
 - 手机段落翻译需要网络和用户自己的 OpenAI 兼容接口；已缓存译文可离线阅读，但尚未集成设备端本地大模型。
-- 整本重排双语 PDF 仍由桌面 `pdf2zh` 流程承担；手机端只提供段落双语和导入已有双语 PDF。
+- 整本重排中文 PDF 仍由桌面 `pdf2zh` 流程承担；手机端只提供段落双语和导入已有纯中文 PDF。
 - 移动构建仍会产出少量桌面分支引用的 KaTeX/品牌资源；不影响功能，但后续可拆为完全独立 HTML 入口以减小 IPA。
 - 目前未做 iOS 原生 UI 测试、真实弱网 arXiv 请求、超大 PDF 内存压力和 100+ 论文库性能测试。
 - 免费个人签名每 7 天过期一次；只有在电脑和 iPhone 可连接时 Sideloadly 才能自动刷新。错过刷新后 App 暂时无法打开，但使用同一 Apple ID 与 Bundle ID 覆盖安装可继续使用；删除 App 会删除本地沙盒论文数据。
@@ -1171,7 +1202,7 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 侧栏按科研工作流重新分组，科研绘图保留在“实验与运行”；首页、PDF 阅读器和 AI 助手增加统一语义类与蓝紫焦点材质。
 - AI 仅在 `isBusy` 真实生成状态触发持续焦点动效，减少动画模式立即降级。
 - `npm run build` 通过：92 个测试文件、588 个测试全部通过，TypeScript、renderer 和 Electron build 通过。
-- 源码与安装版 `npm run visual:check` 均通过；人工查看首页、科研绘图、双语 PDF 和 AI 助手截图，未发现重叠、遮挡、关键操作裁切或横向溢出。
+- 源码与安装版 `npm run visual:check` 均通过；人工查看首页、科研绘图、PDF 阅读和 AI 助手截图，未发现重叠、遮挡、关键操作裁切或横向溢出。
 - 安装包：`dist/PDF Translation Reader Setup 0.1.16.exe`，156,635,821 bytes，SHA-256 `46831CE42ED5AED75F20DD49BCB08426F56DDFDCF7BCD82836490334316D9F3E`。
 - `npm install` 报告 8 个依赖审计漏洞（1 low、2 moderate、3 high、2 critical）；未执行可能改变依赖版本的 `npm audit fix`。
 

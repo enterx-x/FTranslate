@@ -187,7 +187,7 @@ export function MobileReaderScreen({
       <div className="mobile-reader-mode-bar" role="group" aria-label="阅读模式">
         <button type="button" className={mode === 'bilingual' ? 'active' : ''} onClick={() => setMode('bilingual')}>段落双语</button>
         <button type="button" className={mode === 'pdf' ? 'active' : ''} onClick={() => setMode('pdf')}>原始 PDF</button>
-        <button type="button" className={mode === 'translated' ? 'active' : ''} disabled={!translatedPdfData} onClick={() => setMode('translated')}>双语 PDF</button>
+        <button type="button" className={mode === 'translated' ? 'active' : ''} disabled={!translatedPdfData} onClick={() => setMode('translated')}>中文 PDF</button>
       </div>
 
       {mode === 'bilingual' ? (
@@ -241,7 +241,7 @@ export function MobileReaderScreen({
             <button type="button" onClick={() => setScale((value) => Math.max(0.65, value - 0.1))}>－</button>
             <span>{Math.round(scale * 100)}%</span>
             <button type="button" onClick={() => setScale((value) => Math.min(2.4, value + 0.1))}>＋</button>
-            {mode === 'translated' ? <em>已导入双语 PDF</em> : null}
+            {mode === 'translated' ? <em>已导入中文 PDF</em> : null}
           </div>
           <PdfViewer
             pdfData={displayedPdf}
@@ -256,7 +256,7 @@ export function MobileReaderScreen({
         </div>
       )}
 
-      <footer className="mobile-reader-status"><span>{status}</span><button type="button" onClick={() => translatedInputRef.current?.click()}>导入双语 PDF</button></footer>
+      <footer className="mobile-reader-status"><span>{status}</span><button type="button" onClick={() => translatedInputRef.current?.click()}>导入中文 PDF</button></footer>
       <input
         ref={translatedInputRef}
         className="mobile-hidden-input"

@@ -43,7 +43,11 @@ import {
   summarizePdfBatchTranslation,
   type PdfBatchTranslationTask
 } from '../lib/pdfBatchTranslation';
-import { formatPdfTranslationProgressMessage } from '../../shared/pdfTranslation';
+import {
+  formatPdfTranslationProgressMessage,
+  normalizeChinesePdfTranslationRecord,
+  resolveChinesePdfPath
+} from '../../shared/pdfTranslation';
 import type { PdfTranslationResult } from '../types/electron';
 import { PdfTranslationProgressBar } from './PdfTranslationProgressBar';
 import styles from './PaperLibraryPage.module.css';
@@ -444,22 +448,26 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
           const result: PdfTranslationResult = await window.electronAPI.translatePdf({
             paperId: paper.id,
             pdfPath: paper.pdfPath,
-            outputMode: 'dual',
+            outputMode: 'mono',
             force: false,
             metadataOnly: true
           });
+          const chineseResult = normalizeChinesePdfTranslationRecord(result);
+          if (!chineseResult) {
+            throw new Error('翻译任务没有生成纯中文 PDF，已拒绝把双语文件记为中文 PDF。');
+          }
 
           props.onUpdatePapers([updatePaperRecord(paper, {
-            translatedPdfPath: result.translatedPdfPath,
-            translatedPdfName: result.translatedPdfName,
-            translatedMonoPdfPath: result.translatedMonoPdfPath,
-            translatedMonoPdfName: result.translatedMonoPdfName,
-            translatedPdfMode: result.translatedPdfMode,
-            translationEngine: result.translationEngine,
-            translationSourceHash: result.translationSourceHash,
-            translatedAt: result.translatedAt,
-            translatedProvider: result.translatedProvider,
-            translatedModel: result.translatedModel
+            translatedPdfPath: undefined,
+            translatedPdfName: undefined,
+            translatedMonoPdfPath: chineseResult.translatedMonoPdfPath,
+            translatedMonoPdfName: chineseResult.translatedMonoPdfName,
+            translatedPdfMode: 'mono',
+            translationEngine: chineseResult.translationEngine,
+            translationSourceHash: chineseResult.translationSourceHash,
+            translatedAt: chineseResult.translatedAt,
+            translatedProvider: chineseResult.translatedProvider,
+            translatedModel: chineseResult.translatedModel
           })]);
           updateBatchPdfTask(paper.id, {
             status: result.status === 'cached' ? 'cached' : 'completed',
@@ -1080,7 +1088,7 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
                       <ul className={styles.assetList}>
                         <li><span>PDF</span><b>{pathAvailable === false ? '路径失效' : '已索引'}</b></li>
                         <li><span>段落翻译</span><b>{selectedPaper.translationPath ? '可用' : '未生成'}</b></li>
-                        <li><span>中文 PDF</span><b>{selectedPaper.translatedMonoPdfPath || selectedPaper.translatedPdfPath ? '可用' : '未生成'}</b></li>
+                        <li><span>中文 PDF</span><b>{resolveChinesePdfPath(selectedPaper) ? '可用' : '未生成'}</b></li>
                         <li><span>AI 缓存</span><b>{selectedPaper.aiCachePath ? '可用' : '未生成'}</b></li>
                       </ul>
                     </InspectorSection>
@@ -1399,14 +1407,14 @@ function projectNamesForPaper(projects: ResearchProject[], paperId: string): str
 }
 
 function countAssets(paper: PaperRecord): number {
-  return [paper.pdfPath, paper.translationPath, paper.translatedPdfPath, paper.aiCachePath, paper.notes]
+  return [paper.pdfPath, paper.translationPath, resolveChinesePdfPath(paper), paper.aiCachePath, paper.notes]
     .filter((value) => Boolean(value?.trim())).length;
 }
 
 function buildNextStep(paper: PaperRecord): string {
   if (!paper.tags.length) return '先添加标签，建立可检索的研究主题。';
   if (!paper.notes.trim()) return '继续阅读并沉淀方法、局限与复现判断。';
-  if (!paper.translationPath && !paper.translatedMonoPdfPath && !paper.translatedPdfPath) return '生成段落翻译或中文 PDF，补齐可复用阅读资产。';
+  if (!paper.translationPath && !resolveChinesePdfPath(paper)) return '生成段落翻译或中文 PDF，补齐可复用阅读资产。';
   return '将方法和证据写入研究表格或实验矩阵。';
 }
 
