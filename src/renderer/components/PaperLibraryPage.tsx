@@ -36,6 +36,16 @@ import {
   updateProjectPaperMembership,
   type ResearchProject
 } from '../lib/researchProjects';
+import {
+  applyPdfBatchTranslationProgress,
+  createPdfBatchTranslationTasks,
+  runWithConcurrency,
+  summarizePdfBatchTranslation,
+  type PdfBatchTranslationTask
+} from '../lib/pdfBatchTranslation';
+import { formatPdfTranslationProgressMessage } from '../../shared/pdfTranslation';
+import type { PdfTranslationResult } from '../types/electron';
+import { PdfTranslationProgressBar } from './PdfTranslationProgressBar';
 import styles from './PaperLibraryPage.module.css';
 
 export interface PaperLibraryPageProps {
@@ -107,7 +117,12 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [includeProjectPaperSelection, setIncludeProjectPaperSelection] = useState(true);
+  const [batchPdfConcurrency, setBatchPdfConcurrency] = useState(2);
+  const [batchPdfTasks, setBatchPdfTasks] = useState<PdfBatchTranslationTask[]>([]);
+  const [isBatchPdfRunning, setIsBatchPdfRunning] = useState(false);
+  const [batchPdfPanelExpanded, setBatchPdfPanelExpanded] = useState(true);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const batchPdfRunRef = useRef(false);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => setSearch(searchInput), 120);
@@ -166,6 +181,20 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
     () => getSelectionSummary(batchSelectedIds, view.items),
     [batchSelectedIds, view.items]
   );
+  const batchPdfSummary = useMemo(
+    () => summarizePdfBatchTranslation(batchPdfTasks),
+    [batchPdfTasks]
+  );
+
+  useEffect(() => {
+    return window.electronAPI.onPdfTranslationProgress((progress) => {
+      setBatchPdfTasks((current) => current.map((task) =>
+        task.paperId === progress.paperId
+          ? applyPdfBatchTranslationProgress(task, progress)
+          : task
+      ));
+    });
+  }, []);
 
   useEffect(() => {
     if (view.items.length === 0) {
@@ -371,6 +400,93 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
         mode
       )
     );
+  }
+
+  function updateBatchPdfTask(
+    paperId: string,
+    updates: Partial<Omit<PdfBatchTranslationTask, 'paperId' | 'title'>>
+  ): void {
+    setBatchPdfTasks((current) => current.map((task) =>
+      task.paperId === paperId ? { ...task, ...updates } : task
+    ));
+  }
+
+  async function startBatchPdfTranslation(paperIds: Iterable<string>): Promise<void> {
+    if (batchPdfRunRef.current) return;
+
+    const selectedIds = new Set(paperIds);
+    const selectedPapers = props.papers.filter((paper) => selectedIds.has(paper.id));
+    if (selectedPapers.length === 0) return;
+
+    batchPdfRunRef.current = true;
+    setBatchPdfTasks(createPdfBatchTranslationTasks(selectedPapers.map((paper) => ({
+      id: paper.id,
+      title: getPaperDisplayTitle(paper) || paper.pdfName || '未命名论文'
+    }))));
+    setBatchPdfPanelExpanded(true);
+    setIsBatchPdfRunning(true);
+
+    try {
+      await runWithConcurrency(selectedPapers, batchPdfConcurrency, async (paper) => {
+        updateBatchPdfTask(paper.id, {
+          status: 'running',
+          message: '正在检查本地 PDF...',
+          percent: 0,
+          currentPage: null,
+          totalPages: null
+        });
+
+        try {
+          if (!paper.pdfPath || !(await window.electronAPI.fileExists(paper.pdfPath))) {
+            throw new Error('本地 PDF 路径不存在或已移动。');
+          }
+
+          const result: PdfTranslationResult = await window.electronAPI.translatePdf({
+            paperId: paper.id,
+            pdfPath: paper.pdfPath,
+            outputMode: 'dual',
+            force: false,
+            metadataOnly: true
+          });
+
+          props.onUpdatePapers([updatePaperRecord(paper, {
+            translatedPdfPath: result.translatedPdfPath,
+            translatedPdfName: result.translatedPdfName,
+            translatedMonoPdfPath: result.translatedMonoPdfPath,
+            translatedMonoPdfName: result.translatedMonoPdfName,
+            translatedPdfMode: result.translatedPdfMode,
+            translationEngine: result.translationEngine,
+            translationSourceHash: result.translationSourceHash,
+            translatedAt: result.translatedAt,
+            translatedProvider: result.translatedProvider,
+            translatedModel: result.translatedModel
+          })]);
+          updateBatchPdfTask(paper.id, {
+            status: result.status === 'cached' ? 'cached' : 'completed',
+            message: result.message,
+            percent: 100
+          });
+        } catch (error) {
+          const detail = formatPdfTranslationProgressMessage(
+            error instanceof Error ? error.message : String(error)
+          ) || String(error);
+          updateBatchPdfTask(paper.id, {
+            status: 'failed',
+            message: detail
+          });
+        }
+      });
+    } finally {
+      batchPdfRunRef.current = false;
+      setIsBatchPdfRunning(false);
+    }
+  }
+
+  function retryFailedBatchPdfTranslations(): void {
+    const failedIds = batchPdfTasks
+      .filter((task) => task.status === 'failed')
+      .map((task) => task.paperId);
+    void startBatchPdfTranslation(failedIds);
   }
 
   function startMetadataEdit(): void {
@@ -600,6 +716,77 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
           updatePreferences({ inspectorCollapsed: !preferences.inspectorCollapsed })
         }
       />
+
+      {batchPdfTasks.length > 0 ? (
+        <section
+          className={styles.batchPdfPanel}
+          data-paper-library-batch-translation
+          aria-label="批量生成中文 PDF 进度"
+        >
+          <div className={styles.batchPdfHeader}>
+            <div>
+              <strong>批量生成中文 PDF</strong>
+              <span>
+                已完成 {batchPdfSummary.completed}/{batchPdfSummary.total}
+                {batchPdfSummary.running > 0 ? ` · 正在运行 ${batchPdfSummary.running}` : ''}
+                {batchPdfSummary.queued > 0 ? ` · 排队 ${batchPdfSummary.queued}` : ''}
+                {batchPdfSummary.failed > 0 ? ` · 失败 ${batchPdfSummary.failed}` : ''}
+              </span>
+            </div>
+            <div className={styles.batchPdfActions}>
+              {batchPdfSummary.failed > 0 && !isBatchPdfRunning ? (
+                <button type="button" onClick={retryFailedBatchPdfTranslations}>重试失败项</button>
+              ) : null}
+              <button
+                type="button"
+                aria-expanded={batchPdfPanelExpanded}
+                onClick={() => setBatchPdfPanelExpanded((current) => !current)}
+              >
+                {batchPdfPanelExpanded ? '收起详情' : '展开详情'}
+              </button>
+              {!isBatchPdfRunning ? (
+                <button type="button" aria-label="关闭批量进度" onClick={() => setBatchPdfTasks([])}>×</button>
+              ) : null}
+            </div>
+          </div>
+          <PdfTranslationProgressBar
+            label="总体进度"
+            message={
+              isBatchPdfRunning
+                ? '正在并发生成中文 PDF；完成后可直接阅读或使用左右双语模式。'
+                : batchPdfSummary.failed > 0
+                  ? '批量任务已结束，失败项可单独重试。'
+                  : '所选论文的中文 PDF 已准备完成。'
+            }
+            state={
+              isBatchPdfRunning
+                ? 'running'
+                : batchPdfSummary.failed > 0
+                  ? 'failed'
+                  : batchPdfSummary.completed === batchPdfSummary.total
+                    ? 'completed'
+                    : 'queued'
+            }
+            percent={batchPdfSummary.percent}
+            compact
+          />
+          {batchPdfPanelExpanded ? (
+            <div className={styles.batchPdfTaskList}>
+              {batchPdfTasks.map((task) => (
+                <article key={task.paperId} className={styles.batchPdfTask} data-status={task.status}>
+                  <PdfTranslationProgressBar
+                    label={task.title}
+                    message={task.message}
+                    state={task.status}
+                    percent={task.percent}
+                    compact
+                  />
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <section
         className={`${styles.workspace}${preferences.inspectorCollapsed ? ` ${styles.inspectorIsCollapsed}` : ''}`}
@@ -893,7 +1080,7 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
                       <ul className={styles.assetList}>
                         <li><span>PDF</span><b>{pathAvailable === false ? '路径失效' : '已索引'}</b></li>
                         <li><span>段落翻译</span><b>{selectedPaper.translationPath ? '可用' : '未生成'}</b></li>
-                        <li><span>双语 PDF</span><b>{selectedPaper.translatedPdfPath ? '可用' : '未生成'}</b></li>
+                        <li><span>中文 PDF</span><b>{selectedPaper.translatedMonoPdfPath || selectedPaper.translatedPdfPath ? '可用' : '未生成'}</b></li>
                         <li><span>AI 缓存</span><b>{selectedPaper.aiCachePath ? '可用' : '未生成'}</b></li>
                       </ul>
                     </InspectorSection>
@@ -944,6 +1131,28 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
             ) : null}
           </div>
           <div className={styles.bulkControls}>
+            <label className={styles.batchConcurrencyControl}>
+              <span>并发</span>
+              <select
+                value={batchPdfConcurrency}
+                disabled={isBatchPdfRunning}
+                aria-label="中文 PDF 并发数"
+                onChange={(event) => setBatchPdfConcurrency(Number(event.target.value))}
+              >
+                <option value={1}>1</option>
+                <option value={2}>2</option>
+                <option value={3}>3</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              className={styles.batchTranslateButton}
+              data-paper-library-batch-translate
+              disabled={isBatchPdfRunning}
+              onClick={() => void startBatchPdfTranslation(batchSelectedIds)}
+            >
+              {isBatchPdfRunning ? '生成中…' : '批量生成中文 PDF'}
+            </button>
             <div className={styles.bulkInputGroup}>
               <input
                 value={bulkTagInput}
@@ -1041,7 +1250,7 @@ export function PaperLibraryPage(props: PaperLibraryPageProps) {
           <section className={styles.confirmDialog} role="dialog" aria-modal="true" aria-labelledby="paper-remove-title">
             <span className={styles.warningIcon}>!</span>
             <h2 id="paper-remove-title">从论文库移除 {pendingRemovalIds.length} 篇论文？</h2>
-            <p>只会移除本地论文库记录，不会删除 PDF、翻译文件、AI 缓存或双语 PDF。</p>
+            <p>只会移除本地论文库记录，不会删除 PDF、翻译文件、AI 缓存或中文 PDF。</p>
             <div className={styles.dialogActions}>
               <button type="button" onClick={() => setPendingRemovalIds(null)}>取消</button>
               <button type="button" className={styles.dangerPrimary} onClick={() => {
@@ -1197,7 +1406,7 @@ function countAssets(paper: PaperRecord): number {
 function buildNextStep(paper: PaperRecord): string {
   if (!paper.tags.length) return '先添加标签，建立可检索的研究主题。';
   if (!paper.notes.trim()) return '继续阅读并沉淀方法、局限与复现判断。';
-  if (!paper.translationPath && !paper.translatedPdfPath) return '生成段落翻译或双语 PDF，补齐可复用阅读资产。';
+  if (!paper.translationPath && !paper.translatedMonoPdfPath && !paper.translatedPdfPath) return '生成段落翻译或中文 PDF，补齐可复用阅读资产。';
   return '将方法和证据写入研究表格或实验矩阵。';
 }
 

@@ -236,7 +236,7 @@ export interface PdfTranslationProgress {
 export interface PdfTranslationResult {
   status: 'cached' | 'completed';
   message: string;
-  pdf: PdfFilePayload;
+  pdf?: PdfFilePayload;
   monoPdf?: PdfFilePayload | null;
   translatedPdfPath: string;
   translatedPdfName: string;
@@ -258,6 +258,7 @@ export interface ElectronApi {
   selectDirectory: (request?: { title?: string; defaultPath?: string }) => Promise<DirectoryPayload | null>;
   loadProject: (request: {
     pdfPath?: string;
+    sourcePdfPath?: string;
     translationPath?: string;
     aiCachePath?: string;
     translatedPdfPath?: string;
@@ -269,6 +270,7 @@ export interface ElectronApi {
     pdfPath: string;
     outputMode?: 'dual' | 'mono';
     force?: boolean;
+    metadataOnly?: boolean;
   }) => Promise<PdfTranslationResult>;
   onPdfTranslationProgress: (
     callback: (progress: PdfTranslationProgress) => void

@@ -1409,9 +1409,23 @@ async function capturePaperLibraryResponsiveWidths(client) {
     const batchSnapshot = await evaluateJson(client, `() => ({
       selectedCount: document.querySelectorAll('[data-paper-library-row] input[type="checkbox"]:checked').length,
       hasBulkBar: /已选择 2 篇/.test(document.body.textContent ?? ''),
+      hasBatchTranslateButton: /批量生成中文 PDF/.test(document.querySelector('[data-paper-library-batch-translate]')?.textContent ?? ''),
+      hasConcurrencyControl: Boolean(document.querySelector('select[aria-label="中文 PDF 并发数"]')),
+      batchTranslateButtonClipped: (() => {
+        const button = document.querySelector('[data-paper-library-batch-translate]');
+        return Boolean(button && button.scrollWidth > button.clientWidth + 3);
+      })(),
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
     })`);
-    if (batchState !== 2 || batchSnapshot.selectedCount !== 2 || !batchSnapshot.hasBulkBar || batchSnapshot.hasHorizontalOverflow) {
+    if (
+      batchState !== 2 ||
+      batchSnapshot.selectedCount !== 2 ||
+      !batchSnapshot.hasBulkBar ||
+      !batchSnapshot.hasBatchTranslateButton ||
+      !batchSnapshot.hasConcurrencyControl ||
+      batchSnapshot.batchTranslateButtonClipped ||
+      batchSnapshot.hasHorizontalOverflow
+    ) {
       throw new Error(`paperLibrary: batch selection state failed: ${JSON.stringify({ batchState, batchSnapshot })}`);
     }
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
@@ -1512,35 +1526,64 @@ async function capturePaperLibraryResponsiveWidths(client) {
       .find((button) => (button.textContent ?? '').includes('视觉回归新项目'))?.click()`);
     await wait(220);
 
-    await evaluateJson(client, `() => {
+    const searchInjected = await evaluateJson(client, `() => {
       const input = document.querySelector('input[placeholder^="搜索标题"]');
       if (!input) return false;
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      if (!setter) return false;
+      input.focus();
       setter.call(input, 'definitely-no-paper-matches');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        data: 'definitely-no-paper-matches',
+        inputType: 'insertText'
+      }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }`);
-    await wait(350);
-    const noResults = await evaluateJson(client, `() => ({
-      rowCount: document.querySelectorAll('[data-paper-library-row]').length,
-      hasEmptyMessage: /没有匹配的论文/.test(document.body.textContent ?? ''),
-      hasClearAction: /清除全部筛选/.test(document.body.textContent ?? '')
-    })`);
+    if (!searchInjected) throw new Error('paperLibrary: search input not found');
+    let noResults = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      noResults = await evaluateJson(client, `() => ({
+        inputValue: document.querySelector('input[placeholder^="搜索标题"]')?.value ?? '',
+        rowCount: document.querySelectorAll('[data-paper-library-row]').length,
+        hasEmptyMessage: /没有匹配的论文/.test(document.body.textContent ?? ''),
+        hasClearAction: /清除全部筛选/.test(document.body.textContent ?? '')
+      })`);
+      if (noResults.rowCount === 0 && noResults.hasEmptyMessage && noResults.hasClearAction) break;
+      await wait(100);
+    }
     if (noResults.rowCount !== 0 || !noResults.hasEmptyMessage || !noResults.hasClearAction) {
       throw new Error(`paperLibrary: no-results state failed: ${JSON.stringify(noResults)}`);
     }
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'paper-library-no-results.png'), Buffer.from(shot.data, 'base64'))
     );
-    await evaluateJson(client, `() => document.querySelector('button[aria-label="清空搜索"]')?.click()`);
-    await wait(350);
+    const searchCleared = await evaluateJson(client, `() => {
+      const button = document.querySelector('button[aria-label="清空搜索"]');
+      button?.click();
+      return Boolean(button);
+    }`);
+    if (!searchCleared) throw new Error('paperLibrary: clear search action not found');
+    let restoredRowCount = 0;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      restoredRowCount = await evaluateJson(
+        client,
+        `() => document.querySelectorAll('[data-paper-library-row]').length`
+      );
+      if (restoredRowCount > 0) break;
+      await wait(100);
+    }
 
-    await evaluateJson(client, `() => {
+    const missingRowSelected = await evaluateJson(client, `() => {
       const row = [...document.querySelectorAll('[data-paper-library-row]')]
         .find((item) => /Missing Local PDF Recovery/.test(item.textContent ?? ''));
       row?.click();
       return Boolean(row);
     }`);
+    if (!missingRowSelected) {
+      throw new Error(`paperLibrary: missing-path fixture row not found after clearing search (${restoredRowCount} rows)`);
+    }
     await wait(350);
     const missingPath = await evaluateJson(client, `() => {
       const resume = document.querySelector('[data-paper-library-resume]');
@@ -2409,16 +2452,17 @@ async function runWholePdfReaderScenario(client) {
       .find((button) => button.classList.contains('active'))?.textContent?.trim() ?? '',
     displayedStatus: document.querySelector('.whole-pdf-header > span')?.textContent?.trim() ?? '',
     hasPdfCanvas: ${JSON.stringify(pdfCanvasStatus.hasRenderablePdf)},
-    hasDualToggle: [...document.querySelectorAll('.pdf-view-toggle button')]
-      .some((button) => /双语 PDF/.test(button.textContent ?? '')),
+    hasChineseToggle: [...document.querySelectorAll('.pdf-view-toggle button')]
+      .some((button) => /中文 PDF/.test(button.textContent ?? '')),
     pdfCanvasCount: ${JSON.stringify(pdfCanvasStatus.canvasCount)},
     secondaryActionsCollapsed: !document.querySelector('[data-testid="pdf-secondary-actions"]')?.open,
     visibleActionButtonCount: [...document.querySelectorAll('.whole-pdf-actions button')]
       .filter((button) => button.getClientRects().length > 0).length,
     hasGenerateButton: [...document.querySelectorAll('.whole-pdf-panel button')]
-      .some((button) => /生成双语 PDF/.test(button.textContent ?? '')),
+      .some((button) => /生成中文 PDF/.test(button.textContent ?? '')),
     hasImportButton: [...document.querySelectorAll('.whole-pdf-panel button')]
-      .some((button) => /导入中文\\/双语 PDF/.test(button.textContent ?? ''))
+      .some((button) => /导入中文 PDF/.test(button.textContent ?? '')),
+    hasProgressBar: Boolean(document.querySelector('[data-pdf-translation-progress]'))
   })`);
 
   if (
@@ -2426,9 +2470,10 @@ async function runWholePdfReaderScenario(client) {
     wholePdf.activeToggle !== '原文 PDF' ||
     !wholePdf.displayedStatus.includes(path.basename(pdfPath)) ||
     !wholePdf.hasPdfCanvas ||
-    !wholePdf.hasDualToggle ||
+    !wholePdf.hasChineseToggle ||
     !wholePdf.hasGenerateButton ||
     !wholePdf.hasImportButton ||
+    !wholePdf.hasProgressBar ||
     !wholePdf.secondaryActionsCollapsed ||
     wholePdf.visibleActionButtonCount !== 5
   ) {
@@ -2439,7 +2484,7 @@ async function runWholePdfReaderScenario(client) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     dualReady = await evaluateJson(client, `() => {
       const button = [...document.querySelectorAll('.pdf-view-toggle button')]
-        .find((item) => /双语 PDF/.test(item.textContent ?? ''));
+        .find((item) => /中文 PDF/.test(item.textContent ?? ''));
       if (!button || button.disabled) return false;
       button.click();
       return true;
@@ -2447,15 +2492,15 @@ async function runWholePdfReaderScenario(client) {
     if (dualReady) break;
     await wait(100);
   }
-  if (!dualReady) throw new Error('wholePdf: background bilingual PDF resource did not become available');
+  if (!dualReady) throw new Error('wholePdf: background Chinese PDF resource did not become available');
   await waitForPdfCanvas(client);
   const dualSnapshot = await evaluateJson(client, `() => ({
     activeToggle: [...document.querySelectorAll('.pdf-view-toggle button')]
       .find((button) => button.classList.contains('active'))?.textContent?.trim() ?? '',
     displayedStatus: document.querySelector('.whole-pdf-header > span')?.textContent?.trim() ?? ''
   })`);
-  if (dualSnapshot.activeToggle !== '双语 PDF' || !/visual-check-dual\.pdf/.test(dualSnapshot.displayedStatus)) {
-    throw new Error(`wholePdf: bilingual PDF did not switch after background load, got ${JSON.stringify(dualSnapshot)}`);
+  if (dualSnapshot.activeToggle !== '中文 PDF' || !/visual-check-dual\.pdf/.test(dualSnapshot.displayedStatus)) {
+    throw new Error(`wholePdf: Chinese PDF did not switch after background load, got ${JSON.stringify(dualSnapshot)}`);
   }
 
   const legacyPanels = await evaluateJson(client, `() => ({
@@ -3523,7 +3568,68 @@ async function runAiAssistantScenario(client) {
     writeFile(path.join(outputDir, 'ai-assistant.png'), Buffer.from(shot.data, 'base64'))
   );
 
-  return { before, after };
+  await evaluateJson(client, `() => document.querySelector('.ai-template-card')?.scrollIntoView({ block: 'center' })`);
+  await wait(250);
+  const templateAudit = await evaluateJson(client, `() => {
+    const buttons = [...document.querySelectorAll('.ai-template-list button')];
+    const active = document.querySelector('.ai-template-list button[aria-pressed="true"]');
+    const rowActive = document.querySelector('.ai-template-row button[aria-pressed="true"]');
+    const rects = buttons.map((button) => button.getBoundingClientRect());
+    const intersections = rects.flatMap((first, firstIndex) =>
+      rects.slice(firstIndex + 1).map((second, offset) => ({
+        firstIndex,
+        secondIndex: firstIndex + offset + 1,
+        overlaps: first.left < second.right - 1 && first.right > second.left + 1 && first.top < second.bottom - 1 && first.bottom > second.top + 1
+      }))
+    ).filter((item) => item.overlaps);
+    const rgb = (value) => value.match(/\\d+/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+    const luminance = (value) => {
+      const channels = rgb(value).map((channel) => {
+        const normalized = channel / 255;
+        return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    };
+    const activeStyle = active ? getComputedStyle(active) : null;
+    const foreground = luminance(activeStyle?.color ?? 'rgb(0,0,0)');
+    const background = luminance(activeStyle?.backgroundColor ?? 'rgb(255,255,255)');
+    const contrast = (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+    const rowActiveStyle = rowActive ? getComputedStyle(rowActive) : null;
+    const rowForeground = luminance(rowActiveStyle?.color ?? 'rgb(0,0,0)');
+    const rowBackground = luminance(rowActiveStyle?.backgroundColor ?? 'rgb(255,255,255)');
+    const rowContrast = (Math.max(rowForeground, rowBackground) + 0.05) / (Math.min(rowForeground, rowBackground) + 0.05);
+    return {
+      buttonCount: buttons.length,
+      activeText: active?.querySelector('strong')?.textContent?.trim() ?? '',
+      rowActiveText: rowActive?.textContent?.trim() ?? '',
+      minButtonHeight: rects.length ? Math.min(...rects.map((rect) => Math.round(rect.height))) : 0,
+      intersections,
+      activeColor: activeStyle?.color ?? '',
+      activeBackground: activeStyle?.backgroundColor ?? '',
+      activeContrast: Number(contrast.toFixed(2)),
+      rowActiveColor: rowActiveStyle?.color ?? '',
+      rowActiveBackground: rowActiveStyle?.backgroundColor ?? '',
+      rowActiveContrast: Number(rowContrast.toFixed(2)),
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+    };
+  }`);
+  if (
+    templateAudit.buttonCount < 5 ||
+    templateAudit.activeText !== '默认模板' ||
+    templateAudit.rowActiveText !== '默认模板' ||
+    templateAudit.minButtonHeight < 56 ||
+    templateAudit.intersections.length > 0 ||
+    templateAudit.activeContrast < 4.5 ||
+    templateAudit.rowActiveContrast < 4.5 ||
+    templateAudit.hasHorizontalOverflow
+  ) {
+    throw new Error(`aiAssistant: prompt template layout or contrast failed, got ${JSON.stringify(templateAudit)}`);
+  }
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'ai-assistant-templates.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  return { before, after, templateAudit };
 }
 
 async function runPaperTutorScenario(client) {
@@ -4596,7 +4702,16 @@ async function runSettingsScenario(client) {
 
 async function runScientificPlotScenario(client) {
   await clickSidebarSection(client, 'plot');
-  await waitForAppReady(client);
+  let plotReady = false;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    plotReady = await evaluateJson(
+      client,
+      `() => Boolean(document.querySelector('[data-scientific-plot-page]'))`
+    );
+    if (plotReady) break;
+    await wait(100);
+  }
+  if (!plotReady) throw new Error('scientificPlot: page did not finish loading');
   await clickButtonByText(client, '＋ 导入数据');
   const selectedPaste = await evaluateJson(client, `() => {
     const button = [...document.querySelectorAll('button')]
@@ -4914,6 +5029,13 @@ async function main() {
       const earlyFigureExtraction = await runEarlyFigureExtractionScenario(client);
       client.close();
       console.log(JSON.stringify({ pdfPath, earlyFigureExtraction, outputDir }, null, 2));
+      return;
+    }
+
+    if (visualScenario === 'ai-assistant') {
+      const aiAssistant = await runAiAssistantScenario(client);
+      client.close();
+      console.log(JSON.stringify({ pdfPath, aiAssistant, outputDir }, null, 2));
       return;
     }
 

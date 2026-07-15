@@ -5,6 +5,7 @@ import {
   buildPdfTranslationSourceHash,
   findReusablePdfTranslationRecord,
   formatPdfTranslationProgressMessage,
+  parsePdfTranslationProgress,
   normalizePdfTranslationRecordFields,
   patchPdf2zhOpenAiTemperatureSource,
   sanitizePdfTranslationLog
@@ -281,6 +282,21 @@ describe('PDFMathTranslate command helpers', () => {
     expect(formatPdfTranslationProgressMessage('0%|| 0/8 [00:00<?, ?it/s]')).toBe(
       'PDF 翻译进度：0%，0/8 页'
     );
+  });
+
+  it('parses normalized translation progress for determinate progress bars', () => {
+    expect(parsePdfTranslationProgress('\r 38%|███▊      |15/39 [01:02<00:30, 1.2s/it]')).toEqual({
+      message: 'PDF 翻译进度：38%，15/39 页',
+      percent: 38,
+      currentPage: 15,
+      totalPages: 39
+    });
+    expect(parsePdfTranslationProgress('正在准备生成双语 PDF...')).toEqual({
+      message: '正在准备生成双语 PDF...',
+      percent: null,
+      currentPage: null,
+      totalPages: null
+    });
   });
 
   it('formats provider errors into readable PDF translation messages', () => {

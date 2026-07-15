@@ -55,6 +55,10 @@ import { ArxivService } from './arxivService';
 import { ArxivTranslationService, translateTextsWithArgosEngine } from './arxivTranslationService';
 import { scanCodeRepository } from './codeRepositoryScanner';
 import {
+  PDF_TRANSLATION_POSTPROCESS_VERSION,
+  buildPdfTranslationPostprocessInvocation
+} from './pdfTranslationPostprocess';
+import {
   formatAiErrorBody,
   parseChatCompletionContent,
   parseKimiFileUploadId,
@@ -188,6 +192,7 @@ interface ResearchWorkbookExcelCellStyle {
 
 interface LoadProjectRequest {
   pdfPath?: string;
+  sourcePdfPath?: string;
   translationPath?: string;
   aiCachePath?: string;
   translatedPdfPath?: string;
@@ -320,6 +325,7 @@ interface PdfTranslationRequest {
   pdfPath: string;
   outputMode?: PdfTranslationOutputMode;
   force?: boolean;
+  metadataOnly?: boolean;
 }
 
 interface PdfTranslationMetadata {
@@ -333,12 +339,13 @@ interface PdfTranslationMetadata {
   translatedAt: string;
   translatedProvider: AiProviderId;
   translatedModel: string;
+  postprocessVersion?: string;
 }
 
 interface PdfTranslationResult extends PdfTranslationMetadata {
   status: 'cached' | 'completed';
   message: string;
-  pdf: PdfFilePayload;
+  pdf?: PdfFilePayload;
   monoPdf?: PdfFilePayload | null;
 }
 
@@ -349,6 +356,7 @@ interface PdfTranslationProgress {
 }
 
 let mainWindow: BrowserWindow | null = null;
+let pdfTranslationRuntimeSetupPromise: Promise<PdfTranslationRuntime> | null = null;
 let scientificPlotStore: ScientificPlotStore | null = null;
 let plotRuntimeManager: PlotRuntimeManager | null = null;
 let plotRendererService: PlotRendererService | null = null;
@@ -545,9 +553,164 @@ async function resolveOptionalMonoPdfPath(
   return undefined;
 }
 
+function isPythonModuleAvailable(candidate: PythonCommand, moduleName: string): boolean {
+  const result = spawnSync(
+    candidate.command,
+    [...candidate.argsPrefix, '-c', `import ${moduleName}`],
+    {
+      encoding: 'utf8',
+      windowsHide: true
+    }
+  );
+
+  return result.status === 0;
+}
+
+function findPdfTranslationPostprocessPython(
+  runtime: PdfTranslationRuntime | null = inspectPdfTranslationRuntime()
+): PythonCommand | null {
+  const candidates: PythonCommand[] = [];
+  const privatePython = getPdf2zhVenvPythonPath();
+  if (fsSync.existsSync(privatePython)) {
+    candidates.push({ command: privatePython, argsPrefix: [], label: privatePython });
+  }
+
+  if (runtime?.invocation === 'python-module') {
+    candidates.push({ command: runtime.executable, argsPrefix: [], label: runtime.executable });
+  } else if (runtime?.executable) {
+    const siblingPython = path.join(
+      path.dirname(runtime.executable),
+      process.platform === 'win32' ? 'python.exe' : 'python'
+    );
+    if (fsSync.existsSync(siblingPython)) {
+      candidates.push({ command: siblingPython, argsPrefix: [], label: siblingPython });
+    }
+  }
+
+  const compatiblePython = findCompatiblePythonCommand();
+  if (compatiblePython) {
+    candidates.push(compatiblePython);
+  }
+
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const key = `${candidate.command}\u0000${candidate.argsPrefix.join('\u0000')}`.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    if (isPythonModuleAvailable(candidate, 'pikepdf')) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+async function postprocessPdfTranslationFiles(options: {
+  paperId: string;
+  sourcePdfPath: string;
+  monoPdfPath?: string | null;
+  dualPdfPath?: string | null;
+}): Promise<void> {
+  const monoPdfPath = options.monoPdfPath && (await pathExists(options.monoPdfPath))
+    ? options.monoPdfPath
+    : undefined;
+  const dualPdfPath = options.dualPdfPath && (await pathExists(options.dualPdfPath))
+    ? options.dualPdfPath
+    : undefined;
+  if (!monoPdfPath && !dualPdfPath) {
+    return;
+  }
+
+  const python = findPdfTranslationPostprocessPython();
+  if (!python) {
+    throw new Error('PDF 已生成，但未找到包含 pikepdf 的翻译运行环境，无法校正图像色彩与链接标注。');
+  }
+
+  sendPdfTranslationProgress({
+    paperId: options.paperId,
+    status: 'running',
+    message: '正在校正中文 PDF 的图像色彩与链接标注...'
+  });
+  const invocation = buildPdfTranslationPostprocessInvocation({
+    sourcePdfPath: options.sourcePdfPath,
+    monoPdfPath,
+    dualPdfPath
+  });
+  await runPdfTranslationProcess(
+    python.command,
+    [...python.argsPrefix, ...invocation.args],
+    {
+      cwd: path.dirname(monoPdfPath ?? dualPdfPath ?? options.sourcePdfPath),
+      env: {},
+      apiKey: '',
+      paperId: options.paperId
+    }
+  );
+}
+
+async function ensurePdfTranslationPostprocessed(options: {
+  paperId: string;
+  sourcePdfPath: string;
+  metadata: PdfTranslationMetadata;
+  monoPdfPath?: string | null;
+}): Promise<PdfTranslationMetadata> {
+  const metadata = {
+    ...options.metadata,
+    translatedMonoPdfPath: options.monoPdfPath ?? options.metadata.translatedMonoPdfPath,
+    translatedMonoPdfName: options.monoPdfPath
+      ? path.basename(options.monoPdfPath)
+      : options.metadata.translatedMonoPdfName
+  };
+  if (metadata.postprocessVersion === PDF_TRANSLATION_POSTPROCESS_VERSION) {
+    await writePdfTranslationMetadata(options.paperId, metadata);
+    return metadata;
+  }
+
+  await postprocessPdfTranslationFiles({
+    paperId: options.paperId,
+    sourcePdfPath: options.sourcePdfPath,
+    monoPdfPath:
+      metadata.translatedPdfMode === 'mono'
+        ? metadata.translatedPdfPath
+        : metadata.translatedMonoPdfPath,
+    dualPdfPath: metadata.translatedPdfMode === 'dual' ? metadata.translatedPdfPath : undefined
+  });
+  const postprocessedMetadata: PdfTranslationMetadata = {
+    ...metadata,
+    postprocessVersion: PDF_TRANSLATION_POSTPROCESS_VERSION
+  };
+  await writePdfTranslationMetadata(options.paperId, postprocessedMetadata);
+  return postprocessedMetadata;
+}
+
+async function buildPdfTranslationResult(options: {
+  metadata: PdfTranslationMetadata;
+  status: 'cached' | 'completed';
+  message: string;
+  metadataOnly?: boolean;
+}): Promise<PdfTranslationResult> {
+  if (options.metadataOnly) {
+    return {
+      ...options.metadata,
+      status: options.status,
+      message: options.message
+    };
+  }
+
+  return {
+    ...options.metadata,
+    status: options.status,
+    message: options.message,
+    pdf: await readPdfFile(options.metadata.translatedPdfPath),
+    monoPdf: await readOptionalPdfFile(options.metadata.translatedMonoPdfPath)
+  };
+}
+
 async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<PdfTranslationResult> {
   if (!request.paperId.trim()) {
-    throw new Error('缺少论文记录 ID，无法写入双语 PDF 缓存。');
+    throw new Error('缺少论文记录 ID，无法写入中文 PDF 缓存。');
   }
 
   if (!request.pdfPath.trim()) {
@@ -557,7 +720,7 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
   const settings = normalizeStoredAiSettings(await loadStoredAiSettings());
   const apiKey = decryptApiKey(settings.encryptedApiKey);
   if (!apiKey) {
-    throw new Error('请先在 AI 设置中保存 API Key，再生成双语 PDF。');
+    throw new Error('请先在 AI 设置中保存 API Key，再生成中文 PDF。');
   }
 
   const outputMode = request.outputMode ?? 'dual';
@@ -586,15 +749,22 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
       cachedMetadata.translatedMonoPdfPath,
       outputPaths.monoPdfPath
     );
-    return {
-      ...cachedMetadata,
-      translatedMonoPdfPath: cachedMonoPath,
-      translatedMonoPdfName: cachedMonoPath ? path.basename(cachedMonoPath) : undefined,
+    const postprocessedMetadata = await ensurePdfTranslationPostprocessed({
+      paperId: request.paperId,
+      sourcePdfPath: request.pdfPath,
+      metadata: {
+        ...cachedMetadata,
+        translatedMonoPdfPath: cachedMonoPath,
+        translatedMonoPdfName: cachedMonoPath ? path.basename(cachedMonoPath) : undefined
+      },
+      monoPdfPath: cachedMonoPath
+    });
+    return buildPdfTranslationResult({
+      metadata: postprocessedMetadata,
       status: 'cached',
-      message: '已复用本机缓存的双语 PDF。',
-      pdf: await readPdfFile(cachedMetadata.translatedPdfPath),
-      monoPdf: await readOptionalPdfFile(cachedMonoPath)
-    };
+      message: '已复用并校正本机缓存的中文 PDF。',
+      metadataOnly: request.metadataOnly
+    });
   }
 
   if (!request.force) {
@@ -606,15 +776,22 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
         reusableMetadata.translatedMonoPdfPath,
         outputPaths.monoPdfPath
       );
-      return {
-        ...reusableMetadata,
-        translatedMonoPdfPath: reusableMonoPath,
-        translatedMonoPdfName: reusableMonoPath ? path.basename(reusableMonoPath) : undefined,
+      const postprocessedMetadata = await ensurePdfTranslationPostprocessed({
+        paperId: request.paperId,
+        sourcePdfPath: request.pdfPath,
+        metadata: {
+          ...reusableMetadata,
+          translatedMonoPdfPath: reusableMonoPath,
+          translatedMonoPdfName: reusableMonoPath ? path.basename(reusableMonoPath) : undefined
+        },
+        monoPdfPath: reusableMonoPath
+      });
+      return buildPdfTranslationResult({
+        metadata: postprocessedMetadata,
         status: 'cached',
-        message: `已复用同一 PDF 的本机双语缓存：${reusableMetadata.translatedPdfName}`,
-        pdf: await readPdfFile(reusableMetadata.translatedPdfPath),
-        monoPdf: await readOptionalPdfFile(reusableMonoPath)
-      };
+        message: `已复用并校正同一 PDF 的本机中文缓存：${reusableMetadata.translatedPdfName}`,
+        metadataOnly: request.metadataOnly
+      });
     }
   }
 
@@ -624,7 +801,7 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
   sendPdfTranslationProgress({
     paperId: request.paperId,
     status: 'running',
-    message: '正在调用 PDFMathTranslate 生成双语 PDF...'
+    message: '正在调用 PDFMathTranslate 生成中文 PDF...'
   });
 
   const command = buildPdf2zhCommand({
@@ -655,33 +832,37 @@ async function translatePdfWithSidecar(request: PdfTranslationRequest): Promise<
   const translatedMonoPdfPath = await resolveTranslatedPdfPath(outputPaths.monoPdfPath, outputDir, 'mono');
   const translatedMonoPdfName = translatedMonoPdfPath ? path.basename(translatedMonoPdfPath) : undefined;
 
-  const metadata: PdfTranslationMetadata = {
-    translatedPdfPath,
-    translatedPdfName: path.basename(translatedPdfPath),
-    translatedMonoPdfPath: translatedMonoPdfPath ?? undefined,
-    translatedMonoPdfName,
-    translatedPdfMode: outputMode,
-    translationEngine: 'pdfmathtranslate',
-    translationSourceHash: sourceHash,
-    translatedAt: new Date().toISOString(),
-    translatedProvider: settings.provider,
-    translatedModel: settings.model
-  };
+  const metadata = await ensurePdfTranslationPostprocessed({
+    paperId: request.paperId,
+    sourcePdfPath: request.pdfPath,
+    monoPdfPath: translatedMonoPdfPath,
+    metadata: {
+      translatedPdfPath,
+      translatedPdfName: path.basename(translatedPdfPath),
+      translatedMonoPdfPath: translatedMonoPdfPath ?? undefined,
+      translatedMonoPdfName,
+      translatedPdfMode: outputMode,
+      translationEngine: 'pdfmathtranslate',
+      translationSourceHash: sourceHash,
+      translatedAt: new Date().toISOString(),
+      translatedProvider: settings.provider,
+      translatedModel: settings.model
+    }
+  });
 
   await writePdfTranslationMetadata(request.paperId, metadata);
   sendPdfTranslationProgress({
     paperId: request.paperId,
     status: 'completed',
-    message: `双语 PDF 已生成：${metadata.translatedPdfName}`
+    message: `中文 PDF 已生成并完成图像校正：${metadata.translatedMonoPdfName ?? metadata.translatedPdfName}`
   });
 
-  return {
-    ...metadata,
+  return buildPdfTranslationResult({
+    metadata,
     status: 'completed',
-    message: `双语 PDF 已生成：${metadata.translatedPdfName}`,
-    pdf: await readPdfFile(translatedPdfPath),
-    monoPdf: await readOptionalPdfFile(translatedMonoPdfPath)
-  };
+    message: `中文 PDF 已生成：${metadata.translatedMonoPdfName ?? metadata.translatedPdfName}`,
+    metadataOnly: request.metadataOnly
+  });
 }
 
 function checkPdfTranslationEngine(): PdfTranslationEngineView {
@@ -729,6 +910,24 @@ async function ensurePdfTranslationRuntime(
     return existing;
   }
 
+  if (!pdfTranslationRuntimeSetupPromise) {
+    pdfTranslationRuntimeSetupPromise = installPrivatePdfTranslationRuntime(paperId);
+  }
+
+  const setupPromise = pdfTranslationRuntimeSetupPromise;
+  try {
+    const installed = await setupPromise;
+    await patchPrivatePdf2zhTemperatureOption(settings, paperId);
+    return installed;
+  } finally {
+    if (pdfTranslationRuntimeSetupPromise === setupPromise) {
+      pdfTranslationRuntimeSetupPromise = null;
+    }
+  }
+}
+
+async function installPrivatePdfTranslationRuntime(paperId: string): Promise<PdfTranslationRuntime> {
+
   const python = findCompatiblePythonCommand();
   if (!python) {
     throw new Error(
@@ -773,8 +972,6 @@ async function ensurePdfTranslationRuntime(
     apiKey: '',
     paperId
   });
-
-  await patchPrivatePdf2zhTemperatureOption(settings, paperId);
 
   const installed = inspectPrivatePdfTranslationRuntime() ?? inspectPdfTranslationRuntime();
   if (!installed) {
@@ -1116,7 +1313,9 @@ async function readPdfTranslationMetadata(paperId: string): Promise<PdfTranslati
 
     return {
       ...normalized,
-      translatedPdfName: normalized.translatedPdfName || path.basename(parsed.translatedPdfPath)
+      translatedPdfName: normalized.translatedPdfName || path.basename(parsed.translatedPdfPath),
+      postprocessVersion:
+        typeof parsed.postprocessVersion === 'string' ? parsed.postprocessVersion : undefined
     };
   } catch {
     return null;
@@ -3065,7 +3264,7 @@ async function openTranslationDialogForIpc(): Promise<TextFilePayload | null> {
 
 async function openTranslatedPdfDialogForIpc(): Promise<PdfFilePayload | null> {
   const result = await dialog.showOpenDialog({
-    title: '选择已生成的中文/双语 PDF',
+    title: '选择已生成的中文 PDF',
     properties: ['openFile'],
     filters: [{ name: 'PDF', extensions: ['pdf'] }]
   });
@@ -3075,6 +3274,52 @@ async function openTranslatedPdfDialogForIpc(): Promise<PdfFilePayload | null> {
   }
 
   return readPdfFile(result.filePaths[0]);
+}
+
+async function postprocessStoredPdfTranslationForLoad(
+  request: LoadProjectRequest
+): Promise<string | null> {
+  const sourcePdfPath = request.sourcePdfPath ?? request.pdfPath;
+  const outputPath = request.translatedMonoPdfPath ?? request.translatedPdfPath;
+  if (!sourcePdfPath || !outputPath) {
+    return null;
+  }
+
+  const metadataPath = path.join(path.dirname(outputPath), 'job.json');
+  if (!(await pathExists(metadataPath))) {
+    // Imported PDFs are not rewritten because they may not have been generated by PDFMathTranslate.
+    return null;
+  }
+
+  try {
+    const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as Partial<PdfTranslationMetadata>;
+    if (
+      metadata.translationEngine !== 'pdfmathtranslate' ||
+      metadata.postprocessVersion === PDF_TRANSLATION_POSTPROCESS_VERSION
+    ) {
+      return null;
+    }
+
+    const mode: PdfTranslationOutputMode = metadata.translatedPdfMode === 'mono' ? 'mono' : 'dual';
+    await postprocessPdfTranslationFiles({
+      paperId: path.basename(path.dirname(outputPath)),
+      sourcePdfPath,
+      monoPdfPath:
+        request.translatedMonoPdfPath ?? (mode === 'mono' ? request.translatedPdfPath : undefined),
+      dualPdfPath: mode === 'dual' ? request.translatedPdfPath : undefined
+    });
+    await fs.writeFile(
+      metadataPath,
+      JSON.stringify({
+        ...metadata,
+        postprocessVersion: PDF_TRANSLATION_POSTPROCESS_VERSION
+      }, null, 2),
+      'utf8'
+    );
+    return null;
+  } catch (error) {
+    return `中文 PDF 图像与链接标注自动校正失败：${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 async function selectDirectoryDialogForIpc(request?: { title?: string; defaultPath?: string }): Promise<{
@@ -3122,6 +3367,10 @@ async function loadProjectForIpc(request: LoadProjectRequest): Promise<{
     }
   }
 
+  // The source first page is already visible in the renderer. Repair legacy sidecars in
+  // the background before reading them so old red/black figures do not flash on screen.
+  const pdfPostprocessError = await postprocessStoredPdfTranslationForLoad(request);
+
   // Never read multiple large PDFs concurrently: each payload temporarily owns both
   // a Buffer and a base64 string. Small text sidecars may safely load beside the source PDF.
   const [pdfResult, translationResult, aiCacheResult] = await Promise.all([
@@ -3131,7 +3380,7 @@ async function loadProjectForIpc(request: LoadProjectRequest): Promise<{
   ]);
   const translatedPdfResult = await loadOptionalResource(
     request.translatedPdfPath,
-    '双语 PDF',
+    '翻译 PDF',
     readPdfFile
   );
   const translatedMonoPdfResult = await loadOptionalResource(
@@ -3140,6 +3389,7 @@ async function loadProjectForIpc(request: LoadProjectRequest): Promise<{
     readPdfFile
   );
   const errors = [
+    pdfPostprocessError,
     pdfResult.error,
     translationResult.error,
     aiCacheResult.error,
@@ -3371,13 +3621,13 @@ async function downloadArxivPdfForIpc(request: ArxivDownloadPdfRequest): Promise
 
 async function exportPdfForIpc(request: { sourcePath: string; defaultFileName: string }): Promise<SavedFileResult | null> {
   if (!request.sourcePath || !(await pathExists(request.sourcePath))) {
-    throw new Error('没有可导出的双语 PDF 文件。');
+    throw new Error('没有可导出的中文 PDF 文件。');
   }
 
   const sourcePath = await assertReadableFilePath(request.sourcePath, ['.pdf'], MAX_PDF_FILE_BYTES);
 
   const result = await dialog.showSaveDialog({
-    title: '导出双语 PDF',
+    title: '导出中文 PDF',
     defaultPath: request.defaultFileName,
     filters: [{ name: 'PDF', extensions: ['pdf'] }]
   });

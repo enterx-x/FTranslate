@@ -461,6 +461,7 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
                   type="button"
                   className={template.key === selectedTemplateKey ? 'secondary-button is-active' : 'secondary-button'}
                   onClick={() => handleUseTemplate(template.key)}
+                  aria-pressed={template.key === selectedTemplateKey}
                 >
                   {template.label}
                 </button>
@@ -828,6 +829,7 @@ export function AiAssistantPage(props: AiAssistantPageProps) {
                   type="button"
                   className={template.key === selectedTemplateKey ? 'active' : ''}
                   onClick={() => handleUseTemplate(template.key)}
+                  aria-pressed={template.key === selectedTemplateKey}
                 >
                   <strong>{template.label}</strong>
                   <em>{template.scenario}</em>

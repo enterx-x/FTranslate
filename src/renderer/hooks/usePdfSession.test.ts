@@ -14,13 +14,15 @@ function makePdf(fileName: string): PdfState {
 }
 
 describe('usePdfSession helpers', () => {
-  it('selects translated pdf only in translated mode', () => {
+  it('prefers the Chinese-only PDF in translated mode', () => {
     const source = makePdf('source.pdf');
     const translated = makePdf('translated.pdf');
+    const mono = makePdf('mono.pdf');
 
-    expect(resolveDisplayedPdf('source', source, translated)).toBe(source);
-    expect(resolveDisplayedPdf('translated', source, translated)).toBe(translated);
-    expect(resolveDisplayedPdf('translated', source, null)).toBe(source);
+    expect(resolveDisplayedPdf('source', source, translated, mono)).toBe(source);
+    expect(resolveDisplayedPdf('translated', source, translated, mono)).toBe(mono);
+    expect(resolveDisplayedPdf('translated', source, translated, null)).toBe(translated);
+    expect(resolveDisplayedPdf('translated', source, null, null)).toBe(source);
   });
 
   it('prefers mono translation for parallel mode fallback', () => {

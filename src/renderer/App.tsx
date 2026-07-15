@@ -55,6 +55,7 @@ import {
 } from './lib/presentationFigureAssets';
 import { NotesPanel } from './components/NotesPanel';
 import { PdfFigureAssetsPanel, PdfFigureWorkspaceDialog } from './components/PdfFigureAssetsPanel';
+import { PdfTranslationProgressBar } from './components/PdfTranslationProgressBar';
 import { PdfViewer } from './components/PdfViewer';
 import { extractPdfBlocksFromData } from './lib/pdfOutlineExtraction';
 import { decodeBase64ToUint8Array } from './lib/binary';
@@ -449,7 +450,7 @@ export default function App() {
 
     setTranslatedPdf(nextPdf);
     setTranslatedMonoPdf(monoPayload ? buildPdfState(monoPayload) : null);
-    setPdfViewMode(monoPayload ? 'parallel' : 'translated');
+    setPdfViewMode('translated');
     setPdfViewportState(null);
     setPageCount(0);
     return nextPdf;
@@ -644,8 +645,9 @@ export default function App() {
         return;
       }
 
-      setStatusMessage('原文首屏已打开，正在后台载入翻译与双语 PDF 资源...');
+      setStatusMessage('原文首屏已打开，正在后台载入翻译与中文 PDF 资源...');
       const resourceResult = await window.electronAPI.loadProject({
+        sourcePdfPath: paper.pdfPath,
         translationPath: paper.translationPath,
         aiCachePath: paper.aiCachePath,
         translatedPdfPath: isSamePdfFilePath(paper.translatedPdfPath, paper.pdfPath)
@@ -669,20 +671,22 @@ export default function App() {
           resourceWarnings.push('AI 缓存不是 JSON 翻译数组，已只打开手动翻译文件。');
         }
       }
-      const translatedDisplayPdf = resourceResult.translatedPdf ?? resourceResult.translatedMonoPdf;
-      if (translatedDisplayPdf) {
-        setTranslatedPdf(buildPdfState(translatedDisplayPdf));
+      if (resourceResult.translatedPdf || resourceResult.translatedMonoPdf) {
+        setTranslatedPdf(
+          resourceResult.translatedPdf ? buildPdfState(resourceResult.translatedPdf) : null
+        );
         setTranslatedMonoPdf(
-          resourceResult.translatedPdf && resourceResult.translatedMonoPdf
-            ? buildPdfState(resourceResult.translatedMonoPdf)
-            : null
+          resourceResult.translatedMonoPdf ? buildPdfState(resourceResult.translatedMonoPdf) : null
         );
       }
       const loadedLabels = [
         resourceResult.translation ? '手动译文' : '',
         resourceResult.aiCache ? 'AI 缓存' : '',
-        resourceResult.translatedPdf ? '双语 PDF' : '',
-        resourceResult.translatedMonoPdf ? '中文 PDF' : ''
+        resourceResult.translatedMonoPdf
+          ? '中文 PDF'
+          : resourceResult.translatedPdf
+            ? '翻译 PDF'
+            : ''
       ].filter(Boolean);
       const openedMessage = loadedLabels.length > 0
         ? `论文已打开，后台资源已就绪：${loadedLabels.join('、')}`
@@ -761,7 +765,7 @@ export default function App() {
     }
   }
 
-  async function handleGenerateBilingualPdf(force = false): Promise<void> {
+  async function handleGenerateChinesePdf(force = false): Promise<void> {
     const sourcePdf = pdf;
     if (!sourcePdf) {
       setStatusMessage('请先打开原文 PDF。');
@@ -770,7 +774,7 @@ export default function App() {
 
     const paper = ensureActivePaperForCurrentPdf();
     if (!paper) {
-      setStatusMessage('无法建立论文记录，暂不能生成双语 PDF。');
+      setStatusMessage('无法建立论文记录，暂不能生成中文 PDF。');
       return;
     }
 
@@ -783,7 +787,7 @@ export default function App() {
     try {
       setIsPdfTranslationBusy(true);
       setReaderMode('ai');
-      setPdfTranslationStatus('正在准备生成双语 PDF...');
+      setPdfTranslationStatus('正在准备生成中文 PDF...');
       const result = await window.electronAPI.translatePdf({
         paperId: paper.id,
         pdfPath: sourcePdf.filePath,
@@ -794,6 +798,9 @@ export default function App() {
       if (!isCurrentTranslation()) {
         return;
       }
+      if (!result.pdf) {
+        throw new Error('翻译任务没有返回可显示的 PDF 数据。');
+      }
       applyTranslatedPdfPayload(result.pdf, result.monoPdf);
       rememberTranslatedPdfResult(paper.id, result);
       setStatusMessage(result.message);
@@ -803,7 +810,7 @@ export default function App() {
         return;
       }
       const detail = formatPdfTranslationProgressMessage(String(error)) || String(error);
-      const message = `生成双语 PDF 失败：${detail}`;
+      const message = `生成中文 PDF 失败：${detail}`;
       setStatusMessage(message);
       setPdfTranslationStatus(message);
     } finally {
@@ -815,7 +822,7 @@ export default function App() {
 
   async function handleImportTranslatedPdf(): Promise<void> {
     if (!pdf) {
-      setStatusMessage('请先打开原文 PDF，再导入对应的中文/双语 PDF。');
+      setStatusMessage('请先打开原文 PDF，再导入对应的中文 PDF。');
       return;
     }
     const sourcePdfPath = pdf?.filePath ?? null;
@@ -826,12 +833,12 @@ export default function App() {
       }
 
       if (sourcePdfPath && activePdfPathRef.current !== sourcePdfPath) {
-        setStatusMessage('当前原文 PDF 已切换，已取消绑定刚选择的中文/双语 PDF。');
+        setStatusMessage('当前原文 PDF 已切换，已取消绑定刚选择的中文 PDF。');
         return;
       }
 
       if (pdf && isSamePdfFilePath(payload.filePath, pdf.filePath)) {
-        setStatusMessage('导入的中文/双语 PDF 与当前原文 PDF 是同一个文件，已取消绑定，避免误显示为双语 PDF。');
+        setStatusMessage('导入的中文 PDF 与当前原文 PDF 是同一个文件，已取消绑定。');
         return;
       }
 
@@ -842,43 +849,44 @@ export default function App() {
           library.map((item) =>
             item.id === paper.id
               ? updatePaperRecord(item, {
-                  translatedPdfPath: payload.filePath,
-                  translatedPdfName: payload.fileName,
-                  translatedMonoPdfPath: undefined,
-                  translatedMonoPdfName: undefined,
-                  translatedPdfMode: 'dual',
+                  translatedPdfPath: undefined,
+                  translatedPdfName: undefined,
+                  translatedMonoPdfPath: payload.filePath,
+                  translatedMonoPdfName: payload.fileName,
+                  translatedPdfMode: 'mono',
                   translatedAt: new Date().toISOString()
                 })
               : item
           )
         );
       }
-      setStatusMessage(`已导入并显示中文/双语 PDF：${payload.fileName}`);
+      setStatusMessage(`已导入并显示中文 PDF：${payload.fileName}`);
     } catch (error) {
-      setStatusMessage(`导入中文/双语 PDF 失败：${String(error)}`);
+      setStatusMessage(`导入中文 PDF 失败：${String(error)}`);
     }
   }
 
   async function handleExportTranslatedPdf(): Promise<void> {
-    if (!translatedPdf?.filePath) {
-      setStatusMessage('当前没有可导出的双语 PDF，请先生成或导入双语 PDF。');
+    const exportPdf = translatedMonoPdf ?? translatedPdf;
+    if (!exportPdf?.filePath) {
+      setStatusMessage('当前没有可导出的中文 PDF，请先生成或导入中文 PDF。');
       return;
     }
 
     try {
       const result = await window.electronAPI.exportPdf({
-        sourcePath: translatedPdf.filePath,
-        defaultFileName: translatedPdf.fileName || buildPdfExportFileName(pdf?.fileName)
+        sourcePath: exportPdf.filePath,
+        defaultFileName: exportPdf.fileName || buildPdfExportFileName(pdf?.fileName)
       });
 
       if (!result) {
-        setStatusMessage('已取消导出双语 PDF。');
+        setStatusMessage('已取消导出中文 PDF。');
         return;
       }
 
-      setStatusMessage(`双语 PDF 已导出：${result.fileName}`);
+      setStatusMessage(`中文 PDF 已导出：${result.fileName}`);
     } catch (error) {
-      setStatusMessage(`导出双语 PDF 失败：${String(error)}`);
+      setStatusMessage(`导出中文 PDF 失败：${String(error)}`);
     }
   }
 
@@ -2721,7 +2729,7 @@ export default function App() {
           <div id="reader-side-panel" className="side-panel" hidden={isReaderSidePanelCollapsed}>
             <section
               className={`whole-pdf-panel${pdfFigureAssets.length > 0 ? ' has-figure-assets' : ''}`}
-              aria-label="整体双语 PDF"
+              aria-label="整体 PDF 阅读"
             >
               <div className="whole-pdf-header">
                 <strong className="summary-title-with-icon">
@@ -2729,8 +2737,8 @@ export default function App() {
                   <span>整体 PDF 阅读</span>
                 </strong>
                 <span>
-                  {pdfViewMode === 'translated' && translatedPdf
-                    ? `正在显示：${translatedPdf.fileName}`
+                  {pdfViewMode === 'translated' && displayedPdf
+                    ? `正在显示：${displayedPdf.fileName}`
                     : pdf
                       ? `正在显示：${pdf.fileName}`
                       : '尚未打开 PDF'}
@@ -2757,20 +2765,20 @@ export default function App() {
                   <button
                     type="button"
                     className={pdfViewMode === 'translated' ? 'active' : ''}
-                    disabled={!translatedPdf}
+                    disabled={!translatedMonoPdf && !translatedPdf}
                     onClick={() => setPdfViewMode('translated')}
                   >
-                    双语 PDF
+                    中文 PDF
                   </button>
                 </div>
                 <button
                   type="button"
                   className="primary-button button-with-icon"
                   disabled={!pdf || isPdfTranslationBusy}
-                  onClick={() => handleGenerateBilingualPdf(false)}
+                  onClick={() => handleGenerateChinesePdf(false)}
                 >
                   <img className="button-icon" src={translateIcon} alt="" />
-                  <span>生成双语 PDF</span>
+                  <span>生成中文 PDF</span>
                 </button>
                 <button
                   type="button"
@@ -2791,18 +2799,18 @@ export default function App() {
                       type="button"
                       className="secondary-button button-with-icon"
                       disabled={!pdf || isPdfTranslationBusy}
-                      onClick={() => handleGenerateBilingualPdf(true)}
+                      onClick={() => handleGenerateChinesePdf(true)}
                     >
                       <img className="button-icon" src={refreshIcon} alt="" />
                       <span>重新生成</span>
                     </button>
                     <button type="button" className="secondary-button button-with-icon" disabled={!pdf || isPdfTranslationBusy} onClick={handleImportTranslatedPdf}>
                       <img className="button-icon" src={uploadIcon} alt="" />
-                      <span>导入中文/双语 PDF</span>
+                      <span>导入中文 PDF</span>
                     </button>
-                    <button type="button" className="secondary-button button-with-icon" disabled={!translatedPdf || isPdfTranslationBusy} onClick={handleExportTranslatedPdf}>
+                    <button type="button" className="secondary-button button-with-icon" disabled={(!translatedMonoPdf && !translatedPdf) || isPdfTranslationBusy} onClick={handleExportTranslatedPdf}>
                       <img className="button-icon" src={downloadIcon} alt="" />
-                      <span>导出双语 PDF</span>
+                      <span>导出中文 PDF</span>
                     </button>
                     <button type="button" className="secondary-button button-with-icon" disabled={!pdf || isPresentationGenerating} onClick={handleGeneratePresentationFromCurrentPdf}>
                       <img className="button-icon" src={translateIcon} alt="" />
@@ -2823,11 +2831,14 @@ export default function App() {
                   </p>
                 </details>
               </div>
-              <p className="pdf-translation-status" role="status" aria-live="polite">
-                {pdfTranslationStatus ||
+              <PdfTranslationProgressBar
+                message={
+                  pdfTranslationStatus ||
                   pdfTranslationEngine?.message ||
-                  '使用 PDFMathTranslate 生成整本文档的双语 PDF，完成后会直接在左侧显示。'}
-              </p>
+                  '使用 PDFMathTranslate 生成整本文档的中文 PDF；完成后可单独阅读或切换左右双语。'
+                }
+                isBusy={isPdfTranslationBusy}
+              />
               <PdfFigureAssetsPanel
                 figures={pdfFigureAssets}
                 isExtracting={isPdfFigureExtracting}
@@ -3076,10 +3087,10 @@ function buildExportFileName(sourceName?: string): string {
 
 function buildPdfExportFileName(sourceName?: string): string {
   if (!sourceName) {
-    return 'bilingual.pdf';
+    return 'chinese.pdf';
   }
 
-  return sourceName.replace(/\.[^.]+$/, '') + '-bilingual.pdf';
+  return sourceName.replace(/\.[^.]+$/, '') + '-chinese.pdf';
 }
 
 function buildPresentationExportFileName(title: string, extension: 'json' | 'md' | 'pptx'): string {

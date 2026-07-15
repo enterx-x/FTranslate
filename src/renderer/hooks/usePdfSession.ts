@@ -12,9 +12,10 @@ export type PdfViewMode = 'source' | 'parallel' | 'translated';
 export function resolveDisplayedPdf(
   pdfViewMode: PdfViewMode,
   pdf: PdfState | null,
-  translatedPdf: PdfState | null
+  translatedPdf: PdfState | null,
+  translatedMonoPdf: PdfState | null
 ): PdfState | null {
-  return pdfViewMode === 'translated' && translatedPdf ? translatedPdf : pdf;
+  return pdfViewMode === 'translated' ? translatedMonoPdf ?? translatedPdf ?? pdf : pdf;
 }
 
 export function resolveParallelTranslationPdf(
@@ -35,8 +36,8 @@ export function usePdfSession() {
   const [scale, setScale] = useState(1.15);
 
   const displayedPdf = useMemo(
-    () => resolveDisplayedPdf(pdfViewMode, pdf, translatedPdf),
-    [pdf, pdfViewMode, translatedPdf]
+    () => resolveDisplayedPdf(pdfViewMode, pdf, translatedPdf, translatedMonoPdf),
+    [pdf, pdfViewMode, translatedMonoPdf, translatedPdf]
   );
   const parallelTranslationPdf = useMemo(
     () => resolveParallelTranslationPdf(translatedMonoPdf, translatedPdf),

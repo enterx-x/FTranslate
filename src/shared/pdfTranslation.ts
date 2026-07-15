@@ -233,6 +233,33 @@ export function formatPdfTranslationProgressMessage(value: string): string {
   return cleaned.replace(/\s+/gu, ' ');
 }
 
+export interface ParsedPdfTranslationProgress {
+  message: string;
+  percent: number | null;
+  currentPage: number | null;
+  totalPages: number | null;
+}
+
+export function parsePdfTranslationProgress(value: string): ParsedPdfTranslationProgress {
+  const message = formatPdfTranslationProgressMessage(value);
+  const match = message.match(/^PDF 翻译进度：(\d{1,3})%，(\d+)\/(\d+) 页$/u);
+  if (!match) {
+    return {
+      message,
+      percent: null,
+      currentPage: null,
+      totalPages: null
+    };
+  }
+
+  return {
+    message,
+    percent: Math.min(100, Math.max(0, Number(match[1]))),
+    currentPage: Number(match[2]),
+    totalPages: Number(match[3])
+  };
+}
+
 function getFileStem(filePath: string): string {
   const fileName = filePath.replace(/\\/gu, '/').split('/').pop() || 'translated';
   return fileName.replace(/\.[^.]+$/u, '') || 'translated';

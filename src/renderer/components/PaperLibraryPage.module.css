@@ -1060,6 +1060,89 @@
   white-space: nowrap;
 }
 
+.batchPdfPanel {
+  z-index: 3;
+  display: grid;
+  min-width: 0;
+  flex: 0 0 auto;
+  gap: 8px;
+  margin: 8px 10px 0;
+  padding: 10px 12px;
+  border: 1px solid #d5dde7;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(35, 49, 67, 0.06);
+}
+
+.batchPdfHeader {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.batchPdfHeader > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.batchPdfHeader strong {
+  color: #263447;
+  font-size: 12px;
+}
+
+.batchPdfHeader span {
+  overflow: hidden;
+  color: #768396;
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batchPdfActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.batchPdfActions button {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid #cbd4df;
+  border-radius: 5px;
+  color: #536174;
+  background: #f8fafc;
+  font: inherit;
+  font-size: 9.5px;
+  cursor: pointer;
+}
+
+.batchPdfTaskList {
+  display: grid;
+  max-height: 154px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px 14px;
+  overflow: auto;
+  padding: 8px 2px 2px;
+  border-top: 1px solid #e5eaf0;
+}
+
+.batchPdfTask {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #e0e6ed;
+  border-radius: 6px;
+  background: #fbfcfd;
+}
+
+.batchPdfTask[data-status='failed'] {
+  border-color: #e6d1d3;
+  background: #fff9f9;
+}
+
 .bulkBar {
   z-index: 8;
   display: flex;
@@ -1150,6 +1233,49 @@
 .bulkControls input,
 .bulkControls select {
   font-size: 10px;
+}
+
+.batchConcurrencyControl {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 5px;
+  padding-left: 8px;
+  border: 1px solid #617185;
+  border-radius: 5px;
+  color: #dce5ee;
+  background: #33445a;
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.batchConcurrencyControl select {
+  width: 44px;
+  min-height: 28px;
+  padding: 0 5px;
+  border: 0;
+  border-left: 1px solid #617185;
+  border-radius: 0 4px 4px 0;
+  color: #fff;
+  background: #2b3a4e;
+}
+
+.bulkControls .batchTranslateButton {
+  border-color: #dce5ef;
+  color: #1f3045;
+  background: #f4f7fa;
+  font-weight: 700;
+}
+
+.bulkControls .batchTranslateButton:hover:not(:disabled) {
+  border-color: #fff;
+  background: #fff;
+}
+
+.bulkControls button:disabled,
+.bulkControls select:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .modalBackdrop {

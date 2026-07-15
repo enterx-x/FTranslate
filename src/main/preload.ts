@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('dialog:select-directory', request),
   loadProject: (request: {
     pdfPath?: string;
+    sourcePdfPath?: string;
     translationPath?: string;
     aiCachePath?: string;
     translatedPdfPath?: string;
@@ -26,6 +27,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     pdfPath: string;
     outputMode?: 'dual' | 'mono';
     force?: boolean;
+    metadataOnly?: boolean;
   }) => ipcRenderer.invoke('pdf-translation:translate', request),
   onPdfTranslationProgress: (callback: (progress: {
     paperId: string;
