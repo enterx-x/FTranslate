@@ -1,29 +1,17 @@
-import { buildArxivProxyUpstreamUrl, type ArxivProxyQuery } from '../src/shared/arxivProxy';
-
-interface ApiRequest {
-  method?: string;
-  query: ArxivProxyQuery;
-}
-
-interface ApiResponse {
-  status(code: number): ApiResponse;
-  setHeader(name: string, value: string): ApiResponse;
-  send(body: string): void;
-  json(body: unknown): void;
-}
+import { buildArxivProxyUpstreamUrl } from '../src/shared/arxivProxy.mjs';
 
 export const config = { maxDuration: 30 };
 
-export default async function handler(request: ApiRequest, response: ApiResponse): Promise<void> {
+export default async function handler(request, response) {
   if (request.method !== 'GET') {
     response.setHeader('Allow', 'GET');
     response.status(405).json({ error: '只允许 GET 请求。' });
     return;
   }
 
-  let upstreamUrl: string;
+  let upstreamUrl;
   try {
-    upstreamUrl = buildArxivProxyUpstreamUrl(request.query);
+    upstreamUrl = buildArxivProxyUpstreamUrl(request.query ?? {});
   } catch (error) {
     response.status(400).json({ error: formatError(error) });
     return;
@@ -47,6 +35,6 @@ export default async function handler(request: ApiRequest, response: ApiResponse
   }
 }
 
-function formatError(error: unknown): string {
+function formatError(error) {
   return error instanceof Error ? error.message : String(error);
 }

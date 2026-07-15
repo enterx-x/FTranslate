@@ -1,9 +1,7 @@
-export type ArxivProxyQuery = Record<string, string | string[] | undefined>;
-
 const SORT_BY_VALUES = new Set(['relevance', 'lastUpdatedDate', 'submittedDate']);
 const SORT_ORDER_VALUES = new Set(['ascending', 'descending']);
 
-export function buildArxivProxyUpstreamUrl(query: ArxivProxyQuery): string {
+export function buildArxivProxyUpstreamUrl(query) {
   const searchQuery = readSingleValue(query.search_query).trim();
   if (!searchQuery || searchQuery.length > 800) {
     throw new Error('search_query 必须为 1 到 800 个字符。');
@@ -23,17 +21,11 @@ export function buildArxivProxyUpstreamUrl(query: ArxivProxyQuery): string {
   return upstream.toString();
 }
 
-function readSingleValue(value: string | string[] | undefined): string {
+function readSingleValue(value) {
   return Array.isArray(value) ? value[0] ?? '' : value ?? '';
 }
 
-function readBoundedInteger(
-  value: string | string[] | undefined,
-  minimum: number,
-  maximum: number,
-  fallback: number,
-  label: string
-): number {
+function readBoundedInteger(value, minimum, maximum, fallback, label) {
   const raw = readSingleValue(value).trim();
   if (!raw) {
     return fallback;
@@ -48,12 +40,7 @@ function readBoundedInteger(
   return parsed;
 }
 
-function readEnum(
-  value: string | string[] | undefined,
-  allowed: Set<string>,
-  fallback: string,
-  label: string
-): string {
+function readEnum(value, allowed, fallback, label) {
   const raw = readSingleValue(value).trim() || fallback;
   if (!allowed.has(raw)) {
     throw new Error(`${label} 参数无效。`);

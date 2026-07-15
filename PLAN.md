@@ -613,11 +613,15 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 已人工查看论文库、arXiv、段落内联翻译和选词浮层截图；390px / 430px 宽度下未发现明显重叠、遮挡或横向溢出，中文译文位于对应英文段落下方，选词浮层只在选中文本后出现。
 - `$env:NODE_OPTIONS='--max-old-space-size=4096'; npm run dist` 已通过：81 个测试文件、468 个测试全部通过，TypeScript、renderer、Electron build 和 NSIS 安装包构建成功；安装包为 `dist/PDF Translation Reader Setup 0.1.12.exe`。
 - 桌面 `npm run visual:check` 已执行但未形成全量通过：默认 15.6 MB 外部论文在 10 分钟门限内未完成；改用可控短 PDF 后首页、实验矩阵、研究表格和 PDF 阅读/图表页面完成截图，随后被组会 PPT 的内容质量门拒绝。人工复查本轮生成的 `home.png`、`whole-pdf-reader.png` 和 `whole-pdf-figures.png` 未见明显布局回归；本次代码未修改桌面 UI，但全量视觉门仍记为待恢复问题，不能声称通过。
-- 公网生产网址需要在本机完成一次 Vercel OAuth 授权后才能创建；授权完成后必须实际检查首页、`/api/arxiv` 和 iPhone 尺寸页面，再把最终 HTTPS 地址记录到本文与 README。
+- 已完成 Vercel OAuth、创建并关联 `xhunmanoid/ftranslate-mobile`，固定生产地址为 `https://ftranslate-mobile.vercel.app`。
+- 首次部署暴露两项问题并已修复：仓库扫描范围过大时使用 `.vercelignore` 排除桌面安装包、iOS 工程、临时目录和工作树；Node 24 把保留 ESM import 的函数输出按 CommonJS 加载时，改用显式 `.mjs` 函数与共享校验模块。
+- 公网实测通过：首页返回 200 并带 `nosniff` / `no-referrer`，`/api/arxiv` 返回 200 Atom feed 和论文条目，`max_results=200` 返回 400，POST 返回 405。
+- 针对固定生产地址运行 `npm run visual:check:mobile` 已通过；人工复查 arXiv、段落内联译文和选词浮层截图，未发现明显布局回归。
+- `npm audit --omit=dev --json` 显示生产依赖已知漏洞为 0；Vercel 完整安装日志中的 5 个漏洞来自开发/构建依赖，暂不自动执行可能破坏锁定版本的 `npm audit fix`。
 
 ### 问题台账
 
 | 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
 | --- | --- | --- | --- | --- |
-| 2026-07-15 | Vercel CLI 尚未获得部署授权 | 本机没有既有 Vercel 凭据，首次部署必须由用户完成 OAuth 登录 | 部署代码和配置已完成，生产地址待授权创建 | 完成 `npx vercel login` 后运行 `npx vercel --prod`，再验证公网首页与 arXiv 检索 |
+| 2026-07-15 | Vercel CLI 尚未获得部署授权 | 本机没有既有 Vercel 凭据，首次部署必须由用户完成 OAuth 登录 | 已解决：完成 OAuth 并部署到 `https://ftranslate-mobile.vercel.app` | 后续在已关联项目中执行 `npx vercel --prod` 更新同一生产地址 |
 | 2026-07-15 | 桌面视觉脚本未全量通过 | 默认外部论文在 10 分钟门限内未完成；可控短 PDF 能快速验证布局，但生成的 PPT 内容不足以通过来源与中文 bullet 质量门 | 首页、研究表格、实验矩阵、PDF 阅读和图表截图已生成并人工复查；移动端视觉检查独立通过 | 后续为桌面视觉脚本维护一份小型、内容完备、可通过 PPT 质量门的固定 PDF fixture，移除对个人下载目录大论文的依赖 |

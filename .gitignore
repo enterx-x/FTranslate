@@ -9,6 +9,7 @@ distribution/ios/public/manifest.plist
 .tmp*/
 .tmp-*/
 .vercel/
+.env.local
 .worktrees/
 .superpowers/
 demo-output/

@@ -4,6 +4,8 @@
 
 当前首选方案是把独立移动网页部署到 Vercel：iPhone 使用 Safari 打开固定的 HTTPS 地址，无需 App Store、签名或保持 Windows 电脑开机。Vercel 只托管静态网页并转发受限的 arXiv Atom 检索请求；arXiv PDF 由浏览器直接下载。PDF、论文索引、阅读进度和段落译文保存在当前 Safari 的浏览器存储中，不上传到 FTranslate 或 Vercel 数据库。
 
+当前生产地址：[https://ftranslate-mobile.vercel.app](https://ftranslate-mobile.vercel.app)。在 iPhone Safari 打开即可使用；通过“分享 → 添加到主屏幕”可以获得接近独立 App 的入口。
+
 仓库根目录已提供 `vercel.json`，首次部署执行：
 
 ```bash
@@ -11,7 +13,7 @@ npx vercel login
 npx vercel --prod
 ```
 
-部署完成后，终端会返回一个 `https://*.vercel.app` 地址。用 iPhone Safari 打开后，可通过“分享 → 添加到主屏幕”获得接近独立 App 的入口。不要使用无痕模式，也不要清除该网址的网站数据；同一套论文库不会自动出现在其他浏览器、其他域名或桌面端。
+后续部署会继续更新同一个固定生产地址。不要使用无痕模式，也不要清除该网址的网站数据；同一套论文库不会自动出现在其他浏览器、其他域名或桌面端。
 
 手机段落翻译由浏览器直接请求用户配置的 OpenAI 兼容 HTTPS 接口。API Key 只保留在当前页面内存，不写入 Vercel；该接口必须允许浏览器跨域访问。免费域名由 Vercel 自动提供 HTTPS，个人使用不需要购买域名。
 

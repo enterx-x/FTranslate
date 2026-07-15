@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildArxivProxyUpstreamUrl } from './arxivProxy';
+import { buildArxivProxyUpstreamUrl } from './arxivProxy.mjs';
 
 describe('arXiv public proxy validation', () => {
   it('forwards only the supported arXiv parameters', () => {
