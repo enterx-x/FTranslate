@@ -33,6 +33,7 @@ export interface MobilePaper {
   pageCount?: number;
   visionOcrLastPage?: number;
   visionOcrCompleted?: boolean;
+  visionOcrProcessedPages?: number[];
 }
 
 export interface MobileTranslationEntry {
@@ -124,7 +125,10 @@ export function upsertMobilePaper(library: MobilePaper[], incoming: MobilePaper)
       lastPage: sourceEquivalent ? existing.lastPage : incoming.lastPage,
       pageCount: sourceEquivalent ? existing.pageCount ?? incoming.pageCount : incoming.pageCount,
       visionOcrLastPage: sourceEquivalent ? existing.visionOcrLastPage ?? incoming.visionOcrLastPage : incoming.visionOcrLastPage,
-      visionOcrCompleted: sourceEquivalent ? existing.visionOcrCompleted ?? incoming.visionOcrCompleted : incoming.visionOcrCompleted
+      visionOcrCompleted: sourceEquivalent ? existing.visionOcrCompleted ?? incoming.visionOcrCompleted : incoming.visionOcrCompleted,
+      visionOcrProcessedPages: sourceEquivalent
+        ? existing.visionOcrProcessedPages ?? incoming.visionOcrProcessedPages
+        : incoming.visionOcrProcessedPages
     },
     ...library.filter((paper) => paper.id !== incoming.id)
   ];
@@ -307,7 +311,21 @@ function normalizeMobilePaper(value: unknown): MobilePaper | null {
   if (typeof paper.visionOcrCompleted === 'boolean') {
     normalized.visionOcrCompleted = paper.visionOcrCompleted;
   }
+  const visionOcrProcessedPages = normalizePageNumbers(paper.visionOcrProcessedPages);
+  if (visionOcrProcessedPages.length > 0) {
+    normalized.visionOcrProcessedPages = visionOcrProcessedPages;
+  }
   return normalized;
+}
+
+function normalizePageNumbers(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(new Set(value
+    .map((page) => Math.trunc(Number(page)))
+    .filter((page) => Number.isFinite(page) && page > 0)))
+    .sort((left, right) => left - right);
 }
 
 function normalizeStoredPdf(value: unknown, fallbackKind: MobilePdfKind): MobileStoredPdf | null {

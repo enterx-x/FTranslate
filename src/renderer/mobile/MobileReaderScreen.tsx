@@ -101,6 +101,7 @@ export function MobileReaderScreen({
             textBlockCount: textBlocks.length,
             cachedBlocks: cachedOcrBlocks,
             pageCount: knownPageCount,
+            processedPages: paper.visionOcrProcessedPages,
             legacyLastPage: paper.visionOcrLastPage,
             legacyCompleted: paper.visionOcrCompleted
           });
@@ -306,6 +307,7 @@ export function MobileReaderScreen({
       textBlockCount: 0,
       cachedBlocks: cachedOcrBlocks,
       pageCount: Math.max(pageCount, paper.pageCount ?? 0, 1),
+      processedPages: paper.visionOcrProcessedPages,
       legacyLastPage: paper.visionOcrLastPage,
       legacyCompleted: paper.visionOcrCompleted
     });

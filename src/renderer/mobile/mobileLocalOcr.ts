@@ -48,6 +48,7 @@ export interface LocalOcrResumeStateInput {
   textBlockCount: number;
   cachedBlocks: ExtractedPdfBlock[];
   pageCount: number;
+  processedPages?: number[];
   legacyLastPage?: number;
   legacyCompleted?: boolean;
 }
@@ -246,24 +247,32 @@ export function resolveLocalOcrResumeState(input: LocalOcrResumeStateInput): {
   startPage: number;
 } {
   const normalizedPageCount = Math.max(1, Math.trunc(input.pageCount) || 1);
-  const highestCachedPage = input.cachedBlocks.reduce(
-    (highest, block) => Math.max(highest, Math.max(1, Math.trunc(block.page) || 1)),
-    0
-  );
-  const legacyLastPage = Number.isFinite(input.legacyLastPage)
-    ? Math.max(0, Math.trunc(Number(input.legacyLastPage)))
-    : 0;
-  const hasRecoverableCache = input.cachedBlocks.length > 0;
-  const lastSavedPage = Math.max(highestCachedPage, hasRecoverableCache ? legacyLastPage : 0);
-  const completedWithRecoverableText = hasRecoverableCache
-    && input.legacyCompleted === true
-    && lastSavedPage >= normalizedPageCount;
+  const coveredPages = new Set<number>();
+  for (const page of input.processedPages ?? []) {
+    const normalizedPage = Math.trunc(Number(page));
+    if (Number.isFinite(normalizedPage) && normalizedPage >= 1 && normalizedPage <= normalizedPageCount) {
+      coveredPages.add(normalizedPage);
+    }
+  }
+  for (const block of input.cachedBlocks) {
+    const normalizedPage = Math.trunc(Number(block.page));
+    if (Number.isFinite(normalizedPage) && normalizedPage >= 1 && normalizedPage <= normalizedPageCount) {
+      coveredPages.add(normalizedPage);
+    }
+  }
+
+  let firstMissingPage: number | undefined;
+  for (let page = 1; page <= normalizedPageCount; page += 1) {
+    if (!coveredPages.has(page)) {
+      firstMissingPage = page;
+      break;
+    }
+  }
+  const coverageComplete = firstMissingPage === undefined;
 
   return {
-    required: input.textBlockCount === 0 && !completedWithRecoverableText,
-    startPage: hasRecoverableCache
-      ? Math.min(normalizedPageCount, Math.max(1, lastSavedPage + 1))
-      : 1
+    required: input.textBlockCount === 0 && !coverageComplete,
+    startPage: firstMissingPage ?? normalizedPageCount
   };
 }
 

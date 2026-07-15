@@ -82,10 +82,10 @@ The policy remains safe under boun-\nded disturbances.`)).toEqual([
     })).toEqual({ required: true, startPage: 1 });
   });
 
-  it('continues after the last saved OCR page only when recoverable paragraphs exist', () => {
-    const cachedBlocks = buildLocalOcrBlocks(3, [
-      { type: 'paragraph', original: 'Recovered page three.' }
-    ]).map((item) => item.block);
+  it('continues after a contiguous run of saved OCR pages', () => {
+    const cachedBlocks = [1, 2, 3].flatMap((page) => buildLocalOcrBlocks(page, [
+      { type: 'paragraph', original: `Recovered page ${page}.` }
+    ]).map((item) => item.block));
     expect(resolveLocalOcrResumeState({
       textBlockCount: 0,
       cachedBlocks,
@@ -93,5 +93,36 @@ The policy remains safe under boun-\nded disturbances.`)).toEqual([
       legacyLastPage: 3,
       legacyCompleted: false
     })).toEqual({ required: true, startPage: 4 });
+  });
+
+  it('recovers from the first missing page instead of trusting a legacy last-page marker', () => {
+    const cachedBlocks = buildLocalOcrBlocks(3, [
+      { type: 'paragraph', original: 'Only page three survived.' }
+    ]).map((item) => item.block);
+    expect(resolveLocalOcrResumeState({
+      textBlockCount: 0,
+      cachedBlocks,
+      pageCount: 12,
+      legacyLastPage: 3,
+      legacyCompleted: false
+    })).toEqual({ required: true, startPage: 1 });
+  });
+
+  it('uses explicit processed pages so blank OCR pages are not repeated', () => {
+    const cachedBlocks = buildLocalOcrBlocks(3, [
+      { type: 'paragraph', original: 'Recovered page three.' }
+    ]).map((item) => item.block);
+    expect(resolveLocalOcrResumeState({
+      textBlockCount: 0,
+      cachedBlocks,
+      processedPages: [1, 2, 3],
+      pageCount: 12
+    })).toEqual({ required: true, startPage: 4 });
+    expect(resolveLocalOcrResumeState({
+      textBlockCount: 0,
+      cachedBlocks: [],
+      processedPages: [1, 2, 3],
+      pageCount: 3
+    })).toEqual({ required: false, startPage: 3 });
   });
 });

@@ -273,10 +273,19 @@ function MobileApp() {
     if (!activePaperId) {
       return;
     }
-    await commitLibrary((current) => updateMobilePaper(current, activePaperId, {
-      visionOcrLastPage: Math.max(0, Math.trunc(lastPage)),
-      visionOcrCompleted: completed
-    }));
+    const normalizedPage = Math.max(1, Math.trunc(lastPage));
+    await commitLibrary((current) => {
+      const activePaper = current.find((paper) => paper.id === activePaperId);
+      const processedPages = Array.from(new Set([
+        ...(activePaper?.visionOcrProcessedPages ?? []),
+        normalizedPage
+      ])).sort((left, right) => left - right);
+      return updateMobilePaper(current, activePaperId, {
+        visionOcrLastPage: normalizedPage,
+        visionOcrCompleted: completed,
+        visionOcrProcessedPages: processedPages
+      });
+    });
   }, [activePaperId, commitLibrary]);
 
   async function handleTranslationSessionChange(session: MobileTranslationSession): Promise<void> {

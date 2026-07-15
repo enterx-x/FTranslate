@@ -67,7 +67,8 @@ describe('mobile paper model', () => {
       lastPage: 12,
       pageCount: 20,
       visionOcrLastPage: 8,
-      visionOcrCompleted: true
+      visionOcrCompleted: true,
+      visionOcrProcessedPages: [1, 2, 8]
     };
     const refreshed = { ...original, title: 'Updated title' };
     const merged = upsertMobilePaper([withTranslation], refreshed)[0];
@@ -76,6 +77,7 @@ describe('mobile paper model', () => {
     expect(merged.pageCount).toBe(20);
     expect(merged.visionOcrLastPage).toBe(8);
     expect(merged.visionOcrCompleted).toBe(true);
+    expect(merged.visionOcrProcessedPages).toEqual([1, 2, 8]);
     expect(isMobilePaperSourceEquivalent(withTranslation, refreshed)).toBe(true);
   });
 
@@ -88,7 +90,8 @@ describe('mobile paper model', () => {
       lastPage: 12,
       pageCount: 20,
       visionOcrLastPage: 8,
-      visionOcrCompleted: true
+      visionOcrCompleted: true,
+      visionOcrProcessedPages: [1, 2, 8]
     };
     const refreshed = {
       ...original,
@@ -101,6 +104,7 @@ describe('mobile paper model', () => {
     expect(merged.pageCount).toBeUndefined();
     expect(merged.visionOcrLastPage).toBeUndefined();
     expect(merged.visionOcrCompleted).toBeUndefined();
+    expect(merged.visionOcrProcessedPages).toBeUndefined();
   });
 
   it('rejects malformed library JSON and sanitizes file names', () => {
@@ -121,6 +125,17 @@ describe('mobile paper model', () => {
     expect(parsed[0].tags).toEqual([]);
     expect(parsed[0].lastOpenedAt).toBe(parsed[0].addedAt);
     expect(parsed[0].sourcePdf.kind).toBe('source');
+  });
+
+  it('normalizes persisted OCR page coverage', () => {
+    const parsed = parseMobileLibrary(JSON.stringify([{
+      id: 'ocr-pages',
+      title: 'OCR pages',
+      lastPage: 1,
+      visionOcrProcessedPages: [3, 1, 3, 2.8, 0, -1, '4'],
+      sourcePdf: { path: 'papers/ocr/source/paper.pdf', fileName: 'paper.pdf', byteLength: 120 }
+    }]));
+    expect(parsed[0].visionOcrProcessedPages).toEqual([1, 2, 3, 4]);
   });
 
   it('stores a custom display title and normalized tags without changing the source title', () => {
