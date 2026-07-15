@@ -58,6 +58,7 @@ export function MobileReaderScreen({
 }: MobileReaderScreenProps) {
   const bilingualPageRef = useRef<HTMLDivElement | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
+  const readerScrollTopRef = useRef(0);
   const restoredFeedRef = useRef(false);
   const stopTranslationRef = useRef(false);
   const stopOcrRef = useRef(false);
@@ -76,10 +77,13 @@ export function MobileReaderScreen({
   const [ocrBusy, setOcrBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<SelectionPopoverState | null>(null);
+  const [readingImmersive, setReadingImmersive] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     restoredFeedRef.current = false;
+    readerScrollTopRef.current = 0;
+    setReadingImmersive(false);
     setBlocks([]);
     setExtracting(true);
     setStatus('正在把 PDF 转换为连续段落…');
@@ -374,12 +378,26 @@ export function MobileReaderScreen({
 
   function handleBilingualModeClick(): void {
     setMode('bilingual');
+    setReadingImmersive(false);
     if (!extracting && needsLocalOcr && !ocrBusy) {
       void handleRecognizeScan();
     }
   }
 
   function handleFeedScroll(): void {
+    const scrollContainer = bilingualPageRef.current;
+    if (scrollContainer) {
+      const nextScrollTop = scrollContainer.scrollTop;
+      const scrollDelta = nextScrollTop - readerScrollTopRef.current;
+      if (nextScrollTop < 28) {
+        setReadingImmersive(false);
+      } else if (nextScrollTop > 84 && scrollDelta > 8) {
+        setReadingImmersive(true);
+      } else if (scrollDelta < -12) {
+        setReadingImmersive(false);
+      }
+      readerScrollTopRef.current = nextScrollTop;
+    }
     if (scrollFrameRef.current !== null) {
       return;
     }
@@ -440,7 +458,7 @@ export function MobileReaderScreen({
   }
 
   return (
-    <section className="mobile-screen mobile-reader-screen" aria-label="PDF 阅读与翻译">
+    <section className={`mobile-screen mobile-reader-screen${mode === 'bilingual' && readingImmersive ? ' is-reading-immersive' : ''}`} aria-label="PDF 阅读与翻译">
       <header className="mobile-reader-header">
         <button type="button" className="mobile-reader-back" onClick={onBack} aria-label="返回论文库">‹</button>
         <div>
@@ -452,7 +470,10 @@ export function MobileReaderScreen({
 
       <div className="mobile-reader-mode-bar" role="group" aria-label="阅读模式">
         <button type="button" className={mode === 'bilingual' ? 'active' : ''} onClick={handleBilingualModeClick}>连续双语</button>
-        <button type="button" className={mode === 'pdf' ? 'active' : ''} onClick={() => setMode('pdf')}>原始 PDF</button>
+        <button type="button" className={mode === 'pdf' ? 'active' : ''} onClick={() => {
+          setReadingImmersive(false);
+          setMode('pdf');
+        }}>原始 PDF</button>
       </div>
 
       {mode === 'bilingual' ? (
@@ -515,23 +536,24 @@ export function MobileReaderScreen({
             {blocks.map((block, index) => {
               const cached = translationByHash.get(block.sourceHash);
               const startsPage = index === 0 || blocks[index - 1].page !== block.page;
+              const hasCurrentTranslation = Boolean(cached?.translation.trim() && isTranslationEntryCurrent(cached, translationSession));
+              const showBlockAction = translatingHash === block.sourceHash || !hasCurrentTranslation;
               return (
                 <Fragment key={block.id}>
                   {startsPage ? <div className="mobile-bilingual-page-break">第 {block.page} 页</div> : null}
                   <article data-pdf-page={block.page} className={`mobile-bilingual-block is-${block.type}`}>
-                    <div className="mobile-block-original">
+                    <div className={`mobile-block-original${showBlockAction ? ' has-action' : ''}`}>
                       {block.type === 'heading' ? <h2>{block.original}</h2> : <p>{block.original}</p>}
-                      <button type="button" disabled={Boolean(translatingHash) || ocrBusy} onClick={() => void handleTranslateBlock(block)}>
-                        {translatingHash === block.sourceHash
-                          ? '翻译中…'
-                          : cached?.translation.trim()
-                            ? isTranslationEntryCurrent(cached, translationSession) ? '重译' : '更新译文'
-                            : '译此段'}
-                      </button>
+                      {showBlockAction ? (
+                        <button type="button" disabled={Boolean(translatingHash) || ocrBusy} onClick={() => void handleTranslateBlock(block)}>
+                          {translatingHash === block.sourceHash
+                            ? '翻译中…'
+                            : cached?.translation.trim() ? '更新译文' : '译此段'}
+                        </button>
+                      ) : null}
                     </div>
                     {cached?.translation.trim() ? (
                       <div className="mobile-block-translation">
-                        <span>译文</span>
                         <p>{cached.translation}</p>
                       </div>
                     ) : null}

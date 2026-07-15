@@ -681,7 +681,7 @@
 }
 
 .mobile-reader-screen {
-  background: #c4cad3;
+  background: #fff;
 }
 
 .mobile-reader-header {
@@ -757,7 +757,7 @@
 }
 
 .mobile-bilingual-reader {
-  background: #f4f6f9;
+  background: #fff;
 }
 
 .mobile-bilingual-toolbar,
@@ -805,9 +805,14 @@
   flex: 1;
   overflow: hidden auto;
   overscroll-behavior-y: contain;
-  padding: 18px 16px 28px;
-  background: #f8fafc;
+  padding: 28px 22px 64px;
+  background: #fff;
+  scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
+}
+
+.mobile-bilingual-page::-webkit-scrollbar {
+  display: none;
 }
 
 .mobile-reader-loading {
@@ -914,7 +919,7 @@
 }
 
 .mobile-bilingual-page-break {
-  display: flex;
+  display: none;
   align-items: center;
   gap: 9px;
   margin: 20px 0 2px;
@@ -940,12 +945,17 @@
 
 .mobile-bilingual-block {
   position: relative;
-  padding: 14px 0 15px;
-  border-bottom: 1px solid #dce2ea;
+  margin: 0 0 42px;
+  padding: 0;
+  border: 0;
 }
 
 .mobile-bilingual-block:first-child {
-  padding-top: 4px;
+  padding-top: 0;
+}
+
+.mobile-bilingual-block:last-child {
+  margin-bottom: 24px;
 }
 
 .mobile-block-original {
@@ -956,23 +966,36 @@
 .mobile-block-original p,
 .mobile-block-translation p {
   margin: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .mobile-block-original h2 {
-  padding-right: 54px;
-  color: #172033;
+  color: #141414;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: 18px;
-  line-height: 1.35;
+  font-size: clamp(24px, 6.6vw, 28px);
+  font-weight: 700;
+  line-height: 1.42;
+  letter-spacing: -.015em;
 }
 
 .mobile-block-original p {
-  color: #222a36;
+  color: #171717;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: 14px;
-  line-height: 1.72;
-  text-align: justify;
+  font-size: clamp(21px, 5.8vw, 24px);
+  line-height: 1.58;
+  text-align: left;
+  text-wrap: pretty;
+}
+
+.mobile-block-original.has-action {
+  padding-right: 52px;
+}
+
+.mobile-bilingual-block.is-caption .mobile-block-original p {
+  color: #444;
+  font-size: clamp(17px, 4.8vw, 20px);
+  line-height: 1.62;
 }
 
 .mobile-bilingual-block.is-formula .mobile-block-original p {
@@ -984,8 +1007,10 @@
 }
 
 .mobile-block-original > button {
-  float: right;
-  margin: 6px 0 0 10px;
+  position: absolute;
+  top: 2px;
+  right: 0;
+  margin: 0;
   padding: 5px 7px;
   border: 0;
   border-radius: 7px;
@@ -995,25 +1020,31 @@
 }
 
 .mobile-block-translation {
-  clear: both;
-  margin-top: 12px;
-  padding: 2px 0 2px 11px;
-  border-left: 3px solid #b8c9ee;
-}
-
-.mobile-block-translation > span {
-  display: block;
-  margin-bottom: 5px;
-  color: #6b7da5;
-  font-size: 9px;
-  font-weight: 700;
+  margin-top: 28px;
+  padding: 0;
+  border: 0;
 }
 
 .mobile-block-translation p {
-  color: #29364c;
-  font-size: 14px;
-  line-height: 1.78;
-  text-align: justify;
+  color: #111;
+  font-family: "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: clamp(20px, 5.6vw, 23px);
+  line-height: 1.76;
+  letter-spacing: .01em;
+  text-align: left;
+  text-wrap: pretty;
+}
+
+.mobile-reader-screen.is-reading-immersive .mobile-reader-header,
+.mobile-reader-screen.is-reading-immersive .mobile-reader-mode-bar,
+.mobile-reader-screen.is-reading-immersive .mobile-bilingual-toolbar,
+.mobile-reader-screen.is-reading-immersive .mobile-reader-status {
+  display: none;
+}
+
+.mobile-reader-screen.is-reading-immersive .mobile-bilingual-page {
+  padding-top: max(24px, var(--mobile-safe-top));
+  padding-bottom: max(52px, var(--mobile-safe-bottom));
 }
 
 .mobile-bilingual-pagination {

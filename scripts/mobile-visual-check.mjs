@@ -234,8 +234,8 @@ function startTranslationMock() {
       translationMockState.textRequestCount += 1;
       const translation = source.includes('Vision Safety Policy')
         ? '视觉安全策略'
-        : source.includes('scanned policy remains safe')
-          ? '扫描得到的策略在有界扰动下保持安全。'
+        : source.includes('shifting liquid continuously')
+          ? '现在，往杯中注水并倾倒：流动的液体会持续重新分配抓取器指尖上的重力载荷，这要求实时调整抓取力，而固定抓取力或开环抓取无法实现这一点。核心难点在于抓取稳定性与物体安全性紧密耦合：抓取力不足会导致微小滑移和掉落，而稍大的力则会造成不可逆变形。因此，实用的抓取控制器必须实时检测并抑制初始滑移，在承载物载荷减小时降低抓取力以防止过度抓取，并强制执行接触力的硬性安全上限。'
           : source.length < 40
           ? '前向不变性'
           : '策略更新在有界扰动下保持前向不变性，从而使安全约束在执行过程中持续成立。';
@@ -263,10 +263,10 @@ try {
   await client.send('Page.enable');
   await client.send('Page.bringToFront');
   const localOcrTestSource = `globalThis.__FTRANSLATE_MOBILE_OCR_TEST__ = async () => ({
-    text: 'Vision Safety Policy\\n\\nThe scanned policy remains safe under bounded disturbances.',
+    text: 'Vision Safety Policy\\n\\nNow fill it with water and pour: the shifting liquid continuously redistributes the gravitational load along the gripper fingers, demanding real-time effort modulation that fixed-effort or open-loop grasping cannot achieve. The core difficulty is that grasp stability and object safety are tightly coupled: insufficient effort leads to micro-slip and drop, while only slightly more force causes irreversible deformation. A practical grasp controller must therefore detect and suppress incipient slip in real time, reduce effort when the carried load decreases to prevent over-gripping, and enforce a hard safety limit on contact force.',
     blocks: [
       { paragraphs: [{ text: 'Vision Safety Policy' }] },
-      { paragraphs: [{ text: 'The scanned policy remains safe under bounded disturbances.' }] }
+      { paragraphs: [{ text: 'Now fill it with water and pour: the shifting liquid continuously redistributes the gravitational load along the gripper fingers, demanding real-time effort modulation that fixed-effort or open-loop grasping cannot achieve. The core difficulty is that grasp stability and object safety are tightly coupled: insufficient effort leads to micro-slip and drop, while only slightly more force causes irreversible deformation. A practical grasp controller must therefore detect and suppress incipient slip in real time, reduce effort when the carried load decreases to prevent over-gripping, and enforce a hard safety limit on contact force.' }] }
     ]
   });`;
   await client.send('Page.addScriptToEvaluateOnNewDocument', { source: localOcrTestSource });
@@ -712,7 +712,93 @@ try {
   await waitForExpression(client, `document.querySelectorAll('.mobile-bilingual-block').length === 2 ? 'ready' : ''`, 20000);
   await waitForExpression(client, `document.querySelectorAll('.mobile-block-translation').length === 2 ? 'ready' : ''`, 20000);
   await capture(client, '08b-reader-scanned-bilingual-390x844.png');
+  const novelReadingTypography = await evaluate(client, `(() => {
+    const original = document.querySelector('.mobile-bilingual-block.is-paragraph .mobile-block-original p');
+    const translation = document.querySelector('.mobile-bilingual-block.is-paragraph .mobile-block-translation p');
+    const translationBox = document.querySelector('.mobile-bilingual-block.is-paragraph .mobile-block-translation');
+    const block = document.querySelector('.mobile-bilingual-block.is-paragraph');
+    const pageBreak = document.querySelector('.mobile-bilingual-page-break');
+    return {
+      originalFontSize: Number.parseFloat(getComputedStyle(original).fontSize),
+      originalTextAlign: getComputedStyle(original).textAlign,
+      translationFontSize: Number.parseFloat(getComputedStyle(translation).fontSize),
+      translationTextAlign: getComputedStyle(translation).textAlign,
+      translationBorderLeft: getComputedStyle(translationBox).borderLeftWidth,
+      blockBorderBottom: getComputedStyle(block).borderBottomWidth,
+      pageBreakDisplay: getComputedStyle(pageBreak).display,
+      translationLabelCount: document.querySelectorAll('.mobile-block-translation > span').length,
+      paragraphActionCount: document.querySelectorAll('.mobile-bilingual-block.is-paragraph .mobile-block-original > button').length
+    };
+  })()`);
+  if (
+    novelReadingTypography.originalFontSize < 20 ||
+    novelReadingTypography.translationFontSize < 20 ||
+    novelReadingTypography.originalTextAlign === 'justify' ||
+    novelReadingTypography.translationTextAlign === 'justify' ||
+    novelReadingTypography.translationBorderLeft !== '0px' ||
+    novelReadingTypography.blockBorderBottom !== '0px' ||
+    novelReadingTypography.pageBreakDisplay !== 'none' ||
+    novelReadingTypography.translationLabelCount !== 0 ||
+    novelReadingTypography.paragraphActionCount !== 0
+  ) {
+    throw new Error(`Novel-style bilingual typography is invalid: ${JSON.stringify(novelReadingTypography)}`);
+  }
+  await evaluate(client, `(() => {
+    const page = document.querySelector('.mobile-bilingual-page');
+    page.scrollTop = 320;
+    page.dispatchEvent(new Event('scroll', { bubbles: true }));
+    return page.scrollTop;
+  })()`);
+  await waitForExpression(client, `document.querySelector('.mobile-reader-screen')?.classList.contains('is-reading-immersive') ? 'immersive' : ''`);
+  const immersiveChrome = await evaluate(client, `(() => ({
+    header: getComputedStyle(document.querySelector('.mobile-reader-header')).display,
+    modes: getComputedStyle(document.querySelector('.mobile-reader-mode-bar')).display,
+    toolbar: getComputedStyle(document.querySelector('.mobile-bilingual-toolbar')).display,
+    status: getComputedStyle(document.querySelector('.mobile-reader-status')).display
+  }))()`);
+  if (Object.values(immersiveChrome).some(display => display !== 'none')) {
+    throw new Error(`Reader chrome did not collapse during immersive scrolling: ${JSON.stringify(immersiveChrome)}`);
+  }
+  await capture(client, '08c-reader-scanned-immersive-390x844.png');
+  await evaluate(client, `(() => {
+    const page = document.querySelector('.mobile-bilingual-page');
+    page.scrollTop = 0;
+    page.dispatchEvent(new Event('scroll', { bubbles: true }));
+    return page.scrollTop;
+  })()`);
+  await waitForExpression(client, `document.querySelector('.mobile-reader-screen')?.classList.contains('is-reading-immersive') ? '' : 'restored'`);
+  await client.send('Emulation.setDeviceMetricsOverride', {
+    width: 430,
+    height: 932,
+    deviceScaleFactor: 1,
+    mobile: true,
+    screenWidth: 430,
+    screenHeight: 932
+  });
+  await evaluate(client, `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(document.body.offsetHeight))))`);
+  await wait(200);
+  const novelReaderWidthAudit = await evaluate(client, `(() => ({
+    viewportWidth: innerWidth,
+    bodyScrollWidth: document.body.scrollWidth,
+    rootScrollWidth: document.documentElement.scrollWidth
+  }))()`);
+  if (
+    novelReaderWidthAudit.bodyScrollWidth > novelReaderWidthAudit.viewportWidth + 1 ||
+    novelReaderWidthAudit.rootScrollWidth > novelReaderWidthAudit.viewportWidth + 1
+  ) {
+    throw new Error(`Novel-style reader overflows at 430px: ${JSON.stringify(novelReaderWidthAudit)}`);
+  }
+  await capture(client, '08d-reader-scanned-novel-430x932.png');
+  await client.send('Emulation.setDeviceMetricsOverride', {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 1,
+    mobile: true,
+    screenWidth: 390,
+    screenHeight: 844
+  });
   console.log('Started scanned-PDF OCR directly by tapping Continuous bilingual from Original PDF.');
+  console.log('Verified novel-style paragraph typography and reversible immersive scrolling without inline action chrome.');
   await evaluate(client, `document.querySelector('.mobile-reader-back').click()`);
   await waitForSelector(client, '.mobile-library-screen');
   await evaluate(client, `(() => {
