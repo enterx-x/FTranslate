@@ -43,7 +43,7 @@ export interface MobileTranslationEntry {
   translatedAt: string;
   model: string;
   baseURL?: string;
-  origin?: 'text' | 'vision';
+  origin?: 'text' | 'ocr' | 'vision';
   order?: number;
   blockType?: 'heading' | 'paragraph' | 'formula' | 'caption';
 }
@@ -228,6 +228,9 @@ export function isTranslationEntryCurrent(
   entry: MobileTranslationEntry,
   session: MobileTranslationPreferences
 ): boolean {
+  if (!entry.translation.trim()) {
+    return false;
+  }
   const sameModel = entry.model.trim() === session.model.trim();
   const sameBaseURL = !entry.baseURL || normalizeBaseURL(entry.baseURL) === normalizeBaseURL(session.baseURL);
   return sameModel && sameBaseURL;

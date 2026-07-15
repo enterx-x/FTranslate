@@ -184,4 +184,18 @@ describe('mobile translation cache', () => {
     expect(isTranslationEntryCurrent(entry, { model: 'model-b', baseURL: 'https://api.example.test/v1' })).toBe(false);
     expect(isTranslationEntryCurrent(entry, { model: 'model-a', baseURL: 'https://other.example.test/v1' })).toBe(false);
   });
+
+  it('does not treat locally OCR-extracted source text as an existing translation', () => {
+    const entry: MobileTranslationEntry = {
+      sourceHash: 'ocr-a',
+      page: 1,
+      original: 'Scanned source text',
+      translation: '',
+      translatedAt: '1',
+      model: 'deepseek-chat',
+      baseURL: 'https://api.deepseek.com/v1',
+      origin: 'ocr'
+    };
+    expect(isTranslationEntryCurrent(entry, { model: 'deepseek-chat', baseURL: 'https://api.deepseek.com/v1' })).toBe(false);
+  });
 });

@@ -43,6 +43,7 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^8.4.1",
+    "@tesseract.js-data/eng": "^1.0.0",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
@@ -52,6 +53,7 @@
     "electron-builder": "^26.0.12",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
+    "tesseract.js": "^7.0.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
     "vitest": "^4.0.14",

@@ -27,6 +27,13 @@ export default defineConfig(({ mode }) => {
       emptyOutDir: true,
       rollupOptions: {
         output: {
+          assetFileNames(assetInfo) {
+            const sourceName = assetInfo.names?.[0] ?? '';
+            if (sourceName.endsWith('eng.traineddata.gz')) {
+              return 'assets/ocr/[name][extname]';
+            }
+            return 'assets/[name]-[hash][extname]';
+          },
           manualChunks(id) {
             if (!id.includes('node_modules')) {
               return;

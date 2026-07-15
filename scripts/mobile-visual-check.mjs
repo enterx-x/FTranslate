@@ -11,6 +11,7 @@ const outputDir = path.join(root, '.tmp-mobile-visual-check');
 const userDataDir = path.join(outputDir, 'user-data');
 const debugPort = 9443;
 const mockPort = 9444;
+const translationMockState = { imageRequestCount: 0, textRequestCount: 0 };
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -224,14 +225,18 @@ function startTranslationMock() {
     request.on('end', () => {
       const parsed = body ? JSON.parse(body) : {};
       const source = parsed.messages?.at(-1)?.content ?? '';
-      const translation = Array.isArray(source)
-        ? JSON.stringify({
-            paragraphs: [
-              { type: 'heading', original: 'Vision Safety Policy', translation: '视觉安全策略' },
-              { type: 'paragraph', original: 'The scanned policy remains safe under bounded disturbances.', translation: '扫描得到的策略在有界扰动下保持安全。' }
-            ]
-          })
-        : source.length < 40
+      if (Array.isArray(source)) {
+        translationMockState.imageRequestCount += 1;
+        response.writeHead(400, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ error: { message: 'DeepSeek mock does not accept image input.' } }));
+        return;
+      }
+      translationMockState.textRequestCount += 1;
+      const translation = source.includes('Vision Safety Policy')
+        ? '视觉安全策略'
+        : source.includes('scanned policy remains safe')
+          ? '扫描得到的策略在有界扰动下保持安全。'
+          : source.length < 40
           ? '前向不变性'
           : '策略更新在有界扰动下保持前向不变性，从而使安全约束在执行过程中持续成立。';
       response.writeHead(200, { 'Content-Type': 'application/json' });
@@ -257,6 +262,15 @@ try {
   await client.send('Runtime.enable');
   await client.send('Page.enable');
   await client.send('Page.bringToFront');
+  const localOcrTestSource = `globalThis.__FTRANSLATE_MOBILE_OCR_TEST__ = async () => ({
+    text: 'Vision Safety Policy\\n\\nThe scanned policy remains safe under bounded disturbances.',
+    blocks: [
+      { paragraphs: [{ text: 'Vision Safety Policy' }] },
+      { paragraphs: [{ text: 'The scanned policy remains safe under bounded disturbances.' }] }
+    ]
+  });`;
+  await client.send('Page.addScriptToEvaluateOnNewDocument', { source: localOcrTestSource });
+  await client.send('Runtime.evaluate', { expression: localOcrTestSource });
   console.log('Mobile visual check connected to Electron.');
   await client.send('Emulation.setDeviceMetricsOverride', {
     width: 390,
@@ -713,11 +727,13 @@ try {
   if (
     restoredVisionState.originals.length !== 2 ||
     restoredVisionState.translations.length !== 2 ||
-    restoredVisionState.ocrPromptVisible
+    restoredVisionState.ocrPromptVisible ||
+    translationMockState.imageRequestCount !== 0 ||
+    translationMockState.textRequestCount < 2
   ) {
-    throw new Error(`Scanned PDF bilingual cache was not restored: ${JSON.stringify(restoredVisionState)}`);
+    throw new Error(`Scanned PDF local OCR / DeepSeek text flow failed: ${JSON.stringify({ restoredVisionState, translationMockState })}`);
   }
-  console.log('Recognized a scanned PDF into two bilingual blocks and restored both from local cache.');
+  console.log('Ran local OCR, sent only extracted text to DeepSeek, and restored two bilingual blocks from cache.');
   console.log(`Mobile visual check passed. Screenshots: ${outputDir}`);
 } finally {
   client?.close();

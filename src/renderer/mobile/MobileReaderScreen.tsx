@@ -5,9 +5,9 @@ import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import { MobileTranslationSettingsDialog } from './MobileTranslationSettingsDialog';
 import { translateAcademicText } from './mobileTranslation';
 import {
-  buildCachedVisionBlocks,
-  recognizePdfPagesWithVision
-} from './mobileVisionOcr';
+  buildCachedLocalOcrBlocks,
+  recognizePdfPagesLocally
+} from './mobileLocalOcr';
 import type {
   MobilePaper,
   MobileTranslationEntry,
@@ -86,9 +86,9 @@ export function MobileReaderScreen({
       .then((nextBlocks) => {
         if (!cancelled) {
           const textBlocks = nextBlocks.filter((block) => block.original.trim());
-          const cachedVisionBlocks = textBlocks.length === 0 ? buildCachedVisionBlocks(translations) : [];
-          const restoredBlocks = textBlocks.length > 0 ? textBlocks : cachedVisionBlocks;
-          const restoredLastPage = cachedVisionBlocks.reduce((max, block) => Math.max(max, block.page), 0);
+          const cachedOcrBlocks = textBlocks.length === 0 ? buildCachedLocalOcrBlocks(translations) : [];
+          const restoredBlocks = textBlocks.length > 0 ? textBlocks : cachedOcrBlocks;
+          const restoredLastPage = cachedOcrBlocks.reduce((max, block) => Math.max(max, block.page), 0);
           const knownPageCount = Math.max(paper.pageCount ?? 0, ...nextBlocks.map((block) => block.page), 1);
           setBlocks(restoredBlocks);
           setPageCount((count) => Math.max(count, ...nextBlocks.map((block) => block.page), 1));
@@ -96,9 +96,9 @@ export function MobileReaderScreen({
           setExtracting(false);
           setStatus(textBlocks.length
             ? `已转换为连续文章，共 ${nextBlocks.length} 个段落；中文会直接显示在英文下方。`
-            : cachedVisionBlocks.length
-              ? `已恢复 ${cachedVisionBlocks.length} 个扫描识别段落${restoredLastPage < knownPageCount ? '，可继续识别剩余页面。' : '。'}`
-              : '检测到 PDF 没有可提取文字层，可使用支持图片输入的模型逐页识别并直接生成双语段落。');
+            : cachedOcrBlocks.length
+              ? `已恢复 ${cachedOcrBlocks.length} 个本地 OCR 段落${restoredLastPage < knownPageCount ? '，可继续识别剩余页面。' : '。'}`
+              : '检测到 PDF 没有文字层。可先在手机本地 OCR，再把识别出的纯文字交给 DeepSeek 翻译。');
         }
       })
       .catch((error) => {
@@ -147,8 +147,16 @@ export function MobileReaderScreen({
   }).length;
   const staleTranslationCount = blocks.filter((block) => {
     const cached = translationByHash.get(block.sourceHash);
-    return Boolean(cached && !isTranslationEntryCurrent(cached, translationSession));
+    return Boolean(cached?.translation.trim() && !isTranslationEntryCurrent(cached, translationSession));
   }).length;
+  const pendingTranslationCount = blocks.filter((block) => {
+    const cached = translationByHash.get(block.sourceHash);
+    return Boolean(cached && !cached.translation.trim());
+  }).length;
+  const hasOcrBlocks = blocks.some((block) => {
+    const cached = translationByHash.get(block.sourceHash);
+    return cached?.origin === 'ocr' || cached?.origin === 'vision';
+  });
 
   async function translateBlock(
     block: ExtractedPdfBlock,
@@ -259,13 +267,19 @@ export function MobileReaderScreen({
     setOcrBusy(true);
     const startPage = Math.max(1, (paper.visionOcrLastPage ?? 0) + 1);
     let recognizedThisRun = 0;
+    let translatedThisRun = 0;
+    let translationFailure = '';
     try {
-      const result = await recognizePdfPagesWithVision(pdfData, session, {
+      const result = await recognizePdfPagesLocally(pdfData, {
         startPage,
         isCancelled: () => stopOcrRef.current,
         onDocumentReady: (count) => setPageCount(count),
+        onProgress: ({ progress, status: progressStatus }) => {
+          const percentage = Math.round(progress * 100);
+          setStatus(`${progressStatus}${percentage > 0 ? ` ${percentage}%` : ''}`);
+        },
         onPageRecognized: async ({ page, pageCount: totalPages, blocks: pageBlocks }) => {
-          setStatus(`正在识别扫描 PDF：第 ${page} / ${totalPages} 页，已得到 ${recognizedThisRun} 个段落…`);
+          setStatus(`本地 OCR 已完成第 ${page} / ${totalPages} 页，正在保存识别文字…`);
           if (pageBlocks.length === 0) {
             await onOcrProgressChange(page, false);
             return;
@@ -281,32 +295,61 @@ export function MobileReaderScreen({
               sourceHash: item.block.sourceHash,
               page: item.block.page,
               original: item.block.original,
-              translation: item.translation,
+              translation: '',
               translatedAt: new Date().toISOString(),
               model: session.model,
               baseURL: session.baseURL.trim().replace(/\/+$/u, ''),
-              origin: 'vision',
+              origin: 'ocr',
               order: item.order,
               blockType: item.block.type
             });
           }
           await onOcrProgressChange(page, false);
+
+          for (let index = 0; index < pageBlocks.length; index += 1) {
+            if (stopOcrRef.current || translationFailure) {
+              break;
+            }
+            const item = pageBlocks[index];
+            setStatus(`第 ${page} 页本地 OCR 完成，DeepSeek 正在翻译 ${index + 1} / ${pageBlocks.length} 段…`);
+            try {
+              const translation = await translateAcademicText(item.block.original, session);
+              await onSaveTranslation({
+                sourceHash: item.block.sourceHash,
+                page: item.block.page,
+                original: item.block.original,
+                translation,
+                translatedAt: new Date().toISOString(),
+                model: session.model,
+                baseURL: session.baseURL.trim().replace(/\/+$/u, ''),
+                origin: 'ocr',
+                order: item.order,
+                blockType: item.block.type
+              });
+              translatedThisRun += 1;
+            } catch (error) {
+              translationFailure = formatError(error);
+            }
+          }
         }
       });
       const incomplete = result.cancelled || result.lastProcessedPage < result.pageCount;
       setOcrRequired(incomplete);
       if (result.cancelled) {
-        setStatus(`已停止扫描识别；本次完成 ${recognizedThisRun} 个段落，已完成页面仍保存在本机。`);
+        setStatus(`已停止本地 OCR；本次识别 ${recognizedThisRun} 段、翻译 ${translatedThisRun} 段，已完成内容仍保存在本机。`);
       } else if (result.recognizedBlockCount === 0 && blocks.length === 0) {
         setOcrRequired(true);
-        setStatus('图片模型没有识别到正文。请确认模型支持图片输入，或切换到原始 PDF 查看扫描质量。');
+        setStatus('手机本地 OCR 没有识别到正文。请切换到原始 PDF 检查页面是否清晰、方向是否正确。');
       } else {
         await onOcrProgressChange(result.lastProcessedPage, true);
-        setStatus(`扫描 PDF 识别完成：本次 ${recognizedThisRun} 个双语段落已保存在本机。`);
+        setOcrRequired(false);
+        setStatus(translationFailure
+          ? `本地 OCR 已完成并保存 ${recognizedThisRun} 段；DeepSeek 翻译停止：${translationFailure}。可点击“翻译剩余”继续。`
+          : `扫描 PDF 处理完成：本地识别 ${recognizedThisRun} 段，DeepSeek 翻译 ${translatedThisRun} 段，已按段落重排。`);
       }
     } catch (error) {
       setOcrRequired(true);
-      setStatus(`扫描识别停止：${formatError(error)} 请检查当前模型是否支持图片输入。`);
+      setStatus(`本地 OCR 停止：${formatError(error)} 已完成页面仍保存在本机。`);
     } finally {
       stopOcrRef.current = false;
       setOcrBusy(false);
@@ -392,7 +435,9 @@ export function MobileReaderScreen({
       {mode === 'bilingual' ? (
         <div className="mobile-bilingual-reader">
           <div className="mobile-bilingual-toolbar">
-            <span>{ocrRequired ? '扫描 PDF · 逐页识别' : `${translatedCount} / ${blocks.length} 段已译${staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}`}</span>
+            <span>{ocrRequired
+              ? '扫描 PDF · 手机本地 OCR'
+              : `${translatedCount} / ${blocks.length} 段已译${pendingTranslationCount ? ` · ${pendingTranslationCount} 段待翻译` : staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}`}</span>
             <button
               type="button"
               disabled={!ocrBusy && !translatingAll && (extracting || (!ocrRequired && blocks.length === 0) || Boolean(translatingHash))}
@@ -411,7 +456,7 @@ export function MobileReaderScreen({
                 }
               }}
             >
-              {ocrBusy ? '停止识别' : ocrRequired ? blocks.length ? '继续识别' : '识别扫描件' : translatingAll ? '停止' : translatedCount || staleTranslationCount ? '翻译剩余' : '翻译全文'}
+              {ocrBusy ? '停止处理' : ocrRequired ? blocks.length ? '继续本地识别' : '本地识别扫描件' : translatingAll ? '停止' : translatedCount || staleTranslationCount || pendingTranslationCount ? '翻译剩余' : '翻译全文'}
             </button>
           </div>
           <div
@@ -425,20 +470,22 @@ export function MobileReaderScreen({
             {!extracting && blocks.length === 0 && ocrRequired ? (
               <div className="mobile-reader-loading mobile-ocr-empty">
                 <strong>检测到扫描版 PDF</strong>
-                <p>页面只有图片，没有可复制文字。页面图片会逐页发送到你配置的模型服务商，可能产生费用；FTranslate/Vercel 不保存图片。识别出的原文和中文会缓存在本机。</p>
-                <button type="button" disabled={ocrBusy} onClick={() => void handleRecognizeScan()}>{ocrBusy ? '正在识别…' : '识别并生成双语'}</button>
+                <p>手机会先在本地逐页 OCR，页面图片不会发给 DeepSeek；只有识别出的文字会交给 DeepSeek 翻译，再按“原文在上、中文在下”重排。首次使用需加载一次本地 OCR 组件。</p>
+                <button type="button" disabled={ocrBusy} onClick={() => void handleRecognizeScan()}>{ocrBusy ? '正在本地识别…' : '本地识别并翻译'}</button>
               </div>
             ) : null}
             {!extracting && ocrRequired && blocks.length > 0 ? (
               <div className="mobile-ocr-resume">
-                <span>扫描识别尚未完成，已成功页面可以先阅读。</span>
-                <button type="button" disabled={ocrBusy} onClick={() => void handleRecognizeScan()}>继续识别剩余页</button>
+                <span>本地 OCR 尚未完成；已识别的原文和 DeepSeek 译文可以先阅读。</span>
+                <button type="button" disabled={ocrBusy} onClick={() => void handleRecognizeScan()}>继续本地识别</button>
               </div>
             ) : null}
             {!extracting && blocks.length > 0 && translatedCount === 0 && staleTranslationCount === 0 ? (
               <div className="mobile-bilingual-intro">
-                <strong>普通 PDF 已转为连续文章</strong>
-                <p>点击“翻译全文”后，每段中文会直接排在对应英文下方；原 PDF 始终保留在右侧模式中。</p>
+                <strong>{hasOcrBlocks ? '扫描 PDF 已完成本地文字识别' : '普通 PDF 已转为连续文章'}</strong>
+                <p>{hasOcrBlocks
+                  ? '识别出的英文已经保存在本机；点击“翻译全文”后只把文字交给 DeepSeek，中文会直接排在对应英文下方。'
+                  : '点击“翻译全文”后，每段中文会直接排在对应英文下方；原 PDF 始终保留在右侧模式中。'}</p>
                 <button type="button" onClick={() => void handleTranslateAll()}>开始全文翻译</button>
               </div>
             ) : null}
@@ -454,12 +501,12 @@ export function MobileReaderScreen({
                       <button type="button" disabled={Boolean(translatingHash) || ocrBusy} onClick={() => void handleTranslateBlock(block)}>
                         {translatingHash === block.sourceHash
                           ? '翻译中…'
-                          : cached
+                          : cached?.translation.trim()
                             ? isTranslationEntryCurrent(cached, translationSession) ? '重译' : '更新译文'
                             : '译此段'}
                       </button>
                     </div>
-                    {cached ? (
+                    {cached?.translation.trim() ? (
                       <div className="mobile-block-translation">
                         <span>译文</span>
                         <p>{cached.translation}</p>
