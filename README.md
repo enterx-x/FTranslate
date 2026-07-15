@@ -2,7 +2,7 @@
 
 ## iPhone 公网网页阅读（当前首选）
 
-当前首选方案是把独立移动网页部署到 Vercel：iPhone 使用 Safari 打开固定的 HTTPS 地址，无需 App Store、签名或保持 Windows 电脑开机。Vercel 只托管静态网页并转发受限的 arXiv Atom 检索请求；arXiv PDF 由浏览器直接下载。PDF、论文索引、阅读进度和段落译文保存在当前 Safari 的浏览器存储中，不上传到 FTranslate 或 Vercel 数据库。
+当前首选方案是把独立移动网页部署到 Vercel：iPhone 使用 Safari 打开固定的 HTTPS 地址，无需 App Store、签名或保持 Windows 电脑开机。Vercel 托管静态网页，并通过固定目标的同源代理转发 arXiv Atom 检索和 PDF 下载，避免 Safari 因 arXiv 跨域或重定向报 `Load failed`；PDF 响应只流向当前浏览器，不写入 FTranslate 或 Vercel 数据库。论文索引、PDF、阅读进度和段落译文最终保存在当前 Safari 的浏览器存储中。
 
 当前生产地址：[https://ftranslate-mobile.vercel.app](https://ftranslate-mobile.vercel.app)。在 iPhone Safari 打开即可使用；通过“分享 → 添加到主屏幕”可以获得接近独立 App 的入口。
 
@@ -16,6 +16,8 @@ npx vercel --prod
 后续部署会继续更新同一个固定生产地址。不要使用无痕模式，也不要清除该网址的网站数据；同一套论文库不会自动出现在其他浏览器、其他域名或桌面端。
 
 手机段落、arXiv 标题和摘要翻译由浏览器直接请求用户配置的 OpenAI 兼容 HTTPS 接口。检索结果卡片可分别点击“译标题”或“译摘要”，中文译文直接显示在对应英文下面，保存论文时会一并写入论文库。API Key 只保留在当前页面内存，不写入 Vercel；该接口必须允许浏览器跨域访问。免费域名由 Vercel 自动提供 HTTPS，个人使用不需要购买域名。
+
+在本次网页会话内，从“检索”切换到论文库或阅读器后，查询词、结果列表、滚动位置和已经生成的标题/摘要译文会保留；再次进入“检索”可继续原位置，不需要重新搜索或翻译。刷新或关闭整个网页后仍会重新开始检索，已存入论文库的中文元数据不受影响。
 
 手机版会在写入前校验 PDF 文件头与 PDF.js 文档结构，单个 PDF 上限为 64 MB；arXiv 下载支持取消并在 45 秒后超时。网页 PDF 以原始 `ArrayBuffer` 写入独立 IndexedDB，避免 iPhone Safari 无法持久化 Blob URL。重复保存同一份 PDF 会保留阅读进度和双语 PDF；如果源文件内容或 arXiv 版本发生变化，会从第 1 页重新开始，并使旧段落译文和旧双语 PDF 失效，避免原文与译文串版。已有段落译文可以手动重新翻译；更换 Base URL 或模型后，“翻译本页”会更新由旧配置生成的译文。
 

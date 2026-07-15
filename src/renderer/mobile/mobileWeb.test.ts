@@ -13,10 +13,14 @@ describe('mobile web proxy URLs', () => {
     );
   });
 
-  it('uses the redirect-free CORS-enabled arXiv PDF address', () => {
+  it('routes arXiv PDFs through the current web origin so Safari never depends on upstream CORS', () => {
     expect(
       buildMobileWebPdfUrl('https://arxiv.org/pdf/1706.03762.pdf', 'http://192.168.1.23:4174/')
-    ).toBe('https://arxiv.org/pdf/1706.03762');
+    ).toBe('http://192.168.1.23:4174/api/arxiv-pdf/1706.03762');
+
+    expect(
+      buildMobileWebPdfUrl('https://arxiv.org/pdf/hep-th/9901001.pdf', 'https://ftranslate-mobile.vercel.app/')
+    ).toBe('https://ftranslate-mobile.vercel.app/api/arxiv-pdf/hep-th/9901001');
   });
 
   it('does not proxy unrelated PDF hosts', () => {

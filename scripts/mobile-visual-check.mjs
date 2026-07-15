@@ -146,6 +146,18 @@ async function waitForSelector(client, selector, timeoutMs = 20000) {
   throw new Error(`Timed out waiting for selector: ${selector}`);
 }
 
+async function waitForExpression(client, expression, timeoutMs = 20000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const value = await evaluate(client, expression);
+    if (value) {
+      return value;
+    }
+    await wait(200);
+  }
+  throw new Error(`Timed out waiting for expression: ${expression}`);
+}
+
 async function waitForSelectorToDisappear(client, selector, timeoutMs = 20000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -256,6 +268,10 @@ try {
       setter.call(input, 'safe reinforcement learning');
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
+      const sort = document.querySelector('.mobile-arxiv-filters select');
+      const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+      selectSetter.call(sort, 'relevance');
+      sort.dispatchEvent(new Event('change', { bubbles: true }));
       document.querySelector('.mobile-arxiv-search-form').requestSubmit();
       return true;
     })()`);
@@ -277,6 +293,67 @@ try {
     await waitForSelector(client, '.mobile-arxiv-title-zh', 20000);
     await capture(client, '02a-arxiv-title-translation-390x844.png');
     console.log('Captured an arXiv title translated directly below the English title.');
+    const searchStateBeforeNavigation = await evaluate(client, `(() => ({
+      query: document.querySelector('.mobile-arxiv-search-form input')?.value ?? '',
+      resultCount: document.querySelectorAll('.mobile-arxiv-result').length,
+      translatedTitle: document.querySelector('.mobile-arxiv-title-zh')?.textContent ?? ''
+    }))()`);
+    await evaluate(client, `document.querySelectorAll('.mobile-bottom-nav button')[0].click()`);
+    await waitForSelector(client, '.mobile-library-screen');
+    await evaluate(client, `document.querySelectorAll('.mobile-bottom-nav button')[1].click()`);
+    await waitForSelector(client, '.mobile-arxiv-screen');
+    const searchStateAfterNavigation = await evaluate(client, `(() => ({
+      query: document.querySelector('.mobile-arxiv-search-form input')?.value ?? '',
+      resultCount: document.querySelectorAll('.mobile-arxiv-result').length,
+      translatedTitle: document.querySelector('.mobile-arxiv-title-zh')?.textContent ?? ''
+    }))()`);
+    if (
+      searchStateAfterNavigation.query !== searchStateBeforeNavigation.query ||
+      searchStateAfterNavigation.resultCount !== searchStateBeforeNavigation.resultCount ||
+      searchStateAfterNavigation.translatedTitle !== searchStateBeforeNavigation.translatedTitle
+    ) {
+      throw new Error(`Mobile arXiv navigation lost search state: ${JSON.stringify({ searchStateBeforeNavigation, searchStateAfterNavigation })}`);
+    }
+    console.log(`Preserved ${searchStateAfterNavigation.resultCount} arXiv results and translated title across tab navigation.`);
+    await evaluate(client, `(() => {
+      window.__mobileVisualFetches = [];
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = (...args) => {
+        const request = args[0];
+        window.__mobileVisualFetches.push(typeof request === 'string' ? request : request?.url ?? String(request));
+        return originalFetch(...args);
+      };
+      return true;
+    })()`);
+    await evaluate(client, `document.querySelector('.mobile-arxiv-result-actions button').click()`);
+    try {
+      const saveOutcome = await waitForExpression(
+        client,
+        `document.querySelector('.mobile-reader-screen')
+          ? 'reader'
+          : (document.querySelector('.mobile-global-notice')?.textContent?.includes('失败') ? 'error' : '')`,
+        60000
+      );
+      if (saveOutcome !== 'reader') {
+        throw new Error('The application reported an error while saving the live arXiv PDF.');
+      }
+    } catch (error) {
+      await capture(client, '02b-arxiv-live-pdf-failed-390x844.png');
+      const saveFailureState = await evaluate(client, `(() => ({
+        notice: document.querySelector('.mobile-global-notice')?.textContent ?? '',
+        action: document.querySelector('.mobile-arxiv-result-actions button')?.textContent ?? '',
+        libraryCards: document.querySelectorAll('.mobile-paper-card').length,
+        readerVisible: Boolean(document.querySelector('.mobile-reader-screen')),
+        fetches: window.__mobileVisualFetches ?? []
+      }))()`);
+      throw new Error(`Live arXiv PDF save did not open the reader: ${JSON.stringify(saveFailureState)}; ${error.message}`);
+    }
+    await capture(client, '02b-arxiv-live-pdf-opened-390x844.png');
+    console.log('Downloaded a live arXiv PDF through the same-origin proxy, stored it, and opened the reader.');
+    await evaluate(client, `document.querySelector('.mobile-reader-back').click()`);
+    await waitForSelector(client, '.mobile-library-screen');
+    await evaluate(client, `document.querySelectorAll('.mobile-bottom-nav button')[1].click()`);
+    await waitForSelector(client, '.mobile-arxiv-title-zh');
     await client.send('Network.enable');
     await client.send('Network.setBlockedURLs', { urls: ['*://*/api/arxiv*'] });
     await evaluate(client, `(() => {
@@ -297,7 +374,7 @@ try {
     if (successfulResultCount < 1 || failedSearchState.resultCount !== 0) {
       throw new Error(`Mobile arXiv failed-search cleanup failed: ${JSON.stringify({ successfulResultCount, failedSearchState })}`);
     }
-    await capture(client, '02b-arxiv-error-cleared-390x844.png');
+    await capture(client, '02c-arxiv-error-cleared-390x844.png');
     console.log(`Verified failed arXiv search clears ${successfulResultCount} stale results.`);
   }
   await evaluate(client, `document.querySelectorAll('.mobile-bottom-nav button')[0].click()`);

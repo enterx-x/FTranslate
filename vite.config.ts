@@ -4,6 +4,13 @@ import { defineConfig } from 'vite';
 export default defineConfig(({ mode }) => {
   const isMobileBuild = mode === 'mobile';
   const mobileProxy = {
+    '/api/arxiv-pdf': {
+      target: 'https://arxiv.org',
+      changeOrigin: true,
+      secure: true,
+      headers: { Accept: 'application/pdf' },
+      rewrite: (path: string) => path.replace(/^\/api\/arxiv-pdf/u, '/pdf')
+    },
     '/api/arxiv': {
       target: 'https://export.arxiv.org',
       changeOrigin: true,

@@ -3,6 +3,12 @@
   "buildCommand": "npm run build:mobile",
   "outputDirectory": "dist-mobile",
   "installCommand": "npm ci",
+  "rewrites": [
+    {
+      "source": "/api/arxiv-pdf/:path*",
+      "destination": "https://arxiv.org/pdf/:path*"
+    }
+  ],
   "functions": {
     "api/arxiv.mjs": {
       "maxDuration": 30

@@ -372,6 +372,9 @@ async function fetchMobilePdfBytes(url: string, externalSignal?: AbortSignal): P
     if (controller.signal.aborted) {
       throw new Error(timedOut ? 'PDF 下载超时，请检查网络后重试。' : 'PDF 下载已取消。');
     }
+    if (error instanceof TypeError) {
+      throw new Error('PDF 下载请求失败；请检查网络后重试。');
+    }
     throw error;
   } finally {
     globalThis.clearTimeout(timeoutId);

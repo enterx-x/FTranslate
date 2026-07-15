@@ -271,7 +271,7 @@ function MobileApp() {
             onRemovePaper={handleRemovePaper}
           />
         ) : null}
-        {view === 'search' ? (
+        <div className="mobile-view-layer" hidden={view !== 'search'}>
           <MobileArxivScreen
             savingPaperId={savingPaperId}
             translationSession={translationSession}
@@ -279,7 +279,7 @@ function MobileApp() {
             onCancelSave={() => downloadAbortRef.current?.abort()}
             onTranslationSessionChange={handleTranslationSessionChange}
           />
-        ) : null}
+        </div>
         {view === 'reader' && activePaper && pdfData ? (
           <MobileReaderScreen
             paper={activePaper}
