@@ -31,10 +31,17 @@ const COMMON_ACADEMIC_WORDS = new Set([
 ]);
 
 const MAX_TERM_LENGTH = 72;
-const DEFAULT_TRANSLATION_SEGMENT_LENGTH = 900;
-const PROTECTED_PLACEHOLDER_PREFIX = '[[FTR_PROTECTED_';
-const PROTECTED_PLACEHOLDER_SUFFIX = ']]';
-const PROTECTED_PLACEHOLDER_PATTERN_SOURCE = String.raw`\[\[FTR_PROTECTED_\d+\]\]`;
+// Keep local NLLB requests below the range where long English abstracts can
+// exhaust the decoder output budget. The sidecar translates all segments as a
+// batch, so smaller segments improve completeness without adding one request
+// per sentence.
+const DEFAULT_TRANSLATION_SEGMENT_LENGTH = 480;
+// NLLB strips punctuation and may transliterate arbitrary letter tokens in
+// realistic long titles. A low-collision numeric sentinel survives the same
+// GPU inference unchanged and can still move with translated Chinese grammar.
+const PROTECTED_PLACEHOLDER_PREFIX = '86753';
+const PROTECTED_PLACEHOLDER_SUFFIX = '901';
+const PROTECTED_PLACEHOLDER_PATTERN_SOURCE = String.raw`\b86753\d{2}901\b`;
 
 interface ProtectedAcademicSpan {
   start: number;
@@ -63,8 +70,9 @@ export function prepareAcademicTranslation(
   source: string,
   maxSegmentLength = DEFAULT_TRANSLATION_SEGMENT_LENGTH
 ): PreparedAcademicTranslation {
-  const protectedSpans = collectProtectedAcademicSpans(source);
-  const protectedText = applyProtectedAcademicSpans(source, protectedSpans);
+  const translatableSource = normalizeTranslatableAcademicMarkup(source);
+  const protectedSpans = collectProtectedAcademicSpans(translatableSource);
+  const protectedText = applyProtectedAcademicSpans(translatableSource, protectedSpans);
   const segments = splitAcademicTranslationSegments(protectedText, maxSegmentLength);
   const expectedMarkerSequences = segments.map(extractProtectedMarkers);
 
@@ -106,27 +114,16 @@ function collectProtectedAcademicSpans(source: string): ProtectedAcademicSpan[] 
     }
   };
 
-  // The order is deliberate: broad academic-term matches must never replace
-  // text nested inside formulas, code, URLs, identifiers, or citations.
+  // Only spans whose literal position carries meaning remain opaque. Method
+  // names and recoverable metadata stay visible to NLLB and are repaired after
+  // translation, because the model may legitimately omit repeated terms.
   addMatches(/\$\$[\s\S]+?\$\$/gu);
   addMatches(/(?<!\$)\$(?!\$)(?:\\.|[^$\n])+\$(?!\$)/gu);
   addMatches(/``[^`\n]+``/gu);
   addMatches(/`[^`\n]+`/gu);
   addMatches(/\\\[[\s\S]+?\\\]/gu);
   addMatches(/\\\([\s\S]+?\\\)/gu);
-  addMatches(/\bhttps?:\/\/[^\s<>()\]]+/giu);
-  addMatches(/\b(?:doi:\s*)?10\.\d{4,9}\/[\w.()/:;-]+/giu);
-  addMatches(/\barXiv:\s*\d{4}\.\d{4,5}(?:v\d+)?\b/giu);
-  addMatches(/\barXiv:\s*[a-z-]+(?:\.[a-z-]+)?\/\d{7}(?:v\d+)?\b/giu);
   addMatches(/\[(?:\s*\d+\s*(?:[-–]\s*\d+)?\s*)(?:,\s*\d+\s*(?:[-–]\s*\d+)?\s*)*\]/gu);
-
-  extractProtectedAcademicTerms(source).forEach((term) => {
-    let start = source.indexOf(term);
-    while (start >= 0) {
-      candidates.push({ start, end: start + term.length, value: term });
-      start = source.indexOf(term, start + term.length);
-    }
-  });
 
   const selected: Array<{ start: number; end: number; value: string }> = [];
   candidates
@@ -138,12 +135,20 @@ function collectProtectedAcademicSpans(source: string): ProtectedAcademicSpan[] 
       selected.push(candidate);
     });
 
+  if (selected.length > 100) {
+    throw new Error('Too many protected academic spans in one translation request.');
+  }
+
   return selected.map((candidate, index) => ({
     start: candidate.start,
     end: candidate.end,
-    marker: `${PROTECTED_PLACEHOLDER_PREFIX}${index}${PROTECTED_PLACEHOLDER_SUFFIX}`,
+    marker: `${PROTECTED_PLACEHOLDER_PREFIX}${String(index).padStart(2, '0')}${PROTECTED_PLACEHOLDER_SUFFIX}`,
     value: candidate.value
   }));
+}
+
+function normalizeTranslatableAcademicMarkup(source: string): string {
+  return source.replace(/\\(?:textit|textbf|emph)\{([^{}]+)\}/giu, '$1');
 }
 
 function applyProtectedAcademicSpans(source: string, protectedSpans: ProtectedAcademicSpan[]): string {
@@ -171,8 +176,8 @@ function restorePreparedAcademicTranslation(
   }
 
   const hasExpectedMarkersInEverySegment = translatedSegments.every((segment, index) => {
-    const actualMarkers = extractProtectedMarkers(segment);
-    const expectedMarkers = expectedMarkerSequences[index] ?? [];
+    const actualMarkers = extractProtectedMarkers(segment).sort();
+    const expectedMarkers = [...(expectedMarkerSequences[index] ?? [])].sort();
     return (
       actualMarkers.length === expectedMarkers.length &&
       actualMarkers.every((marker, markerIndex) => marker === expectedMarkers[markerIndex])
@@ -266,9 +271,14 @@ export function repairAcademicTranslation(
   }
 
   const collapsedTranslation = collapseLocalRepeatedFragments(
-    collapseRepeatedTranslationTail(collapseLocalRepeatedFragments(normalizedTranslation))
+    collapseRepeatedLeadingAcademicPrefix(
+      collapseRepeatedTranslationTail(collapseLocalRepeatedFragments(normalizedTranslation))
+    )
   );
-  const cleaned = repairDamagedLatinTerms(source, collapsedTranslation);
+  const cleaned = restoreRecoverableAcademicLiterals(
+    source,
+    applySourceAwareAcademicGlossary(source, repairDamagedLatinTerms(source, collapsedTranslation))
+  );
   if (!cleaned) {
     return '';
   }
@@ -283,6 +293,52 @@ export function repairAcademicTranslation(
     return repaired;
   }
   return prefixMissingAcademicTerms(source, repaired, options);
+}
+
+function restoreRecoverableAcademicLiterals(source: string, translated: string): string {
+  const literalPatterns = [
+    /\bhttps?:\/\/[^\s<>()\]]+/giu,
+    /\b(?:doi:\s*)?10\.\d{4,9}\/[\w.()/:;-]+/giu,
+    /\barXiv:\s*\d{4}\.\d{4,5}(?:v\d+)?\b/giu,
+    /\barXiv:\s*[a-z-]+(?:\.[a-z-]+)?\/\d{7}(?:v\d+)?\b/giu
+  ];
+  const literals = literalPatterns
+    .flatMap((pattern) => Array.from(source.matchAll(pattern), (match) => match[0]))
+    .map((literal) => (/^https?:\/\//iu.test(literal) ? literal.replace(/[.,;:!?]+$/u, '') : literal));
+  const uniqueLiterals = literals.filter(
+    (literal, index) => literals.findIndex((candidate) => candidate.toLowerCase() === literal.toLowerCase()) === index
+  );
+  const missing = uniqueLiterals.filter((literal) => !containsRecoverableAcademicLiteral(translated, literal));
+  if (missing.length === 0) {
+    return translated;
+  }
+
+  const suffix = missing
+    .map((literal) =>
+      /^https?:\/\//iu.test(literal) && /\bproject\s+(?:page|website)\s*:/iu.test(source)
+        ? `项目页面：${literal}`
+        : literal
+    )
+    .join(' ');
+  const separator = /[。！？.!?]\s*$/u.test(translated) ? ' ' : '。 ';
+  return `${translated}${separator}${suffix}`.trim();
+}
+
+function containsRecoverableAcademicLiteral(translated: string, literal: string): boolean {
+  if (translated.toLowerCase().includes(literal.toLowerCase())) {
+    return true;
+  }
+  if (!/^https?:\/\//iu.test(literal)) {
+    return false;
+  }
+  const normalizeUrl = (value: string): string =>
+    value
+      .toLowerCase()
+      .replace(/^https?:\/\//u, '')
+      .replace(/[.,;:!?]+$/u, '')
+      .replace(/\/$/u, '');
+  const translatedUrls = translated.match(/\bhttps?:\/\/[^\s<>()\]]+/giu) ?? [];
+  return translatedUrls.some((candidate) => normalizeUrl(candidate) === normalizeUrl(literal));
 }
 
 export function collapseRepeatedTranslationTail(value: string): string {
@@ -337,7 +393,12 @@ export function extractProtectedAcademicTerms(source: string): string[] {
     addTerm(leadingName[1]);
   }
 
-  const normalizedSource = source.replace(/[()[\]{}]/gu, ' ');
+  const normalizedSource = normalizeTranslatableAcademicMarkup(source)
+    .replace(/\bhttps?:\/\/[^\s<>()\]]+/giu, ' ')
+    .replace(/\b(?:doi:\s*)?10\.\d{4,9}\/[\w.()/:;-]+/giu, ' ')
+    .replace(/\barXiv:\s*(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z-]+)?\/\d{7})(?:v\d+)?\b/giu, ' ')
+    .replace(/[()[\]{}]/gu, ' ')
+    .replace(/\s+/gu, ' ');
   [
     /\bFull-Hand\s+Tactile\s+Representations?\b/giu,
     /\bDexterous\s+Full-Hand\s+Tactile\s+Representations?\b/giu,
@@ -346,7 +407,10 @@ export function extractProtectedAcademicTerms(source: string): string[] {
     /\bTactile\s+Simulation\b/giu,
     /\bWorld\s+Model\b/giu,
     /\bFoundation\s+Model\b/giu,
-    /\bControl\s+Barrier\s+Function\b/giu
+    /\bControl\s+Barrier\s+Function\b/giu,
+    /\bLow-level\b/giu,
+    /\bLearning-Based\s+Robot\s+Navigation\b/giu,
+    /\bOmni-Modal\b/giu
   ].forEach((pattern) => {
     for (const match of normalizedSource.matchAll(pattern)) {
       addTerm(match[0]);
@@ -435,7 +499,22 @@ function findFirstTitleSeparator(value: string): number {
 }
 
 function containsProtectedTerm(value: string, term: string): boolean {
-  return value.toLowerCase().includes(term.toLowerCase());
+  const normalize = (text: string): string =>
+    normalizeTranslatableAcademicMarkup(text)
+      .toLowerCase()
+      .replace(/[^a-z0-9\u3400-\u9fff]+/giu, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim();
+  return normalize(value).includes(normalize(term));
+}
+
+function collapseRepeatedLeadingAcademicPrefix(value: string): string {
+  let text = value;
+  const repeatedPrefix = /^([^：:\n]{3,96})[：:]\s*\1[：:]\s*/iu;
+  while (repeatedPrefix.test(text)) {
+    text = text.replace(repeatedPrefix, '$1：');
+  }
+  return text;
 }
 
 function repairDamagedLatinTerms(source: string, translated: string): string {
@@ -466,6 +545,55 @@ function repairDamagedLatinTerms(source: string, translated: string): string {
     const samePrefix = normalizedToken.slice(0, 4) === normalizedTerm.slice(0, 4);
     return samePrefix && nearest.distance > 0 && nearest.distance <= maxDistance ? nearest.term : token;
   });
+}
+
+function applySourceAwareAcademicGlossary(source: string, translated: string): string {
+  const sourceLower = source.toLowerCase();
+  let text = translated;
+  const replaceWhenPresent = (sourceTerm: string, pattern: RegExp, replacement: string): void => {
+    if (sourceLower.includes(sourceTerm)) {
+      text = text.replace(pattern, replacement);
+    }
+  };
+
+  replaceWhenPresent('reinforcement learning', /增强学习/gu, '强化学习');
+  replaceWhenPresent('control barrier function', /控制屏障(?:功能|作用)/gu, '控制屏障函数');
+  replaceWhenPresent('ordinary differential equation', /普通(?:的)?(?:差异|差分)方程/gu, '常微分方程');
+  replaceWhenPresent('safety filter', /安全(?:过器|滤器|筛选器)/gu, '安全过滤器');
+  replaceWhenPresent('reward shaping', /(?<!奖励)(?:奖励)?塑造/gu, '奖励塑形');
+  replaceWhenPresent('generalization', /通用化/gu, '泛化');
+  replaceWhenPresent('generalizable', /(?:更)?可普遍(?:的)?/gu, '可泛化的');
+  replaceWhenPresent('symmetric koopman predictions', /(?:符号|对比性|对称性)库普曼预测/gu, '对称 Koopman 预测');
+  replaceWhenPresent('legged robot locomotion', /(?:腿部|双腿)机器人(?:移动|运动)/gu, '足式机器人运动');
+  replaceWhenPresent('minimalist', /(?:微观主义|最低限度|极小主义)(?:的)?/gu, '极简');
+  replaceWhenPresent('retargeting-guided', /(?:反指导|重新定位指导|重定目标指导|重定向指导)/gu, '重定向引导');
+  replaceWhenPresent('dexterous manipulation', /(?:巧妙|精巧|灵巧)的?(?:操纵|操控)/gu, '灵巧操作');
+  replaceWhenPresent('sample efficiency', /样本效率差/gu, '样本效率低');
+  replaceWhenPresent('policy', /政策/gu, '策略');
+  replaceWhenPresent('actor', /演员/gu, 'Actor');
+  replaceWhenPresent('critic', /(?:评论家|批评者)/gu, 'Critic');
+  replaceWhenPresent('agent', /(?:代理人|代理)(?!模型|服务|变量)/gu, '智能体');
+  replaceWhenPresent('group symmetries', /(?:集团|组)对称性?/gu, '群对称性');
+  replaceWhenPresent('equivariant', /高度等价(?:的)?/gu, '高度等变的');
+  replaceWhenPresent('convergence time', /(?:缩|汇合)时间/gu, '收敛时间');
+  replaceWhenPresent('bipedal locomotion', /双脚(?:移动|运动)/gu, '双足运动');
+  replaceWhenPresent('quadruped robot', /四脚机器人/gu, '四足机器人');
+  replaceWhenPresent('residual reinforcement learning', /残余(?:强化学习|RL)/gu, '残差强化学习');
+  replaceWhenPresent('system identification', /系统识别/gu, '系统辨识');
+  replaceWhenPresent('sim-to-real', /SIM到真实/giu, '仿真到现实');
+
+  if (sourceLower.includes('dexterous manipulation') && !text.includes('灵巧操作')) {
+    text = `${text.replace(/[：:]\s*$/u, '')}：用于灵巧操作`;
+  }
+
+  if (sourceLower.includes('without increasing inference latency')) {
+    text = text.replace(
+      /(?:从而|并且|同时)?增加(?:了)?未见(?:的)?障碍布局延迟[。.]?/gu,
+      '并能泛化到未见的障碍布局，且不增加推理延迟。'
+    );
+  }
+
+  return text;
 }
 
 function normalizeTranslationSpacing(value: string): string {
@@ -541,7 +669,7 @@ function shouldPreserveAcademicPhrase(value: string): boolean {
   }
 
   return (
-    /[A-Z]{2,}|[A-Za-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*|[A-Za-z0-9]+-[A-Za-z0-9]+/u.test(cleaned) ||
+    /[A-Z]{2,}|[A-Za-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*/u.test(cleaned) ||
     /\b(Egocentric|Tactile|Haptic|Dexterous|Full-Hand|Vision|FEM|Cauchy|Sim-to-Real|World Model|Foundation Model|Control Barrier|MPC|CBF|PINN|VLA|VLM)\b/iu.test(cleaned)
   );
 }

@@ -17,6 +17,7 @@ import {
   advanceArxivTranslationQueue,
   canStartArxivManualTranslation,
   getArxivTranslationActionState,
+  getArxivTranslationFeedbackText,
   describeLocalTranslationStatus,
   getArxivCardPreviewText,
   getArxivResultDensityConfig,
@@ -26,6 +27,7 @@ import {
   resolveSelectedArxivPaper,
   resolveArxivExecutedQuerySnapshot,
   resolveArxivPaperInsightForExecutedQuery,
+  restoreArxivFastTitleTranslation,
   runArxivTranslationBatches,
   shouldQueueArxivMetadataTranslation,
   upsertArxivQueuedPaper
@@ -430,6 +432,27 @@ describe('ArxivSearchPage result display', () => {
     expect(getArxivTranslationActionState(false, true, true).disabled).toBe(true);
   });
 
+  it('describes visible foreground translation stages with elapsed time', () => {
+    const startedAt = 1_000;
+    expect(getArxivTranslationFeedbackText({ paperId: paper.id, phase: 'title', startedAt }, 1_460)).toEqual({
+      label: '正在生成中文标题',
+      elapsedLabel: '0.5s'
+    });
+    expect(
+      getArxivTranslationFeedbackText(
+        { paperId: paper.id, phase: 'abstract', startedAt, titleElapsedMs: 460 },
+        2_300
+      )
+    ).toEqual({ label: '标题已显示，正在翻译摘要', elapsedLabel: '1.3s' });
+  });
+
+  it('accepts a fast title preview only when it restores to a real Chinese translation', () => {
+    expect(restoreArxivFastTitleTranslation(paper.title, ['用于机器人导航的安全强化学习'])).toBe(
+      '用于机器人导航的安全强化学习'
+    );
+    expect(restoreArxivFastTitleTranslation(paper.title, [paper.title])).toBe('');
+  });
+
   it('builds explicit preview, page, and foreground IPC request shapes', () => {
     expect(buildArxivTranslationBatchRequest([paper], 'preview', 7)).toMatchObject({
       papers: [expect.objectContaining({ stableId: paper.stableId })],
@@ -438,6 +461,10 @@ describe('ArxivSearchPage result display', () => {
     });
     expect(buildArxivTranslationBatchRequest([paper], 'background', 7).priority).toBe('background');
     expect(buildArxivTranslationBatchRequest([paper], 'foreground', 7).priority).toBe('foreground');
+    expect(
+      buildArxivTranslationBatchRequest([paper], 'foreground', 7, { [paper.stableId]: '机器人导航的安全强化学习' })
+        .papers[0].pretranslatedTitleZh
+    ).toBe('机器人导航的安全强化学习');
   });
 
   it('does not produce a metadata patch for a stale search translation session', () => {

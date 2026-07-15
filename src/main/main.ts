@@ -1241,6 +1241,24 @@ async function translateWithLocalEngine(request: LocalTranslateBatchRequest): Pr
     return { texts: [], engine: 'nllb-ct2-int8', device: 'unknown' };
   }
 
+  const isVisualArxivFastTitle =
+    isVisualArxivMockEnabled() &&
+    request.sourceLanguage === 'en' &&
+    request.targetLanguage === 'zh' &&
+    texts.length === 1 &&
+    /Reinforcement Learning for Active Perception/i.test(texts[0]);
+  if (isVisualArxivFastTitle) {
+    // Keep the visual-only request slow enough to capture the attached progress state,
+    // while avoiding a real model startup inside deterministic layout checks.
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    return {
+      texts: ['面向自主机器人导航主动感知的强化学习'],
+      engine: 'nllb-ct2-int8',
+      device: 'cpu',
+      model: 'visual-arxiv-progress-mock'
+    };
+  }
+
   if (request.forceEngine === 'argos') {
     return translateTextsWithArgosEngine(texts, timeoutMs, {
       sourceLanguage: request.sourceLanguage,
@@ -3256,6 +3274,7 @@ async function translateArxivPaperForIpc(
   request: ArxivTitleAbstractTranslationRequest
 ): Promise<ArxivTitleAbstractTranslationResult> {
   if (isVisualArxivMockEnabled()) {
+    await new Promise((resolve) => setTimeout(resolve, 360));
     return buildVisualArxivTranslationResult(request);
   }
   return getArxivTranslationService().translatePaper(request);
@@ -3266,6 +3285,7 @@ async function translateArxivPapersForIpc(
 ): Promise<ArxivTitleAbstractTranslationResult[]> {
   const safeRequest = Array.isArray(request.papers) ? request.papers.slice(0, 100) : [];
   if (isVisualArxivMockEnabled()) {
+    await new Promise((resolve) => setTimeout(resolve, 360));
     return safeRequest.map((item) => buildVisualArxivTranslationResult(item));
   }
   return getArxivTranslationService().translatePapers(safeRequest, {

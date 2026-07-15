@@ -23089,6 +23089,127 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   isolation: isolate;
 }
 
+/* arXiv translation progress stays attached to the paper that owns the work. */
+.arxiv-translation-trigger.is-translation-starting {
+  position: relative;
+  border-color: #405c7c;
+  background: #405c7c;
+  color: transparent;
+  box-shadow: 0 0 0 3px rgba(64, 92, 124, 0.13);
+}
+
+.arxiv-translation-trigger.is-translation-starting > * {
+  opacity: 0;
+}
+
+.arxiv-translation-trigger.is-translation-starting::after {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  content: attr(data-immediate-label);
+  font-size: inherit;
+  font-weight: 760;
+}
+
+.arxiv-translation-feedback {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto auto;
+  gap: 7px;
+  align-items: center;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid #d7e0ea;
+  border-left: 3px solid #526d8f;
+  border-radius: 7px;
+  background: #f4f7fa;
+  color: #334155;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.arxiv-translation-feedback-label {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arxiv-translation-feedback time {
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.arxiv-translation-feedback-indicator {
+  display: inline-grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  border: 2px solid #b6c4d4;
+  border-top-color: #526d8f;
+  border-radius: 50%;
+  color: #526d8f;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.arxiv-translation-feedback:is(.is-warming, .is-title, .is-abstract) .arxiv-translation-feedback-indicator {
+  animation: arxiv-translation-spin 720ms linear infinite;
+}
+
+.arxiv-translation-feedback-pulse {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #526d8f;
+  box-shadow: 0 0 0 0 rgba(82, 109, 143, 0.34);
+  animation: arxiv-translation-pulse 1.25s ease-out infinite;
+}
+
+.arxiv-translation-feedback.is-done {
+  border-color: #c9dfd2;
+  border-left-color: #3f7b59;
+  background: #f2f8f4;
+  color: #28523a;
+}
+
+.arxiv-translation-feedback.is-done .arxiv-translation-feedback-indicator {
+  border-color: #7fa58e;
+  color: #2f6b49;
+}
+
+.arxiv-translation-feedback.is-error {
+  border-color: #ead3d0;
+  border-left-color: #a85a52;
+  background: #fbf5f4;
+  color: #7f3f38;
+}
+
+.arxiv-translation-feedback.is-error .arxiv-translation-feedback-indicator {
+  border-color: #c48780;
+  color: #8e463f;
+}
+
+@keyframes arxiv-translation-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes arxiv-translation-pulse {
+  70% { box-shadow: 0 0 0 5px rgba(82, 109, 143, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(82, 109, 143, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arxiv-translation-feedback:is(.is-warming, .is-title, .is-abstract) .arxiv-translation-feedback-indicator,
+  .arxiv-translation-feedback-pulse,
+  .arxiv-translation-trigger.is-translation-starting {
+    animation: none;
+  }
+}
+
 .arxiv-page .arxiv-search-card {
   position: relative;
   z-index: 30;

@@ -163,6 +163,7 @@ export class ArxivTranslationService {
       stableId: string;
       title: string;
       summary: string;
+      pretranslatedTitleZh: string;
       cacheKey: string;
     }> = [];
 
@@ -170,6 +171,7 @@ export class ArxivTranslationService {
       const stableId = coerceTranslationInput(request.stableId);
       const title = coerceTranslationInput(request.title);
       const summary = coerceTranslationInput(request.summary);
+      const pretranslatedTitleZh = coerceTranslationInput(request.pretranslatedTitleZh);
 
       if (!stableId || !title || !summary) {
         results[index] = buildFailedTranslationResult(
@@ -186,7 +188,7 @@ export class ArxivTranslationService {
         return;
       }
 
-      missing.push({ index, stableId, title, summary, cacheKey });
+      missing.push({ index, stableId, title, summary, pretranslatedTitleZh, cacheKey });
     });
 
     if (missing.length === 0) {
@@ -223,7 +225,9 @@ export class ArxivTranslationService {
         const preparedItems = remaining.map((item) => ({
           sourceTitle: item.title,
           sourceAbstract: item.summary,
-          title: prepareAcademicTranslation(item.title),
+          title: isUsableTranslatedText(item.pretranslatedTitleZh, item.title)
+            ? preparePretranslatedAcademicText(item.pretranslatedTitleZh)
+            : prepareAcademicTranslation(item.title),
           abstract: prepareAcademicTranslation(item.summary)
         }));
         const texts = preparedItems.flatMap((item) => [...item.title.segments, ...item.abstract.segments]);
@@ -534,6 +538,16 @@ function buildUniqueTranslationBatch(texts: string[]): { texts: string[]; indexe
   return { texts: uniqueTexts, indexes };
 }
 
+function preparePretranslatedAcademicText(text: string): PreparedAcademicTranslation {
+  return {
+    segments: [],
+    restore: (translatedSegments) =>
+      translatedSegments.length === 0
+        ? { ok: true, text }
+        : { ok: false, text: '', reason: 'segment-count-mismatch' }
+  };
+}
+
 function evaluatePreparedTranslations(
   preparedItems: PreparedTranslationBatchItem[],
   translatedTexts: string[]
@@ -575,7 +589,7 @@ function buildTranslationCacheKey(input: { stableId: string; title: string; summ
     .createHash('sha256')
     .update(
       JSON.stringify({
-         version: 3,
+        version: 4,
         target: 'zh',
         stableId: input.stableId,
         title: input.title,

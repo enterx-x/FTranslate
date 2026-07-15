@@ -21,6 +21,16 @@ describe('academic translation quality repair', () => {
     expect(terms).toContain('CBF-MPC');
   });
 
+  it('lets ordinary hyphenated prose translate instead of protecting most of a title', () => {
+    const terms = extractProtectedAcademicTerms(
+      'Physics-Informed Safe Reinforcement Learning for Contact-Rich Robot Navigation with safety-layer baselines.'
+    );
+
+    expect(terms).not.toContain('Physics-Informed');
+    expect(terms).not.toContain('Contact-Rich');
+    expect(terms).not.toContain('safety-layer');
+  });
+
   it('extracts title-case academic phrases that local translators should not translate', () => {
     const terms = extractProtectedAcademicTerms(
       'HT-Bench: Benchmarking and Learning Dexterous Full-Hand Tactile Representations with Egocentric Vision'
@@ -68,6 +78,23 @@ describe('academic translation quality repair', () => {
 
     expect(repaired.match(/并通过测量和测量系统进行了更高的测量/gu)).toHaveLength(1);
     expect(repaired).toContain('触觉遥操作系统');
+  });
+
+  it('repairs source-grounded RL and safety terminology without another model call', () => {
+    const source =
+      'We study reinforcement learning with control barrier functions, an ordinary differential equation residual, a safety filter, reward shaping, and generalization without increasing inference latency.';
+    const repaired = repairAcademicTranslation(
+      source,
+      '我们研究增强学习、控制屏障功能、普通的差异方程残差、安全过器、塑造和通用化，从而增加了未见的障碍布局延迟。',
+      { mode: 'abstract' }
+    );
+
+    expect(repaired).toContain('强化学习');
+    expect(repaired).toContain('控制屏障函数');
+    expect(repaired).toContain('常微分方程');
+    expect(repaired).toContain('安全过滤器');
+    expect(repaired).toContain('奖励塑形');
+    expect(repaired).toContain('泛化到未见的障碍布局，且不增加推理延迟');
   });
 
   it('repairs AI translation results before storing provider metadata', () => {
@@ -137,13 +164,14 @@ describe('academic translation quality repair', () => {
     );
   });
 
-  it('round-trips protected academic spans through opaque placeholders', () => {
+  it('strictly protects formulas, code, and citations while leaving recoverable terms visible to translation', () => {
     const source =
       'OmniAgent uses $x^2 + y^2$ and $$\\mathcal{L}=\\lambda \\|x\\|$$ with `policy.step()` and ``policy batch``; constraints are \\(E = mc^2\\) and \\[\\int_a^b f(x)dx\\]. See https://example.org/paper, doi:10.48550/arXiv.2607.01234, arXiv:2607.01234, arXiv:hep-th/9901001, and [1-3, 5] for Sim-to-Real CBF-MPC.';
     const prepared = prepareAcademicTranslation(source);
 
     expect(prepared.segments).toHaveLength(1);
-    expect(prepared.segments[0]).not.toContain('OmniAgent');
+    expect(prepared.segments[0]).toContain('OmniAgent');
+    expect(prepared.segments[0]).toContain('https://example.org/paper');
     expect(prepared.segments[0]).not.toContain('$x^2 + y^2$');
 
     const restored = prepared.restore([`这是译文：${prepared.segments[0]}`]);
@@ -165,6 +193,73 @@ describe('academic translation quality repair', () => {
     expect(restored.text).toContain('CBF-MPC');
   });
 
+  it('restores project URLs deterministically when the translator omits metadata trailers', () => {
+    const source =
+      'We validate the method on challenging robot locomotion tasks. Project page: https://example.org/project/';
+    const repaired = repairAcademicTranslation(source, '我们在具有挑战性的机器人运动任务上验证了该方法。', {
+      mode: 'abstract'
+    });
+
+    expect(repaired).toContain('项目页面：https://example.org/project/');
+  });
+
+  it('does not duplicate equivalent http and https project links', () => {
+    const source = 'Video and code are available at https://example.org/REGRIND.';
+    const repaired = repairAcademicTranslation(source, '视频和代码可在 http://example.org/REGRIND 上找到。', {
+      mode: 'abstract'
+    });
+
+    expect(repaired.match(/https?:\/\/example\.org\/REGRIND/giu)).toHaveLength(1);
+  });
+
+  it('repairs common reinforcement-learning terminology without another model call', () => {
+    const source =
+      'A Minimalist Retargeting-Guided Reinforcement Learning Recipe for Dexterous Manipulation uses an actor, critic, policy, agent, residual reinforcement learning, and system identification.';
+    const repaired = repairAcademicTranslation(
+      source,
+      '微观主义的反指导强化学习方法用于巧妙的操纵，并使用演员、评论家、政策、代理人、残余强化学习和系统识别。',
+      { mode: 'abstract' }
+    );
+
+    expect(repaired).toContain('极简');
+    expect(repaired).toContain('重定向引导');
+    expect(repaired).toContain('灵巧操作');
+    expect(repaired).toContain('Actor');
+    expect(repaired).toContain('Critic');
+    expect(repaired).toContain('策略');
+    expect(repaired).toContain('智能体');
+    expect(repaired).toContain('残差强化学习');
+    expect(repaired).toContain('系统辨识');
+
+    const repairedTitle = repairAcademicTranslation(
+      'A Minimalist Retargeting-Guided Reinforcement Learning Recipe for Dexterous Manipulation',
+      '微观主义的反指导强化学习方法',
+      { mode: 'title' }
+    );
+    expect(repairedTitle).toContain('极简');
+    expect(repairedTitle).toContain('重定向引导');
+    expect(repairedTitle).toContain('灵巧操作');
+  });
+
+  it('removes presentation-only LaTeX text commands before sending prose to the translator', () => {
+    const prepared = prepareAcademicTranslation('We introduce \\textit{SKooP (Symmetric Koopman Predictions)}.');
+
+    expect(prepared.segments).toEqual(['We introduce SKooP (Symmetric Koopman Predictions).']);
+  });
+
+  it('keeps academic term repair idempotent and ignores method-like URL paths', () => {
+    const source =
+      'We introduce \\textit{SKooP (Symmetric Koopman Predictions)}. Project page: https://example.org/SymmetricKoopmanPredictions/';
+    const translated =
+      'SKooP Symmetric Koopman Predictions：SKooP Symmetric Koopman Predictions：我们提出了 SKOOP（Symmetric Koopman Predictions）。';
+    const repairedOnce = repairAcademicTranslation(source, translated, { mode: 'abstract' });
+    const repairedTwice = repairAcademicTranslation(source, repairedOnce, { mode: 'abstract' });
+
+    expect(repairedOnce).not.toContain('SKooP Symmetric Koopman Predictions：SKooP Symmetric Koopman Predictions：');
+    expect(repairedTwice).toBe(repairedOnce);
+    expect(extractProtectedAcademicTerms(source)).not.toContain('SymmetricKoopmanPredictions');
+  });
+
   it('splits long abstracts at sentence boundaries and restores all segments in order', () => {
     const source = Array.from(
       { length: 18 },
@@ -173,7 +268,7 @@ describe('academic translation quality repair', () => {
     const prepared = prepareAcademicTranslation(source);
 
     expect(prepared.segments.length).toBeGreaterThan(1);
-    expect(prepared.segments.every((segment) => segment.length <= 900)).toBe(true);
+    expect(prepared.segments.every((segment) => segment.length <= 480)).toBe(true);
 
     const restored = prepared.restore(prepared.segments.map((segment, index) => `第${index}段：${segment}`));
 
@@ -183,12 +278,12 @@ describe('academic translation quality repair', () => {
     expect(restored.text.indexOf('Sentence-00')).toBeLessThan(restored.text.indexOf('Sentence-17'));
   });
 
-  it('rejects protected markers moved across or reordered within translated segments', () => {
+  it('allows natural marker reordering within a segment but rejects markers moved across segments', () => {
     const source =
       'We use $x^2$ with `policy.step()` in the first experiment. ' +
       `The second experiment has \\(E=mc^2\\) and ${'details '.repeat(130)}.`;
     const prepared = prepareAcademicTranslation(source);
-    const markerGroups = prepared.segments.map((segment) => segment.match(/\[\[FTR_PROTECTED_\d+\]\]/gu) ?? []);
+    const markerGroups = prepared.segments.map((segment) => segment.match(/\b86753\d{2}901\b/gu) ?? []);
     const firstSegment = markerGroups.findIndex((markers) => markers.length >= 2);
     const secondSegment = markerGroups.findIndex((markers, index) => index !== firstSegment && markers.length > 0);
 
@@ -212,7 +307,7 @@ describe('academic translation quality repair', () => {
       return segment;
     });
 
-    expect(prepared.restore(reordered).ok).toBe(false);
+    expect(prepared.restore(reordered).ok).toBe(true);
     expect(prepared.restore(crossSegment).ok).toBe(false);
   });
 

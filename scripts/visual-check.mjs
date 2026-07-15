@@ -4118,6 +4118,9 @@ async function runArxivSearchScenario(client) {
   }`);
 
   let resultsSnapshot = null;
+  let translationTriggerSnapshot = null;
+  let translationProgressSnapshot = null;
+  let preTranslationZhCount = null;
   let threeColumnLayout = null;
   let twoColumnLayout = null;
   let oneColumnLayout = null;
@@ -4182,6 +4185,9 @@ async function runArxivSearchScenario(client) {
           cardCount: cards.length,
           cardRects,
           zhCount: cards.filter((card) => /强化学习|中文摘要/.test(card.textContent ?? '')).length,
+          hasCompletedTranslationFeedback: Boolean(
+            document.querySelector('.arxiv-translation-feedback.is-done')
+          ),
           hasPageFilterPanel: Boolean(document.querySelector('.arxiv-filter-panel')),
           hasTopPageFilters: (() => {
             const advancedFilters = document.querySelector('.arxiv-query-options');
@@ -4210,7 +4216,43 @@ async function runArxivSearchScenario(client) {
           )
         };
       }`);
-      if (resultsSnapshot.cardCount >= 3 && resultsSnapshot.zhCount >= 1) {
+      if (resultsSnapshot.cardCount >= 3 && !translationTriggerSnapshot) {
+        preTranslationZhCount = resultsSnapshot.zhCount;
+        translationTriggerSnapshot = await evaluateJson(client, `() => {
+          const card = document.querySelector('.arxiv-results-list > .arxiv-paper-card');
+          const button = card?.querySelector('.arxiv-translation-trigger');
+          const disabledBeforeClick = button?.disabled ?? null;
+          button?.click();
+          return {
+            found: Boolean(button),
+            disabledBeforeClick,
+            immediateBusy: button?.getAttribute('aria-busy') === 'true',
+            immediateClass: button?.classList.contains('is-translation-starting') ?? false,
+            immediateLabel: button?.getAttribute('data-immediate-label') ?? ''
+          };
+        }`);
+        await wait(110);
+        translationProgressSnapshot = await evaluateJson(client, `() => {
+          const feedback = document.querySelector('.arxiv-translation-feedback');
+          const rect = feedback?.getBoundingClientRect();
+          return {
+            found: Boolean(feedback),
+            active: Boolean(feedback?.matches('.is-warming, .is-title, .is-abstract')),
+            label: feedback?.querySelector('.arxiv-translation-feedback-label')?.textContent?.trim() ?? '',
+            width: rect ? Math.round(rect.width) : 0,
+            height: rect ? Math.round(rect.height) : 0,
+            hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+          };
+        }`);
+        await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+          writeFile(path.join(outputDir, 'arxiv-translation-progress.png'), Buffer.from(shot.data, 'base64'))
+        );
+      }
+      if (
+        resultsSnapshot.cardCount >= 3 &&
+        resultsSnapshot.zhCount >= 1 &&
+        resultsSnapshot.hasCompletedTranslationFeedback
+      ) {
         break;
       }
       await wait(250);
@@ -4221,6 +4263,19 @@ async function runArxivSearchScenario(client) {
       !resultsSnapshot.hasResultsList ||
       resultsSnapshot.cardCount < 3 ||
       resultsSnapshot.zhCount < 1 ||
+      !resultsSnapshot.hasCompletedTranslationFeedback ||
+      preTranslationZhCount !== 0 ||
+      !translationTriggerSnapshot?.found ||
+      translationTriggerSnapshot.disabledBeforeClick !== false ||
+      !translationTriggerSnapshot.immediateBusy ||
+      !translationTriggerSnapshot.immediateClass ||
+      translationTriggerSnapshot.immediateLabel !== '翻译中' ||
+      !translationProgressSnapshot?.found ||
+      !translationProgressSnapshot.active ||
+      !/标题|加载/.test(translationProgressSnapshot.label) ||
+      translationProgressSnapshot.width < 120 ||
+      translationProgressSnapshot.height < 20 ||
+      translationProgressSnapshot.hasHorizontalOverflow ||
       resultsSnapshot.hasPageFilterPanel ||
       !resultsSnapshot.hasTopPageFilters ||
       compressedCard ||
@@ -4240,7 +4295,14 @@ async function runArxivSearchScenario(client) {
       await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
         writeFile(path.join(outputDir, 'arxiv-search-results-failed.png'), Buffer.from(shot.data, 'base64'))
       );
-      throw new Error(`arxiv: expected readable translated result cards, got ${JSON.stringify(resultsSnapshot)}`);
+      throw new Error(
+        `arxiv: expected explicit progressive translation and readable result cards, got ${JSON.stringify({
+          resultsSnapshot,
+          preTranslationZhCount,
+          translationTriggerSnapshot,
+          translationProgressSnapshot
+        })}`
+      );
     }
 
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>

@@ -14,8 +14,8 @@ import {
 } from './arxivTranslationService';
 
 function preserveProtectedAcademicMarkers(source: string, translated: string): string {
-  const markers = source.match(/\[\[FTR_PROTECTED_\d+\]\]/gu) ?? [];
-  return `${markers.join('')}${translated}`;
+  const markers = source.match(/\b86753\d{2}901\b/gu) ?? [];
+  return `${markers.join(' ')} ${translated}`.trim();
 }
 
 describe('ArxivTranslationService', () => {
@@ -121,7 +121,7 @@ describe('ArxivTranslationService', () => {
         elapsedMs: 250
       });
       expect(first.titleZh).toContain('PILOT');
-      expect(first.titleZh).toContain('Low-level');
+      expect(first.titleZh).toContain('低层控制器');
       expect(second).toMatchObject({
         titleZh: first.titleZh,
         abstractZh: first.abstractZh,
@@ -160,7 +160,7 @@ describe('ArxivTranslationService', () => {
         {
           stableId: '2606.13680',
           title: 'Contact-rich manipulation with reinforcement learning',
-          summary: 'The policy learns contact-rich manipulation from robot demonstrations.'
+          summary: 'The policy learns contact-rich manipulation from robot demonstrations with CBF.'
         }
       ];
 
@@ -175,7 +175,38 @@ describe('ArxivTranslationService', () => {
       expect(batches[0]).toContain(requests[0].title);
       expect(batches[0]).toContain(requests[0].summary);
       expect(batches[0].some((text) => text.includes('The policy learns'))).toBe(true);
-      expect(batches[0].some((text) => text.includes('[[FTR_PROTECTED_'))).toBe(true);
+      expect(batches[0].some((text) => text.includes('CBF'))).toBe(true);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('reuses a validated fast title and sends only the abstract to the full translation pass', async () => {
+    const batches: string[][] = [];
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) => {
+        batches.push(texts);
+        return texts.map(() => '这是完整的中文摘要，说明了研究方法、实验设置与主要结论。');
+      }
+    });
+
+    try {
+      const result = await service.translatePaper({
+        stableId: '2606.13681',
+        title: 'Safe Reinforcement Learning for Robot Navigation',
+        summary: 'This study evaluates safe policies across reproducible robot navigation experiments.',
+        pretranslatedTitleZh: '用于机器人导航的安全强化学习'
+      });
+
+      expect(result).toMatchObject({
+        status: 'completed',
+        titleZh: '用于机器人导航的安全强化学习'
+      });
+      expect(batches).toHaveLength(1);
+      expect(batches[0]).toHaveLength(1);
+      expect(batches[0][0]).toContain('This study evaluates');
+      expect(batches[0]).not.toContain('Safe Reinforcement Learning for Robot Navigation');
     } finally {
       service.close();
     }
@@ -476,7 +507,7 @@ describe('ArxivTranslationService', () => {
       dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
       translateTexts: async (texts) => {
         batches.push(texts);
-        const markersBySegment = texts.map((text) => text.match(/\[\[FTR_PROTECTED_\d+\]\]/gu) ?? []);
+        const markersBySegment = texts.map((text) => text.match(/\b86753\d{2}901\b/gu) ?? []);
         const markedAbstractSegments = markersBySegment
           .map((markers, index) => ({ index, markers }))
           .filter(({ index, markers }) => index > 0 && markers.length > 0);
@@ -873,7 +904,7 @@ describe('ArxivTranslationService', () => {
 
       expect(first.status).toBe('completed');
       expect(first.titleZh).toContain('OmniAgent');
-      expect(first.titleZh).toContain('Omni-Modal');
+      expect(first.titleZh).toContain('全模态');
       expect(first.abstractZh).toContain('OmniAgent');
       expect(first.abstractZh).toContain('Sim-to-Real');
       expect(first.abstractZh.endsWith('代理代理代理代理')).toBe(false);
@@ -952,7 +983,7 @@ describe('ArxivTranslationService', () => {
       expect(result.status).toBe('completed');
       expect(result.cacheHit).toBe(false);
       expect(result.titleZh).toContain('MSVIPER');
-      expect(result.titleZh).toContain('Learning-Based Robot Navigation');
+      expect(result.titleZh).toContain('改进策略蒸馏');
       expect(calls).toHaveLength(2);
     } finally {
       service.close();

@@ -3,7 +3,6 @@ import {
   type PointerEvent as ReactPointerEvent,
   useEffect,
   useMemo,
-  useRef,
   useState
 } from 'react';
 import {
@@ -37,7 +36,7 @@ import translateIcon from '../assets/icons/duotone/translate.svg';
 import analysisIcon from '../assets/icons/duotone/analysis.svg';
 import saveIcon from '../assets/icons/duotone/save.svg';
 import type { LocalTranslationStatus, PdfFilePayload } from '../types/electron';
-import { repairAcademicTranslation } from '../../shared/academicTranslationQuality';
+import { prepareAcademicTranslation, repairAcademicTranslation } from '../../shared/academicTranslationQuality';
 import { clampPanelRatio, getRightPanelRatioFromPointer } from '../lib/responsiveLayout';
 import { createArxivSearchSessionController, tryBeginArxivSearchSession } from '../lib/arxivSearchSession';
 import { MathText } from './MathText';
@@ -50,6 +49,16 @@ interface ArxivSearchPageProps {
 type SearchStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 export type ResultColumnMode = 'one' | 'two' | 'three';
 export type AbstractMode = 'en' | 'zh';
+export type ArxivForegroundTranslationPhase = 'warming' | 'title' | 'abstract' | 'done' | 'error';
+
+export interface ArxivForegroundTranslationFeedback {
+  paperId: string;
+  phase: ArxivForegroundTranslationPhase;
+  startedAt: number;
+  titleElapsedMs?: number;
+  completedElapsedMs?: number;
+  detail?: string;
+}
 
 export interface ArxivResultDisplay {
   title: string;
@@ -368,6 +377,45 @@ export function getArxivTranslationActionState(
   };
 }
 
+export function getArxivTranslationFeedbackText(
+  feedback: ArxivForegroundTranslationFeedback,
+  now = Date.now()
+): { label: string; elapsedLabel: string } {
+  const elapsedMs = feedback.completedElapsedMs ?? Math.max(0, now - feedback.startedAt);
+  const elapsedLabel = elapsedMs < 1_000
+    ? `${Math.max(0.1, elapsedMs / 1_000).toFixed(1)}s`
+    : `${(elapsedMs / 1_000).toFixed(1)}s`;
+  switch (feedback.phase) {
+    case 'warming':
+      return { label: '首次加载本地翻译模型', elapsedLabel };
+    case 'title':
+      return { label: '正在生成中文标题', elapsedLabel };
+    case 'abstract':
+      return {
+        label: feedback.titleElapsedMs ? '标题已显示，正在翻译摘要' : '正在翻译标题与摘要',
+        elapsedLabel
+      };
+    case 'done':
+      return { label: '标题与摘要已更新', elapsedLabel };
+    case 'error':
+      return { label: feedback.detail || '翻译失败，已保留英文', elapsedLabel };
+  }
+}
+
+export function restoreArxivFastTitleTranslation(source: string, translatedSegments: string[]): string {
+  const restored = prepareAcademicTranslation(source).restore(translatedSegments);
+  if (!restored.ok) {
+    return '';
+  }
+  const titleZh = repairAcademicTranslation(source, restored.text, { mode: 'title' });
+  const normalizedSource = source.replace(/\s+/gu, ' ').trim().toLowerCase();
+  const normalizedTranslation = titleZh.replace(/\s+/gu, ' ').trim().toLowerCase();
+  const cjkCount = titleZh.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
+  return titleZh && cjkCount >= 2 && normalizedTranslation !== normalizedSource && !isMojibakeTranslationText(titleZh)
+    ? titleZh
+    : '';
+}
+
 export interface ArxivExecutedQuerySnapshotSource {
   originalQuery: string;
   effectiveQuery: string;
@@ -415,15 +463,20 @@ export function advanceArxivTranslationQueue(
 export function buildArxivTranslationBatchRequest(
   papers: ArxivPaper[],
   priority: ArxivTranslationPriority,
-  sessionId: number
+  sessionId: number,
+  pretranslatedTitleByStableId: Record<string, string> = {}
 ): ArxivTranslationBatchRequest {
   return {
-    papers: papers.map((paper) => ({
-      stableId: paper.stableId,
-      title: paper.title,
-      summary: paper.summary,
-      targetLanguage: 'zh'
-    })),
+    papers: papers.map((paper) => {
+      const pretranslatedTitleZh = pretranslatedTitleByStableId[paper.stableId]?.trim();
+      return {
+        stableId: paper.stableId,
+        title: paper.title,
+        summary: paper.summary,
+        ...(pretranslatedTitleZh ? { pretranslatedTitleZh } : {}),
+        targetLanguage: 'zh'
+      };
+    }),
     priority,
     sessionId
   };
@@ -526,6 +579,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [searchSessionController] = useState(createArxivSearchSessionController);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [translatingId, setTranslatingId] = useState<string | null>(null);
+  const [foregroundTranslationFeedback, setForegroundTranslationFeedback] =
+    useState<ArxivForegroundTranslationFeedback | null>(null);
+  const [translationClockMs, setTranslationClockMs] = useState(Date.now());
   const [backgroundTranslatingIds, setBackgroundTranslatingIds] = useState<Record<string, boolean>>({});
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [showOfflineTranslationHelp, setShowOfflineTranslationHelp] = useState(false);
@@ -543,20 +599,28 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   } | null>(null);
   const [executedRequest, setExecutedRequest] = useState<ArxivSearchRequest | null>(null);
   const [translationQueue, setTranslationQueue] = useState<ArxivTranslationQueueState | null>(null);
-  const scheduledPreviewTranslationRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const activePageSize = executedRequest?.maxResults ?? pageSize;
     setPageJump(String(Math.floor(start / Math.max(1, activePageSize)) + 1));
   }, [executedRequest?.maxResults, pageSize, start]);
 
-  useEffect(
-    () => () => {
-      scheduledPreviewTranslationRef.current?.();
-      scheduledPreviewTranslationRef.current = null;
-    },
-    []
-  );
+  useEffect(() => {
+    if (!foregroundTranslationFeedback || ['done', 'error'].includes(foregroundTranslationFeedback.phase)) {
+      return;
+    }
+    setTranslationClockMs(Date.now());
+    const timerId = window.setInterval(() => setTranslationClockMs(Date.now()), 250);
+    return () => window.clearInterval(timerId);
+  }, [foregroundTranslationFeedback?.paperId, foregroundTranslationFeedback?.phase]);
+
+  useEffect(() => {
+    if (!foregroundTranslationFeedback || !['done', 'error'].includes(foregroundTranslationFeedback.phase)) {
+      return;
+    }
+    const timerId = window.setTimeout(() => setForegroundTranslationFeedback(null), 6_000);
+    return () => window.clearTimeout(timerId);
+  }, [foregroundTranslationFeedback]);
 
   useEffect(() => {
     if (!isReadingQueueOpen) {
@@ -723,10 +787,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       : buildArxivSearchRequestForUi(request, effectiveSearchQuery, nextStart, options);
 
     try {
-      cancelScheduledPreviewTranslations();
       setIsSearching(true);
       setTranslationQueue(null);
       setTranslatingId(null);
+      setForegroundTranslationFeedback(null);
       setBackgroundTranslatingIds({});
       setStatus('loading');
       if (options.resetFilters) {
@@ -788,7 +852,6 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       setStatus('success');
       const rangeText = formatArxivResultRange(nextStart, result.papers.length, result.totalResults ?? result.papers.length);
       const queryNotice = result.queryNotice ? `${result.queryNotice}。` : '';
-      schedulePreviewTranslations(result.papers, searchSessionId);
       if (result.warning) {
         setMessage(`${queryNotice}${result.warning} 当前显示：${rangeText}。`);
       } else if (result.cacheHit) {
@@ -916,7 +979,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     }
   }
 
-  async function handleTranslateAbstract(paper: ArxivPaper): Promise<void> {
+  async function handleTranslateAbstract(
+    paper: ArxivPaper,
+    triggerElement: HTMLButtonElement | null = null
+  ): Promise<void> {
     const translationSessionId = searchSessionController.current();
     if (!canStartArxivManualTranslation(isSearching, translationSessionId)) {
       setMessage(isSearching ? '搜索进行中，完成后再翻译当前论文。' : '请先完成一次搜索，再翻译论文。');
@@ -929,76 +995,131 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       return;
     }
 
+    triggerElement?.classList.add('is-translation-starting');
+    triggerElement?.setAttribute('aria-busy', 'true');
+    if (triggerElement) {
+      triggerElement.dataset.immediateLabel = '翻译中';
+    }
+    const startedAt = Date.now();
+    const isModelWarming = Boolean(
+      localTranslationStatus &&
+        localTranslationStatus.preferredEngine !== 'argos-only' &&
+        localTranslationStatus.nllb.configured &&
+        !localTranslationStatus.nllb.available
+    );
     try {
-      cancelScheduledPreviewTranslations();
       setTranslatingId(paper.id);
-      setMessage('正在使用本地离线引擎翻译标题和摘要，并写入 SQLite 缓存；优先 NLLB，失败回退 Argos，不会调用 AI API。');
-      const result = await translatePaperMetadata(paper, false, translationSessionId);
+      setForegroundTranslationFeedback({
+        paperId: paper.id,
+        phase: isModelWarming ? 'warming' : 'title',
+        startedAt
+      });
+      setMessage(
+        isModelWarming
+          ? '正在首次加载本地 NLLB 模型；卡片内会持续显示阶段与耗时，模型就绪后后续标题进入 1 秒级。'
+          : '正在优先生成中文标题；标题显示后会继续完成摘要，不会调用 AI API。'
+      );
+
+      let fastTitleZh = currentMeta.titleZh ?? '';
+      if (!fastTitleZh) {
+        try {
+          const preparedTitle = prepareAcademicTranslation(paper.title);
+          const titleResult = await window.electronAPI.translateLocalBatch({
+            texts: preparedTitle.segments,
+            sourceLanguage: 'en',
+            targetLanguage: 'zh',
+            timeoutMs: 45_000
+          });
+          if (!searchSessionController.isCurrent(translationSessionId)) {
+            return;
+          }
+          fastTitleZh = restoreArxivFastTitleTranslation(paper.title, titleResult.texts);
+          if (fastTitleZh) {
+            patchMeta(paper, { titleZh: fastTitleZh });
+          }
+          void window.electronAPI.getLocalTranslationStatus().then(setLocalTranslationStatus).catch(() => undefined);
+        } catch {
+          // The full metadata request below keeps its own fallback and quality gate.
+        }
+      }
+
+      if (!searchSessionController.isCurrent(translationSessionId)) {
+        return;
+      }
+      const titleElapsedMs = fastTitleZh ? Date.now() - startedAt : undefined;
+      setForegroundTranslationFeedback({
+        paperId: paper.id,
+        phase: 'abstract',
+        startedAt,
+        ...(titleElapsedMs ? { titleElapsedMs } : {})
+      });
+      setMessage(
+        fastTitleZh
+          ? `中文标题已在 ${(titleElapsedMs! / 1_000).toFixed(1)} 秒显示，正在继续翻译摘要。`
+          : '标题快速预览未通过质量校验，正在使用完整质量链路翻译标题与摘要。'
+      );
+      const result = await translatePaperMetadata(paper, false, translationSessionId, fastTitleZh);
       if (!searchSessionController.isCurrent(translationSessionId)) {
         return;
       }
       if (result?.status === 'completed' || result?.status === 'cached') {
         setAbstractModes((previous) => ({ ...previous, [paper.id]: 'zh' }));
         setMessage(result.message);
+        setForegroundTranslationFeedback({
+          paperId: paper.id,
+          phase: 'done',
+          startedAt,
+          ...(titleElapsedMs ? { titleElapsedMs } : {}),
+          completedElapsedMs: Date.now() - startedAt
+        });
       } else if (result?.status === 'unavailable') {
         setStatus('error');
         setShowOfflineTranslationHelp(true);
+        setForegroundTranslationFeedback({
+          paperId: paper.id,
+          phase: 'error',
+          startedAt,
+          completedElapsedMs: Date.now() - startedAt,
+          detail: '本地翻译环境不可用'
+        });
+      } else if (result?.status === 'failed') {
+        setForegroundTranslationFeedback({
+          paperId: paper.id,
+          phase: 'error',
+          startedAt,
+          completedElapsedMs: Date.now() - startedAt,
+          detail: '质量校验未通过，已保留英文'
+        });
       } else if (!result) {
         setStatus('error');
         setMessage('本地翻译未返回结果，请重新检测翻译环境后重试。');
+        setForegroundTranslationFeedback({
+          paperId: paper.id,
+          phase: 'error',
+          startedAt,
+          completedElapsedMs: Date.now() - startedAt,
+          detail: '翻译未返回结果'
+        });
       }
     } catch (error) {
       setMessage(`标题/摘要本地翻译失败，已保留英文：${formatError(error)}`);
+      setForegroundTranslationFeedback({
+        paperId: paper.id,
+        phase: 'error',
+        startedAt,
+        completedElapsedMs: Date.now() - startedAt,
+        detail: '翻译失败，已保留英文'
+      });
     } finally {
+      triggerElement?.classList.remove('is-translation-starting');
+      triggerElement?.removeAttribute('aria-busy');
+      if (triggerElement) {
+        delete triggerElement.dataset.immediateLabel;
+      }
       if (searchSessionController.isCurrent(translationSessionId)) {
         setTranslatingId(null);
       }
     }
-  }
-
-  async function queuePreviewTranslations(
-    nextPapers: ArxivPaper[],
-    translationSessionId: number
-  ): Promise<void> {
-    const batches = buildArxivPreviewTranslationBatches(nextPapers, (paper) => {
-      const meta = getPaperMeta(paper, metaById);
-      return shouldQueueArxivMetadataTranslation(meta);
-    });
-    await queueTranslationBatches(batches, 'preview', translationSessionId, 'preview');
-  }
-
-  function cancelScheduledPreviewTranslations(): void {
-    scheduledPreviewTranslationRef.current?.();
-    scheduledPreviewTranslationRef.current = null;
-  }
-
-  function schedulePreviewTranslations(
-    nextPapers: ArxivPaper[],
-    translationSessionId: number
-  ): void {
-    cancelScheduledPreviewTranslations();
-    let cancelled = false;
-    const run = (): void => {
-      scheduledPreviewTranslationRef.current = null;
-      if (!cancelled && searchSessionController.isCurrent(translationSessionId)) {
-        void queuePreviewTranslations(nextPapers, translationSessionId);
-      }
-    };
-
-    if (typeof window.requestIdleCallback === 'function') {
-      const idleId = window.requestIdleCallback(run, { timeout: 900 });
-      scheduledPreviewTranslationRef.current = () => {
-        cancelled = true;
-        window.cancelIdleCallback(idleId);
-      };
-      return;
-    }
-
-    const timerId = window.setTimeout(run, 500);
-    scheduledPreviewTranslationRef.current = () => {
-      cancelled = true;
-      window.clearTimeout(timerId);
-    };
   }
 
   async function handleTranslatePage(): Promise<void> {
@@ -1015,7 +1136,6 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       setMessage('当前页标题和摘要已有可用中文缓存。');
       return;
     }
-    cancelScheduledPreviewTranslations();
     const batches = buildArxivTranslationBatches(missing, OFFLINE_TRANSLATION_BATCH_SIZE);
     setMessage(`已将当前页 ${missing.length} 篇待翻译论文加入用户翻译队列。`);
     await queueTranslationBatches(batches, 'foreground', translationSessionId, 'page');
@@ -1121,10 +1241,16 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   async function translatePaperMetadata(
     paper: ArxivPaper,
     silent: boolean,
-    translationSessionId: number
+    translationSessionId: number,
+    pretranslatedTitleZh = ''
   ) {
     const [result] = await window.electronAPI.translateArxivTitleAbstractBatch(
-      buildArxivTranslationBatchRequest([paper], 'foreground', translationSessionId)
+      buildArxivTranslationBatchRequest(
+        [paper],
+        'foreground',
+        translationSessionId,
+        pretranslatedTitleZh ? { [paper.stableId]: pretranslatedTitleZh } : {}
+      )
     );
     if (!result) {
       return undefined;
@@ -1740,6 +1866,14 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                 isForegroundTranslating,
                 isBackgroundTranslating
               );
+              const paperTranslationFeedback =
+                foregroundTranslationFeedback?.paperId === paper.id ? foregroundTranslationFeedback : null;
+              const translationFeedbackText = paperTranslationFeedback
+                ? getArxivTranslationFeedbackText(paperTranslationFeedback, translationClockMs)
+                : null;
+              const isTranslationFeedbackActive = Boolean(
+                paperTranslationFeedback && ['warming', 'title', 'abstract'].includes(paperTranslationFeedback.phase)
+              );
               const tagItems = buildVisibleArxivCardTags(matchReasons, insight.tags);
               return (
                 <article
@@ -1782,6 +1916,23 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
 
                   <p className="arxiv-summary">{getArxivCardPreviewText(display.abstractText)}</p>
 
+                  {paperTranslationFeedback && translationFeedbackText ? (
+                    <div className={`arxiv-translation-feedback is-${paperTranslationFeedback.phase}`}>
+                      <span className="arxiv-translation-feedback-indicator" aria-hidden="true">
+                        {paperTranslationFeedback.phase === 'done'
+                          ? '✓'
+                          : paperTranslationFeedback.phase === 'error'
+                            ? '!'
+                            : ''}
+                      </span>
+                      <span className="arxiv-translation-feedback-label" role="status" aria-live="polite">
+                        {translationFeedbackText.label}
+                      </span>
+                      <time aria-hidden="true">{translationFeedbackText.elapsedLabel}</time>
+                      {isTranslationFeedbackActive ? <span className="arxiv-translation-feedback-pulse" aria-hidden="true" /> : null}
+                    </div>
+                  ) : null}
+
                   <div className="arxiv-tag-row">
                     {tagItems.visible.map((tag) => (
                       <span key={tag.key} className={tag.kind === 'match' ? 'pill-tag accent-pill-tag' : 'pill-tag'}>
@@ -1805,13 +1956,13 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                     </button>
                     <button
                       type="button"
-                      className="secondary-button"
+                      className="secondary-button arxiv-translation-trigger"
                       data-search-session-guard="true"
                       disabled={translationAction.disabled}
                       title={translationAction.title}
                       onClick={(event) => {
                         event.stopPropagation();
-                        void handleTranslateAbstract(paper);
+                        void handleTranslateAbstract(paper, event.currentTarget);
                       }}
                     >
                       <img className="button-icon" src={translateIcon} alt="" />
@@ -2086,10 +2237,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                   </button>
                   <button
                     type="button"
-                    className="secondary-button button-with-icon"
+                    className="secondary-button button-with-icon arxiv-translation-trigger"
                     disabled={isSearching || selectedIsTranslating}
                     title={selectedIsBackgroundTranslating ? '点击后提升为前台优先翻译' : undefined}
-                    onClick={() => void handleTranslateAbstract(selectedPaper)}
+                    onClick={(event) => void handleTranslateAbstract(selectedPaper, event.currentTarget)}
                   >
                     <img className="button-icon" src={translateIcon} alt="" />
                     {selectedIsTranslating

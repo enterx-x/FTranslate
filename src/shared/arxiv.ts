@@ -54,6 +54,7 @@ export interface ArxivTitleAbstractTranslationRequest {
   stableId: string;
   title: string;
   summary: string;
+  pretranslatedTitleZh?: string;
   targetLanguage?: 'zh';
 }
 

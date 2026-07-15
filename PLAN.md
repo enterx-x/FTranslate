@@ -1077,3 +1077,36 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 源码与安装版 `npm run visual:check` 均通过；人工查看首页、科研绘图、双语 PDF 和 AI 助手截图，未发现重叠、遮挡、关键操作裁切或横向溢出。
 - 安装包：`dist/PDF Translation Reader Setup 0.1.16.exe`，156,635,821 bytes，SHA-256 `46831CE42ED5AED75F20DD49BCB08426F56DDFDCF7BCD82836490334316D9F3E`。
 - `npm install` 报告 8 个依赖审计漏洞（1 low、2 moderate、3 high、2 critical）；未执行可能改变依赖版本的 `npm audit fix`。
+
+## 19. 2026-07-15 arXiv 渐进翻译与 1 秒级暖机体验（0.1.28）
+
+### 第一性原理与根因
+
+- 用户的核心问题不是缺少翻译入口，而是点击后无法判断任务是否开始、标题和摘要必须一起等完、后台预翻译可能占住非抢占 worker，以及长摘要被 NLLB 截断后只看到“质量失败”。
+- 最小可验证闭环定义为：点击同步反馈；暖机后的中文标题在 1 秒内可读；完整摘要在约 2 秒内完成；严格公式/代码/引用保护不因追求速度而关闭；失败不写缓存。
+- 真实 SKooP 摘要诊断确认旧 900 字符分段会触及 NLLB 解码上限，且模型会合理省略重复方法名和末尾 Project page。继续要求所有软术语占位符原位返回会制造假失败。
+
+### 已实现
+
+- 单篇翻译拆为快速标题与完整摘要两阶段，快速标题通过质量检查后写回卡片，并作为 `pretranslatedTitleZh` 复用于主进程，完整阶段只翻译摘要。
+- 点击按钮同步施加 `aria-busy` 与“翻译中”视觉状态，随后卡片显示标题、摘要、完成或失败阶段和实际耗时；完成后自动切换中文摘要。
+- 移除搜索完成后的隐藏预翻译调度，只保留用户发起的单篇与整页翻译，避免后台 worker 影响前台延迟。
+- 摘要分段上限降为 480 字符并保持单批 GPU 推理；严格占位仅用于公式、代码、引用。方法名通过幂等术语修复恢复，URL / DOI / arXiv ID 在模型省略时确定性补回。
+- 翻译缓存格式升到 version 4，避免旧占位策略缓存混入新质量链路；新增 RL/机器人术语修复与 http/https 等价链接去重。
+
+### 实测证据
+
+- 真实查询：`reinforcement learning robot navigation`，本地 NLLB CTranslate2 int8，CUDA。
+- SKooP 长摘要：完整标题与摘要 1.29 秒完成，质量门禁通过；旧实现同一摘要会因缺失术语/URL占位符失败。
+- 未缓存的 RegRIND 论文：按钮同步进入忙碌态，中文标题 0.515 秒出现，完整摘要 1.523 秒完成。
+- 冷启动模型加载仍受磁盘、CPU/GPU 与 sidecar 启动影响，不能承诺首次点击 1 秒；UI 必须显示 warming 阶段，后续连续翻译进入 1 秒级标题体验。
+
+### 验证与风险
+
+- 定向验证为 3 个文件 / 84 项通过；`npm run dist` 内完整构建为 99 个测试文件、646 项测试、两套 TypeScript、Vite renderer 与 Electron main 全部通过。
+- 源码与安装包内 arXiv 专项视觉门禁均通过。自动化先确认翻译前 `zhCount = 0`，再真实点击首篇卡片，验证按钮同步 `aria-busy` / `is-translation-starting`、卡片出现加载或标题阶段、最终完成态与中文摘要；单/双/三列及 1366/1440/1920px 均无横向溢出。
+- 人工对抗式复查 `.tmp-visual-check/arxiv-translation-progress.png`、`arxiv-search-results.png` 与 `arxiv-search-results-1366.png`：进行态附着在所属论文卡片内，未遮挡摘要、标签或三个主操作；完成态没有挤压详情栏、分页或相邻卡片，未发现重叠、截断和布局抖动。
+- `npm run dist` 生成 `dist/PDF Translation Reader Setup 0.1.28.exe`，157,085,637 bytes，SHA-256 `2BC1B64F91960BD8EDE9F1A42F36B86DA0AFE7DD9772DDC958920872C00A273D`。
+- 打包前再次核对三个工作树：当前仍为 `codex/scientific-plot-axis-controls`，不是用户指定需合并的“13号”分支，因此未合并 `codex/ios-mobile-reader` 或 `codex/scientific-plot-ui-refactor`。
+- 机器翻译仍可能产生论文特有的新术语误译；当前策略是源文本约束、严格完整性门禁和英文原文并存，不增加 AI 润色链路。
+- Electron Builder 仍报告既有的 Univer 重复依赖与大 chunk 警告，不影响本次构建和安装包生成；冷启动 NLLB 约 11–12 秒的模型加载成本仍是 1 秒目标之外的明确边界。
