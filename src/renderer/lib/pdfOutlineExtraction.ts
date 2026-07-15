@@ -9,6 +9,27 @@ import {
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
+export async function validatePdfDocumentData(pdfData: Uint8Array): Promise<number> {
+  const loadingTask = pdfjsLib.getDocument({ data: pdfData.slice() });
+  let pdfDocument: PDFDocumentProxy | null = null;
+  try {
+    pdfDocument = await loadingTask.promise;
+    if (pdfDocument.numPages < 1) {
+      throw new Error('PDF 不包含可阅读页面。');
+    }
+    return pdfDocument.numPages;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`PDF 结构验证失败：${message}`);
+  } finally {
+    if (pdfDocument) {
+      await pdfDocument.destroy();
+    } else {
+      await loadingTask.destroy();
+    }
+  }
+}
+
 export async function extractPdfBlocksFromData(
   pdfData: Uint8Array,
   isCancelled: () => boolean = () => false

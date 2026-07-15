@@ -146,6 +146,17 @@ async function waitForSelector(client, selector, timeoutMs = 20000) {
   throw new Error(`Timed out waiting for selector: ${selector}`);
 }
 
+async function waitForSelectorToDisappear(client, selector, timeoutMs = 20000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (!(await evaluate(client, `Boolean(document.querySelector(${JSON.stringify(selector)}))`))) {
+      return;
+    }
+    await wait(200);
+  }
+  throw new Error(`Timed out waiting for selector to disappear: ${selector}`);
+}
+
 async function capture(client, name) {
   const result = await client.send('Page.captureScreenshot', {
     format: 'png',
@@ -205,6 +216,30 @@ try {
     screenHeight: 844
   });
   await waitForSelector(client, '.mobile-library-screen');
+  await evaluate(client, `(() => {
+    localStorage.setItem('CapacitorStorage.pdfTranslationReader:mobileLibrary:v1', JSON.stringify([{
+      id: 'legacy-mobile-record',
+      title: 'Legacy mobile paper',
+      lastPage: 3,
+      sourcePdf: { path: 'papers/legacy/source/paper.pdf', fileName: 'paper.pdf', byteLength: 120 }
+    }]));
+    return true;
+  })()`);
+  await client.send('Page.reload', { ignoreCache: true });
+  await waitForSelector(client, '.mobile-library-screen');
+  await waitForSelector(client, '.mobile-paper-row');
+  const recoveredLegacyRecord = await evaluate(client, `(() => ({
+    title: document.querySelector('.mobile-paper-row strong')?.textContent ?? '',
+    bodyText: document.body.textContent ?? ''
+  }))()`);
+  if (recoveredLegacyRecord.title !== 'Legacy mobile paper' || recoveredLegacyRecord.bodyText.includes('手机阅读器遇到异常')) {
+    throw new Error(`Mobile legacy record recovery failed: ${JSON.stringify(recoveredLegacyRecord)}`);
+  }
+  await evaluate(client, `localStorage.removeItem('CapacitorStorage.pdfTranslationReader:mobileLibrary:v1')`);
+  await client.send('Page.reload', { ignoreCache: true });
+  await waitForSelector(client, '.mobile-library-screen');
+  await waitForSelectorToDisappear(client, '.mobile-paper-row');
+  console.log('Recovered a legacy mobile library record without a white screen.');
   await wait(350);
   await capture(client, '01-library-empty-390x844.png');
   console.log('Captured empty library.');
@@ -214,6 +249,57 @@ try {
   await wait(350);
   await capture(client, '02-arxiv-idle-390x844.png');
   console.log('Captured arXiv search.');
+  if (process.env.FTRANSLATE_MOBILE_VISUAL_URL) {
+    await evaluate(client, `(() => {
+      const input = document.querySelector('.mobile-arxiv-search-form input');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, 'safe reinforcement learning');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      document.querySelector('.mobile-arxiv-search-form').requestSubmit();
+      return true;
+    })()`);
+    await waitForSelector(client, '.mobile-arxiv-result', 45000);
+    const successfulResultCount = await evaluate(client, `document.querySelectorAll('.mobile-arxiv-result').length`);
+    await evaluate(client, `document.querySelector('.mobile-arxiv-translate-title').click()`);
+    await waitForSelector(client, '.mobile-translation-dialog');
+    await evaluate(client, `(() => {
+      const values = ['http://127.0.0.1:${mockPort}/v1', 'visual-model', 'visual-key'];
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      document.querySelectorAll('.mobile-translation-dialog input').forEach((input, index) => {
+        setter.call(input, values[index]);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      document.querySelector('.mobile-dialog-primary').click();
+      return true;
+    })()`);
+    await waitForSelector(client, '.mobile-arxiv-title-zh', 20000);
+    await capture(client, '02a-arxiv-title-translation-390x844.png');
+    console.log('Captured an arXiv title translated directly below the English title.');
+    await client.send('Network.enable');
+    await client.send('Network.setBlockedURLs', { urls: ['*://*/api/arxiv*'] });
+    await evaluate(client, `(() => {
+      const input = document.querySelector('.mobile-arxiv-search-form input');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, 'forced network failure');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      document.querySelector('.mobile-arxiv-search-form').requestSubmit();
+      return true;
+    })()`);
+    await waitForSelector(client, '.mobile-arxiv-status.is-error', 20000);
+    const failedSearchState = await evaluate(client, `(() => ({
+      resultCount: document.querySelectorAll('.mobile-arxiv-result').length,
+      status: document.querySelector('.mobile-arxiv-status')?.textContent ?? ''
+    }))()`);
+    await client.send('Network.setBlockedURLs', { urls: [] });
+    if (successfulResultCount < 1 || failedSearchState.resultCount !== 0) {
+      throw new Error(`Mobile arXiv failed-search cleanup failed: ${JSON.stringify({ successfulResultCount, failedSearchState })}`);
+    }
+    await capture(client, '02b-arxiv-error-cleared-390x844.png');
+    console.log(`Verified failed arXiv search clears ${successfulResultCount} stale results.`);
+  }
   await evaluate(client, `document.querySelectorAll('.mobile-bottom-nav button')[0].click()`);
   await waitForSelector(client, '.mobile-library-screen');
 
@@ -258,6 +344,28 @@ try {
   await wait(120);
   await capture(client, '03-reader-inline-translation-390x844.png');
   console.log('Captured inline paragraph translation.');
+
+  await evaluate(client, `document.querySelector('.mobile-reader-more').click()`);
+  await waitForSelector(client, '.mobile-translation-dialog');
+  await evaluate(client, `(() => {
+    const modelInput = document.querySelectorAll('.mobile-translation-dialog input')[1];
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(modelInput, 'visual-model-v2');
+    modelInput.dispatchEvent(new Event('input', { bubbles: true }));
+    modelInput.dispatchEvent(new Event('change', { bubbles: true }));
+    document.querySelector('.mobile-dialog-primary').click();
+    return true;
+  })()`);
+  await wait(350);
+  const staleTranslationState = await evaluate(client, `(() => ({
+    button: document.querySelector('.mobile-block-original button')?.textContent ?? '',
+    toolbar: document.querySelector('.mobile-bilingual-toolbar span')?.textContent ?? ''
+  }))()`);
+  if (!staleTranslationState.button.includes('当前配置重译') || !staleTranslationState.toolbar.includes('待更新')) {
+    throw new Error(`Mobile stale translation state was not exposed: ${JSON.stringify(staleTranslationState)}`);
+  }
+  await capture(client, '03b-reader-stale-translation-390x844.png');
+  console.log('Captured stale translation state after changing the model.');
 
   await evaluate(client, `(() => {
     const paragraph = document.querySelector('.mobile-block-original p, .mobile-block-original h2');

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import type { ArxivPaper } from '../../shared/arxiv';
-import { MobileArxivScreen } from './MobileArxivScreen';
+import { MobileArxivScreen, type MobileArxivTranslation } from './MobileArxivScreen';
 import { MobileBottomNav, type MobileView } from './MobileBottomNav';
 import { MobileLibraryScreen } from './MobileLibraryScreen';
 import { MobileReaderScreen } from './MobileReaderScreen';
@@ -10,6 +10,7 @@ import {
   loadPaperTranslations,
   loadTranslationPreferences,
   readPdfBytes,
+  removeStoredPdfFile,
   removeStoredPaper,
   saveMobileLibrary,
   savePaperTranslations,
@@ -20,6 +21,7 @@ import {
   createArxivMobilePaper,
   createImportedMobilePaper,
   createLocalPaperId,
+  isMobilePaperSourceEquivalent,
   mergeTranslationEntry,
   updateMobilePaper,
   upsertMobilePaper,
@@ -29,7 +31,7 @@ import {
 } from './mobileTypes';
 import './mobile.css';
 
-export default function MobileApp() {
+function MobileApp() {
   const [view, setView] = useState<MobileView>('library');
   const [library, setLibrary] = useState<MobilePaper[]>([]);
   const libraryRef = useRef<MobilePaper[]>([]);
@@ -45,6 +47,7 @@ export default function MobileApp() {
   const [busy, setBusy] = useState(false);
   const [savingPaperId, setSavingPaperId] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
+  const downloadAbortRef = useRef<AbortController | null>(null);
 
   const activePaper = useMemo(
     () => (activePaperId ? library.find((paper) => paper.id === activePaperId) ?? null : null),
@@ -110,10 +113,15 @@ export default function MobileApp() {
     setBusy(true);
     try {
       const paperId = createLocalPaperId(file.name, file.size, file.lastModified);
+      const existing = libraryRef.current.find((paper) => paper.id === paperId);
       const storedPdf = await savePdfFile({ paperId, file, kind: 'source' });
       const paper = createImportedMobilePaper({ id: paperId, fileName: file.name, storedPdf });
       const nextLibrary = await commitLibrary((current) => upsertMobilePaper(current, paper));
+      const cleanupWarning = await clearReplacedSourceData(existing, paper);
       await handleOpenPaper(nextLibrary.find((item) => item.id === paperId) ?? paper);
+      if (cleanupWarning) {
+        setNotice(cleanupWarning);
+      }
     } catch (error) {
       setNotice(`导入 PDF 失败：${formatError(error)}`);
     } finally {
@@ -121,22 +129,41 @@ export default function MobileApp() {
     }
   }
 
-  async function handleSaveArxivPaper(paper: ArxivPaper): Promise<void> {
+  async function handleSaveArxivPaper(paper: ArxivPaper, translation?: MobileArxivTranslation): Promise<void> {
+    if (downloadAbortRef.current) {
+      return;
+    }
+    const abortController = new AbortController();
+    downloadAbortRef.current = abortController;
     setSavingPaperId(paper.stableId);
     setNotice(`正在下载 arXiv:${paper.stableId}…`);
     try {
       const paperId = `arxiv-${paper.stableId.replace(/[^a-z0-9._-]+/giu, '-')}`;
+      const existing = libraryRef.current.find((item) => item.id === paperId);
       const storedPdf = await downloadPdfFile({
         paperId,
         url: paper.pdfUrl,
-        fileName: `${paper.stableId}-${paper.title.slice(0, 72)}.pdf`
+        fileName: `${paper.stableId}-${paper.title.slice(0, 72)}.pdf`,
+        signal: abortController.signal
       });
-      const mobilePaper = createArxivMobilePaper({ paper, storedPdf });
+      const mobilePaper = createArxivMobilePaper({
+        paper,
+        storedPdf,
+        titleZh: translation?.titleZh,
+        abstractZh: translation?.abstractZh
+      });
       const nextLibrary = await commitLibrary((current) => upsertMobilePaper(current, mobilePaper));
+      const cleanupWarning = await clearReplacedSourceData(existing, mobilePaper);
       await handleOpenPaper(nextLibrary.find((item) => item.id === mobilePaper.id) ?? mobilePaper);
+      if (cleanupWarning) {
+        setNotice(cleanupWarning);
+      }
     } catch (error) {
       setNotice(`保存 arXiv 论文失败：${formatError(error)}`);
     } finally {
+      if (downloadAbortRef.current === abortController) {
+        downloadAbortRef.current = null;
+      }
       setSavingPaperId(null);
     }
   }
@@ -147,6 +174,7 @@ export default function MobileApp() {
     }
     setBusy(true);
     try {
+      const previousTranslatedPdf = activePaper.translatedPdf;
       const translatedPdf = await savePdfFile({ paperId: activePaper.id, file, kind: 'translated' });
       const nextLibrary = await commitLibrary((current) => updateMobilePaper(current, activePaper.id, { translatedPdf }));
       setTranslatedPdfData(await readPdfBytes(translatedPdf));
@@ -154,6 +182,9 @@ export default function MobileApp() {
       const updated = nextLibrary.find((paper) => paper.id === activePaper.id);
       if (updated) {
         setActivePaperId(updated.id);
+      }
+      if (previousTranslatedPdf && previousTranslatedPdf.path !== translatedPdf.path) {
+        await removeStoredPdfFile(previousTranslatedPdf);
       }
     } catch (error) {
       setNotice(`导入双语 PDF 失败：${formatError(error)}`);
@@ -205,8 +236,26 @@ export default function MobileApp() {
   }, [activePaperId]);
 
   async function handleTranslationSessionChange(session: MobileTranslationSession): Promise<void> {
+    if (!session.baseURL.trim() || !session.model.trim()) {
+      throw new Error('Base URL 和 Model 不能为空。');
+    }
     setTranslationSession(session);
     await saveTranslationPreferences({ baseURL: session.baseURL, model: session.model });
+  }
+
+  async function clearReplacedSourceData(existing: MobilePaper | undefined, incoming: MobilePaper): Promise<string> {
+    if (!existing || isMobilePaperSourceEquivalent(existing, incoming)) {
+      return '';
+    }
+    await savePaperTranslations(incoming.id, []);
+    const staleFiles = [
+      existing.translatedPdf,
+      existing.sourcePdf.path !== incoming.sourcePdf.path ? existing.sourcePdf : undefined
+    ].filter((pdf): pdf is MobilePaper['sourcePdf'] => Boolean(pdf));
+    const cleanup = await Promise.allSettled(staleFiles.map((pdf) => removeStoredPdfFile(pdf)));
+    return cleanup.some((result) => result.status === 'rejected')
+      ? '论文已更新并清空旧译文，但有旧文件未能删除；不影响当前阅读。'
+      : '';
   }
 
   return (
@@ -222,7 +271,15 @@ export default function MobileApp() {
             onRemovePaper={handleRemovePaper}
           />
         ) : null}
-        {view === 'search' ? <MobileArxivScreen savingPaperId={savingPaperId} onSavePaper={handleSaveArxivPaper} /> : null}
+        {view === 'search' ? (
+          <MobileArxivScreen
+            savingPaperId={savingPaperId}
+            translationSession={translationSession}
+            onSavePaper={handleSaveArxivPaper}
+            onCancelSave={() => downloadAbortRef.current?.abort()}
+            onTranslationSessionChange={handleTranslationSessionChange}
+          />
+        ) : null}
         {view === 'reader' && activePaper && pdfData ? (
           <MobileReaderScreen
             paper={activePaper}
@@ -246,6 +303,36 @@ export default function MobileApp() {
       {notice ? <div className="mobile-global-notice" role="status"><span>{notice}</span><button type="button" onClick={() => setNotice('')}>×</button></div> : null}
     </div>
   );
+}
+
+class MobileErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('Mobile reader render failed', error, info);
+  }
+
+  render() {
+    if (!this.state.error) {
+      return this.props.children;
+    }
+    return (
+      <main className="mobile-fatal-error" role="alert">
+        <strong>手机阅读器遇到异常</strong>
+        <p>论文数据仍保留在当前浏览器中。请先重新加载；不要清除 Safari 网站数据。</p>
+        <details><summary>错误详情</summary><code>{this.state.error.message}</code></details>
+        <button type="button" onClick={() => window.location.reload()}>重新加载</button>
+      </main>
+    );
+  }
+}
+
+export default function MobileAppRoot() {
+  return <MobileErrorBoundary><MobileApp /></MobileErrorBoundary>;
 }
 
 function formatError(error: unknown): string {

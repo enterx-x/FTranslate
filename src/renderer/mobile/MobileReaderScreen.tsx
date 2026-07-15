@@ -2,12 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { PdfViewer } from '../components/PdfViewer';
 import { extractPdfBlocksFromData } from '../lib/pdfOutlineExtraction';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
+import { MobileTranslationSettingsDialog } from './MobileTranslationSettingsDialog';
 import { translateAcademicText } from './mobileTranslation';
 import type {
   MobilePaper,
   MobileTranslationEntry,
   MobileTranslationSession
 } from './mobileTypes';
+import { isTranslationEntryCurrent } from './mobileTypes';
 
 type MobileReaderMode = 'bilingual' | 'pdf' | 'translated';
 
@@ -28,6 +30,7 @@ interface SelectionPopoverState {
   text: string;
   left: number;
   top: number;
+  maxHeight: number;
   translation?: string;
   loading?: boolean;
   error?: string;
@@ -96,15 +99,21 @@ export function MobileReaderScreen({
     [blocks, currentPage]
   );
   const translatedCount = currentBlocks.filter((block) => translationByHash.has(block.sourceHash)).length;
+  const staleTranslationCount = currentBlocks.filter((block) => {
+    const cached = translationByHash.get(block.sourceHash);
+    return Boolean(cached && !isTranslationEntryCurrent(cached, translationSession));
+  }).length;
   const displayedPdf = mode === 'translated' && translatedPdfData ? translatedPdfData : pdfData;
 
-  async function handleTranslateBlock(block: ExtractedPdfBlock): Promise<void> {
+  async function handleTranslateBlock(block: ExtractedPdfBlock, updateStatus = true): Promise<boolean> {
     if (!translationSession.apiKey.trim()) {
       setSettingsOpen(true);
-      return;
+      return false;
     }
     setTranslatingHash(block.sourceHash);
-    setStatus(`正在翻译第 ${block.page} 页段落…`);
+    if (updateStatus) {
+      setStatus(`正在翻译第 ${block.page} 页段落…`);
+    }
     try {
       const translation = await translateAcademicText(block.original, translationSession);
       await onSaveTranslation({
@@ -113,11 +122,18 @@ export function MobileReaderScreen({
         original: block.original,
         translation,
         translatedAt: new Date().toISOString(),
-        model: translationSession.model
+        model: translationSession.model,
+        baseURL: translationSession.baseURL.trim().replace(/\/+$/u, '')
       });
-      setStatus('译文已写入对应英文段落下方，并缓存在本机。');
+      if (updateStatus) {
+        setStatus('译文已写入对应英文段落下方，并缓存在本机。');
+      }
+      return true;
     } catch (error) {
-      setStatus(`翻译失败：${formatError(error)}`);
+      if (updateStatus) {
+        setStatus(`翻译失败：${formatError(error)}`);
+      }
+      return false;
     } finally {
       setTranslatingHash(null);
     }
@@ -128,12 +144,24 @@ export function MobileReaderScreen({
       setSettingsOpen(true);
       return;
     }
-    const missing = currentBlocks.filter(
-      (block) => !translationByHash.has(block.sourceHash) && block.original.length <= 6000
-    );
-    for (const block of missing) {
-      await handleTranslateBlock(block);
+    const targets = currentBlocks.filter((block) => {
+      const cached = translationByHash.get(block.sourceHash);
+      return !cached || !isTranslationEntryCurrent(cached, translationSession);
+    });
+    if (targets.length === 0) {
+      setStatus('本页译文均由当前翻译配置生成，无需更新。');
+      return;
     }
+    let succeeded = 0;
+    for (const block of targets) {
+      if (await handleTranslateBlock(block, false)) {
+        succeeded += 1;
+      }
+    }
+    const failed = targets.length - succeeded;
+    setStatus(failed > 0
+      ? `本页翻译完成：成功 ${succeeded} 段，失败 ${failed} 段；可单独重试失败段落。`
+      : `本页 ${succeeded} 个段落已使用当前配置翻译并缓存。`);
   }
 
   function captureSelection(): void {
@@ -148,10 +176,12 @@ export function MobileReaderScreen({
         return;
       }
       const rect = selection.rangeCount > 0 ? selection.getRangeAt(0).getBoundingClientRect() : null;
+      const top = Math.max(74, Math.min(window.innerHeight - 180, (rect?.bottom ?? 80) + 8));
       setSelectionPopover({
         text,
         left: Math.max(12, Math.min(window.innerWidth - 292, rect?.left ?? 12)),
-        top: Math.max(74, (rect?.bottom ?? 80) + 8)
+        top,
+        maxHeight: Math.max(140, window.innerHeight - top - 12)
       });
     }, 30);
   }
@@ -194,7 +224,7 @@ export function MobileReaderScreen({
         <div className="mobile-bilingual-reader">
           <div className="mobile-bilingual-toolbar">
             <button type="button" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}>上一页</button>
-            <span>{translatedCount} / {currentBlocks.length} 段已有译文</span>
+            <span>{translatedCount} / {currentBlocks.length} 段已有译文{staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}</span>
             <button type="button" disabled={currentBlocks.length === 0 || Boolean(translatingHash)} onClick={() => void handleTranslatePage()}>翻译本页</button>
           </div>
           <div
@@ -213,11 +243,13 @@ export function MobileReaderScreen({
                 <article key={block.id} className={`mobile-bilingual-block is-${block.type}`}>
                   <div className="mobile-block-original">
                     {block.type === 'heading' ? <h2>{block.original}</h2> : <p>{block.original}</p>}
-                    {!cached ? (
-                      <button type="button" disabled={Boolean(translatingHash)} onClick={() => void handleTranslateBlock(block)}>
-                        {translatingHash === block.sourceHash ? '翻译中…' : '翻译此段'}
-                      </button>
-                    ) : null}
+                    <button type="button" disabled={Boolean(translatingHash)} onClick={() => void handleTranslateBlock(block)}>
+                      {translatingHash === block.sourceHash
+                        ? '翻译中…'
+                        : cached
+                          ? isTranslationEntryCurrent(cached, translationSession) ? '重新翻译' : '用当前配置重译'
+                          : '翻译此段'}
+                    </button>
                   </div>
                   {cached ? (
                     <div className="mobile-block-translation">
@@ -272,7 +304,7 @@ export function MobileReaderScreen({
       />
 
       {selectionPopover ? (
-        <aside className="mobile-selection-popover" style={{ left: selectionPopover.left, top: selectionPopover.top }}>
+        <aside className="mobile-selection-popover" style={{ left: selectionPopover.left, top: selectionPopover.top, maxHeight: selectionPopover.maxHeight }}>
           <button type="button" className="mobile-selection-close" onClick={() => setSelectionPopover(null)}>×</button>
           <strong>{selectionPopover.text}</strong>
           {selectionPopover.translation ? <p>{selectionPopover.translation}</p> : null}
@@ -282,8 +314,10 @@ export function MobileReaderScreen({
       ) : null}
 
       {settingsOpen ? (
-        <TranslationSettingsDialog
+        <MobileTranslationSettingsDialog
           session={translationSession}
+          title="段落翻译设置"
+          submitLabel="保存并返回阅读"
           onClose={() => setSettingsOpen(false)}
           onSave={async (next) => {
             await onTranslationSessionChange(next);
@@ -293,31 +327,6 @@ export function MobileReaderScreen({
         />
       ) : null}
     </section>
-  );
-}
-
-function TranslationSettingsDialog({
-  session,
-  onClose,
-  onSave
-}: {
-  session: MobileTranslationSession;
-  onClose: () => void;
-  onSave: (session: MobileTranslationSession) => Promise<void>;
-}) {
-  const [form, setForm] = useState(session);
-  return (
-    <div className="mobile-dialog-backdrop" role="presentation" onClick={onClose}>
-      <section className="mobile-translation-dialog" role="dialog" aria-modal="true" aria-label="翻译设置" onClick={(event) => event.stopPropagation()}>
-        <div className="mobile-dialog-handle" />
-        <header><strong>段落翻译设置</strong><button type="button" onClick={onClose}>关闭</button></header>
-        <p>支持允许浏览器访问的 OpenAI 兼容接口。API Key 只保存在当前网页内存，刷新或关闭网页后不会写入设备。</p>
-        <label>Base URL<input value={form.baseURL} onChange={(event) => setForm((value) => ({ ...value, baseURL: event.target.value }))} /></label>
-        <label>Model<input value={form.model} onChange={(event) => setForm((value) => ({ ...value, model: event.target.value }))} /></label>
-        <label>API Key<input type="password" value={form.apiKey} onChange={(event) => setForm((value) => ({ ...value, apiKey: event.target.value }))} placeholder="仅本次会话" /></label>
-        <button type="button" className="mobile-dialog-primary" onClick={() => void onSave(form)}>保存并返回阅读</button>
-      </section>
-    </div>
   );
 }
 

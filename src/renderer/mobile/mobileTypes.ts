@@ -8,12 +8,14 @@ export interface MobileStoredPdf {
   fileName: string;
   kind: MobilePdfKind;
   byteLength: number;
+  contentHash?: string;
 }
 
 export interface MobilePaper {
   id: string;
   source: MobilePaperSource;
   arxivId?: string;
+  sourceRevision?: string;
   title: string;
   titleZh?: string;
   authors: string[];
@@ -36,6 +38,7 @@ export interface MobileTranslationEntry {
   translation: string;
   translatedAt: string;
   model: string;
+  baseURL?: string;
 }
 
 export interface MobileTranslationPreferences {
@@ -71,6 +74,8 @@ export function createImportedMobilePaper(input: {
 export function createArxivMobilePaper(input: {
   paper: ArxivPaper;
   storedPdf: MobileStoredPdf;
+  titleZh?: string;
+  abstractZh?: string;
   now?: string;
 }): MobilePaper {
   const now = input.now ?? new Date().toISOString();
@@ -78,10 +83,13 @@ export function createArxivMobilePaper(input: {
     id: `arxiv-${sanitizeIdentifier(input.paper.stableId)}`,
     source: 'arxiv',
     arxivId: input.paper.stableId,
+    sourceRevision: input.paper.id || input.paper.pdfUrl,
     title: input.paper.title,
+    ...(input.titleZh ? { titleZh: input.titleZh } : {}),
     authors: input.paper.authors,
     year: input.paper.published.slice(0, 4),
     abstract: input.paper.summary,
+    ...(input.abstractZh ? { abstractZh: input.abstractZh } : {}),
     categories: input.paper.categories,
     sourcePdf: input.storedPdf,
     addedAt: now,
@@ -95,13 +103,15 @@ export function upsertMobilePaper(library: MobilePaper[], incoming: MobilePaper)
   if (!existing) {
     return [incoming, ...library];
   }
+  const sourceEquivalent = isMobilePaperSourceEquivalent(existing, incoming);
   return [
     {
       ...existing,
       ...incoming,
-      translatedPdf: incoming.translatedPdf ?? existing.translatedPdf,
+      translatedPdf: sourceEquivalent ? incoming.translatedPdf ?? existing.translatedPdf : incoming.translatedPdf,
       addedAt: existing.addedAt,
-      lastPage: incoming.lastPage || existing.lastPage
+      lastPage: sourceEquivalent ? existing.lastPage : incoming.lastPage,
+      pageCount: sourceEquivalent ? existing.pageCount ?? incoming.pageCount : incoming.pageCount
     },
     ...library.filter((paper) => paper.id !== incoming.id)
   ];
@@ -133,7 +143,7 @@ export function parseMobileLibrary(value: string | null): MobilePaper[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter(isMobilePaper).slice(0, 500);
+    return parsed.map(normalizeMobilePaper).filter((paper): paper is MobilePaper => paper !== null).slice(0, 500);
   } catch {
     return [];
   }
@@ -145,7 +155,7 @@ export function parseTranslationEntries(value: string): MobileTranslationEntry[]
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter(isTranslationEntry).slice(-600);
+    return parsed.filter(isTranslationEntry);
   } catch {
     return [];
   }
@@ -155,7 +165,30 @@ export function mergeTranslationEntry(
   entries: MobileTranslationEntry[],
   incoming: MobileTranslationEntry
 ): MobileTranslationEntry[] {
-  return [...entries.filter((entry) => entry.sourceHash !== incoming.sourceHash), incoming].slice(-600);
+  return [...entries.filter((entry) => entry.sourceHash !== incoming.sourceHash), incoming];
+}
+
+export function isMobilePaperSourceEquivalent(left: MobilePaper, right: MobilePaper): boolean {
+  if (left.sourceRevision && right.sourceRevision) {
+    return left.sourceRevision === right.sourceRevision;
+  }
+  if (left.sourcePdf.contentHash && right.sourcePdf.contentHash) {
+    return left.sourcePdf.contentHash === right.sourcePdf.contentHash;
+  }
+  return (
+    left.sourcePdf.path === right.sourcePdf.path &&
+    left.sourcePdf.fileName === right.sourcePdf.fileName &&
+    left.sourcePdf.byteLength === right.sourcePdf.byteLength
+  );
+}
+
+export function isTranslationEntryCurrent(
+  entry: MobileTranslationEntry,
+  session: MobileTranslationPreferences
+): boolean {
+  const sameModel = entry.model.trim() === session.model.trim();
+  const sameBaseURL = !entry.baseURL || normalizeBaseURL(entry.baseURL) === normalizeBaseURL(session.baseURL);
+  return sameModel && sameBaseURL;
 }
 
 export function createLocalPaperId(fileName: string, byteLength: number, lastModified: number): string {
@@ -189,25 +222,62 @@ function hashString(value: string): string {
   return (hash >>> 0).toString(36);
 }
 
-function isMobilePaper(value: unknown): value is MobilePaper {
+function normalizeMobilePaper(value: unknown): MobilePaper | null {
   if (!value || typeof value !== 'object') {
-    return false;
+    return null;
   }
   const paper = value as Partial<MobilePaper>;
-  return (
-    typeof paper.id === 'string' &&
-    typeof paper.title === 'string' &&
-    typeof paper.lastPage === 'number' &&
-    isStoredPdf(paper.sourcePdf)
-  );
+  const sourcePdf = normalizeStoredPdf(paper.sourcePdf, 'source');
+  if (typeof paper.id !== 'string' || !paper.id.trim() || typeof paper.title !== 'string' || !sourcePdf) {
+    return null;
+  }
+  const addedAt = typeof paper.addedAt === 'string' ? paper.addedAt : '';
+  const translatedPdf = normalizeStoredPdf(paper.translatedPdf, 'translated');
+  const normalized: MobilePaper = {
+    id: paper.id,
+    source: paper.source === 'arxiv' || paper.source === 'import' ? paper.source : paper.arxivId ? 'arxiv' : 'import',
+    title: paper.title,
+    authors: normalizeStringArray(paper.authors),
+    year: typeof paper.year === 'string' ? paper.year : '',
+    categories: normalizeStringArray(paper.categories),
+    sourcePdf,
+    addedAt,
+    lastOpenedAt: typeof paper.lastOpenedAt === 'string' ? paper.lastOpenedAt : addedAt,
+    lastPage: Math.max(1, Math.trunc(Number(paper.lastPage) || 1))
+  };
+  if (typeof paper.arxivId === 'string') normalized.arxivId = paper.arxivId;
+  if (typeof paper.sourceRevision === 'string') normalized.sourceRevision = paper.sourceRevision;
+  if (typeof paper.titleZh === 'string') normalized.titleZh = paper.titleZh;
+  if (typeof paper.abstract === 'string') normalized.abstract = paper.abstract;
+  if (typeof paper.abstractZh === 'string') normalized.abstractZh = paper.abstractZh;
+  if (translatedPdf) normalized.translatedPdf = translatedPdf;
+  if (Number.isFinite(paper.pageCount) && Number(paper.pageCount) > 0) {
+    normalized.pageCount = Math.trunc(Number(paper.pageCount));
+  }
+  return normalized;
 }
 
-function isStoredPdf(value: unknown): value is MobileStoredPdf {
+function normalizeStoredPdf(value: unknown, fallbackKind: MobilePdfKind): MobileStoredPdf | null {
   if (!value || typeof value !== 'object') {
-    return false;
+    return null;
   }
   const pdf = value as Partial<MobileStoredPdf>;
-  return typeof pdf.path === 'string' && typeof pdf.fileName === 'string' && typeof pdf.byteLength === 'number';
+  if (
+    typeof pdf.path !== 'string' ||
+    !pdf.path.trim() ||
+    typeof pdf.fileName !== 'string' ||
+    !Number.isFinite(pdf.byteLength) ||
+    Number(pdf.byteLength) < 0
+  ) {
+    return null;
+  }
+  return {
+    path: pdf.path,
+    fileName: pdf.fileName,
+    kind: pdf.kind === 'source' || pdf.kind === 'translated' ? pdf.kind : fallbackKind,
+    byteLength: Number(pdf.byteLength),
+    ...(typeof pdf.contentHash === 'string' && pdf.contentHash ? { contentHash: pdf.contentHash } : {})
+  };
 }
 
 function isTranslationEntry(value: unknown): value is MobileTranslationEntry {
@@ -221,6 +291,15 @@ function isTranslationEntry(value: unknown): value is MobileTranslationEntry {
     typeof entry.original === 'string' &&
     typeof entry.translation === 'string' &&
     typeof entry.translatedAt === 'string' &&
-    typeof entry.model === 'string'
+    typeof entry.model === 'string' &&
+    (entry.baseURL === undefined || typeof entry.baseURL === 'string')
   );
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+function normalizeBaseURL(value: string): string {
+  return value.trim().replace(/\/+$/u, '');
 }

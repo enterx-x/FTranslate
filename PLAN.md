@@ -619,9 +619,22 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 针对固定生产地址运行 `npm run visual:check:mobile` 已通过；人工复查 arXiv、段落内联译文和选词浮层截图，未发现明显布局回归。
 - `npm audit --omit=dev --json` 显示生产依赖已知漏洞为 0；Vercel 完整安装日志中的 5 个漏洞来自开发/构建依赖，暂不自动执行可能破坏锁定版本的 `npm audit fix`。
 
+### 2026-07-15 移动端对抗式审查修复
+
+- 数据恢复：移动论文记录改为逐字段规范化，旧记录缺少作者、分类、时间或 PDF kind 时补安全默认值；不可恢复记录被隔离，不再把整个论文库拖入白屏。移动入口新增错误边界，未捕获渲染异常会显示保留数据的重载提示。
+- 来源一致性：本地 PDF 保存 SHA-256 内容指纹，arXiv 保存带版本来源标识。同一来源重复保存保留页码、页数和双语 PDF；来源变化时重置进度并清空旧段落译文、解绑旧双语 PDF。
+- 下载与导入边界：单个 PDF 上限 64 MB；网页 arXiv 下载支持取消、45 秒超时、Content-Length / Content-Type / 流式累计大小检查，并在写入前验证 `%PDF-` 文件头和 PDF.js 文档结构。根据 iPhone Safari 实测报错，网页 PDF 改由独立 IndexedDB 保存原始 `ArrayBuffer`，不再向 Capacitor Filesystem 写入 Safari 不支持持久化的 Blob URL；读取和删除仍兼容旧 Filesystem 数据。
+- 检索状态：新检索开始即清空旧结果，检索期间锁定查询与筛选输入，失败后保持空结果，不再把上一查询论文留在错误消息下方。
+- 翻译缓存：缓存记录加入 Base URL；更换端点或模型后对应译文标记为待更新，“翻译本页”会重新生成。每个已有段落均显示“重新翻译”入口，移除 600 条静默淘汰上限，并显示批量翻译成功/失败统计。
+- arXiv 翻译：检索结果新增“译标题”和“译摘要”，共用阅读器的 OpenAI 兼容翻译设置；中文结果直接显示在对应英文下方，并随论文一起存入本地论文库。未配置 API Key 时点击翻译会先打开设置，保存后继续原请求。
+- 阅读性能：共享 `PdfViewer` 只在调用方需要提取结果时解析全文，移动端切换原始 PDF 不再重复执行第二次无消费者的全文抽取；选词浮层增加视口高度约束。
+- 验证已收口：`npm run dist` 通过（82 个测试文件、476 项测试；TypeScript、桌面生产构建、Windows NSIS 安装包均成功），`npm run ios:sync` 成功；本地和生产地址的 `npm run visual:check:mobile` 均通过。线上对抗脚本确认可恢复旧记录、真实 arXiv 检索返回 20 篇、标题中文紧邻英文显示、失败检索清空 20 条旧结果、PDF 经新 IndexedDB 路径保存后可重新打开、段落内嵌翻译和旧配置重译均正常；截图位于 `.tmp-mobile-visual-check/`。生产部署 `dpl_FUtZyPJdVZHAohxaM7swAnxoL1v4` 已绑定 `https://ftranslate-mobile.vercel.app`。剩余验证仅为 iPhone Safari 真机再次保存 arXiv PDF，确认 WebKit 的实际存储配额。
+
 ### 问题台账
 
 | 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
 | --- | --- | --- | --- | --- |
 | 2026-07-15 | Vercel CLI 尚未获得部署授权 | 本机没有既有 Vercel 凭据，首次部署必须由用户完成 OAuth 登录 | 已解决：完成 OAuth 并部署到 `https://ftranslate-mobile.vercel.app` | 后续在已关联项目中执行 `npx vercel --prod` 更新同一生产地址 |
+| 2026-07-15 | iPhone Safari 存入 arXiv 论文时报 `BlobURLs are not yet supported` | Capacitor Filesystem 网页实现把 Blob 交给 IndexedDB，Safari 无法持久化该 Blob URL | 已改为独立 IndexedDB `ArrayBuffer` 存储，本地 Chromium 导入/读取闭环通过 | 重新部署后由 iPhone Safari 再保存同一论文，确认真机 WebKit 与浏览器配额行为 |
+| 2026-07-15 | 本机 C 盘剩余空间为 0，`npx` 安装 Vercel CLI 失败 | npm 临时缓存无法继续写入 | 使用今天已有的 Vercel CLI 缓存完成生产部署，未删除用户文件 | 后续在用户授权下清理低风险临时缓存，否则新依赖安装仍可能失败 |
 | 2026-07-15 | 桌面视觉脚本未全量通过 | 默认外部论文在 10 分钟门限内未完成；可控短 PDF 能快速验证布局，但生成的 PPT 内容不足以通过来源与中文 bullet 质量门 | 首页、研究表格、实验矩阵、PDF 阅读和图表截图已生成并人工复查；移动端视觉检查独立通过 | 后续为桌面视觉脚本维护一份小型、内容完备、可通过 PPT 质量门的固定 PDF fixture，移除对个人下载目录大论文的依赖 |

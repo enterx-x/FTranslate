@@ -282,11 +282,13 @@ export function PdfViewer(props: PdfViewerProps) {
             scheduleInitialHorizontalCenter(8);
           }
         });
-        void extractPdfBlocksFromDocument(pdfDocument, () => cancelled).then((outline) => {
-          if (!cancelled) {
-            propsRef.current.onExtractedTextReady?.(outline);
-          }
-        });
+        if (propsRef.current.onExtractedTextReady) {
+          void extractPdfBlocksFromDocument(pdfDocument, () => cancelled).then((outline) => {
+            if (!cancelled) {
+              propsRef.current.onExtractedTextReady?.(outline);
+            }
+          });
+        }
       })
       .catch((error) => {
         if (!cancelled) {
