@@ -32,6 +32,7 @@ interface MobileReaderScreenProps {
   onProgressChange: (page: number, pageCount: number) => void;
   onOcrProgressChange: (lastPage: number, completed: boolean) => Promise<void>;
   onSaveTranslation: (entry: MobileTranslationEntry) => Promise<void>;
+  onSaveTranslations: (entries: MobileTranslationEntry[]) => Promise<void>;
   onTranslationSessionChange: (session: MobileTranslationSession) => Promise<void>;
 }
 
@@ -54,6 +55,7 @@ export function MobileReaderScreen({
   onProgressChange,
   onOcrProgressChange,
   onSaveTranslation,
+  onSaveTranslations,
   onTranslationSessionChange
 }: MobileReaderScreenProps) {
   const bilingualPageRef = useRef<HTMLDivElement | null>(null);
@@ -126,6 +128,14 @@ export function MobileReaderScreen({
   }, [pdfData]);
 
   useEffect(() => {
+    const cachedOcrBlocks = buildCachedLocalOcrBlocks(translations);
+    if (cachedOcrBlocks.length === 0) {
+      return;
+    }
+    setBlocks(cachedOcrBlocks);
+  }, [translations]);
+
+  useEffect(() => {
     onProgressChange(currentPage, pageCount);
   }, [currentPage, onProgressChange, pageCount]);
 
@@ -137,9 +147,22 @@ export function MobileReaderScreen({
     const target = container.querySelector<HTMLElement>(`[data-pdf-page="${Math.max(1, paper.lastPage)}"]`);
     if (target) {
       container.scrollTop = Math.max(0, target.offsetTop - container.offsetTop - 12);
+      readerScrollTopRef.current = container.scrollTop;
     }
     restoredFeedRef.current = true;
   }, [blocks, paper.lastPage]);
+
+  useEffect(() => {
+    if (mode !== 'bilingual') {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      if (bilingualPageRef.current) {
+        bilingualPageRef.current.scrollTop = readerScrollTopRef.current;
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [mode]);
 
   useEffect(() => () => {
     stopTranslationRef.current = true;
@@ -310,8 +333,7 @@ export function MobileReaderScreen({
             return [...current.filter((block) => !incomingHashes.has(block.sourceHash)), ...pageBlocks.map((item) => item.block)]
               .sort((left, right) => left.page - right.page);
           });
-          for (const item of pageBlocks) {
-            await onSaveTranslation({
+          await onSaveTranslations(pageBlocks.map((item) => ({
               sourceHash: item.block.sourceHash,
               page: item.block.page,
               original: item.block.original,
@@ -322,8 +344,7 @@ export function MobileReaderScreen({
               origin: 'ocr',
               order: item.order,
               blockType: item.block.type
-            });
-          }
+            })));
           await onOcrProgressChange(page, false);
 
           for (let index = 0; index < pageBlocks.length; index += 1) {

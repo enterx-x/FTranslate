@@ -36,9 +36,13 @@ function MobileApp() {
   const [library, setLibrary] = useState<MobilePaper[]>([]);
   const libraryRef = useRef<MobilePaper[]>([]);
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
+  const activePaperIdRef = useRef<string | null>(null);
+  const activePaperSourceKeyRef = useRef<string | null>(null);
   const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
   const [translations, setTranslations] = useState<MobileTranslationEntry[]>([]);
   const translationsRef = useRef<MobileTranslationEntry[]>([]);
+  const translationCacheByPaperRef = useRef(new Map<string, MobileTranslationEntry[]>());
+  const translationWriteQueuesRef = useRef(new Map<string, Promise<void>>());
   const [translationSession, setTranslationSession] = useState<MobileTranslationSession>({
     baseURL: 'https://api.openai.com/v1',
     model: 'gpt-4.1-mini',
@@ -83,16 +87,30 @@ function MobileApp() {
   }, []);
 
   const handleOpenPaper = useCallback(async (paper: MobilePaper) => {
+    if (
+      activePaperIdRef.current === paper.id
+      && activePaperSourceKeyRef.current === buildPaperSourceKey(paper)
+      && pdfData
+    ) {
+      await commitLibrary((current) => updateMobilePaper(current, paper.id, { lastOpenedAt: new Date().toISOString() }));
+      setView('reader');
+      setNotice('');
+      return;
+    }
     setBusy(true);
     setNotice(`正在打开 ${paper.title}…`);
     try {
+      await waitForPaperTranslationWrites(paper.id);
       const [sourceBytes, cachedTranslations] = await Promise.all([
         readPdfBytes(paper.sourcePdf),
         loadPaperTranslations(paper.id)
       ]);
       setPdfData(sourceBytes);
+      translationCacheByPaperRef.current.set(paper.id, cachedTranslations);
       translationsRef.current = cachedTranslations;
       setTranslations(cachedTranslations);
+      activePaperIdRef.current = paper.id;
+      activePaperSourceKeyRef.current = buildPaperSourceKey(paper);
       setActivePaperId(paper.id);
       await commitLibrary((current) => updateMobilePaper(current, paper.id, { lastOpenedAt: new Date().toISOString() }));
       setView('reader');
@@ -102,7 +120,7 @@ function MobileApp() {
     } finally {
       setBusy(false);
     }
-  }, [commitLibrary]);
+  }, [commitLibrary, pdfData]);
 
   async function handleImportPdf(file: File): Promise<void> {
     if (!file.name.toLowerCase().endsWith('.pdf')) {
@@ -175,11 +193,16 @@ function MobileApp() {
     try {
       await commitLibrary((current) => current.filter((item) => item.id !== paper.id));
       if (activePaperId === paper.id) {
+        activePaperIdRef.current = null;
+        activePaperSourceKeyRef.current = null;
         setActivePaperId(null);
         setPdfData(null);
         translationsRef.current = [];
         setTranslations([]);
       }
+      await waitForPaperTranslationWrites(paper.id);
+      translationCacheByPaperRef.current.delete(paper.id);
+      translationWriteQueuesRef.current.delete(paper.id);
       try {
         await removeStoredPaper(paper.id);
         setNotice('论文已从当前浏览器移除。');
@@ -206,14 +229,32 @@ function MobileApp() {
     }
   }
 
-  async function handleSaveTranslation(entry: MobileTranslationEntry): Promise<void> {
-    if (!activePaper) {
-      return;
+  async function handleSaveTranslations(paperId: string, entries: MobileTranslationEntry[]): Promise<void> {
+    const cachedEntries = translationCacheByPaperRef.current.get(paperId)
+      ?? (activePaperIdRef.current === paperId ? translationsRef.current : []);
+    const next = entries.reduce(mergeTranslationEntry, cachedEntries);
+    translationCacheByPaperRef.current.set(paperId, next);
+    if (activePaperIdRef.current === paperId) {
+      translationsRef.current = next;
+      setTranslations(next);
     }
-    const next = mergeTranslationEntry(translationsRef.current, entry);
-    translationsRef.current = next;
-    setTranslations(next);
-    await savePaperTranslations(activePaper.id, next);
+
+    const previousWrite = translationWriteQueuesRef.current.get(paperId) ?? Promise.resolve();
+    const currentWrite = previousWrite
+      .catch(() => undefined)
+      .then(() => savePaperTranslations(paperId, next));
+    translationWriteQueuesRef.current.set(paperId, currentWrite);
+    try {
+      await currentWrite;
+    } finally {
+      if (translationWriteQueuesRef.current.get(paperId) === currentWrite) {
+        translationWriteQueuesRef.current.delete(paperId);
+      }
+    }
+  }
+
+  async function waitForPaperTranslationWrites(paperId: string): Promise<void> {
+    await translationWriteQueuesRef.current.get(paperId);
   }
 
   const handleProgressChange = useCallback((page: number, pageCount: number) => {
@@ -250,6 +291,8 @@ function MobileApp() {
     if (!existing || isMobilePaperSourceEquivalent(existing, incoming)) {
       return '';
     }
+    await waitForPaperTranslationWrites(incoming.id);
+    translationCacheByPaperRef.current.set(incoming.id, []);
     await savePaperTranslations(incoming.id, []);
     const staleFiles = [
       existing.translatedPdf,
@@ -284,18 +327,22 @@ function MobileApp() {
             onTranslationSessionChange={handleTranslationSessionChange}
           />
         </div>
-        {view === 'reader' && activePaper && pdfData ? (
-          <MobileReaderScreen
-            paper={activePaper}
-            pdfData={pdfData}
-            translations={translations}
-            translationSession={translationSession}
-            onBack={() => setView('library')}
-            onProgressChange={handleProgressChange}
-            onOcrProgressChange={handleOcrProgressChange}
-            onSaveTranslation={handleSaveTranslation}
-            onTranslationSessionChange={handleTranslationSessionChange}
-          />
+        {activePaper && pdfData ? (
+          <div className="mobile-view-layer" hidden={view !== 'reader'}>
+            <MobileReaderScreen
+              key={activePaper.id}
+              paper={activePaper}
+              pdfData={pdfData}
+              translations={translations}
+              translationSession={translationSession}
+              onBack={() => setView('library')}
+              onProgressChange={handleProgressChange}
+              onOcrProgressChange={handleOcrProgressChange}
+              onSaveTranslation={(entry) => handleSaveTranslations(activePaper.id, [entry])}
+              onSaveTranslations={(entries) => handleSaveTranslations(activePaper.id, entries)}
+              onTranslationSessionChange={handleTranslationSessionChange}
+            />
+          </div>
         ) : null}
       </main>
 
@@ -340,4 +387,10 @@ export default function MobileAppRoot() {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function buildPaperSourceKey(paper: MobilePaper): string {
+  return paper.sourceRevision
+    || paper.sourcePdf.contentHash
+    || `${paper.sourcePdf.path}|${paper.sourcePdf.byteLength}`;
 }

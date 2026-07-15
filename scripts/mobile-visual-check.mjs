@@ -63,7 +63,7 @@ startxref
   );
 }
 
-function createScannedFallbackPdfBuffer() {
+function createScannedFallbackPdfBuffer(pageCount = 3) {
   const content = `q
 0.94 g
 54 96 487 650 re f
@@ -76,12 +76,18 @@ function createScannedFallbackPdfBuffer() {
 76 570 420 8 re f
 76 548 410 8 re f
 Q`;
+  const pageObjectNumbers = Array.from({ length: pageCount }, (_, index) => 3 + index * 2);
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Count 1 /Kids [3 0 R] >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << >> /Contents 4 0 R >>',
-    `<< /Length ${Buffer.byteLength(content, 'ascii')} >>\nstream\n${content}\nendstream`
+    `<< /Type /Pages /Count ${pageCount} /Kids [${pageObjectNumbers.map(number => `${number} 0 R`).join(' ')}] >>`
   ];
+  for (let index = 0; index < pageCount; index += 1) {
+    const contentObjectNumber = 4 + index * 2;
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << >> /Contents ${contentObjectNumber} 0 R >>`,
+      `<< /Length ${Buffer.byteLength(content, 'ascii')} >>\nstream\n${content}\nendstream`
+    );
+  }
   let source = '%PDF-1.4\n';
   const offsets = [0];
   for (let index = 0; index < objects.length; index += 1) {
@@ -262,13 +268,18 @@ try {
   await client.send('Runtime.enable');
   await client.send('Page.enable');
   await client.send('Page.bringToFront');
-  const localOcrTestSource = `globalThis.__FTRANSLATE_MOBILE_OCR_TEST__ = async () => ({
-    text: 'Vision Safety Policy\\n\\nNow fill it with water and pour: the shifting liquid continuously redistributes the gravitational load along the gripper fingers, demanding real-time effort modulation that fixed-effort or open-loop grasping cannot achieve. The core difficulty is that grasp stability and object safety are tightly coupled: insufficient effort leads to micro-slip and drop, while only slightly more force causes irreversible deformation. A practical grasp controller must therefore detect and suppress incipient slip in real time, reduce effort when the carried load decreases to prevent over-gripping, and enforce a hard safety limit on contact force.',
-    blocks: [
-      { paragraphs: [{ text: 'Vision Safety Policy' }] },
-      { paragraphs: [{ text: 'Now fill it with water and pour: the shifting liquid continuously redistributes the gravitational load along the gripper fingers, demanding real-time effort modulation that fixed-effort or open-loop grasping cannot achieve. The core difficulty is that grasp stability and object safety are tightly coupled: insufficient effort leads to micro-slip and drop, while only slightly more force causes irreversible deformation. A practical grasp controller must therefore detect and suppress incipient slip in real time, reduce effort when the carried load decreases to prevent over-gripping, and enforce a hard safety limit on contact force.' }] }
-    ]
-  });`;
+  const localOcrTestSource = `globalThis.__FTRANSLATE_MOBILE_OCR_TEST__ = async (_image, page) => {
+    await new Promise(resolve => setTimeout(resolve, page === 2 ? 800 : 80));
+    const heading = 'Vision Safety Policy Page ' + page;
+    const body = 'Page ' + page + '. Now fill it with water and pour: the shifting liquid continuously redistributes the gravitational load along the gripper fingers, demanding real-time effort modulation that fixed-effort or open-loop grasping cannot achieve. The core difficulty is that grasp stability and object safety are tightly coupled: insufficient effort leads to micro-slip and drop, while only slightly more force causes irreversible deformation. A practical grasp controller must therefore detect and suppress incipient slip in real time, reduce effort when the carried load decreases to prevent over-gripping, and enforce a hard safety limit on contact force.';
+    return {
+      text: heading + '\\n\\n' + body,
+      blocks: [
+        { paragraphs: [{ text: heading }] },
+        { paragraphs: [{ text: body }] }
+      ]
+    };
+  };`;
   await client.send('Page.addScriptToEvaluateOnNewDocument', { source: localOcrTestSource });
   await client.send('Runtime.evaluate', { expression: localOcrTestSource });
   console.log('Mobile visual check connected to Electron.');
@@ -454,11 +465,11 @@ try {
     input.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
   })()`);
-  await waitForSelector(client, '.mobile-reader-screen');
-  await waitForSelector(client, '.mobile-bilingual-block');
-  await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[1].click()`);
-  await waitForSelector(client, '.mobile-pdf-reader');
-  await waitForSelector(client, '.mobile-pdf-reader .pdfViewer .page canvas', 20000);
+  await waitForExpression(client, `document.querySelector('.mobile-view-layer:not([hidden]) .mobile-reader-header strong')?.textContent.includes('safe-policy-optimization') ? 'active-fallback-reader' : ''`, 20000);
+  await waitForSelector(client, '.mobile-view-layer:not([hidden]) .mobile-bilingual-block');
+  await evaluate(client, `document.querySelectorAll('.mobile-view-layer:not([hidden]) .mobile-reader-mode-bar button')[1].click()`);
+  await waitForSelector(client, '.mobile-view-layer:not([hidden]) .mobile-pdf-reader');
+  await waitForSelector(client, '.mobile-view-layer:not([hidden]) .mobile-pdf-reader .pdfViewer .page canvas', 20000);
   await wait(350);
   const zoomChange = await evaluate(client, `(() => {
     const toolbar = document.querySelector('.mobile-pdf-toolbar');
@@ -709,8 +720,19 @@ try {
   await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[1].click()`);
   await waitForSelector(client, '.mobile-pdf-reader');
   await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[0].click()`);
-  await waitForExpression(client, `document.querySelectorAll('.mobile-bilingual-block').length === 2 ? 'ready' : ''`, 20000);
-  await waitForExpression(client, `document.querySelectorAll('.mobile-block-translation').length === 2 ? 'ready' : ''`, 20000);
+  await waitForExpression(client, `document.querySelectorAll('.mobile-bilingual-block').length >= 2 ? 'page-one' : ''`, 20000);
+  await waitForExpression(client, `document.querySelectorAll('.mobile-block-translation').length >= 2 ? 'page-one-translated' : ''`, 20000);
+  await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[1].click()`);
+  await waitForSelector(client, '.mobile-pdf-reader');
+  await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[0].click()`);
+  await waitForExpression(client, `document.body.textContent.includes('Vision Safety Policy Page 1') ? 'page-one-preserved-after-mode-switch' : ''`);
+  await evaluate(client, `document.querySelector('.mobile-reader-back').click()`);
+  await waitForSelector(client, '.mobile-library-screen');
+  await evaluate(client, `document.querySelectorAll('.mobile-bottom-nav button')[2].click()`);
+  await waitForSelector(client, '.mobile-reader-screen');
+  await waitForExpression(client, `document.body.textContent.includes('Vision Safety Policy Page 1') ? 'page-one-preserved-after-reader-exit' : ''`);
+  await waitForExpression(client, `document.querySelectorAll('.mobile-bilingual-block').length === 6 ? 'all-pages' : ''`, 20000);
+  await waitForExpression(client, `document.querySelectorAll('.mobile-block-translation').length === 6 ? 'all-pages-translated' : ''`, 20000);
   await capture(client, '08b-reader-scanned-bilingual-390x844.png');
   const novelReadingTypography = await evaluate(client, `(() => {
     const original = document.querySelector('.mobile-bilingual-block.is-paragraph .mobile-block-original p');
@@ -731,8 +753,10 @@ try {
     };
   })()`);
   if (
-    novelReadingTypography.originalFontSize < 20 ||
-    novelReadingTypography.translationFontSize < 20 ||
+    novelReadingTypography.originalFontSize < 16.5 ||
+    novelReadingTypography.originalFontSize > 20 ||
+    novelReadingTypography.translationFontSize < 16.5 ||
+    novelReadingTypography.translationFontSize > 20 ||
     novelReadingTypography.originalTextAlign === 'justify' ||
     novelReadingTypography.translationTextAlign === 'justify' ||
     novelReadingTypography.translationBorderLeft !== '0px' ||
@@ -798,7 +822,8 @@ try {
     screenHeight: 844
   });
   console.log('Started scanned-PDF OCR directly by tapping Continuous bilingual from Original PDF.');
-  console.log('Verified novel-style paragraph typography and reversible immersive scrolling without inline action chrome.');
+  console.log('Preserved earlier OCR pages across PDF mode switching and a reader exit while later pages were still processing.');
+  console.log('Verified compact novel-style paragraph typography and reversible immersive scrolling without inline action chrome.');
   await evaluate(client, `document.querySelector('.mobile-reader-back').click()`);
   await waitForSelector(client, '.mobile-library-screen');
   await evaluate(client, `(() => {
@@ -807,22 +832,45 @@ try {
     row?.querySelector('.mobile-paper-main')?.click();
     return Boolean(row);
   })()`);
-  await waitForExpression(client, `document.querySelectorAll('.mobile-bilingual-block').length === 2 ? 'ready' : ''`, 20000);
+  await waitForExpression(client, `document.querySelectorAll('.mobile-bilingual-block').length === 6 ? 'ready' : ''`, 20000);
+  await client.send('Page.reload', { ignoreCache: true });
+  await waitForSelector(client, '.mobile-library-screen', 20000);
+  await waitForExpression(client, `Array.from(document.querySelectorAll('.mobile-paper-row')).some(candidate => candidate.textContent.includes('scanned-safety-paper')) ? 'scanned-paper-loaded' : ''`, 20000);
+  await evaluate(client, `(() => {
+    const row = Array.from(document.querySelectorAll('.mobile-paper-row'))
+      .find(candidate => candidate.textContent.includes('scanned-safety-paper'));
+    row?.querySelector('.mobile-paper-main')?.click();
+    return Boolean(row);
+  })()`);
+  await waitForExpression(client, `document.querySelector('.mobile-view-layer:not([hidden]) .mobile-reader-screen') ? 'reader-reloaded' : ''`, 20000);
+  await wait(2000);
+  const reloadedCacheState = await evaluate(client, `(() => ({
+    blockCount: document.querySelectorAll('.mobile-bilingual-block').length,
+    translationCount: document.querySelectorAll('.mobile-block-translation').length,
+    status: document.querySelector('.mobile-reader-status')?.textContent ?? '',
+    ocrPromptVisible: Boolean(document.querySelector('.mobile-ocr-empty')),
+    title: document.querySelector('.mobile-reader-header strong')?.textContent ?? ''
+  }))()`);
+  if (reloadedCacheState.blockCount !== 6 || reloadedCacheState.translationCount !== 6) {
+    throw new Error(`Reloaded OCR cache is incomplete: ${JSON.stringify(reloadedCacheState)}`);
+  }
   const restoredVisionState = await evaluate(client, `(() => ({
     originals: Array.from(document.querySelectorAll('.mobile-block-original p, .mobile-block-original h2')).map(node => node.textContent),
     translations: Array.from(document.querySelectorAll('.mobile-block-translation p')).map(node => node.textContent),
     ocrPromptVisible: Boolean(document.querySelector('.mobile-ocr-empty'))
   }))()`);
   if (
-    restoredVisionState.originals.length !== 2 ||
-    restoredVisionState.translations.length !== 2 ||
+    restoredVisionState.originals.length !== 6 ||
+    restoredVisionState.translations.length !== 6 ||
+    !restoredVisionState.originals.some(original => original.includes('Page 1')) ||
+    !restoredVisionState.originals.some(original => original.includes('Page 3')) ||
     restoredVisionState.ocrPromptVisible ||
     translationMockState.imageRequestCount !== 0 ||
-    translationMockState.textRequestCount < 2
+    translationMockState.textRequestCount < 6
   ) {
     throw new Error(`Scanned PDF local OCR / DeepSeek text flow failed: ${JSON.stringify({ restoredVisionState, translationMockState })}`);
   }
-  console.log('Ran local OCR, sent only extracted text to DeepSeek, and restored two bilingual blocks from cache.');
+  console.log('Reloaded the web app and restored all six bilingual blocks from three persisted OCR pages.');
   console.log(`Mobile visual check passed. Screenshots: ${outputDir}`);
 } finally {
   client?.close();

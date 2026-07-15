@@ -807,6 +807,7 @@
   overscroll-behavior-y: contain;
   padding: 28px 22px 64px;
   background: #fff;
+  overflow-anchor: none;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
@@ -973,7 +974,7 @@
 .mobile-block-original h2 {
   color: #141414;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(24px, 6.6vw, 28px);
+  font-size: clamp(21px, 5.8vw, 24px);
   font-weight: 700;
   line-height: 1.42;
   letter-spacing: -.015em;
@@ -982,8 +983,8 @@
 .mobile-block-original p {
   color: #171717;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(21px, 5.8vw, 24px);
-  line-height: 1.58;
+  font-size: clamp(17px, 4.8vw, 19px);
+  line-height: 1.68;
   text-align: left;
   text-wrap: pretty;
 }
@@ -994,7 +995,7 @@
 
 .mobile-bilingual-block.is-caption .mobile-block-original p {
   color: #444;
-  font-size: clamp(17px, 4.8vw, 20px);
+  font-size: clamp(15px, 4.2vw, 17px);
   line-height: 1.62;
 }
 
@@ -1028,8 +1029,8 @@
 .mobile-block-translation p {
   color: #111;
   font-family: "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
-  font-size: clamp(20px, 5.6vw, 23px);
-  line-height: 1.76;
+  font-size: clamp(17px, 4.7vw, 19px);
+  line-height: 1.78;
   letter-spacing: .01em;
   text-align: left;
   text-wrap: pretty;
