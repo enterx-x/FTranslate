@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { PdfViewer } from '../components/PdfViewer';
 import { extractPdfBlocksFromData } from '../lib/pdfOutlineExtraction';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
@@ -11,16 +11,18 @@ import type {
 } from './mobileTypes';
 import { isTranslationEntryCurrent } from './mobileTypes';
 
-type MobileReaderMode = 'bilingual' | 'pdf' | 'translated';
+type MobileReaderMode = 'bilingual' | 'pdf';
+type PendingTranslation =
+  | { type: 'all' }
+  | { type: 'block'; block: ExtractedPdfBlock }
+  | { type: 'selection' };
 
 interface MobileReaderScreenProps {
   paper: MobilePaper;
   pdfData: Uint8Array;
-  translatedPdfData: Uint8Array | null;
   translations: MobileTranslationEntry[];
   translationSession: MobileTranslationSession;
   onBack: () => void;
-  onImportTranslatedPdf: (file: File) => Promise<void>;
   onProgressChange: (page: number, pageCount: number) => void;
   onSaveTranslation: (entry: MobileTranslationEntry) => Promise<void>;
   onTranslationSessionChange: (session: MobileTranslationSession) => Promise<void>;
@@ -39,39 +41,46 @@ interface SelectionPopoverState {
 export function MobileReaderScreen({
   paper,
   pdfData,
-  translatedPdfData,
   translations,
   translationSession,
   onBack,
-  onImportTranslatedPdf,
   onProgressChange,
   onSaveTranslation,
   onTranslationSessionChange
 }: MobileReaderScreenProps) {
-  const translatedInputRef = useRef<HTMLInputElement | null>(null);
   const bilingualPageRef = useRef<HTMLDivElement | null>(null);
+  const scrollFrameRef = useRef<number | null>(null);
+  const restoredFeedRef = useRef(false);
+  const stopTranslationRef = useRef(false);
+  const pendingTranslationRef = useRef<PendingTranslation | null>(null);
   const [mode, setMode] = useState<MobileReaderMode>('bilingual');
   const [currentPage, setCurrentPage] = useState(Math.max(1, paper.lastPage));
   const [pageCount, setPageCount] = useState(Math.max(0, paper.pageCount ?? 0));
   const [scale, setScale] = useState(1);
+  const [fitWidthRequestId, setFitWidthRequestId] = useState(0);
   const [blocks, setBlocks] = useState<ExtractedPdfBlock[]>([]);
   const [extracting, setExtracting] = useState(true);
   const [status, setStatus] = useState('正在解析 PDF 段落…');
   const [translatingHash, setTranslatingHash] = useState<string | null>(null);
+  const [translatingAll, setTranslatingAll] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<SelectionPopoverState | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    restoredFeedRef.current = false;
+    setBlocks([]);
     setExtracting(true);
-    setStatus('正在解析 PDF 段落…');
+    setStatus('正在把 PDF 转换为连续段落…');
     void extractPdfBlocksFromData(pdfData, () => cancelled)
       .then((nextBlocks) => {
         if (!cancelled) {
-          setBlocks(nextBlocks);
+          setBlocks(nextBlocks.filter((block) => block.original.trim()));
           setPageCount((count) => Math.max(count, ...nextBlocks.map((block) => block.page), 1));
           setExtracting(false);
-          setStatus(nextBlocks.length ? `已识别 ${nextBlocks.length} 个论文段落` : '没有识别到可重排段落，可切换到原始 PDF 阅读。');
+          setStatus(nextBlocks.length
+            ? `已转换为连续文章，共 ${nextBlocks.length} 个段落；中文会直接显示在英文下方。`
+            : '没有识别到可重排段落，可切换到原始 PDF 阅读。');
         }
       })
       .catch((error) => {
@@ -90,23 +99,45 @@ export function MobileReaderScreen({
     onProgressChange(currentPage, pageCount);
   }, [currentPage, onProgressChange, pageCount]);
 
+  useEffect(() => {
+    const container = bilingualPageRef.current;
+    if (!container || blocks.length === 0 || restoredFeedRef.current) {
+      return;
+    }
+    const target = container.querySelector<HTMLElement>(`[data-pdf-page="${Math.max(1, paper.lastPage)}"]`);
+    if (target) {
+      container.scrollTop = Math.max(0, target.offsetTop - container.offsetTop - 12);
+    }
+    restoredFeedRef.current = true;
+  }, [blocks, paper.lastPage]);
+
+  useEffect(() => () => {
+    stopTranslationRef.current = true;
+    if (scrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current);
+    }
+  }, []);
+
   const translationByHash = useMemo(
     () => new Map(translations.map((entry) => [entry.sourceHash, entry])),
     [translations]
   );
-  const currentBlocks = useMemo(
-    () => blocks.filter((block) => block.page === currentPage && block.original.trim()),
-    [blocks, currentPage]
-  );
-  const translatedCount = currentBlocks.filter((block) => translationByHash.has(block.sourceHash)).length;
-  const staleTranslationCount = currentBlocks.filter((block) => {
+  const translatedCount = blocks.filter((block) => {
+    const cached = translationByHash.get(block.sourceHash);
+    return Boolean(cached && isTranslationEntryCurrent(cached, translationSession));
+  }).length;
+  const staleTranslationCount = blocks.filter((block) => {
     const cached = translationByHash.get(block.sourceHash);
     return Boolean(cached && !isTranslationEntryCurrent(cached, translationSession));
   }).length;
-  const displayedPdf = mode === 'translated' && translatedPdfData ? translatedPdfData : pdfData;
 
-  async function handleTranslateBlock(block: ExtractedPdfBlock, updateStatus = true): Promise<boolean> {
-    if (!translationSession.apiKey.trim()) {
+  async function translateBlock(
+    block: ExtractedPdfBlock,
+    session: MobileTranslationSession,
+    updateStatus = true
+  ): Promise<boolean> {
+    if (!session.apiKey.trim()) {
+      pendingTranslationRef.current = { type: 'block', block };
       setSettingsOpen(true);
       return false;
     }
@@ -115,18 +146,18 @@ export function MobileReaderScreen({
       setStatus(`正在翻译第 ${block.page} 页段落…`);
     }
     try {
-      const translation = await translateAcademicText(block.original, translationSession);
+      const translation = await translateAcademicText(block.original, session);
       await onSaveTranslation({
         sourceHash: block.sourceHash,
         page: block.page,
         original: block.original,
         translation,
         translatedAt: new Date().toISOString(),
-        model: translationSession.model,
-        baseURL: translationSession.baseURL.trim().replace(/\/+$/u, '')
+        model: session.model,
+        baseURL: session.baseURL.trim().replace(/\/+$/u, '')
       });
       if (updateStatus) {
-        setStatus('译文已写入对应英文段落下方，并缓存在本机。');
+        setStatus('译文已直接写在对应英文段落下方，并缓存在本机。');
       }
       return true;
     } catch (error) {
@@ -139,29 +170,79 @@ export function MobileReaderScreen({
     }
   }
 
-  async function handleTranslatePage(): Promise<void> {
-    if (!translationSession.apiKey.trim()) {
+  async function handleTranslateBlock(
+    block: ExtractedPdfBlock,
+    session = translationSession
+  ): Promise<void> {
+    if (!session.apiKey.trim()) {
+      pendingTranslationRef.current = { type: 'block', block };
       setSettingsOpen(true);
       return;
     }
-    const targets = currentBlocks.filter((block) => {
-      const cached = translationByHash.get(block.sourceHash);
-      return !cached || !isTranslationEntryCurrent(cached, translationSession);
-    });
-    if (targets.length === 0) {
-      setStatus('本页译文均由当前翻译配置生成，无需更新。');
+    await translateBlock(block, session);
+  }
+
+  async function handleTranslateAll(session = translationSession): Promise<void> {
+    if (!session.apiKey.trim()) {
+      pendingTranslationRef.current = { type: 'all' };
+      setSettingsOpen(true);
       return;
     }
+    const targets = blocks.filter((block) => {
+      const cached = translationByHash.get(block.sourceHash);
+      return !cached || !isTranslationEntryCurrent(cached, session);
+    });
+    if (targets.length === 0) {
+      setStatus('全文译文均由当前翻译配置生成，无需更新。');
+      return;
+    }
+
+    stopTranslationRef.current = false;
+    setTranslatingAll(true);
     let succeeded = 0;
+    let failed = 0;
     for (const block of targets) {
-      if (await handleTranslateBlock(block, false)) {
+      if (stopTranslationRef.current) {
+        break;
+      }
+      setStatus(`正在翻译全文 ${succeeded + 1} / ${targets.length} 段…`);
+      if (await translateBlock(block, session, false)) {
         succeeded += 1;
+      } else {
+        failed += 1;
+        break;
       }
     }
-    const failed = targets.length - succeeded;
-    setStatus(failed > 0
-      ? `本页翻译完成：成功 ${succeeded} 段，失败 ${failed} 段；可单独重试失败段落。`
-      : `本页 ${succeeded} 个段落已使用当前配置翻译并缓存。`);
+    setTranslatingAll(false);
+    const stopped = stopTranslationRef.current;
+    stopTranslationRef.current = false;
+    if (failed > 0) {
+      setStatus(`全文翻译在第 ${succeeded + 1} 段停止：成功 ${succeeded} 段，失败 ${failed} 段；已成功部分仍保存在本机。`);
+    } else if (stopped) {
+      setStatus(`已停止全文翻译；本次完成 ${succeeded} 段，已完成译文仍保存在本机。`);
+    } else {
+      setStatus(`全文翻译完成：${succeeded} 个段落的中文已直接排在英文下方。`);
+    }
+  }
+
+  function handleFeedScroll(): void {
+    if (scrollFrameRef.current !== null) {
+      return;
+    }
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const container = bilingualPageRef.current;
+      if (!container) {
+        return;
+      }
+      const threshold = container.getBoundingClientRect().top + 24;
+      const visibleBlock = Array.from(container.querySelectorAll<HTMLElement>('[data-pdf-page]'))
+        .find((element) => element.getBoundingClientRect().bottom > threshold);
+      const page = Number(visibleBlock?.dataset.pdfPage);
+      if (Number.isInteger(page) && page > 0) {
+        setCurrentPage(page);
+      }
+    });
   }
 
   function captureSelection(): void {
@@ -186,17 +267,18 @@ export function MobileReaderScreen({
     }, 30);
   }
 
-  async function translateSelection(): Promise<void> {
+  async function translateSelection(session = translationSession): Promise<void> {
     if (!selectionPopover) {
       return;
     }
-    if (!translationSession.apiKey.trim()) {
+    if (!session.apiKey.trim()) {
+      pendingTranslationRef.current = { type: 'selection' };
       setSettingsOpen(true);
       return;
     }
     setSelectionPopover({ ...selectionPopover, loading: true, error: undefined });
     try {
-      const translation = await translateAcademicText(selectionPopover.text, translationSession);
+      const translation = await translateAcademicText(selectionPopover.text, session);
       setSelectionPopover({ ...selectionPopover, translation, loading: false });
     } catch (error) {
       setSelectionPopover({ ...selectionPopover, loading: false, error: formatError(error) });
@@ -208,78 +290,100 @@ export function MobileReaderScreen({
       <header className="mobile-reader-header">
         <button type="button" className="mobile-reader-back" onClick={onBack} aria-label="返回论文库">‹</button>
         <div>
-          <strong>{paper.titleZh || paper.title}</strong>
+          <strong>{paper.customTitle || paper.titleZh || paper.title}</strong>
           <span>第 {currentPage}{pageCount ? ` / ${pageCount}` : ''} 页</span>
         </div>
         <button type="button" className="mobile-reader-more" onClick={() => setSettingsOpen(true)} aria-label="翻译设置">•••</button>
       </header>
 
       <div className="mobile-reader-mode-bar" role="group" aria-label="阅读模式">
-        <button type="button" className={mode === 'bilingual' ? 'active' : ''} onClick={() => setMode('bilingual')}>段落双语</button>
+        <button type="button" className={mode === 'bilingual' ? 'active' : ''} onClick={() => setMode('bilingual')}>连续双语</button>
         <button type="button" className={mode === 'pdf' ? 'active' : ''} onClick={() => setMode('pdf')}>原始 PDF</button>
-        <button type="button" className={mode === 'translated' ? 'active' : ''} disabled={!translatedPdfData} onClick={() => setMode('translated')}>双语 PDF</button>
       </div>
 
       {mode === 'bilingual' ? (
         <div className="mobile-bilingual-reader">
           <div className="mobile-bilingual-toolbar">
-            <button type="button" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}>上一页</button>
-            <span>{translatedCount} / {currentBlocks.length} 段已有译文{staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}</span>
-            <button type="button" disabled={currentBlocks.length === 0 || Boolean(translatingHash)} onClick={() => void handleTranslatePage()}>翻译本页</button>
+            <span>{translatedCount} / {blocks.length} 段已译{staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}</span>
+            <button
+              type="button"
+              disabled={!translatingAll && (extracting || blocks.length === 0 || Boolean(translatingHash))}
+              className={translatingAll ? 'is-stop' : ''}
+              onClick={() => {
+                if (translatingAll) {
+                  stopTranslationRef.current = true;
+                  setStatus('将在当前段落完成后停止…');
+                } else {
+                  void handleTranslateAll();
+                }
+              }}
+            >
+              {translatingAll ? '停止' : translatedCount || staleTranslationCount ? '翻译剩余' : '翻译全文'}
+            </button>
           </div>
           <div
             ref={bilingualPageRef}
             className="mobile-bilingual-page"
+            onScroll={handleFeedScroll}
             onPointerUp={captureSelection}
             onTouchEnd={captureSelection}
           >
-            {extracting ? <div className="mobile-reader-loading">正在识别当前论文的段落结构…</div> : null}
-            {!extracting && currentBlocks.length === 0 ? (
-              <div className="mobile-reader-loading">本页没有识别到正文段落。可切换到“原始 PDF”，或翻到其他页面。</div>
+            {extracting ? <div className="mobile-reader-loading">正在识别全文段落，完成后可像文章一样连续向下阅读…</div> : null}
+            {!extracting && blocks.length === 0 ? (
+              <div className="mobile-reader-loading">这份 PDF 没有可提取的文字层。原文件仍保留，请切换到“原始 PDF”阅读；扫描件后续可接入 OCR。</div>
             ) : null}
-            {currentBlocks.map((block) => {
+            {!extracting && blocks.length > 0 && translatedCount === 0 && staleTranslationCount === 0 ? (
+              <div className="mobile-bilingual-intro">
+                <strong>普通 PDF 已转为连续文章</strong>
+                <p>点击“翻译全文”后，每段中文会直接排在对应英文下方；原 PDF 始终保留在右侧模式中。</p>
+                <button type="button" onClick={() => void handleTranslateAll()}>开始全文翻译</button>
+              </div>
+            ) : null}
+            {blocks.map((block, index) => {
               const cached = translationByHash.get(block.sourceHash);
+              const startsPage = index === 0 || blocks[index - 1].page !== block.page;
               return (
-                <article key={block.id} className={`mobile-bilingual-block is-${block.type}`}>
-                  <div className="mobile-block-original">
-                    {block.type === 'heading' ? <h2>{block.original}</h2> : <p>{block.original}</p>}
-                    <button type="button" disabled={Boolean(translatingHash)} onClick={() => void handleTranslateBlock(block)}>
-                      {translatingHash === block.sourceHash
-                        ? '翻译中…'
-                        : cached
-                          ? isTranslationEntryCurrent(cached, translationSession) ? '重新翻译' : '用当前配置重译'
-                          : '翻译此段'}
-                    </button>
-                  </div>
-                  {cached ? (
-                    <div className="mobile-block-translation">
-                      <span>中文</span>
-                      <p>{cached.translation}</p>
+                <Fragment key={block.id}>
+                  {startsPage ? <div className="mobile-bilingual-page-break">第 {block.page} 页</div> : null}
+                  <article data-pdf-page={block.page} className={`mobile-bilingual-block is-${block.type}`}>
+                    <div className="mobile-block-original">
+                      {block.type === 'heading' ? <h2>{block.original}</h2> : <p>{block.original}</p>}
+                      <button type="button" disabled={Boolean(translatingHash)} onClick={() => void handleTranslateBlock(block)}>
+                        {translatingHash === block.sourceHash
+                          ? '翻译中…'
+                          : cached
+                            ? isTranslationEntryCurrent(cached, translationSession) ? '重译' : '更新译文'
+                            : '译此段'}
+                      </button>
                     </div>
-                  ) : null}
-                </article>
+                    {cached ? (
+                      <div className="mobile-block-translation">
+                        <span>译文</span>
+                        <p>{cached.translation}</p>
+                      </div>
+                    ) : null}
+                  </article>
+                </Fragment>
               );
             })}
-          </div>
-          <div className="mobile-bilingual-pagination">
-            <button type="button" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}>上一页</button>
-            <span>{currentPage} / {pageCount || '?'}</span>
-            <button type="button" disabled={Boolean(pageCount) && currentPage >= pageCount} onClick={() => setCurrentPage((page) => Math.min(pageCount || page + 1, page + 1))}>下一页</button>
           </div>
         </div>
       ) : (
         <div className="mobile-pdf-reader">
           <div className="mobile-pdf-toolbar">
-            <button type="button" onClick={() => setScale((value) => Math.max(0.65, value - 0.1))}>－</button>
+            <button type="button" className="mobile-fit-width" onClick={() => setFitWidthRequestId((value) => value + 1)}>适宽</button>
+            <button type="button" aria-label="缩小 PDF" onClick={() => setScale((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))))}>－</button>
             <span>{Math.round(scale * 100)}%</span>
-            <button type="button" onClick={() => setScale((value) => Math.min(2.4, value + 0.1))}>＋</button>
-            {mode === 'translated' ? <em>已导入双语 PDF</em> : null}
+            <button type="button" aria-label="放大 PDF" onClick={() => setScale((value) => Math.min(2.4, Number((value + 0.1).toFixed(2))))}>＋</button>
+            <em>支持双指缩放</em>
           </div>
           <PdfViewer
-            pdfData={displayedPdf}
-            fileName={mode === 'translated' ? paper.translatedPdf?.fileName : paper.sourcePdf.fileName}
+            pdfData={pdfData}
+            fileName={paper.sourcePdf.fileName}
             currentPage={currentPage}
             scale={scale}
+            enableTouchZoom
+            fitWidthRequestId={fitWidthRequestId}
             onScaleChange={setScale}
             onDocumentLoad={(count) => setPageCount(count)}
             onCurrentPageChange={setCurrentPage}
@@ -288,20 +392,7 @@ export function MobileReaderScreen({
         </div>
       )}
 
-      <footer className="mobile-reader-status"><span>{status}</span><button type="button" onClick={() => translatedInputRef.current?.click()}>导入双语 PDF</button></footer>
-      <input
-        ref={translatedInputRef}
-        className="mobile-hidden-input"
-        type="file"
-        accept="application/pdf,.pdf"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          event.currentTarget.value = '';
-          if (file) {
-            void onImportTranslatedPdf(file);
-          }
-        }}
-      />
+      <footer className="mobile-reader-status"><span>{status}</span></footer>
 
       {selectionPopover ? (
         <aside className="mobile-selection-popover" style={{ left: selectionPopover.left, top: selectionPopover.top, maxHeight: selectionPopover.maxHeight }}>
@@ -316,13 +407,25 @@ export function MobileReaderScreen({
       {settingsOpen ? (
         <MobileTranslationSettingsDialog
           session={translationSession}
-          title="段落翻译设置"
-          submitLabel="保存并返回阅读"
-          onClose={() => setSettingsOpen(false)}
+          title="全文段落翻译设置"
+          submitLabel={pendingTranslationRef.current ? '保存并开始翻译' : '保存设置'}
+          onClose={() => {
+            pendingTranslationRef.current = null;
+            setSettingsOpen(false);
+          }}
           onSave={async (next) => {
             await onTranslationSessionChange(next);
+            const pending = pendingTranslationRef.current;
+            pendingTranslationRef.current = null;
             setSettingsOpen(false);
             setStatus('翻译设置已更新；API Key 仅保留在本次运行会话。');
+            if (pending?.type === 'all') {
+              void handleTranslateAll(next);
+            } else if (pending?.type === 'block') {
+              void handleTranslateBlock(pending.block, next);
+            } else if (pending?.type === 'selection') {
+              void translateSelection(next);
+            }
           }}
         />
       ) : null}

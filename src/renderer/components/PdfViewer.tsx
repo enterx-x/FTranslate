@@ -13,6 +13,8 @@ import {
 import 'pdfjs-dist/legacy/web/pdf_viewer.css';
 import {
   buildAnchoredScrollPosition,
+  getFitWidthScale,
+  getPinchZoomScale,
   getWheelZoomScale,
   type PdfZoomAnchor
 } from '../lib/pdfInteraction';
@@ -44,6 +46,8 @@ interface PdfViewerProps {
   viewportSyncId?: string;
   viewportState?: PdfViewportState | null;
   onViewportStateChange?: (state: PdfViewportState) => void;
+  enableTouchZoom?: boolean;
+  fitWidthRequestId?: number;
 }
 
 type PdfViewerRuntime = InstanceType<typeof PdfJsViewer>;
@@ -88,6 +92,11 @@ export function PdfViewer(props: PdfViewerProps) {
     startY: number;
     scrollLeft: number;
     scrollTop: number;
+  } | null>(null);
+  const pinchStateRef = useRef<{
+    initialDistance: number;
+    initialScale: number;
+    anchor: PdfZoomAnchor;
   } | null>(null);
   const isApplyingViewportSyncRef = useRef(false);
   const viewportScrollFrameRef = useRef<number | null>(null);
@@ -335,6 +344,44 @@ export function PdfViewer(props: PdfViewerProps) {
   }, [documentProxy, props.scale]);
 
   useEffect(() => {
+    if (!documentProxy || props.fitWidthRequestId === undefined) {
+      return;
+    }
+
+    let cancelled = false;
+    let frameId = 0;
+    const applyFitWidth = (attemptsLeft: number): void => {
+      frameId = window.requestAnimationFrame(() => {
+        if (cancelled) {
+          return;
+        }
+        const container = containerRef.current;
+        const viewer = pdfViewerRef.current;
+        const page = viewerElementRef.current?.querySelector<HTMLElement>(
+          `.page[data-page-number="${propsRef.current.currentPage}"]`
+        ) ?? viewerElementRef.current?.querySelector<HTMLElement>('.page');
+        const currentScale = viewer?.currentScale ?? propsRef.current.scale;
+        const renderedWidth = page?.getBoundingClientRect().width ?? 0;
+        if (!container || !page || renderedWidth <= 0 || currentScale <= 0) {
+          if (attemptsLeft > 1) {
+            applyFitWidth(attemptsLeft - 1);
+          }
+          return;
+        }
+        propsRef.current.onScaleChange(
+          getFitWidthScale(container.clientWidth, renderedWidth, currentScale, 20)
+        );
+      });
+    };
+
+    applyFitWidth(12);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [documentProxy, props.fitWidthRequestId]);
+
+  useEffect(() => {
     const viewer = pdfViewerRef.current;
     if (!viewer || !documentProxy || props.currentPage < 1 || props.currentPage > viewer.pagesCount) {
       return;
@@ -513,6 +560,45 @@ export function PdfViewer(props: PdfViewerProps) {
     const anchor = buildZoomAnchor(event.clientX, event.clientY);
     pendingZoomAnchorRef.current = anchor;
     props.onScaleChange(getWheelZoomScale(props.scale, event.deltaY), anchor);
+  }
+
+  function handleTouchStart(event: React.TouchEvent<HTMLDivElement>): void {
+    if (!props.enableTouchZoom || event.touches.length !== 2) {
+      return;
+    }
+    event.preventDefault();
+    const first = event.touches[0];
+    const second = event.touches[1];
+    const centerX = (first.clientX + second.clientX) / 2;
+    const centerY = (first.clientY + second.clientY) / 2;
+    pinchStateRef.current = {
+      initialDistance: Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
+      initialScale: props.scale,
+      anchor: buildZoomAnchor(centerX, centerY)
+    };
+  }
+
+  function handleTouchMove(event: React.TouchEvent<HTMLDivElement>): void {
+    const pinchState = pinchStateRef.current;
+    if (!props.enableTouchZoom || !pinchState || event.touches.length !== 2) {
+      return;
+    }
+    event.preventDefault();
+    const first = event.touches[0];
+    const second = event.touches[1];
+    const nextScale = getPinchZoomScale(
+      pinchState.initialScale,
+      pinchState.initialDistance,
+      Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY)
+    );
+    pendingZoomAnchorRef.current = pinchState.anchor;
+    props.onScaleChange(nextScale, pinchState.anchor);
+  }
+
+  function handleTouchEnd(event: React.TouchEvent<HTMLDivElement>): void {
+    if (event.touches.length < 2) {
+      pinchStateRef.current = null;
+    }
   }
 
   function handleMouseDown(event: React.MouseEvent<HTMLDivElement>): void {
@@ -925,7 +1011,7 @@ export function PdfViewer(props: PdfViewerProps) {
       </div>
       <div className="pdf-viewer-shell">
         <div
-          className={`pdf-js-viewer-container${isPanning ? ' is-panning' : ''}`}
+          className={`pdf-js-viewer-container${isPanning ? ' is-panning' : ''}${props.enableTouchZoom ? ' is-touch-zoom-enabled' : ''}`}
           ref={containerRef}
           onAuxClick={(event) => {
             if (event.button === 1) {
@@ -933,6 +1019,10 @@ export function PdfViewer(props: PdfViewerProps) {
             }
           }}
           onMouseDown={handleMouseDown}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={() => { pinchStateRef.current = null; }}
           onWheel={handleWheel}
         >
           <div className="pdfViewer" ref={viewerElementRef} />

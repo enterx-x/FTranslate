@@ -60,7 +60,7 @@
 - 论文 PDF 存入 Capacitor Filesystem；论文索引存入 Preferences；段落译文按论文写入独立缓存文件。
 - PDF 阅读复用 PDF.js；段落双语模式复用现有论文结构提取逻辑，把中文直接放在英文段落下面。
 - 用户选择单词或短语后才显示翻译浮层；长文本限制在视口内。
-- 支持导入已有中文/双语 PDF；不把 Windows `pdf2zh`/Python sidecar 迁入 iOS。
+- 移动端不再要求导入已有双语 PDF；普通 PDF 直接重排为连续段落并生成内联中文。Windows `pdf2zh`/Python sidecar 不迁入 iOS。
 - arXiv 使用共享查询构造与 Atom 解析逻辑，通过 Capacitor HTTP 请求，带 24 小时本机缓存和最小请求间隔；PDF 使用 File Transfer 下载到 App 沙盒。
 - `ios/`：iOS 15+ 原生工程与 Swift Package 插件声明；Windows 生成的反斜杠路径通过 `scripts/normalize-capacitor-spm-paths.mjs` 自动修复。
 - `distribution/ios/`：Ad Hoc 导出配置、OTA manifest 模板和 iPhone HTTPS 安装页。
@@ -93,7 +93,7 @@
 - 当前机器是 Windows，不能运行 Xcode、iOS Simulator、Apple 代码签名或真机安装，因此不能声称 `.ipa` 已签名可下载。
 - Ad Hoc 分发必须有 Apple Developer Program、分发证书、App ID、包含目标 UDID 的 Provisioning Profile；设备数量受 Apple 年度上限约束。
 - 手机段落翻译需要网络和用户自己的 OpenAI 兼容接口；已缓存译文可离线阅读，但尚未集成设备端本地大模型。
-- 整本重排双语 PDF 仍由桌面 `pdf2zh` 流程承担；手机端只提供段落双语和导入已有双语 PDF。
+- 整本保版式双语 PDF 仍由桌面 `pdf2zh` 流程承担；手机端以普通 PDF 的连续段落双语阅读为主，并保留原 PDF 核对视图。
 - 移动构建仍会产出少量桌面分支引用的 KaTeX/品牌资源；不影响功能，但后续可拆为完全独立 HTML 入口以减小 IPA。
 - 目前未做 iOS 原生 UI 测试、真实弱网 arXiv 请求、超大 PDF 内存压力和 100+ 论文库性能测试。
 - 免费个人签名每 7 天过期一次；只有在电脑和 iPhone 可连接时 Sideloadly 才能自动刷新。错过刷新后 App 暂时无法打开，但使用同一 Apple ID 与 Bundle ID 覆盖安装可继续使用；删除 App 会删除本地沙盒论文数据。
@@ -635,6 +635,16 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 阅读性能：共享 `PdfViewer` 只在调用方需要提取结果时解析全文，移动端切换原始 PDF 不再重复执行第二次无消费者的全文抽取；选词浮层增加视口高度约束。
 - 验证已收口：`npm run dist` 通过（83 个测试文件、484 项测试；TypeScript、桌面生产构建、Windows NSIS 安装包均成功），`npm run ios:sync` 成功；本地和生产地址的 `npm run visual:check:mobile` 均通过。生产 `/api/arxiv` 实测返回 200、`official-search` 和 20 篇结果，首篇完整摘要为 1,433 字符；线上对抗脚本确认可恢复旧记录、标题中文紧邻英文显示、在论文库与检索页之间往返后查询词、20 条结果和标题译文保持一致、失败检索清空 20 条旧结果，并把真实 arXiv PDF 经生产同源代理下载、写入 IndexedDB、读回后打开阅读器。论文管理面板完成改名与 3 个标签保存，删除后对应 IndexedDB PDF 键不存在；段落内嵌翻译和旧配置重译也正常。新增原始 PDF 专项回归已在生产地址实际点击模式开关、等待 PDF canvas 渲染，并确认 viewer 外壳计算样式为 `relative`、滚动容器为 `absolute` 且四边 `0px`。视觉审查的 390px 宽页面 `bodyScrollWidth` / `rootScrollWidth` 均为 390，无裁切项；原始 PDF 截图为 `.tmp-mobile-visual-check/03a-reader-original-pdf-390x844.png`。生产部署 `dpl_DqzBp4Jmivt6dqStJTHewZ9VJ8yV` 已绑定 `https://ftranslate-mobile.vercel.app`。剩余验证仅为 iPhone Safari 真机强制刷新后再切换一次“原始 PDF”，确认 WebKit 实际环境与自动化浏览器一致。
 
+### 2026-07-15 连续双语阅读与手机 PDF 缩放
+
+- 第一性原理：手机阅读的核心不是导入另一份“双语 PDF”，而是用户只上传普通 PDF，就能得到适合单手纵向滚动的英文段落—中文译文连续文章；原 PDF 只承担公式、图表与版式核对，但必须能真正放大看清。
+- 阅读流改造：移除移动阅读器的“双语 PDF”模式和显眼导入入口；“段落双语”改为“连续双语”，不再按当前页分页渲染，而是按原页序显示全文段落、页分隔线并随滚动更新阅读页码。自定义论文名也同步用于阅读器标题。
+- 翻译闭环：增加“翻译全文/翻译剩余”和“停止”，中文结果逐段保存后直接排在英文下面；接口失败或用户停止时保留已成功部分。未配置 API Key 时先打开会话设置，保存后自动继续原全文或单段任务；已有缓存仍按 Base URL 与模型判断是否需要更新。
+- 原 PDF 能力：共享 `PdfViewer` 增加双指距离缩放与缩放锚点；移动工具栏提供适宽、减小、百分比、放大和“双指缩放”提示。适宽比例由实际容器宽度、当前页面渲染宽度与比例计算，不依赖固定 iPhone 尺寸。
+- 自动验证：`pdfInteraction.test.ts` 新增双指比例、上下限和适宽计算测试；`npm run dist` 通过（83 个测试文件、486 项测试），TypeScript、桌面生产构建和 Windows NSIS 安装包均成功。`npm run ios:sync` 通过。移动视觉脚本实际改变缩放比例、确认触摸缩放类与 `touch-action`、检查原 PDF 容器定位，并断言中文块位于对应英文块下方且阅读模式仅有两个；脚本同时覆盖无 API 配置先设置和已有配置直接翻译两条路径。
+- 视觉对抗式审查：人工查看 `.tmp-mobile-visual-check/03-reader-inline-translation-390x844.png`、`03a-reader-original-pdf-390x844.png` 和 `03b-reader-stale-translation-390x844.png`。390px 下未发现页面级横向溢出、按钮遮挡或译文弹窗；放大后的 PDF 横向滚动被限制在 viewer 内。剩余真机风险是 Safari 对 React 双指 `touchmove` 的手势细节仍需实际两指操作确认。
+- 公网发布：Vercel 生产部署 `dpl_4PCUguAcSr44NZxtoX8jCa4thyRx` 已重新绑定 `https://ftranslate-mobile.vercel.app`。固定生产地址的完整移动检查通过：arXiv 20 条结果、中文标题、导航状态保留、真实 PDF 下载入库、原 PDF 缩放控件、连续全文翻译、旧配置提示、改名标签和 IndexedDB 删除闭环均成功。
+
 ### 问题台账
 
 | 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
@@ -646,6 +656,7 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 | 2026-07-15 | arXiv 检索提示 `HTTP 502` | Vercel 函数等待 Atom 上游约 25 秒后超时；紧接着重试还可能触发 429 | 已部署单次官网搜索转换方案；生产地址实测 5.4 秒内返回 200、`official-search` 和 20 篇结果，线上 UI 检索通过 | 真机强制刷新后再验证普通查询与分类筛选；官网不可用时应显示明确繁忙提示 |
 | 2026-07-15 | Safari 删除论文时报 `IDBTransaction will abort due to uncaught exception in an event handler` | IndexedDB 删除使用 `openKeyCursor()` 并在事件回调内删除、继续游标，WebKit 会中止事务 | 已部署 `getAllKeys()` 同事务批量删除；线上脚本验证改名、标签、删除及 PDF 键清理闭环，无遮挡或横向溢出 | 由真机删除截图中的本地 PDF 再确认一次 |
 | 2026-07-15 | iPhone 切换到“原始 PDF”后整页显示 `The container must be absolutely positioned` | 移动构建不加载桌面 `global.css`，PDF.js 容器缺少强制绝对定位；旧视觉脚本只验证段落双语，没有点击原始 PDF | 已部署 `relative` 外壳和 `absolute; inset: 0` 容器；生产视觉脚本已成功切换模式、渲染 PDF canvas 并通过计算样式断言 | 由 iPhone 使用带版本参数的地址强制刷新，再切换一次“原始 PDF”确认 |
+| 2026-07-15 | 手机 PDF 不能缩放，普通 PDF 不能直接连续双语阅读 | 共享 viewer 只有桌面 Ctrl+滚轮；移动阅读器按单页渲染，并把外部双语 PDF 当作主入口 | 已改为全文连续段落流、全文渐进翻译、原 PDF 适宽/加减/双指缩放；本地构建与移动视觉检查通过 | 生产部署后用 iPhone Safari 实测双指缩放与一篇多页论文的连续滚动、停止/恢复全文翻译 |
 | 2026-07-15 | 官网结果已显示但某篇 PDF 下载返回 404 | arXiv 可先公开摘要页，个别新条目的 PDF 文件尚未开放；例如 `2607.12784` 摘要为 200 而 PDF 为 404 | 页面将 404 翻译为“PDF 暂未开放，请稍后重试或选择另一篇”，其他可用论文仍可正常保存 | 不把单篇源站 404 误判为论文库写入失败；如长期 404 再核查该条目版本 |
 | 2026-07-15 | 本机 C 盘剩余空间为 0，`npx` 安装 Vercel CLI 失败 | npm 临时缓存无法继续写入 | 使用今天已有的 Vercel CLI 缓存完成生产部署，未删除用户文件 | 后续在用户授权下清理低风险临时缓存，否则新依赖安装仍可能失败 |
 | 2026-07-15 | 桌面视觉脚本未全量通过 | 默认外部论文在 10 分钟门限内未完成；可控短 PDF 能快速验证布局，但生成的 PPT 内容不足以通过来源与中文 bullet 质量门 | 首页、研究表格、实验矩阵、PDF 阅读和图表截图已生成并人工复查；移动端视觉检查独立通过 | 后续为桌面视觉脚本维护一份小型、内容完备、可通过 PPT 质量门的固定 PDF fixture，移除对个人下载目录大论文的依赖 |

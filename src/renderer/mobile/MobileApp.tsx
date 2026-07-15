@@ -37,7 +37,6 @@ function MobileApp() {
   const libraryRef = useRef<MobilePaper[]>([]);
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
   const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
-  const [translatedPdfData, setTranslatedPdfData] = useState<Uint8Array | null>(null);
   const [translations, setTranslations] = useState<MobileTranslationEntry[]>([]);
   const [translationSession, setTranslationSession] = useState<MobileTranslationSession>({
     baseURL: 'https://api.openai.com/v1',
@@ -86,13 +85,11 @@ function MobileApp() {
     setBusy(true);
     setNotice(`正在打开 ${paper.title}…`);
     try {
-      const [sourceBytes, translatedBytes, cachedTranslations] = await Promise.all([
+      const [sourceBytes, cachedTranslations] = await Promise.all([
         readPdfBytes(paper.sourcePdf),
-        paper.translatedPdf ? readPdfBytes(paper.translatedPdf) : Promise.resolve(null),
         loadPaperTranslations(paper.id)
       ]);
       setPdfData(sourceBytes);
-      setTranslatedPdfData(translatedBytes);
       setTranslations(cachedTranslations);
       setActivePaperId(paper.id);
       await commitLibrary((current) => updateMobilePaper(current, paper.id, { lastOpenedAt: new Date().toISOString() }));
@@ -168,31 +165,6 @@ function MobileApp() {
     }
   }
 
-  async function handleImportTranslatedPdf(file: File): Promise<void> {
-    if (!activePaper) {
-      return;
-    }
-    setBusy(true);
-    try {
-      const previousTranslatedPdf = activePaper.translatedPdf;
-      const translatedPdf = await savePdfFile({ paperId: activePaper.id, file, kind: 'translated' });
-      const nextLibrary = await commitLibrary((current) => updateMobilePaper(current, activePaper.id, { translatedPdf }));
-      setTranslatedPdfData(await readPdfBytes(translatedPdf));
-      setNotice(`已绑定双语 PDF：${file.name}`);
-      const updated = nextLibrary.find((paper) => paper.id === activePaper.id);
-      if (updated) {
-        setActivePaperId(updated.id);
-      }
-      if (previousTranslatedPdf && previousTranslatedPdf.path !== translatedPdf.path) {
-        await removeStoredPdfFile(previousTranslatedPdf);
-      }
-    } catch (error) {
-      setNotice(`导入双语 PDF 失败：${formatError(error)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function handleRemovePaper(paper: MobilePaper): Promise<void> {
     if (!window.confirm(`从本机论文库移除“${paper.title}”？这会删除当前浏览器中的 PDF 和翻译缓存。`)) {
       return;
@@ -203,7 +175,6 @@ function MobileApp() {
       if (activePaperId === paper.id) {
         setActivePaperId(null);
         setPdfData(null);
-        setTranslatedPdfData(null);
         setTranslations([]);
       }
       try {
@@ -303,11 +274,9 @@ function MobileApp() {
           <MobileReaderScreen
             paper={activePaper}
             pdfData={pdfData}
-            translatedPdfData={translatedPdfData}
             translations={translations}
             translationSession={translationSession}
             onBack={() => setView('library')}
-            onImportTranslatedPdf={handleImportTranslatedPdf}
             onProgressChange={handleProgressChange}
             onSaveTranslation={handleSaveTranslation}
             onTranslationSessionChange={handleTranslationSessionChange}

@@ -31,6 +31,30 @@ export function getWheelZoomScale(currentScale: number, deltaY: number): number 
   return clampScale(Number((currentScale + direction * WHEEL_SCALE_STEP).toFixed(2)));
 }
 
+export function getPinchZoomScale(
+  initialScale: number,
+  initialDistance: number,
+  currentDistance: number
+): number {
+  if (initialDistance <= 0 || currentDistance <= 0) {
+    return clampScale(initialScale);
+  }
+  return clampScale(Number((initialScale * currentDistance / initialDistance).toFixed(2)));
+}
+
+export function getFitWidthScale(
+  containerWidth: number,
+  renderedPageWidth: number,
+  renderedScale: number,
+  horizontalPadding = 16
+): number {
+  if (containerWidth <= 0 || renderedPageWidth <= 0 || renderedScale <= 0) {
+    return clampScale(renderedScale || 1);
+  }
+  const unscaledPageWidth = renderedPageWidth / renderedScale;
+  return clampScale((containerWidth - horizontalPadding) / unscaledPageWidth);
+}
+
 export function clampScale(scale: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
 }

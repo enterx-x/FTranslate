@@ -725,7 +725,7 @@
   display: grid;
   min-height: 40px;
   flex: 0 0 auto;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 5px;
   padding: 5px 8px;
   border-bottom: 1px solid #c7d0dc;
@@ -795,6 +795,11 @@
   font-size: 10px;
 }
 
+.mobile-bilingual-toolbar button.is-stop {
+  background: #f4dfe1;
+  color: #8b2d37;
+}
+
 .mobile-bilingual-page {
   min-height: 0;
   flex: 1;
@@ -811,6 +816,63 @@
   color: var(--mobile-muted);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.mobile-bilingual-intro {
+  margin: 0 0 18px;
+  padding: 15px;
+  border: 1px solid #d6deeb;
+  border-radius: 10px;
+  background: #f1f5fb;
+}
+
+.mobile-bilingual-intro strong {
+  display: block;
+  color: #172033;
+  font-size: 14px;
+}
+
+.mobile-bilingual-intro p {
+  margin: 7px 0 12px;
+  color: #59677d;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.mobile-bilingual-intro button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--mobile-nav);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.mobile-bilingual-page-break {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 20px 0 2px;
+  color: #7a8799;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+
+.mobile-bilingual-page-break::before,
+.mobile-bilingual-page-break::after {
+  height: 1px;
+  flex: 1;
+  background: #dce2ea;
+  content: '';
+}
+
+.mobile-bilingual-intro + .mobile-bilingual-page-break,
+.mobile-reader-loading + .mobile-bilingual-page-break,
+.mobile-bilingual-page > .mobile-bilingual-page-break:first-child {
+  margin-top: 0;
 }
 
 .mobile-bilingual-block {
@@ -871,24 +933,24 @@
 
 .mobile-block-translation {
   clear: both;
-  margin-top: 10px;
-  padding: 10px 11px;
-  border-radius: 8px;
-  background: #edf2fb;
+  margin-top: 12px;
+  padding: 2px 0 2px 11px;
+  border-left: 3px solid #b8c9ee;
 }
 
 .mobile-block-translation > span {
   display: block;
   margin-bottom: 5px;
-  color: #526caa;
+  color: #6b7da5;
   font-size: 9px;
   font-weight: 700;
 }
 
 .mobile-block-translation p {
-  color: #24324a;
-  font-size: 13px;
-  line-height: 1.7;
+  color: #29364c;
+  font-size: 14px;
+  line-height: 1.78;
+  text-align: justify;
 }
 
 .mobile-bilingual-pagination {
@@ -904,6 +966,12 @@
 
 .mobile-pdf-toolbar {
   justify-content: center;
+}
+
+.mobile-pdf-toolbar .mobile-fit-width {
+  padding-inline: 10px;
+  background: var(--mobile-nav);
+  color: white;
 }
 
 .mobile-pdf-toolbar em {
@@ -938,6 +1006,10 @@
   min-height: 0;
   overflow: auto;
   -webkit-overflow-scrolling: touch;
+}
+
+.mobile-pdf-reader .pdf-js-viewer-container.is-touch-zoom-enabled {
+  touch-action: pan-x pan-y;
 }
 
 .mobile-reader-status {

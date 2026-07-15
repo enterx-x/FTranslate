@@ -23,9 +23,9 @@ npx vercel --prod
 
 生产检索不再连续重试容易超时的 arXiv Atom 接口，而是单次请求 arXiv 官网搜索并在服务端转换为应用现有的数据结构；查询参数仍被限制在固定的 arXiv 地址和最大结果数内。若 arXiv 官网本身暂时不可用，页面会提示“arXiv 暂时繁忙，请稍后点击刷新”，而不是只显示难以判断的 `HTTP 502`。
 
-手机版会在写入前校验 PDF 文件头与 PDF.js 文档结构，单个 PDF 上限为 64 MB；arXiv 下载支持取消并在 45 秒后超时。网页 PDF 以原始 `ArrayBuffer` 写入独立 IndexedDB，避免 iPhone Safari 无法持久化 Blob URL。少数刚收录的 arXiv 摘要可能暂时还没有对应 PDF；源站返回 404 时页面会明确提示“PDF 暂未开放”，可稍后重试或选择另一篇。重复保存同一份 PDF 会保留阅读进度和双语 PDF；如果源文件内容或 arXiv 版本发生变化，会从第 1 页重新开始，并使旧段落译文和旧双语 PDF 失效，避免原文与译文串版。已有段落译文可以手动重新翻译；更换 Base URL 或模型后，“翻译本页”会更新由旧配置生成的译文。
+手机版会在写入前校验 PDF 文件头与 PDF.js 文档结构，单个 PDF 上限为 64 MB；arXiv 下载支持取消并在 45 秒后超时。网页 PDF 以原始 `ArrayBuffer` 写入独立 IndexedDB，避免 iPhone Safari 无法持久化 Blob URL。少数刚收录的 arXiv 摘要可能暂时还没有对应 PDF；源站返回 404 时页面会明确提示“PDF 暂未开放”，可稍后重试或选择另一篇。重复保存同一份 PDF 会保留阅读进度；如果源文件内容或 arXiv 版本发生变化，会从第 1 页重新开始并使旧段落译文失效，避免原文与译文串版。上传普通 PDF 后默认进入“连续双语”：全文按段落重排为纵向文章流，点击“翻译全文”后中文逐段写在对应英文下方，可中途停止并保留已完成部分。更换 Base URL 或模型后，“翻译剩余”会更新旧配置生成的译文。
 
-“原始 PDF”与“双语 PDF”模式使用 PDF.js 官方 viewer。移动样式必须让 viewer 外壳保持相对定位、内部滚动容器保持绝对定位；`npm run visual:check:mobile` 会实际切换到“原始 PDF”、等待画布渲染并检查计算样式，防止 Safari 再次出现 `The container must be absolutely positioned` 异常。
+原 PDF 不会被转换结果覆盖，可随时切换到“原始 PDF”核对版式。该模式使用 PDF.js 官方 viewer，提供“适宽”、加减缩放、双指缩放和放大后的横向拖动。移动样式必须让 viewer 外壳保持相对定位、内部滚动容器保持绝对定位；`npm run visual:check:mobile` 会实际切换模式、改变缩放比例、等待画布渲染并检查计算样式，防止 Safari 再次出现 `The container must be absolutely positioned` 异常。
 
 ## iPhone 局域网网页阅读（离线备用）
 
@@ -55,10 +55,10 @@ http://192.168.0.104:4174/
 1. 从 iOS“文件”导入 PDF，或通过 arXiv 检索后下载；
 2. PDF 与论文元数据写入 App 本地沙盒；
 3. 在论文库恢复最近阅读位置；
-4. 使用 PDF.js 阅读原始 PDF；
-5. 在“段落双语”模式中把中文译文直接放在对应英文段落下方；
+4. 使用 PDF.js 阅读保留的原始 PDF，并支持适宽、加减和双指缩放；
+5. 普通 PDF 默认转换为整篇连续段落流，“翻译全文”会把中文直接放在对应英文段落下方；
 6. 只有长按或选择词语、短语时才显示翻译浮层；
-7. 可以导入已有中文/双语 PDF 并绑定到原论文。
+7. 连续双语与原始 PDF 是同一篇论文的两个阅读视图，不要求另外准备或导入双语 PDF。
 
 当前明确不包含账号、云同步、桌面/手机数据互通、Android 工程、App Store 上架和 Windows `pdf2zh` Python sidecar。手机段落翻译使用用户配置的 OpenAI 兼容接口；`Base URL` 与模型名保存在本机，API Key 只保存在当前运行内存，退出 App 后需要重新填写。
 

@@ -407,12 +407,25 @@ try {
   await waitForSelector(client, '.mobile-pdf-reader');
   await waitForSelector(client, '.mobile-pdf-reader .pdfViewer .page canvas', 20000);
   await wait(350);
+  const zoomChange = await evaluate(client, `(() => {
+    const toolbar = document.querySelector('.mobile-pdf-toolbar');
+    const before = toolbar?.querySelector('span')?.textContent ?? '';
+    toolbar?.querySelector('button[aria-label="放大 PDF"]')?.click();
+    return { before, hint: toolbar?.querySelector('em')?.textContent ?? '' };
+  })()`);
+  await wait(250);
+  const zoomAfter = await evaluate(client, `document.querySelector('.mobile-pdf-toolbar span')?.textContent ?? ''`);
+  if (!zoomChange.before || zoomChange.before === zoomAfter || !zoomChange.hint.includes('双指缩放')) {
+    throw new Error(`Mobile PDF zoom controls did not change the scale: ${JSON.stringify({ ...zoomChange, zoomAfter })}`);
+  }
   const pdfContainerLayout = await evaluate(client, `(() => {
     const shell = document.querySelector('.mobile-pdf-reader .pdf-viewer-shell');
     const container = document.querySelector('.mobile-pdf-reader .pdf-js-viewer-container');
     return {
       shellPosition: shell ? getComputedStyle(shell).position : '',
       containerPosition: container ? getComputedStyle(container).position : '',
+      touchZoomEnabled: container?.classList.contains('is-touch-zoom-enabled') ?? false,
+      touchAction: container ? getComputedStyle(container).touchAction : '',
       containerInset: container ? [
         getComputedStyle(container).top,
         getComputedStyle(container).right,
@@ -424,6 +437,8 @@ try {
   if (
     pdfContainerLayout.shellPosition !== 'relative' ||
     pdfContainerLayout.containerPosition !== 'absolute' ||
+    !pdfContainerLayout.touchZoomEnabled ||
+    pdfContainerLayout.touchAction !== 'pan-x pan-y' ||
     pdfContainerLayout.containerInset.some(value => value !== '0px')
   ) {
     throw new Error(`Mobile PDF.js container is not safely positioned: ${JSON.stringify(pdfContainerLayout)}`);
@@ -433,23 +448,47 @@ try {
   await waitForSelector(client, '.mobile-bilingual-reader');
   console.log('Imported fallback PDF and opened reader.');
 
-  await evaluate(client, `document.querySelector('.mobile-reader-more').click()`);
-  await waitForSelector(client, '.mobile-translation-dialog');
-  await evaluate(client, `(() => {
-    const values = ['http://127.0.0.1:${mockPort}/v1', 'visual-model', 'visual-key'];
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-    document.querySelectorAll('.mobile-translation-dialog input').forEach((input, index) => {
-      setter.call(input, values[index]);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    document.querySelector('.mobile-dialog-primary').click();
-    return true;
-  })()`);
-  await wait(300);
-  await evaluate(client, `document.querySelector('.mobile-block-original button').click()`);
+  await evaluate(client, `document.querySelector('.mobile-bilingual-intro button').click()`);
+  const translationStartState = await waitForExpression(
+    client,
+    `document.querySelector('.mobile-translation-dialog')
+      ? 'settings'
+      : (document.querySelector('.mobile-block-translation') ? 'translated' : '')`,
+    20000
+  );
+  if (translationStartState === 'settings') {
+    await evaluate(client, `(() => {
+      const values = ['http://127.0.0.1:${mockPort}/v1', 'visual-model', 'visual-key'];
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      document.querySelectorAll('.mobile-translation-dialog input').forEach((input, index) => {
+        setter.call(input, values[index]);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      document.querySelector('.mobile-dialog-primary').click();
+      return true;
+    })()`);
+  }
   await waitForSelector(client, '.mobile-block-translation');
   await wait(400);
+  const inlineTranslationLayout = await evaluate(client, `(() => {
+    const block = document.querySelector('.mobile-bilingual-block');
+    const original = block?.querySelector('.mobile-block-original');
+    const translation = block?.querySelector('.mobile-block-translation');
+    return {
+      modeCount: document.querySelectorAll('.mobile-reader-mode-bar button').length,
+      originalBottom: original?.getBoundingClientRect().bottom ?? 0,
+      translationTop: translation?.getBoundingClientRect().top ?? 0,
+      toolbar: document.querySelector('.mobile-bilingual-toolbar')?.textContent ?? ''
+    };
+  })()`);
+  if (
+    inlineTranslationLayout.modeCount !== 2 ||
+    inlineTranslationLayout.translationTop < inlineTranslationLayout.originalBottom ||
+    !inlineTranslationLayout.toolbar.includes('段已译')
+  ) {
+    throw new Error(`Inline continuous bilingual layout is invalid: ${JSON.stringify(inlineTranslationLayout)}`);
+  }
   await client.send('Page.captureScreenshot', {
     format: 'png',
     fromSurface: true,
@@ -475,7 +514,7 @@ try {
     button: document.querySelector('.mobile-block-original button')?.textContent ?? '',
     toolbar: document.querySelector('.mobile-bilingual-toolbar span')?.textContent ?? ''
   }))()`);
-  if (!staleTranslationState.button.includes('当前配置重译') || !staleTranslationState.toolbar.includes('待更新')) {
+  if (!staleTranslationState.button.includes('更新译文') || !staleTranslationState.toolbar.includes('待更新')) {
     throw new Error(`Mobile stale translation state was not exposed: ${JSON.stringify(staleTranslationState)}`);
   }
   await capture(client, '03b-reader-stale-translation-390x844.png');
