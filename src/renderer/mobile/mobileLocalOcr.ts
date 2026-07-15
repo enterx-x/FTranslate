@@ -44,6 +44,14 @@ export interface LocalOcrRunResult {
   cancelled: boolean;
 }
 
+export interface LocalOcrResumeStateInput {
+  textBlockCount: number;
+  cachedBlocks: ExtractedPdfBlock[];
+  pageCount: number;
+  legacyLastPage?: number;
+  legacyCompleted?: boolean;
+}
+
 interface OcrLayoutBlock {
   paragraphs?: Array<{ text?: string }>;
 }
@@ -231,6 +239,32 @@ export function buildCachedLocalOcrBlocks(entries: MobileTranslationEntry[]): Ex
       page: entry.page,
       sourceHash: entry.sourceHash
     }));
+}
+
+export function resolveLocalOcrResumeState(input: LocalOcrResumeStateInput): {
+  required: boolean;
+  startPage: number;
+} {
+  const normalizedPageCount = Math.max(1, Math.trunc(input.pageCount) || 1);
+  const highestCachedPage = input.cachedBlocks.reduce(
+    (highest, block) => Math.max(highest, Math.max(1, Math.trunc(block.page) || 1)),
+    0
+  );
+  const legacyLastPage = Number.isFinite(input.legacyLastPage)
+    ? Math.max(0, Math.trunc(Number(input.legacyLastPage)))
+    : 0;
+  const hasRecoverableCache = input.cachedBlocks.length > 0;
+  const lastSavedPage = Math.max(highestCachedPage, hasRecoverableCache ? legacyLastPage : 0);
+  const completedWithRecoverableText = hasRecoverableCache
+    && input.legacyCompleted === true
+    && lastSavedPage >= normalizedPageCount;
+
+  return {
+    required: input.textBlockCount === 0 && !completedWithRecoverableText,
+    startPage: hasRecoverableCache
+      ? Math.min(normalizedPageCount, Math.max(1, lastSavedPage + 1))
+      : 1
+  };
 }
 
 async function renderPdfPageForLocalOcr(page: PDFPageProxy): Promise<string> {

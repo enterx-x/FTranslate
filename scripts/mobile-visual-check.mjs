@@ -706,10 +706,13 @@ try {
   })()`);
   await waitForSelector(client, '.mobile-ocr-empty', 20000);
   await capture(client, '08a-reader-scanned-pdf-390x844.png');
-  await evaluate(client, `document.querySelector('.mobile-ocr-empty button').click()`);
+  await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[1].click()`);
+  await waitForSelector(client, '.mobile-pdf-reader');
+  await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[0].click()`);
   await waitForExpression(client, `document.querySelectorAll('.mobile-bilingual-block').length === 2 ? 'ready' : ''`, 20000);
   await waitForExpression(client, `document.querySelectorAll('.mobile-block-translation').length === 2 ? 'ready' : ''`, 20000);
   await capture(client, '08b-reader-scanned-bilingual-390x844.png');
+  console.log('Started scanned-PDF OCR directly by tapping Continuous bilingual from Original PDF.');
   await evaluate(client, `document.querySelector('.mobile-reader-back').click()`);
   await waitForSelector(client, '.mobile-library-screen');
   await evaluate(client, `(() => {

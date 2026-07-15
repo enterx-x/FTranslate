@@ -25,7 +25,7 @@ npx vercel --prod
 
 手机版会在写入前校验 PDF 文件头与 PDF.js 文档结构，单个 PDF 上限为 64 MB；arXiv 下载支持取消并在 45 秒后超时。网页 PDF 以原始 `ArrayBuffer` 写入独立 IndexedDB，避免 iPhone Safari 无法持久化 Blob URL。少数刚收录的 arXiv 摘要可能暂时还没有对应 PDF；源站返回 404 时页面会明确提示“PDF 暂未开放”，可稍后重试或选择另一篇。重复保存同一份 PDF 会保留阅读进度；如果源文件内容或 arXiv 版本发生变化，会从第 1 页重新开始并使旧段落译文失效，避免原文与译文串版。上传普通 PDF 后默认进入“连续双语”：全文按段落重排为纵向文章流，点击“翻译全文”后中文逐段写在对应英文下方，可中途停止并保留已完成部分。更换 Base URL 或模型后，“翻译剩余”会更新旧配置生成的译文。
 
-扫描件、拍照 PDF 或已把字体转成轮廓的 PDF 没有浏览器可提取的文字层。移动阅读器检测到这种文件后不再停在错误提示，而是显示“本地识别并翻译”：PDF.js 在当前设备逐页渲染受控尺寸的页面，随应用提供的 Tesseract.js 英文 OCR 在手机本地提取并重排原文，再把纯文字交给现有 DeepSeek / OpenAI-compatible 文本接口翻译。DeepSeek 不需要支持图片输入，页面图片也不会发送到 DeepSeek、FTranslate 或 Vercel。识别原文、译文和完成页码逐页写入当前浏览器，可以停止后继续，退出再打开也不会重做已成功页面。公网网页首次使用会从同一 FTranslate 站点加载约 7 MB 的 OCR worker、英文数据和 WASM 核心，之后由浏览器缓存复用。
+扫描件、拍照 PDF 或已把字体转成轮廓的 PDF 没有浏览器可提取的文字层。移动阅读器检测到这种文件后不再停在错误提示，而是显示“本地识别并翻译”：PDF.js 在当前设备逐页渲染受控尺寸的页面，随应用提供的 Tesseract.js 英文 OCR 在手机本地提取并重排原文，再把纯文字交给现有 DeepSeek / OpenAI-compatible 文本接口翻译。DeepSeek 不需要支持图片输入，页面图片也不会发送到 DeepSeek、FTranslate 或 Vercel。从“原始 PDF”点击“连续双语”会直接开始该流程；没有 API Key 时会先打开翻译设置。旧版本若残留“识别完成”但没有保存任何段落，新版会自动忽略这个无效状态并从第 1 页重新识别。识别原文、译文和完成页码逐页写入当前浏览器，可以停止后继续，退出再打开也不会重做已成功页面。公网网页首次使用会从同一 FTranslate 站点加载约 7 MB 的 OCR worker、英文数据和 WASM 核心，之后由浏览器缓存复用。
 
 原 PDF 不会被转换结果覆盖，可随时切换到“原始 PDF”核对版式。该模式使用 PDF.js 官方 viewer，提供“适宽”、加减缩放、双指缩放和放大后的横向拖动。移动样式必须让 viewer 外壳保持相对定位、内部滚动容器保持绝对定位；`npm run visual:check:mobile` 会实际切换模式、改变缩放比例、等待画布渲染并检查计算样式，防止 Safari 再次出现 `The container must be absolutely positioned` 异常。
 

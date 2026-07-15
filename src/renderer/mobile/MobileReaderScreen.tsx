@@ -6,7 +6,8 @@ import { MobileTranslationSettingsDialog } from './MobileTranslationSettingsDial
 import { translateAcademicText } from './mobileTranslation';
 import {
   buildCachedLocalOcrBlocks,
-  recognizePdfPagesLocally
+  recognizePdfPagesLocally,
+  resolveLocalOcrResumeState
 } from './mobileLocalOcr';
 import type {
   MobilePaper,
@@ -90,9 +91,16 @@ export function MobileReaderScreen({
           const restoredBlocks = textBlocks.length > 0 ? textBlocks : cachedOcrBlocks;
           const restoredLastPage = cachedOcrBlocks.reduce((max, block) => Math.max(max, block.page), 0);
           const knownPageCount = Math.max(paper.pageCount ?? 0, ...nextBlocks.map((block) => block.page), 1);
+          const ocrResumeState = resolveLocalOcrResumeState({
+            textBlockCount: textBlocks.length,
+            cachedBlocks: cachedOcrBlocks,
+            pageCount: knownPageCount,
+            legacyLastPage: paper.visionOcrLastPage,
+            legacyCompleted: paper.visionOcrCompleted
+          });
           setBlocks(restoredBlocks);
           setPageCount((count) => Math.max(count, ...nextBlocks.map((block) => block.page), 1));
-          setOcrRequired(textBlocks.length === 0 && !paper.visionOcrCompleted);
+          setOcrRequired(ocrResumeState.required);
           setExtracting(false);
           setStatus(textBlocks.length
             ? `已转换为连续文章，共 ${nextBlocks.length} 个段落；中文会直接显示在英文下方。`
@@ -104,8 +112,8 @@ export function MobileReaderScreen({
       .catch((error) => {
         if (!cancelled) {
           setExtracting(false);
-          setStatus(`段落解析失败：${formatError(error)}`);
-          setMode('pdf');
+          setOcrRequired(true);
+          setStatus(`无法直接提取段落：${formatError(error)} 可改用手机本地 OCR。`);
         }
       });
     return () => {
@@ -157,6 +165,7 @@ export function MobileReaderScreen({
     const cached = translationByHash.get(block.sourceHash);
     return cached?.origin === 'ocr' || cached?.origin === 'vision';
   });
+  const needsLocalOcr = ocrRequired || (!extracting && blocks.length === 0);
 
   async function translateBlock(
     block: ExtractedPdfBlock,
@@ -265,7 +274,14 @@ export function MobileReaderScreen({
 
     stopOcrRef.current = false;
     setOcrBusy(true);
-    const startPage = Math.max(1, (paper.visionOcrLastPage ?? 0) + 1);
+    const cachedOcrBlocks = buildCachedLocalOcrBlocks(translations);
+    const { startPage } = resolveLocalOcrResumeState({
+      textBlockCount: 0,
+      cachedBlocks: cachedOcrBlocks,
+      pageCount: Math.max(pageCount, paper.pageCount ?? 0, 1),
+      legacyLastPage: paper.visionOcrLastPage,
+      legacyCompleted: paper.visionOcrCompleted
+    });
     let recognizedThisRun = 0;
     let translatedThisRun = 0;
     let translationFailure = '';
@@ -356,6 +372,13 @@ export function MobileReaderScreen({
     }
   }
 
+  function handleBilingualModeClick(): void {
+    setMode('bilingual');
+    if (!extracting && needsLocalOcr && !ocrBusy) {
+      void handleRecognizeScan();
+    }
+  }
+
   function handleFeedScroll(): void {
     if (scrollFrameRef.current !== null) {
       return;
@@ -428,25 +451,25 @@ export function MobileReaderScreen({
       </header>
 
       <div className="mobile-reader-mode-bar" role="group" aria-label="阅读模式">
-        <button type="button" className={mode === 'bilingual' ? 'active' : ''} onClick={() => setMode('bilingual')}>连续双语</button>
+        <button type="button" className={mode === 'bilingual' ? 'active' : ''} onClick={handleBilingualModeClick}>连续双语</button>
         <button type="button" className={mode === 'pdf' ? 'active' : ''} onClick={() => setMode('pdf')}>原始 PDF</button>
       </div>
 
       {mode === 'bilingual' ? (
         <div className="mobile-bilingual-reader">
           <div className="mobile-bilingual-toolbar">
-            <span>{ocrRequired
+            <span>{needsLocalOcr
               ? '扫描 PDF · 手机本地 OCR'
               : `${translatedCount} / ${blocks.length} 段已译${pendingTranslationCount ? ` · ${pendingTranslationCount} 段待翻译` : staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}`}</span>
             <button
               type="button"
-              disabled={!ocrBusy && !translatingAll && (extracting || (!ocrRequired && blocks.length === 0) || Boolean(translatingHash))}
+              disabled={!ocrBusy && !translatingAll && (extracting || (!needsLocalOcr && blocks.length === 0) || Boolean(translatingHash))}
               className={translatingAll || ocrBusy ? 'is-stop' : ''}
               onClick={() => {
                 if (ocrBusy) {
                   stopOcrRef.current = true;
                   setStatus('将在当前扫描页完成后停止…');
-                } else if (ocrRequired) {
+                } else if (needsLocalOcr) {
                   void handleRecognizeScan();
                 } else if (translatingAll) {
                   stopTranslationRef.current = true;
@@ -456,7 +479,7 @@ export function MobileReaderScreen({
                 }
               }}
             >
-              {ocrBusy ? '停止处理' : ocrRequired ? blocks.length ? '继续本地识别' : '本地识别扫描件' : translatingAll ? '停止' : translatedCount || staleTranslationCount || pendingTranslationCount ? '翻译剩余' : '翻译全文'}
+              {ocrBusy ? '停止处理' : needsLocalOcr ? blocks.length ? '继续本地识别' : '本地识别扫描件' : translatingAll ? '停止' : translatedCount || staleTranslationCount || pendingTranslationCount ? '翻译剩余' : '翻译全文'}
             </button>
           </div>
           <div
@@ -467,14 +490,14 @@ export function MobileReaderScreen({
             onTouchEnd={captureSelection}
           >
             {extracting ? <div className="mobile-reader-loading">正在识别全文段落，完成后可像文章一样连续向下阅读…</div> : null}
-            {!extracting && blocks.length === 0 && ocrRequired ? (
+            {!extracting && blocks.length === 0 && needsLocalOcr ? (
               <div className="mobile-reader-loading mobile-ocr-empty">
                 <strong>检测到扫描版 PDF</strong>
                 <p>手机会先在本地逐页 OCR，页面图片不会发给 DeepSeek；只有识别出的文字会交给 DeepSeek 翻译，再按“原文在上、中文在下”重排。首次使用需加载一次本地 OCR 组件。</p>
                 <button type="button" disabled={ocrBusy} onClick={() => void handleRecognizeScan()}>{ocrBusy ? '正在本地识别…' : '本地识别并翻译'}</button>
               </div>
             ) : null}
-            {!extracting && ocrRequired && blocks.length > 0 ? (
+            {!extracting && needsLocalOcr && blocks.length > 0 ? (
               <div className="mobile-ocr-resume">
                 <span>本地 OCR 尚未完成；已识别的原文和 DeepSeek 译文可以先阅读。</span>
                 <button type="button" disabled={ocrBusy} onClick={() => void handleRecognizeScan()}>继续本地识别</button>

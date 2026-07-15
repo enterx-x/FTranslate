@@ -3,7 +3,8 @@ import {
   buildCachedLocalOcrBlocks,
   buildLocalOcrBlocks,
   calculateLocalOcrRenderScale,
-  extractLocalOcrParagraphs
+  extractLocalOcrParagraphs,
+  resolveLocalOcrResumeState
 } from './mobileLocalOcr';
 
 describe('mobile scanned PDF local OCR', () => {
@@ -69,5 +70,28 @@ The policy remains safe under boun-\nded disturbances.`)).toEqual([
     expect(calculateLocalOcrRenderScale(595, 842)).toBeCloseTo(2.1, 1);
     expect(calculateLocalOcrRenderScale(3000, 1500)).toBe(0.6);
     expect(calculateLocalOcrRenderScale(400, 400)).toBe(2.4);
+  });
+
+  it('ignores an old completed flag when no OCR paragraphs were actually saved', () => {
+    expect(resolveLocalOcrResumeState({
+      textBlockCount: 0,
+      cachedBlocks: [],
+      pageCount: 12,
+      legacyLastPage: 12,
+      legacyCompleted: true
+    })).toEqual({ required: true, startPage: 1 });
+  });
+
+  it('continues after the last saved OCR page only when recoverable paragraphs exist', () => {
+    const cachedBlocks = buildLocalOcrBlocks(3, [
+      { type: 'paragraph', original: 'Recovered page three.' }
+    ]).map((item) => item.block);
+    expect(resolveLocalOcrResumeState({
+      textBlockCount: 0,
+      cachedBlocks,
+      pageCount: 12,
+      legacyLastPage: 3,
+      legacyCompleted: false
+    })).toEqual({ required: true, startPage: 4 });
   });
 });
