@@ -645,6 +645,16 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 视觉对抗式审查：人工查看 `.tmp-mobile-visual-check/03-reader-inline-translation-390x844.png`、`03a-reader-original-pdf-390x844.png` 和 `03b-reader-stale-translation-390x844.png`。390px 下未发现页面级横向溢出、按钮遮挡或译文弹窗；放大后的 PDF 横向滚动被限制在 viewer 内。剩余真机风险是 Safari 对 React 双指 `touchmove` 的手势细节仍需实际两指操作确认。
 - 公网发布：Vercel 生产部署 `dpl_4PCUguAcSr44NZxtoX8jCa4thyRx` 已重新绑定 `https://ftranslate-mobile.vercel.app`。固定生产地址的完整移动检查通过：arXiv 20 条结果、中文标题、导航状态保留、真实 PDF 下载入库、原 PDF 缩放控件、连续全文翻译、旧配置提示、改名标签和 IndexedDB 删除闭环均成功。
 
+### 2026-07-15 扫描 PDF 视觉识别兜底
+
+- 根因：用户真机导入的 PDF 没有可提取文字层。PDF.js 能正常显示页面，但 `getTextContent()` 返回空，原“连续双语”只能显示提示，无法形成上传普通 PDF 后直接阅读的闭环。
+- 设计边界：公网网页无法程序化调用 iPhone“实况文本”，也不把页面发给 Vercel。现改为在当前浏览器把每页渲染为最长边不超过约 1600px 的 JPEG，直接调用用户配置的 OpenAI 兼容图片模型；严格 JSON 同时返回原文、中文和段落类型。该能力需要支持图片输入的模型，并可能按页计费。
+- 实现：新增 `mobileVisionOcr.ts`，负责受控页面渲染、图片请求、严格 JSON 解析、稳定段落哈希和缓存恢复。阅读器检测空文字层后显示“识别并生成双语”，支持逐页状态、停止、继续和失败提示；每页成功后保存段落译文及 `visionOcrLastPage`，整本完成记录 `visionOcrCompleted`，退出重开只恢复本地结果。
+- 数据一致性：修复 `MobileApp` 连续保存多个段落时闭包捕获旧 `translations` 的问题，改用最新缓存引用累积合并；否则全文翻译或一页 OCR 返回多个段落时，后写入项可能覆盖前项。来源 PDF 变化时 OCR 页码与完成状态一并失效。
+- 专项验证：`mobileVisionOcr.test.ts` 覆盖 fenced JSON、非图片模型错误、段落稳定顺序、缓存恢复和移动渲染上限；移动视觉脚本新增完全无文字对象的扫描 PDF fixture，实测出现扫描识别入口、生成 2 个双语段落、退出再打开仍恢复 2 个段落。人工查看 `.tmp-mobile-visual-check/08a-reader-scanned-pdf-390x844.png` 与 `08b-reader-scanned-bilingual-390x844.png`，未见遮挡、横向溢出或弹窗式段落译文。
+- 全量验证：`npm run dist` 通过（84 个测试文件、491 项测试），TypeScript、renderer/Electron 生产构建和 Windows NSIS 安装包均成功；`npm run ios:sync` 通过，最新移动资源和 3 个 Capacitor 插件已同步；最终 `npm run visual:check:mobile` 通过。图片预览器曾把 `08b` 正文下方误显示为黑块，直接读取 PNG 对应区域的 RGBA 像素为不透明 `#f8fafc`，确认实际产物没有黑色空区。
+- 公网发布：Vercel 生产部署 `dpl_9W561gkxchYnAoY5vWfRZoTxp8Dj` 已绑定固定地址 `https://ftranslate-mobile.vercel.app`。针对固定地址的完整移动检查通过：真实 arXiv 检索与 PDF 同源下载、IndexedDB 保存、连续段落翻译、扫描 PDF 两段视觉识别、退出重开缓存恢复、改名标签和删除闭环均成功。
+
 ### 问题台账
 
 | 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
@@ -657,6 +667,7 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 | 2026-07-15 | Safari 删除论文时报 `IDBTransaction will abort due to uncaught exception in an event handler` | IndexedDB 删除使用 `openKeyCursor()` 并在事件回调内删除、继续游标，WebKit 会中止事务 | 已部署 `getAllKeys()` 同事务批量删除；线上脚本验证改名、标签、删除及 PDF 键清理闭环，无遮挡或横向溢出 | 由真机删除截图中的本地 PDF 再确认一次 |
 | 2026-07-15 | iPhone 切换到“原始 PDF”后整页显示 `The container must be absolutely positioned` | 移动构建不加载桌面 `global.css`，PDF.js 容器缺少强制绝对定位；旧视觉脚本只验证段落双语，没有点击原始 PDF | 已部署 `relative` 外壳和 `absolute; inset: 0` 容器；生产视觉脚本已成功切换模式、渲染 PDF canvas 并通过计算样式断言 | 由 iPhone 使用带版本参数的地址强制刷新，再切换一次“原始 PDF”确认 |
 | 2026-07-15 | 手机 PDF 不能缩放，普通 PDF 不能直接连续双语阅读 | 共享 viewer 只有桌面 Ctrl+滚轮；移动阅读器按单页渲染，并把外部双语 PDF 当作主入口 | 已改为全文连续段落流、全文渐进翻译、原 PDF 适宽/加减/双指缩放；本地构建与移动视觉检查通过 | 生产部署后用 iPhone Safari 实测双指缩放与一篇多页论文的连续滚动、停止/恢复全文翻译 |
+| 2026-07-15 | 导入后提示“没有可提取的文字层” | PDF 页面是扫描图片、拍照内容或轮廓字，PDF.js 没有可重排的文本对象 | 新增逐页视觉 OCR + 中文生成、进度与段落缓存；无文字层 fixture 已完成生成和重开恢复 | 生产部署后由真机对原问题 PDF 点击“识别并生成双语”，确认所用模型接受图片输入及真实页耗时 |
 | 2026-07-15 | 官网结果已显示但某篇 PDF 下载返回 404 | arXiv 可先公开摘要页，个别新条目的 PDF 文件尚未开放；例如 `2607.12784` 摘要为 200 而 PDF 为 404 | 页面将 404 翻译为“PDF 暂未开放，请稍后重试或选择另一篇”，其他可用论文仍可正常保存 | 不把单篇源站 404 误判为论文库写入失败；如长期 404 再核查该条目版本 |
 | 2026-07-15 | 本机 C 盘剩余空间为 0，`npx` 安装 Vercel CLI 失败 | npm 临时缓存无法继续写入 | 使用今天已有的 Vercel CLI 缓存完成生产部署，未删除用户文件 | 后续在用户授权下清理低风险临时缓存，否则新依赖安装仍可能失败 |
 | 2026-07-15 | 桌面视觉脚本未全量通过 | 默认外部论文在 10 分钟门限内未完成；可控短 PDF 能快速验证布局，但生成的 PPT 内容不足以通过来源与中文 bullet 质量门 | 首页、研究表格、实验矩阵、PDF 阅读和图表截图已生成并人工复查；移动端视觉检查独立通过 | 后续为桌面视觉脚本维护一份小型、内容完备、可通过 PPT 质量门的固定 PDF fixture，移除对个人下载目录大论文的依赖 |

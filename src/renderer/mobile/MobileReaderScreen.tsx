@@ -4,6 +4,10 @@ import { extractPdfBlocksFromData } from '../lib/pdfOutlineExtraction';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import { MobileTranslationSettingsDialog } from './MobileTranslationSettingsDialog';
 import { translateAcademicText } from './mobileTranslation';
+import {
+  buildCachedVisionBlocks,
+  recognizePdfPagesWithVision
+} from './mobileVisionOcr';
 import type {
   MobilePaper,
   MobileTranslationEntry,
@@ -15,7 +19,8 @@ type MobileReaderMode = 'bilingual' | 'pdf';
 type PendingTranslation =
   | { type: 'all' }
   | { type: 'block'; block: ExtractedPdfBlock }
-  | { type: 'selection' };
+  | { type: 'selection' }
+  | { type: 'ocr' };
 
 interface MobileReaderScreenProps {
   paper: MobilePaper;
@@ -24,6 +29,7 @@ interface MobileReaderScreenProps {
   translationSession: MobileTranslationSession;
   onBack: () => void;
   onProgressChange: (page: number, pageCount: number) => void;
+  onOcrProgressChange: (lastPage: number, completed: boolean) => Promise<void>;
   onSaveTranslation: (entry: MobileTranslationEntry) => Promise<void>;
   onTranslationSessionChange: (session: MobileTranslationSession) => Promise<void>;
 }
@@ -45,6 +51,7 @@ export function MobileReaderScreen({
   translationSession,
   onBack,
   onProgressChange,
+  onOcrProgressChange,
   onSaveTranslation,
   onTranslationSessionChange
 }: MobileReaderScreenProps) {
@@ -52,6 +59,7 @@ export function MobileReaderScreen({
   const scrollFrameRef = useRef<number | null>(null);
   const restoredFeedRef = useRef(false);
   const stopTranslationRef = useRef(false);
+  const stopOcrRef = useRef(false);
   const pendingTranslationRef = useRef<PendingTranslation | null>(null);
   const [mode, setMode] = useState<MobileReaderMode>('bilingual');
   const [currentPage, setCurrentPage] = useState(Math.max(1, paper.lastPage));
@@ -63,6 +71,8 @@ export function MobileReaderScreen({
   const [status, setStatus] = useState('正在解析 PDF 段落…');
   const [translatingHash, setTranslatingHash] = useState<string | null>(null);
   const [translatingAll, setTranslatingAll] = useState(false);
+  const [ocrRequired, setOcrRequired] = useState(false);
+  const [ocrBusy, setOcrBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<SelectionPopoverState | null>(null);
 
@@ -75,12 +85,20 @@ export function MobileReaderScreen({
     void extractPdfBlocksFromData(pdfData, () => cancelled)
       .then((nextBlocks) => {
         if (!cancelled) {
-          setBlocks(nextBlocks.filter((block) => block.original.trim()));
+          const textBlocks = nextBlocks.filter((block) => block.original.trim());
+          const cachedVisionBlocks = textBlocks.length === 0 ? buildCachedVisionBlocks(translations) : [];
+          const restoredBlocks = textBlocks.length > 0 ? textBlocks : cachedVisionBlocks;
+          const restoredLastPage = cachedVisionBlocks.reduce((max, block) => Math.max(max, block.page), 0);
+          const knownPageCount = Math.max(paper.pageCount ?? 0, ...nextBlocks.map((block) => block.page), 1);
+          setBlocks(restoredBlocks);
           setPageCount((count) => Math.max(count, ...nextBlocks.map((block) => block.page), 1));
+          setOcrRequired(textBlocks.length === 0 && !paper.visionOcrCompleted);
           setExtracting(false);
-          setStatus(nextBlocks.length
+          setStatus(textBlocks.length
             ? `已转换为连续文章，共 ${nextBlocks.length} 个段落；中文会直接显示在英文下方。`
-            : '没有识别到可重排段落，可切换到原始 PDF 阅读。');
+            : cachedVisionBlocks.length
+              ? `已恢复 ${cachedVisionBlocks.length} 个扫描识别段落${restoredLastPage < knownPageCount ? '，可继续识别剩余页面。' : '。'}`
+              : '检测到 PDF 没有可提取文字层，可使用支持图片输入的模型逐页识别并直接生成双语段落。');
         }
       })
       .catch((error) => {
@@ -113,6 +131,7 @@ export function MobileReaderScreen({
 
   useEffect(() => () => {
     stopTranslationRef.current = true;
+    stopOcrRef.current = true;
     if (scrollFrameRef.current !== null) {
       window.cancelAnimationFrame(scrollFrameRef.current);
     }
@@ -147,6 +166,7 @@ export function MobileReaderScreen({
     }
     try {
       const translation = await translateAcademicText(block.original, session);
+      const cached = translationByHash.get(block.sourceHash);
       await onSaveTranslation({
         sourceHash: block.sourceHash,
         page: block.page,
@@ -154,7 +174,10 @@ export function MobileReaderScreen({
         translation,
         translatedAt: new Date().toISOString(),
         model: session.model,
-        baseURL: session.baseURL.trim().replace(/\/+$/u, '')
+        baseURL: session.baseURL.trim().replace(/\/+$/u, ''),
+        ...(cached?.origin ? { origin: cached.origin } : {}),
+        ...(Number.isFinite(cached?.order) ? { order: cached?.order } : {}),
+        ...(cached?.blockType ? { blockType: cached.blockType } : {})
       });
       if (updateStatus) {
         setStatus('译文已直接写在对应英文段落下方，并缓存在本机。');
@@ -222,6 +245,71 @@ export function MobileReaderScreen({
       setStatus(`已停止全文翻译；本次完成 ${succeeded} 段，已完成译文仍保存在本机。`);
     } else {
       setStatus(`全文翻译完成：${succeeded} 个段落的中文已直接排在英文下方。`);
+    }
+  }
+
+  async function handleRecognizeScan(session = translationSession): Promise<void> {
+    if (!session.apiKey.trim()) {
+      pendingTranslationRef.current = { type: 'ocr' };
+      setSettingsOpen(true);
+      return;
+    }
+
+    stopOcrRef.current = false;
+    setOcrBusy(true);
+    const startPage = Math.max(1, (paper.visionOcrLastPage ?? 0) + 1);
+    let recognizedThisRun = 0;
+    try {
+      const result = await recognizePdfPagesWithVision(pdfData, session, {
+        startPage,
+        isCancelled: () => stopOcrRef.current,
+        onDocumentReady: (count) => setPageCount(count),
+        onPageRecognized: async ({ page, pageCount: totalPages, blocks: pageBlocks }) => {
+          setStatus(`正在识别扫描 PDF：第 ${page} / ${totalPages} 页，已得到 ${recognizedThisRun} 个段落…`);
+          if (pageBlocks.length === 0) {
+            await onOcrProgressChange(page, false);
+            return;
+          }
+          recognizedThisRun += pageBlocks.length;
+          setBlocks((current) => {
+            const incomingHashes = new Set(pageBlocks.map((item) => item.block.sourceHash));
+            return [...current.filter((block) => !incomingHashes.has(block.sourceHash)), ...pageBlocks.map((item) => item.block)]
+              .sort((left, right) => left.page - right.page);
+          });
+          for (const item of pageBlocks) {
+            await onSaveTranslation({
+              sourceHash: item.block.sourceHash,
+              page: item.block.page,
+              original: item.block.original,
+              translation: item.translation,
+              translatedAt: new Date().toISOString(),
+              model: session.model,
+              baseURL: session.baseURL.trim().replace(/\/+$/u, ''),
+              origin: 'vision',
+              order: item.order,
+              blockType: item.block.type
+            });
+          }
+          await onOcrProgressChange(page, false);
+        }
+      });
+      const incomplete = result.cancelled || result.lastProcessedPage < result.pageCount;
+      setOcrRequired(incomplete);
+      if (result.cancelled) {
+        setStatus(`已停止扫描识别；本次完成 ${recognizedThisRun} 个段落，已完成页面仍保存在本机。`);
+      } else if (result.recognizedBlockCount === 0 && blocks.length === 0) {
+        setOcrRequired(true);
+        setStatus('图片模型没有识别到正文。请确认模型支持图片输入，或切换到原始 PDF 查看扫描质量。');
+      } else {
+        await onOcrProgressChange(result.lastProcessedPage, true);
+        setStatus(`扫描 PDF 识别完成：本次 ${recognizedThisRun} 个双语段落已保存在本机。`);
+      }
+    } catch (error) {
+      setOcrRequired(true);
+      setStatus(`扫描识别停止：${formatError(error)} 请检查当前模型是否支持图片输入。`);
+    } finally {
+      stopOcrRef.current = false;
+      setOcrBusy(false);
     }
   }
 
@@ -293,7 +381,7 @@ export function MobileReaderScreen({
           <strong>{paper.customTitle || paper.titleZh || paper.title}</strong>
           <span>第 {currentPage}{pageCount ? ` / ${pageCount}` : ''} 页</span>
         </div>
-        <button type="button" className="mobile-reader-more" onClick={() => setSettingsOpen(true)} aria-label="翻译设置">•••</button>
+        <button type="button" className="mobile-reader-more" disabled={ocrBusy || translatingAll || Boolean(translatingHash)} onClick={() => setSettingsOpen(true)} aria-label="翻译设置">•••</button>
       </header>
 
       <div className="mobile-reader-mode-bar" role="group" aria-label="阅读模式">
@@ -304,13 +392,18 @@ export function MobileReaderScreen({
       {mode === 'bilingual' ? (
         <div className="mobile-bilingual-reader">
           <div className="mobile-bilingual-toolbar">
-            <span>{translatedCount} / {blocks.length} 段已译{staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}</span>
+            <span>{ocrRequired ? '扫描 PDF · 逐页识别' : `${translatedCount} / ${blocks.length} 段已译${staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}`}</span>
             <button
               type="button"
-              disabled={!translatingAll && (extracting || blocks.length === 0 || Boolean(translatingHash))}
-              className={translatingAll ? 'is-stop' : ''}
+              disabled={!ocrBusy && !translatingAll && (extracting || (!ocrRequired && blocks.length === 0) || Boolean(translatingHash))}
+              className={translatingAll || ocrBusy ? 'is-stop' : ''}
               onClick={() => {
-                if (translatingAll) {
+                if (ocrBusy) {
+                  stopOcrRef.current = true;
+                  setStatus('将在当前扫描页完成后停止…');
+                } else if (ocrRequired) {
+                  void handleRecognizeScan();
+                } else if (translatingAll) {
                   stopTranslationRef.current = true;
                   setStatus('将在当前段落完成后停止…');
                 } else {
@@ -318,7 +411,7 @@ export function MobileReaderScreen({
                 }
               }}
             >
-              {translatingAll ? '停止' : translatedCount || staleTranslationCount ? '翻译剩余' : '翻译全文'}
+              {ocrBusy ? '停止识别' : ocrRequired ? blocks.length ? '继续识别' : '识别扫描件' : translatingAll ? '停止' : translatedCount || staleTranslationCount ? '翻译剩余' : '翻译全文'}
             </button>
           </div>
           <div
@@ -329,8 +422,18 @@ export function MobileReaderScreen({
             onTouchEnd={captureSelection}
           >
             {extracting ? <div className="mobile-reader-loading">正在识别全文段落，完成后可像文章一样连续向下阅读…</div> : null}
-            {!extracting && blocks.length === 0 ? (
-              <div className="mobile-reader-loading">这份 PDF 没有可提取的文字层。原文件仍保留，请切换到“原始 PDF”阅读；扫描件后续可接入 OCR。</div>
+            {!extracting && blocks.length === 0 && ocrRequired ? (
+              <div className="mobile-reader-loading mobile-ocr-empty">
+                <strong>检测到扫描版 PDF</strong>
+                <p>页面只有图片，没有可复制文字。页面图片会逐页发送到你配置的模型服务商，可能产生费用；FTranslate/Vercel 不保存图片。识别出的原文和中文会缓存在本机。</p>
+                <button type="button" disabled={ocrBusy} onClick={() => void handleRecognizeScan()}>{ocrBusy ? '正在识别…' : '识别并生成双语'}</button>
+              </div>
+            ) : null}
+            {!extracting && ocrRequired && blocks.length > 0 ? (
+              <div className="mobile-ocr-resume">
+                <span>扫描识别尚未完成，已成功页面可以先阅读。</span>
+                <button type="button" disabled={ocrBusy} onClick={() => void handleRecognizeScan()}>继续识别剩余页</button>
+              </div>
             ) : null}
             {!extracting && blocks.length > 0 && translatedCount === 0 && staleTranslationCount === 0 ? (
               <div className="mobile-bilingual-intro">
@@ -348,7 +451,7 @@ export function MobileReaderScreen({
                   <article data-pdf-page={block.page} className={`mobile-bilingual-block is-${block.type}`}>
                     <div className="mobile-block-original">
                       {block.type === 'heading' ? <h2>{block.original}</h2> : <p>{block.original}</p>}
-                      <button type="button" disabled={Boolean(translatingHash)} onClick={() => void handleTranslateBlock(block)}>
+                      <button type="button" disabled={Boolean(translatingHash) || ocrBusy} onClick={() => void handleTranslateBlock(block)}>
                         {translatingHash === block.sourceHash
                           ? '翻译中…'
                           : cached
@@ -425,6 +528,8 @@ export function MobileReaderScreen({
               void handleTranslateBlock(pending.block, next);
             } else if (pending?.type === 'selection') {
               void translateSelection(next);
+            } else if (pending?.type === 'ocr') {
+              void handleRecognizeScan(next);
             }
           }}
         />

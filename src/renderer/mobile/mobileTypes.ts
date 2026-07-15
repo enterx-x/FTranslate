@@ -31,6 +31,8 @@ export interface MobilePaper {
   lastOpenedAt: string;
   lastPage: number;
   pageCount?: number;
+  visionOcrLastPage?: number;
+  visionOcrCompleted?: boolean;
 }
 
 export interface MobileTranslationEntry {
@@ -41,6 +43,9 @@ export interface MobileTranslationEntry {
   translatedAt: string;
   model: string;
   baseURL?: string;
+  origin?: 'text' | 'vision';
+  order?: number;
+  blockType?: 'heading' | 'paragraph' | 'formula' | 'caption';
 }
 
 export interface MobileTranslationPreferences {
@@ -117,7 +122,9 @@ export function upsertMobilePaper(library: MobilePaper[], incoming: MobilePaper)
       tags: existing.tags,
       addedAt: existing.addedAt,
       lastPage: sourceEquivalent ? existing.lastPage : incoming.lastPage,
-      pageCount: sourceEquivalent ? existing.pageCount ?? incoming.pageCount : incoming.pageCount
+      pageCount: sourceEquivalent ? existing.pageCount ?? incoming.pageCount : incoming.pageCount,
+      visionOcrLastPage: sourceEquivalent ? existing.visionOcrLastPage ?? incoming.visionOcrLastPage : incoming.visionOcrLastPage,
+      visionOcrCompleted: sourceEquivalent ? existing.visionOcrCompleted ?? incoming.visionOcrCompleted : incoming.visionOcrCompleted
     },
     ...library.filter((paper) => paper.id !== incoming.id)
   ];
@@ -290,6 +297,12 @@ function normalizeMobilePaper(value: unknown): MobilePaper | null {
   if (translatedPdf) normalized.translatedPdf = translatedPdf;
   if (Number.isFinite(paper.pageCount) && Number(paper.pageCount) > 0) {
     normalized.pageCount = Math.trunc(Number(paper.pageCount));
+  }
+  if (Number.isFinite(paper.visionOcrLastPage) && Number(paper.visionOcrLastPage) > 0) {
+    normalized.visionOcrLastPage = Math.trunc(Number(paper.visionOcrLastPage));
+  }
+  if (typeof paper.visionOcrCompleted === 'boolean') {
+    normalized.visionOcrCompleted = paper.visionOcrCompleted;
   }
   return normalized;
 }

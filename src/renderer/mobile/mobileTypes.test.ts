@@ -61,19 +61,35 @@ describe('mobile paper model', () => {
   it('preserves translated PDF when refreshing an existing record', () => {
     const original = createImportedMobilePaper({ id: 'local-1', fileName: 'paper.pdf', storedPdf });
     const translatedPdf = { ...storedPdf, kind: 'translated' as const, path: 'papers/local/translated/paper.pdf' };
-    const withTranslation = { ...original, translatedPdf, lastPage: 12, pageCount: 20 };
+    const withTranslation = {
+      ...original,
+      translatedPdf,
+      lastPage: 12,
+      pageCount: 20,
+      visionOcrLastPage: 8,
+      visionOcrCompleted: true
+    };
     const refreshed = { ...original, title: 'Updated title' };
     const merged = upsertMobilePaper([withTranslation], refreshed)[0];
     expect(merged.translatedPdf).toEqual(translatedPdf);
     expect(merged.lastPage).toBe(12);
     expect(merged.pageCount).toBe(20);
+    expect(merged.visionOcrLastPage).toBe(8);
+    expect(merged.visionOcrCompleted).toBe(true);
     expect(isMobilePaperSourceEquivalent(withTranslation, refreshed)).toBe(true);
   });
 
   it('invalidates progress and translated PDF when the source bytes change under the same paper id', () => {
     const original = createImportedMobilePaper({ id: 'local-1', fileName: 'paper.pdf', storedPdf });
     const translatedPdf = { ...storedPdf, kind: 'translated' as const, path: 'papers/local/translated/paper.pdf' };
-    const withTranslation = { ...original, translatedPdf, lastPage: 12, pageCount: 20 };
+    const withTranslation = {
+      ...original,
+      translatedPdf,
+      lastPage: 12,
+      pageCount: 20,
+      visionOcrLastPage: 8,
+      visionOcrCompleted: true
+    };
     const refreshed = {
       ...original,
       sourcePdf: { ...storedPdf, contentHash: 'sha256-source-v2' }
@@ -83,6 +99,8 @@ describe('mobile paper model', () => {
     expect(merged.translatedPdf).toBeUndefined();
     expect(merged.lastPage).toBe(1);
     expect(merged.pageCount).toBeUndefined();
+    expect(merged.visionOcrLastPage).toBeUndefined();
+    expect(merged.visionOcrCompleted).toBeUndefined();
   });
 
   it('rejects malformed library JSON and sanitizes file names', () => {

@@ -62,6 +62,38 @@ startxref
   );
 }
 
+function createScannedFallbackPdfBuffer() {
+  const content = `q
+0.94 g
+54 96 487 650 re f
+0.12 g
+76 700 410 22 re f
+0.45 g
+76 660 360 8 re f
+76 638 420 8 re f
+76 616 390 8 re f
+76 570 420 8 re f
+76 548 410 8 re f
+Q`;
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Count 1 /Kids [3 0 R] >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << >> /Contents 4 0 R >>',
+    `<< /Length ${Buffer.byteLength(content, 'ascii')} >>\nstream\n${content}\nendstream`
+  ];
+  let source = '%PDF-1.4\n';
+  const offsets = [0];
+  for (let index = 0; index < objects.length; index += 1) {
+    offsets.push(Buffer.byteLength(source, 'ascii'));
+    source += `${index + 1} 0 obj\n${objects[index]}\nendobj\n`;
+  }
+  const xrefOffset = Buffer.byteLength(source, 'ascii');
+  source += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  source += offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  source += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(source, 'ascii');
+}
+
 async function waitForWebSocketUrl() {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     try {
@@ -192,9 +224,16 @@ function startTranslationMock() {
     request.on('end', () => {
       const parsed = body ? JSON.parse(body) : {};
       const source = parsed.messages?.at(-1)?.content ?? '';
-      const translation = source.length < 40
-        ? '前向不变性'
-        : '策略更新在有界扰动下保持前向不变性，从而使安全约束在执行过程中持续成立。';
+      const translation = Array.isArray(source)
+        ? JSON.stringify({
+            paragraphs: [
+              { type: 'heading', original: 'Vision Safety Policy', translation: '视觉安全策略' },
+              { type: 'paragraph', original: 'The scanned policy remains safe under bounded disturbances.', translation: '扫描得到的策略在有界扰动下保持安全。' }
+            ]
+          })
+        : source.length < 40
+          ? '前向不变性'
+          : '策略更新在有界扰动下保持前向不变性，从而使安全约束在执行过程中持续成立。';
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ choices: [{ message: { content: translation } }] }));
     });
@@ -638,6 +677,47 @@ try {
   }
   await capture(client, '07-library-paper-deleted-390x844.png');
   console.log('Deleted the paper without an IndexedDB cursor transaction failure.');
+
+  const scannedPdfBase64 = createScannedFallbackPdfBuffer().toString('base64');
+  await evaluate(client, `(() => {
+    const binary = atob(${JSON.stringify(scannedPdfBase64)});
+    const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+    const file = new File([bytes], 'scanned-safety-paper.pdf', { type: 'application/pdf', lastModified: 2 });
+    const input = document.querySelector('.mobile-library-screen input[type=file]');
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    Object.defineProperty(input, 'files', { configurable: true, value: transfer.files });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`);
+  await waitForSelector(client, '.mobile-ocr-empty', 20000);
+  await capture(client, '08a-reader-scanned-pdf-390x844.png');
+  await evaluate(client, `document.querySelector('.mobile-ocr-empty button').click()`);
+  await waitForExpression(client, `document.querySelectorAll('.mobile-bilingual-block').length === 2 ? 'ready' : ''`, 20000);
+  await waitForExpression(client, `document.querySelectorAll('.mobile-block-translation').length === 2 ? 'ready' : ''`, 20000);
+  await capture(client, '08b-reader-scanned-bilingual-390x844.png');
+  await evaluate(client, `document.querySelector('.mobile-reader-back').click()`);
+  await waitForSelector(client, '.mobile-library-screen');
+  await evaluate(client, `(() => {
+    const row = Array.from(document.querySelectorAll('.mobile-paper-row'))
+      .find(candidate => candidate.textContent.includes('scanned-safety-paper'));
+    row?.querySelector('.mobile-paper-main')?.click();
+    return Boolean(row);
+  })()`);
+  await waitForExpression(client, `document.querySelectorAll('.mobile-bilingual-block').length === 2 ? 'ready' : ''`, 20000);
+  const restoredVisionState = await evaluate(client, `(() => ({
+    originals: Array.from(document.querySelectorAll('.mobile-block-original p, .mobile-block-original h2')).map(node => node.textContent),
+    translations: Array.from(document.querySelectorAll('.mobile-block-translation p')).map(node => node.textContent),
+    ocrPromptVisible: Boolean(document.querySelector('.mobile-ocr-empty'))
+  }))()`);
+  if (
+    restoredVisionState.originals.length !== 2 ||
+    restoredVisionState.translations.length !== 2 ||
+    restoredVisionState.ocrPromptVisible
+  ) {
+    throw new Error(`Scanned PDF bilingual cache was not restored: ${JSON.stringify(restoredVisionState)}`);
+  }
+  console.log('Recognized a scanned PDF into two bilingual blocks and restored both from local cache.');
   console.log(`Mobile visual check passed. Screenshots: ${outputDir}`);
 } finally {
   client?.close();

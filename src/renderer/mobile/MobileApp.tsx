@@ -38,6 +38,7 @@ function MobileApp() {
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
   const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
   const [translations, setTranslations] = useState<MobileTranslationEntry[]>([]);
+  const translationsRef = useRef<MobileTranslationEntry[]>([]);
   const [translationSession, setTranslationSession] = useState<MobileTranslationSession>({
     baseURL: 'https://api.openai.com/v1',
     model: 'gpt-4.1-mini',
@@ -90,6 +91,7 @@ function MobileApp() {
         loadPaperTranslations(paper.id)
       ]);
       setPdfData(sourceBytes);
+      translationsRef.current = cachedTranslations;
       setTranslations(cachedTranslations);
       setActivePaperId(paper.id);
       await commitLibrary((current) => updateMobilePaper(current, paper.id, { lastOpenedAt: new Date().toISOString() }));
@@ -175,6 +177,7 @@ function MobileApp() {
       if (activePaperId === paper.id) {
         setActivePaperId(null);
         setPdfData(null);
+        translationsRef.current = [];
         setTranslations([]);
       }
       try {
@@ -207,7 +210,8 @@ function MobileApp() {
     if (!activePaper) {
       return;
     }
-    const next = mergeTranslationEntry(translations, entry);
+    const next = mergeTranslationEntry(translationsRef.current, entry);
+    translationsRef.current = next;
     setTranslations(next);
     await savePaperTranslations(activePaper.id, next);
   }
@@ -223,6 +227,16 @@ function MobileApp() {
       return next;
     });
   }, [activePaperId]);
+
+  const handleOcrProgressChange = useCallback(async (lastPage: number, completed: boolean) => {
+    if (!activePaperId) {
+      return;
+    }
+    await commitLibrary((current) => updateMobilePaper(current, activePaperId, {
+      visionOcrLastPage: Math.max(0, Math.trunc(lastPage)),
+      visionOcrCompleted: completed
+    }));
+  }, [activePaperId, commitLibrary]);
 
   async function handleTranslationSessionChange(session: MobileTranslationSession): Promise<void> {
     if (!session.baseURL.trim() || !session.model.trim()) {
@@ -278,6 +292,7 @@ function MobileApp() {
             translationSession={translationSession}
             onBack={() => setView('library')}
             onProgressChange={handleProgressChange}
+            onOcrProgressChange={handleOcrProgressChange}
             onSaveTranslation={handleSaveTranslation}
             onTranslationSessionChange={handleTranslationSessionChange}
           />
