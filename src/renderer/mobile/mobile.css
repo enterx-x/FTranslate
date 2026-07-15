@@ -357,7 +357,7 @@
   grid-template-columns: 43px minmax(0, 1fr) 18px;
   gap: 11px;
   align-items: center;
-  padding: 12px 0 10px;
+  padding: 12px 50px 10px 0;
   text-align: left;
   border: 0;
   background: transparent;
@@ -384,6 +384,30 @@
 .mobile-paper-copy small {
   display: block;
   overflow: hidden;
+}
+
+.mobile-paper-tags {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+  overflow: hidden;
+}
+
+.mobile-paper-tags i {
+  max-width: 92px;
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 1px solid #cbd5e3;
+  border-radius: 999px;
+  background: #f3f6fa;
+  color: #465771;
+  font-size: 9px;
+  font-style: normal;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mobile-paper-copy strong {
@@ -415,15 +439,20 @@
   font-size: 23px;
 }
 
-.mobile-paper-remove {
+.mobile-paper-manage {
   position: absolute;
-  right: 18px;
-  bottom: 3px;
-  padding: 3px 0;
-  border: 0;
-  background: transparent;
-  color: #7e4d52 !important;
-  font-size: 9px;
+  right: 0;
+  top: 50%;
+  min-width: 42px;
+  min-height: 32px;
+  padding: 0 8px;
+  transform: translateY(-50%);
+  border: 1px solid #c6d0de;
+  border-radius: 7px;
+  background: #f7f9fc;
+  color: #40516b !important;
+  font-size: 10px;
+  font-weight: 650;
 }
 
 .mobile-bottom-nav {
@@ -1059,6 +1088,34 @@
 .mobile-dialog-primary {
   width: 100%;
   margin-top: 16px;
+}
+
+.mobile-paper-editor-hint {
+  display: block;
+  margin-top: 7px;
+  color: var(--mobile-muted);
+  font-size: 10px;
+}
+
+.mobile-paper-editor-actions {
+  display: grid;
+  grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.mobile-paper-editor-actions .mobile-dialog-primary {
+  margin-top: 0;
+}
+
+.mobile-paper-editor-delete {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid #d7b8bc;
+  border-radius: 9px;
+  background: #fff8f8;
+  color: #963b45 !important;
+  font-weight: 650;
 }
 
 .mobile-global-notice {

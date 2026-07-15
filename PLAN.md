@@ -626,11 +626,13 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 下载与导入边界：单个 PDF 上限 64 MB；网页 arXiv 下载支持取消、45 秒超时、Content-Length / Content-Type / 流式累计大小检查，并在写入前验证 `%PDF-` 文件头和 PDF.js 文档结构。根据 iPhone Safari 实测报错，网页 PDF 改由独立 IndexedDB 保存原始 `ArrayBuffer`，不再向 Capacitor Filesystem 写入 Safari 不支持持久化的 Blob URL；读取和删除仍兼容旧 Filesystem 数据。
 - Safari 下载链路：iPhone 真机在修复 Blob 存储后继续报 `Load failed`，定位为生产网页仍直接请求 `arxiv.org`，不同论文的 CORS/重定向行为不一致。网页 PDF 地址现统一映射到当前 origin 的 `/api/arxiv-pdf/*`；Vite 本地代理和 Vercel 外部 rewrite 都只允许转发到固定 `https://arxiv.org/pdf/*`，并修正 `/api/arxiv` 抢先匹配 PDF 路径的路由顺序。
 - 检索状态：新检索开始即清空旧结果，检索期间锁定查询与筛选输入，失败后保持空结果，不再把上一查询论文留在错误消息下方。
+- 检索网关稳定性：生产实测 Atom 上游约 25.8 秒超时返回 502，立即重试还会触发 429，因此不再连续重试同一接口。公网代理现对查询词、分类、排序和结果数做边界校验后，单次请求 arXiv 官网搜索页面并转换为现有 Atom 数据结构；官网失败时返回明确的 503 与稍后刷新提示，不再只暴露 `HTTP 502`。
 - 翻译缓存：缓存记录加入 Base URL；更换端点或模型后对应译文标记为待更新，“翻译本页”会重新生成。每个已有段落均显示“重新翻译”入口，移除 600 条静默淘汰上限，并显示批量翻译成功/失败统计。
 - arXiv 翻译：检索结果新增“译标题”和“译摘要”，共用阅读器的 OpenAI 兼容翻译设置；中文结果直接显示在对应英文下方，并随论文一起存入本地论文库。未配置 API Key 时点击翻译会先打开设置，保存后继续原请求。
 - 检索会话连续性：`MobileArxivScreen` 在底部导航切换和进入阅读器时保持挂载，仅隐藏界面，因此查询词、结果、卡片译文和滚动位置不会因返回论文库或阅读器而丢失；完整网页刷新仍按当前本地 MVP 边界重新建立检索会话。
+- 论文库管理：移动论文记录新增独立 `customTitle` 与规范化 `tags`，管理面板支持改名、最多 12 个标签和删除；自定义信息参与本地检索、重复保存同一来源时保留，且不覆盖原始标题。Safari 删除改为一次读取 IndexedDB 键后批量删除，避开游标事件回调异常；论文索引先移除、文件随后清理，文件清理失败只提示残留风险，不再让论文卡在列表中。
 - 阅读性能：共享 `PdfViewer` 只在调用方需要提取结果时解析全文，移动端切换原始 PDF 不再重复执行第二次无消费者的全文抽取；选词浮层增加视口高度约束。
-- 验证已收口：`npm run dist` 通过（82 个测试文件、476 项测试；TypeScript、桌面生产构建、Windows NSIS 安装包均成功），`npm run ios:sync` 成功；本地和生产地址的 `npm run visual:check:mobile` 均通过。线上对抗脚本确认可恢复旧记录、真实 arXiv 检索返回 20 篇、标题中文紧邻英文显示、在论文库与检索页之间往返后查询词、20 条结果和标题译文保持一致、失败检索清空 20 条旧结果，并已把真实 arXiv PDF 经生产同源代理下载、写入 IndexedDB、读回后打开阅读器；段落内嵌翻译和旧配置重译也正常。生产 `/api/arxiv-pdf/1910.00399v1` 返回 200、`application/pdf`、902,496 字节和 `%PDF-` 文件头；视觉审查的 390px 宽页面 `bodyScrollWidth` / `rootScrollWidth` 均为 390，无裁切项，截图位于 `.tmp-mobile-visual-check/`。生产部署 `dpl_8MLWut3Dn5AFx42V2T2XbUyokR19` 已绑定 `https://ftranslate-mobile.vercel.app`。剩余验证仅为 iPhone Safari 真机强制刷新后再次保存 arXiv PDF，确认 WebKit 的实际存储配额。
+- 验证已收口：`npm run dist` 通过（83 个测试文件、484 项测试；TypeScript、桌面生产构建、Windows NSIS 安装包均成功），`npm run ios:sync` 成功；本地和生产地址的 `npm run visual:check:mobile` 均通过。生产 `/api/arxiv` 实测返回 200、`official-search` 和 20 篇结果，首篇完整摘要为 1,433 字符；线上对抗脚本确认可恢复旧记录、标题中文紧邻英文显示、在论文库与检索页之间往返后查询词、20 条结果和标题译文保持一致、失败检索清空 20 条旧结果，并把真实 arXiv PDF 经生产同源代理下载、写入 IndexedDB、读回后打开阅读器。论文管理面板完成改名与 3 个标签保存，删除后对应 IndexedDB PDF 键不存在；段落内嵌翻译和旧配置重译也正常。视觉审查的 390px 宽页面 `bodyScrollWidth` / `rootScrollWidth` 均为 390，无裁切项，管理、改名和删除截图位于 `.tmp-mobile-visual-check/06a-library-paper-editor-390x844.png`、`06-library-paper-managed-390x844.png` 和 `07-library-paper-deleted-390x844.png`。生产部署 `dpl_8yoJNBnZKJm6toP68AbcP6EwGDEv` 已绑定 `https://ftranslate-mobile.vercel.app`。剩余验证仅为 iPhone Safari 真机强制刷新后再执行一次检索、改名、标签和删除，确认 WebKit 实际环境与自动化浏览器一致。
 
 ### 问题台账
 
@@ -640,5 +642,8 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 | 2026-07-15 | iPhone Safari 存入 arXiv 论文时报 `BlobURLs are not yet supported` | Capacitor Filesystem 网页实现把 Blob 交给 IndexedDB，Safari 无法持久化该 Blob URL | 已改为独立 IndexedDB `ArrayBuffer` 存储，本地 Chromium 导入/读取闭环通过 | 重新部署后由 iPhone Safari 再保存同一论文，确认真机 WebKit 与浏览器配额行为 |
 | 2026-07-15 | iPhone Safari 存入论文继续报 `Load failed` | PDF 下载绕过同源代理直接访问 arXiv，部分论文被 Safari 的跨域或重定向策略阻断 | 已恢复固定目标的 `/api/arxiv-pdf/*` 同源代理；生产实际下载 `1910.00399v1` 返回有效 PDF，线上 UI 已完成下载、IndexedDB 写入、读回和打开阅读器闭环 | 由 iPhone 强制刷新后重试；若某条论文明确返回 HTTP 404，需区分 arXiv 源站尚未提供该 PDF，而非本地保存故障 |
 | 2026-07-15 | 从 arXiv 检索页切走再返回时结果和译文消失 | `MobileApp` 按当前 tab 条件渲染，离开检索页会卸载组件并销毁 React state | 检索页改为会话内常驻、非当前 tab 仅隐藏；线上脚本已确认查询词、20 条结果和标题译文往返后保持一致 | 真机确认返回检索页时仍位于原列表位置 |
+| 2026-07-15 | arXiv 检索提示 `HTTP 502` | Vercel 函数等待 Atom 上游约 25 秒后超时；紧接着重试还可能触发 429 | 已部署单次官网搜索转换方案；生产地址实测 5.4 秒内返回 200、`official-search` 和 20 篇结果，线上 UI 检索通过 | 真机强制刷新后再验证普通查询与分类筛选；官网不可用时应显示明确繁忙提示 |
+| 2026-07-15 | Safari 删除论文时报 `IDBTransaction will abort due to uncaught exception in an event handler` | IndexedDB 删除使用 `openKeyCursor()` 并在事件回调内删除、继续游标，WebKit 会中止事务 | 已部署 `getAllKeys()` 同事务批量删除；线上脚本验证改名、标签、删除及 PDF 键清理闭环，无遮挡或横向溢出 | 由真机删除截图中的本地 PDF 再确认一次 |
+| 2026-07-15 | 官网结果已显示但某篇 PDF 下载返回 404 | arXiv 可先公开摘要页，个别新条目的 PDF 文件尚未开放；例如 `2607.12784` 摘要为 200 而 PDF 为 404 | 页面将 404 翻译为“PDF 暂未开放，请稍后重试或选择另一篇”，其他可用论文仍可正常保存 | 不把单篇源站 404 误判为论文库写入失败；如长期 404 再核查该条目版本 |
 | 2026-07-15 | 本机 C 盘剩余空间为 0，`npx` 安装 Vercel CLI 失败 | npm 临时缓存无法继续写入 | 使用今天已有的 Vercel CLI 缓存完成生产部署，未删除用户文件 | 后续在用户授权下清理低风险临时缓存，否则新依赖安装仍可能失败 |
 | 2026-07-15 | 桌面视觉脚本未全量通过 | 默认外部论文在 10 分钟门限内未完成；可控短 PDF 能快速验证布局，但生成的 PPT 内容不足以通过来源与中文 bullet 质量门 | 首页、研究表格、实验矩阵、PDF 阅读和图表截图已生成并人工复查；移动端视觉检查独立通过 | 后续为桌面视觉脚本维护一份小型、内容完备、可通过 PPT 质量门的固定 PDF fixture，移除对个人下载目录大论文的依赖 |

@@ -17,12 +17,14 @@ export interface MobilePaper {
   arxivId?: string;
   sourceRevision?: string;
   title: string;
+  customTitle?: string;
   titleZh?: string;
   authors: string[];
   year: string;
   abstract?: string;
   abstractZh?: string;
   categories: string[];
+  tags: string[];
   sourcePdf: MobileStoredPdf;
   translatedPdf?: MobileStoredPdf;
   addedAt: string;
@@ -64,6 +66,7 @@ export function createImportedMobilePaper(input: {
     authors: [],
     year: '',
     categories: [],
+    tags: [],
     sourcePdf: input.storedPdf,
     addedAt: now,
     lastOpenedAt: now,
@@ -91,6 +94,7 @@ export function createArxivMobilePaper(input: {
     abstract: input.paper.summary,
     ...(input.abstractZh ? { abstractZh: input.abstractZh } : {}),
     categories: input.paper.categories,
+    tags: [],
     sourcePdf: input.storedPdf,
     addedAt: now,
     lastOpenedAt: now,
@@ -109,6 +113,8 @@ export function upsertMobilePaper(library: MobilePaper[], incoming: MobilePaper)
       ...existing,
       ...incoming,
       translatedPdf: sourceEquivalent ? incoming.translatedPdf ?? existing.translatedPdf : incoming.translatedPdf,
+      customTitle: existing.customTitle,
+      tags: existing.tags,
       addedAt: existing.addedAt,
       lastPage: sourceEquivalent ? existing.lastPage : incoming.lastPage,
       pageCount: sourceEquivalent ? existing.pageCount ?? incoming.pageCount : incoming.pageCount
@@ -122,16 +128,45 @@ export function updateMobilePaper(
   paperId: string,
   updates: Partial<MobilePaper>
 ): MobilePaper[] {
-  return library.map((paper) =>
-    paper.id === paperId
-      ? {
-          ...paper,
-          ...updates,
-          id: paper.id,
-          lastPage: Math.max(1, Number(updates.lastPage ?? paper.lastPage) || 1)
-        }
-      : paper
-  );
+  return library.map((paper) => {
+    if (paper.id !== paperId) {
+      return paper;
+    }
+    const updated: MobilePaper = {
+      ...paper,
+      ...updates,
+      id: paper.id,
+      lastPage: Math.max(1, Number(updates.lastPage ?? paper.lastPage) || 1),
+      tags: updates.tags ? normalizeMobilePaperTags(updates.tags) : paper.tags
+    };
+    if (Object.prototype.hasOwnProperty.call(updates, 'customTitle')) {
+      const customTitle = typeof updates.customTitle === 'string' ? updates.customTitle.trim().slice(0, 120) : '';
+      if (customTitle) {
+        updated.customTitle = customTitle;
+      } else {
+        delete updated.customTitle;
+      }
+    }
+    return updated;
+  });
+}
+
+export function normalizeMobilePaperTags(tags: string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of tags) {
+    const tag = value.trim().replace(/\s+/gu, ' ').slice(0, 24);
+    const key = tag.toLocaleLowerCase();
+    if (!tag || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    normalized.push(tag);
+    if (normalized.length >= 12) {
+      break;
+    }
+  }
+  return normalized;
 }
 
 export function parseMobileLibrary(value: string | null): MobilePaper[] {
@@ -240,6 +275,7 @@ function normalizeMobilePaper(value: unknown): MobilePaper | null {
     authors: normalizeStringArray(paper.authors),
     year: typeof paper.year === 'string' ? paper.year : '',
     categories: normalizeStringArray(paper.categories),
+    tags: normalizeMobilePaperTags(normalizeStringArray(paper.tags)),
     sourcePdf,
     addedAt,
     lastOpenedAt: typeof paper.lastOpenedAt === 'string' ? paper.lastOpenedAt : addedAt,
@@ -247,6 +283,7 @@ function normalizeMobilePaper(value: unknown): MobilePaper | null {
   };
   if (typeof paper.arxivId === 'string') normalized.arxivId = paper.arxivId;
   if (typeof paper.sourceRevision === 'string') normalized.sourceRevision = paper.sourceRevision;
+  if (typeof paper.customTitle === 'string' && paper.customTitle.trim()) normalized.customTitle = paper.customTitle.trim().slice(0, 120);
   if (typeof paper.titleZh === 'string') normalized.titleZh = paper.titleZh;
   if (typeof paper.abstract === 'string') normalized.abstract = paper.abstract;
   if (typeof paper.abstractZh === 'string') normalized.abstractZh = paper.abstractZh;

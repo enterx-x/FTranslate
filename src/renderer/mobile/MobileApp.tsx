@@ -199,7 +199,6 @@ function MobileApp() {
     }
     setBusy(true);
     try {
-      await removeStoredPaper(paper.id);
       await commitLibrary((current) => current.filter((item) => item.id !== paper.id));
       if (activePaperId === paper.id) {
         setActivePaperId(null);
@@ -207,10 +206,29 @@ function MobileApp() {
         setTranslatedPdfData(null);
         setTranslations([]);
       }
+      try {
+        await removeStoredPaper(paper.id);
+        setNotice('论文已从当前浏览器移除。');
+      } catch (cleanupError) {
+        setNotice(`论文已移除，但部分本地文件未能清理：${formatError(cleanupError)}`);
+      }
     } catch (error) {
       setNotice(`移除论文失败：${formatError(error)}`);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleUpdatePaperMetadata(
+    paperId: string,
+    updates: Pick<MobilePaper, 'customTitle' | 'tags'>
+  ): Promise<void> {
+    try {
+      await commitLibrary((current) => updateMobilePaper(current, paperId, updates));
+      setNotice('论文名称和标签已保存。');
+    } catch (error) {
+      setNotice(`保存论文信息失败：${formatError(error)}`);
+      throw error;
     }
   }
 
@@ -269,6 +287,7 @@ function MobileApp() {
             onImportPdf={handleImportPdf}
             onOpenPaper={handleOpenPaper}
             onRemovePaper={handleRemovePaper}
+            onUpdatePaper={handleUpdatePaperMetadata}
           />
         ) : null}
         <div className="mobile-view-layer" hidden={view !== 'search'}>

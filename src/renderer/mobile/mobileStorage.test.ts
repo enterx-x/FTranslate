@@ -3,6 +3,7 @@ import {
   MAX_MOBILE_PDF_BYTES,
   assertMobilePdfByteLength,
   copyPdfBytesForIndexedDb,
+  formatMobilePdfDownloadHttpError,
   readMobilePdfResponse,
   validateMobilePdfHeader
 } from './mobileStorage';
@@ -36,5 +37,11 @@ describe('mobile PDF storage guards', () => {
     source[0] = 0;
     expect(stored).toBeInstanceOf(ArrayBuffer);
     expect(Array.from(new Uint8Array(stored))).toEqual([37, 80, 68, 70, 45]);
+  });
+
+  it('explains arXiv PDF availability and rate-limit errors instead of showing a bare status', () => {
+    expect(formatMobilePdfDownloadHttpError(404)).toContain('PDF 暂未开放');
+    expect(formatMobilePdfDownloadHttpError(429)).toContain('请求过于频繁');
+    expect(formatMobilePdfDownloadHttpError(500)).toBe('PDF 下载失败：HTTP 500');
   });
 });

@@ -2,7 +2,7 @@
 
 ## iPhone 公网网页阅读（当前首选）
 
-当前首选方案是把独立移动网页部署到 Vercel：iPhone 使用 Safari 打开固定的 HTTPS 地址，无需 App Store、签名或保持 Windows 电脑开机。Vercel 托管静态网页，并通过固定目标的同源代理转发 arXiv Atom 检索和 PDF 下载，避免 Safari 因 arXiv 跨域或重定向报 `Load failed`；PDF 响应只流向当前浏览器，不写入 FTranslate 或 Vercel 数据库。论文索引、PDF、阅读进度和段落译文最终保存在当前 Safari 的浏览器存储中。
+当前首选方案是把独立移动网页部署到 Vercel：iPhone 使用 Safari 打开固定的 HTTPS 地址，无需 App Store、签名或保持 Windows 电脑开机。Vercel 托管静态网页，并通过固定目标的同源代理转发 arXiv 官网检索和 PDF 下载，避免 Safari 因 arXiv 跨域或重定向报 `Load failed`；PDF 响应只流向当前浏览器，不写入 FTranslate 或 Vercel 数据库。论文索引、PDF、阅读进度和段落译文最终保存在当前 Safari 的浏览器存储中。
 
 当前生产地址：[https://ftranslate-mobile.vercel.app](https://ftranslate-mobile.vercel.app)。在 iPhone Safari 打开即可使用；通过“分享 → 添加到主屏幕”可以获得接近独立 App 的入口。
 
@@ -19,7 +19,11 @@ npx vercel --prod
 
 在本次网页会话内，从“检索”切换到论文库或阅读器后，查询词、结果列表、滚动位置和已经生成的标题/摘要译文会保留；再次进入“检索”可继续原位置，不需要重新搜索或翻译。刷新或关闭整个网页后仍会重新开始检索，已存入论文库的中文元数据不受影响。
 
-手机版会在写入前校验 PDF 文件头与 PDF.js 文档结构，单个 PDF 上限为 64 MB；arXiv 下载支持取消并在 45 秒后超时。网页 PDF 以原始 `ArrayBuffer` 写入独立 IndexedDB，避免 iPhone Safari 无法持久化 Blob URL。重复保存同一份 PDF 会保留阅读进度和双语 PDF；如果源文件内容或 arXiv 版本发生变化，会从第 1 页重新开始，并使旧段落译文和旧双语 PDF 失效，避免原文与译文串版。已有段落译文可以手动重新翻译；更换 Base URL 或模型后，“翻译本页”会更新由旧配置生成的译文。
+论文库每一行提供“管理”入口，可修改仅用于当前浏览器显示的论文名称，并添加最多 12 个本地标签；名称和标签都可以被论文库搜索框检索，不会改写原始 PDF 或 arXiv 元数据。删除论文会先从论文库索引移除，再清理 IndexedDB 中对应的 PDF 数据；即使浏览器文件清理出现异常，论文也不会继续卡在列表中。
+
+生产检索不再连续重试容易超时的 arXiv Atom 接口，而是单次请求 arXiv 官网搜索并在服务端转换为应用现有的数据结构；查询参数仍被限制在固定的 arXiv 地址和最大结果数内。若 arXiv 官网本身暂时不可用，页面会提示“arXiv 暂时繁忙，请稍后点击刷新”，而不是只显示难以判断的 `HTTP 502`。
+
+手机版会在写入前校验 PDF 文件头与 PDF.js 文档结构，单个 PDF 上限为 64 MB；arXiv 下载支持取消并在 45 秒后超时。网页 PDF 以原始 `ArrayBuffer` 写入独立 IndexedDB，避免 iPhone Safari 无法持久化 Blob URL。少数刚收录的 arXiv 摘要可能暂时还没有对应 PDF；源站返回 404 时页面会明确提示“PDF 暂未开放”，可稍后重试或选择另一篇。重复保存同一份 PDF 会保留阅读进度和双语 PDF；如果源文件内容或 arXiv 版本发生变化，会从第 1 页重新开始，并使旧段落译文和旧双语 PDF 失效，避免原文与译文串版。已有段落译文可以手动重新翻译；更换 Base URL 或模型后，“翻译本页”会更新由旧配置生成的译文。
 
 ## iPhone 局域网网页阅读（离线备用）
 

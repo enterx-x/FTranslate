@@ -34,18 +34,19 @@ export async function searchMobileArxiv(request: ArxivSearchRequest): Promise<Ar
   try {
     lastRequestAt = Date.now();
     const apiUrl = buildArxivApiUrl(request);
-    const { status, xmlText } = Capacitor.isNativePlatform()
+    const { status, xmlText, source } = Capacitor.isNativePlatform()
       ? await requestNativeArxiv(apiUrl)
-      : await requestWebArxiv(apiUrl);
+      : await requestWebArxiv(apiUrl, request);
     if (status < 200 || status >= 300) {
-      throw new Error(`HTTP ${status}`);
+      throw new Error(formatMobileArxivHttpError(status, xmlText));
     }
     const parsed = parseArxivSearchResult(xmlText);
     const result: ArxivSearchServiceResult = {
       ...parsed,
       cacheHit: false,
       queueSize: 0,
-      lastRequestGapMs: waitMs
+      lastRequestGapMs: waitMs,
+      ...(source === 'html-fallback' ? { warning: 'arXiv API 暂时繁忙，当前结果来自 arXiv 官网备用检索。' } : {})
     };
     await Preferences.set({ key: cacheKey, value: JSON.stringify({ cachedAt: Date.now(), result }) });
     return result;
@@ -62,7 +63,7 @@ export async function searchMobileArxiv(request: ArxivSearchRequest): Promise<Ar
   }
 }
 
-async function requestNativeArxiv(url: string): Promise<{ status: number; xmlText: string }> {
+async function requestNativeArxiv(url: string): Promise<{ status: number; xmlText: string; source: string }> {
   const response = await CapacitorHttp.get({
     url,
     responseType: 'text',
@@ -72,15 +73,41 @@ async function requestNativeArxiv(url: string): Promise<{ status: number; xmlTex
   });
   return {
     status: response.status,
-    xmlText: typeof response.data === 'string' ? response.data : String(response.data ?? '')
+    xmlText: typeof response.data === 'string' ? response.data : String(response.data ?? ''),
+    source: 'api'
   };
 }
 
-async function requestWebArxiv(url: string): Promise<{ status: number; xmlText: string }> {
-  const response = await fetch(buildMobileWebArxivSearchUrl(url), {
+async function requestWebArxiv(
+  url: string,
+  request: ArxivSearchRequest
+): Promise<{ status: number; xmlText: string; source: string }> {
+  const response = await fetch(buildMobileWebArxivSearchUrl(url, window.location.href, {
+    query: request.searchQuery,
+    category: request.category
+  }), {
     headers: { Accept: 'application/atom+xml' }
   });
-  return { status: response.status, xmlText: await response.text() };
+  return {
+    status: response.status,
+    xmlText: await response.text(),
+    source: response.headers.get('x-ftranslate-arxiv-source') ?? 'api'
+  };
+}
+
+export function formatMobileArxivHttpError(status: number, responseText: string): string {
+  try {
+    const parsed = JSON.parse(responseText) as { error?: unknown };
+    if (typeof parsed.error === 'string' && parsed.error.trim()) {
+      return parsed.error.trim();
+    }
+  } catch {
+    // Non-JSON upstream responses fall through to a concise status message.
+  }
+  if ([429, 502, 503, 504].includes(status)) {
+    return `arXiv 暂时繁忙（HTTP ${status}），请稍后点击刷新。`;
+  }
+  return `arXiv 检索失败：HTTP ${status}`;
 }
 
 async function readCache(key: string): Promise<CachedArxivResult | null> {

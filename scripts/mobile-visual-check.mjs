@@ -325,7 +325,16 @@ try {
       };
       return true;
     })()`);
-    await evaluate(client, `document.querySelector('.mobile-arxiv-result-actions button').click()`);
+    const livePdfSaveTarget = await evaluate(client, `(() => {
+      const results = Array.from(document.querySelectorAll('.mobile-arxiv-result'));
+      const target = results.find((result) => result.querySelector('h2')?.textContent?.includes('Integrating Physics-Informed Neural Networks')) ?? results[0];
+      const button = target?.querySelector('.mobile-arxiv-result-actions button');
+      button?.click();
+      return target?.querySelector('h2')?.textContent ?? '';
+    })()`);
+    if (!livePdfSaveTarget) {
+      throw new Error('No live arXiv result was available for the PDF save check.');
+    }
     try {
       const saveOutcome = await waitForExpression(
         client,
@@ -349,7 +358,7 @@ try {
       throw new Error(`Live arXiv PDF save did not open the reader: ${JSON.stringify(saveFailureState)}; ${error.message}`);
     }
     await capture(client, '02b-arxiv-live-pdf-opened-390x844.png');
-    console.log('Downloaded a live arXiv PDF through the same-origin proxy, stored it, and opened the reader.');
+    console.log(`Downloaded a live arXiv PDF through the same-origin proxy, stored it, and opened the reader: ${livePdfSaveTarget}`);
     await evaluate(client, `document.querySelector('.mobile-reader-back').click()`);
     await waitForSelector(client, '.mobile-library-screen');
     await evaluate(client, `document.querySelectorAll('.mobile-bottom-nav button')[1].click()`);
@@ -482,6 +491,86 @@ try {
     screenHeight: 932
   });
   await capture(client, '05-reader-selection-popover-430x932.png');
+
+  await client.send('Emulation.setDeviceMetricsOverride', {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 1,
+    mobile: true,
+    screenWidth: 390,
+    screenHeight: 844
+  });
+  await evaluate(client, `(() => {
+    window.getSelection()?.removeAllRanges();
+    document.querySelector('.mobile-reader-back').click();
+    return true;
+  })()`);
+  await waitForSelector(client, '.mobile-library-screen');
+  await evaluate(client, `(() => {
+    const row = Array.from(document.querySelectorAll('.mobile-paper-row'))
+      .find(candidate => candidate.textContent.includes('safe-policy-optimization'));
+    row.querySelector('.mobile-paper-manage').click();
+    return true;
+  })()`);
+  await waitForSelector(client, '.mobile-paper-editor-dialog');
+  const editorActionState = await evaluate(client, `(() => ({
+    saveDisabled: document.querySelector('.mobile-paper-editor-dialog .mobile-dialog-primary').disabled,
+    deleteDisabled: document.querySelector('.mobile-paper-editor-delete').disabled,
+    saveBackground: getComputedStyle(document.querySelector('.mobile-paper-editor-dialog .mobile-dialog-primary')).backgroundColor
+  }))()`);
+  if (editorActionState.saveDisabled || editorActionState.deleteDisabled || editorActionState.saveBackground !== 'rgb(24, 33, 54)') {
+    throw new Error(`Mobile paper editor actions unexpectedly disabled: ${JSON.stringify(editorActionState)}`);
+  }
+  await capture(client, '06a-library-paper-editor-390x844.png');
+  await evaluate(client, `(() => {
+    const [titleInput, tagsInput] = document.querySelectorAll('.mobile-paper-editor-dialog input');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(titleInput, '安全策略优化论文');
+    titleInput.dispatchEvent(new Event('input', { bubbles: true }));
+    setter.call(tagsInput, '强化学习，CBF，待读');
+    tagsInput.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('.mobile-paper-editor-dialog .mobile-dialog-primary').click();
+    return true;
+  })()`);
+  await waitForSelectorToDisappear(client, '.mobile-paper-editor-dialog');
+  await waitForSelector(client, '.mobile-paper-tags');
+  const managedPaperState = await evaluate(client, `(() => ({
+    title: document.querySelector('.mobile-paper-row strong')?.textContent ?? '',
+    tags: Array.from(document.querySelectorAll('.mobile-paper-row .mobile-paper-tags i')).map(tag => tag.textContent)
+  }))()`);
+  if (managedPaperState.title !== '安全策略优化论文' || managedPaperState.tags.join(',') !== '强化学习,CBF,待读') {
+    throw new Error(`Mobile paper metadata editor failed: ${JSON.stringify(managedPaperState)}`);
+  }
+  await capture(client, '06-library-paper-managed-390x844.png');
+  console.log('Renamed a paper and saved searchable local tags.');
+
+  await evaluate(client, `(() => {
+    window.confirm = () => true;
+    document.querySelector('.mobile-paper-row .mobile-paper-manage').click();
+    return true;
+  })()`);
+  await waitForSelector(client, '.mobile-paper-editor-dialog');
+  await evaluate(client, `document.querySelector('.mobile-paper-editor-delete').click()`);
+  await waitForSelectorToDisappear(client, '.mobile-paper-editor-dialog');
+  const deletionState = await evaluate(client, `(() => new Promise((resolve, reject) => {
+    const request = indexedDB.open('pdfTranslationReader:mobilePdfFiles:v1', 1);
+    request.onsuccess = () => {
+      const database = request.result;
+      const transaction = database.transaction('pdfFiles', 'readonly');
+      const keysRequest = transaction.objectStore('pdfFiles').getAllKeys();
+      keysRequest.onsuccess = () => resolve({
+        paperVisible: document.body.textContent.includes('安全策略优化论文'),
+        storedKeys: keysRequest.result.map(String)
+      });
+      keysRequest.onerror = () => reject(keysRequest.error);
+    };
+    request.onerror = () => reject(request.error);
+  }))()`);
+  if (deletionState.paperVisible || deletionState.storedKeys.some(key => key.includes('safe-policy-optimization'))) {
+    throw new Error(`Mobile paper deletion left visible or stored data: ${JSON.stringify(deletionState)}`);
+  }
+  await capture(client, '07-library-paper-deleted-390x844.png');
+  console.log('Deleted the paper without an IndexedDB cursor transaction failure.');
   console.log(`Mobile visual check passed. Screenshots: ${outputDir}`);
 } finally {
   client?.close();

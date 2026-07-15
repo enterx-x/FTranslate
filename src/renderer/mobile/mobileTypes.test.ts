@@ -6,7 +6,9 @@ import {
   isTranslationEntryCurrent,
   mergeTranslationEntry,
   parseMobileLibrary,
+  normalizeMobilePaperTags,
   sanitizeFileName,
+  updateMobilePaper,
   upsertMobilePaper,
   type MobileStoredPdf,
   type MobileTranslationEntry
@@ -98,8 +100,33 @@ describe('mobile paper model', () => {
     expect(parsed).toHaveLength(1);
     expect(parsed[0].authors).toEqual([]);
     expect(parsed[0].categories).toEqual([]);
+    expect(parsed[0].tags).toEqual([]);
     expect(parsed[0].lastOpenedAt).toBe(parsed[0].addedAt);
     expect(parsed[0].sourcePdf.kind).toBe('source');
+  });
+
+  it('stores a custom display title and normalized tags without changing the source title', () => {
+    const paper = createImportedMobilePaper({ id: 'local-1', fileName: 'paper.pdf', storedPdf });
+    const [updated] = updateMobilePaper([paper], paper.id, {
+      customTitle: '  我的安全强化学习论文  ',
+      tags: [' 强化学习 ', 'CBF', '强化学习', '', 'A very long tag name that should be truncated']
+    });
+    expect(updated.title).toBe('paper');
+    expect(updated.customTitle).toBe('我的安全强化学习论文');
+    expect(updated.tags).toEqual(['强化学习', 'CBF', 'A very long tag name tha']);
+    expect(normalizeMobilePaperTags(['RL', 'rl', ' CBF '])).toEqual(['RL', 'CBF']);
+  });
+
+  it('preserves custom title and tags when the same arXiv source is saved again', () => {
+    const original = {
+      ...createImportedMobilePaper({ id: 'local-1', fileName: 'paper.pdf', storedPdf }),
+      customTitle: '我的论文',
+      tags: ['RL']
+    };
+    const refreshed = createImportedMobilePaper({ id: 'local-1', fileName: 'paper-updated.pdf', storedPdf });
+    const [merged] = upsertMobilePaper([original], refreshed);
+    expect(merged.customTitle).toBe('我的论文');
+    expect(merged.tags).toEqual(['RL']);
   });
 });
 

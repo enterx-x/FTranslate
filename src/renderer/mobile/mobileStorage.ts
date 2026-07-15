@@ -288,15 +288,21 @@ async function deleteWebPdfPrefix(prefix: string): Promise<void> {
   try {
     await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(MOBILE_PDF_OBJECT_STORE, 'readwrite');
-      const request = transaction.objectStore(MOBILE_PDF_OBJECT_STORE).openKeyCursor();
+      const store = transaction.objectStore(MOBILE_PDF_OBJECT_STORE);
+      const request = store.getAllKeys();
       request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) return;
-        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) {
-          cursor.delete();
+        try {
+          request.result.forEach((key) => {
+            if (typeof key === 'string' && key.startsWith(prefix)) {
+              store.delete(key);
+            }
+          });
+        } catch (error) {
+          transaction.abort();
+          reject(error);
         }
-        cursor.continue();
       };
+      request.onerror = () => reject(request.error ?? new Error('读取网页 PDF 存储键失败。'));
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error ?? new Error('清理网页 PDF 存储失败。'));
       transaction.onabort = () => reject(transaction.error ?? new Error('清理网页 PDF 存储失败。'));
@@ -365,7 +371,7 @@ async function fetchMobilePdfBytes(url: string, externalSignal?: AbortSignal): P
   try {
     const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) {
-      throw new Error(`PDF 下载失败：HTTP ${response.status}`);
+      throw new Error(formatMobilePdfDownloadHttpError(response.status));
     }
     return await readMobilePdfResponse(response);
   } catch (error) {
@@ -380,6 +386,16 @@ async function fetchMobilePdfBytes(url: string, externalSignal?: AbortSignal): P
     globalThis.clearTimeout(timeoutId);
     externalSignal?.removeEventListener('abort', forwardAbort);
   }
+}
+
+export function formatMobilePdfDownloadHttpError(status: number): string {
+  if (status === 404) {
+    return 'arXiv 已收录摘要，但 PDF 暂未开放，请稍后重试或选择另一篇。';
+  }
+  if (status === 429) {
+    return 'arXiv PDF 下载请求过于频繁，请稍后重试。';
+  }
+  return `PDF 下载失败：HTTP ${status}`;
 }
 
 export async function readMobilePdfResponse(response: Response): Promise<Uint8Array> {
