@@ -25,6 +25,8 @@ npx vercel --prod
 
 手机版会在写入前校验 PDF 文件头与 PDF.js 文档结构，单个 PDF 上限为 64 MB；arXiv 下载支持取消并在 45 秒后超时。网页 PDF 以原始 `ArrayBuffer` 写入独立 IndexedDB，避免 iPhone Safari 无法持久化 Blob URL。少数刚收录的 arXiv 摘要可能暂时还没有对应 PDF；源站返回 404 时页面会明确提示“PDF 暂未开放”，可稍后重试或选择另一篇。重复保存同一份 PDF 会保留阅读进度和双语 PDF；如果源文件内容或 arXiv 版本发生变化，会从第 1 页重新开始，并使旧段落译文和旧双语 PDF 失效，避免原文与译文串版。已有段落译文可以手动重新翻译；更换 Base URL 或模型后，“翻译本页”会更新由旧配置生成的译文。
 
+“原始 PDF”与“双语 PDF”模式使用 PDF.js 官方 viewer。移动样式必须让 viewer 外壳保持相对定位、内部滚动容器保持绝对定位；`npm run visual:check:mobile` 会实际切换到“原始 PDF”、等待画布渲染并检查计算样式，防止 Safari 再次出现 `The container must be absolutely positioned` 异常。
+
 ## iPhone 局域网网页阅读（离线备用）
 
 没有公网或不想部署时，可以使用免费、无需签名的局域网网页方案：Windows 电脑负责提供网页并转发 arXiv 请求，iPhone 使用 Safari 打开。

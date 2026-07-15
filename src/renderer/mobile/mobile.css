@@ -925,10 +925,19 @@
   display: none;
 }
 
-.mobile-pdf-reader .pdf-viewer-shell,
-.mobile-pdf-reader .pdf-js-viewer-container {
+.mobile-pdf-reader .pdf-viewer-shell {
+  position: relative;
   min-height: 0;
   height: 100%;
+  overflow: hidden;
+}
+
+.mobile-pdf-reader .pdf-js-viewer-container {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .mobile-reader-status {

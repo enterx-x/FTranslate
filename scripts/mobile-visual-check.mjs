@@ -403,6 +403,34 @@ try {
   })()`);
   await waitForSelector(client, '.mobile-reader-screen');
   await waitForSelector(client, '.mobile-bilingual-block');
+  await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[1].click()`);
+  await waitForSelector(client, '.mobile-pdf-reader');
+  await waitForSelector(client, '.mobile-pdf-reader .pdfViewer .page canvas', 20000);
+  await wait(350);
+  const pdfContainerLayout = await evaluate(client, `(() => {
+    const shell = document.querySelector('.mobile-pdf-reader .pdf-viewer-shell');
+    const container = document.querySelector('.mobile-pdf-reader .pdf-js-viewer-container');
+    return {
+      shellPosition: shell ? getComputedStyle(shell).position : '',
+      containerPosition: container ? getComputedStyle(container).position : '',
+      containerInset: container ? [
+        getComputedStyle(container).top,
+        getComputedStyle(container).right,
+        getComputedStyle(container).bottom,
+        getComputedStyle(container).left
+      ] : []
+    };
+  })()`);
+  if (
+    pdfContainerLayout.shellPosition !== 'relative' ||
+    pdfContainerLayout.containerPosition !== 'absolute' ||
+    pdfContainerLayout.containerInset.some(value => value !== '0px')
+  ) {
+    throw new Error(`Mobile PDF.js container is not safely positioned: ${JSON.stringify(pdfContainerLayout)}`);
+  }
+  await capture(client, '03a-reader-original-pdf-390x844.png');
+  await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[0].click()`);
+  await waitForSelector(client, '.mobile-bilingual-reader');
   console.log('Imported fallback PDF and opened reader.');
 
   await evaluate(client, `document.querySelector('.mobile-reader-more').click()`);
