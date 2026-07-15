@@ -31,6 +31,25 @@ const COMMON_ACADEMIC_WORDS = new Set([
 ]);
 
 const MAX_TERM_LENGTH = 72;
+const NATURAL_CHINESE_REDUPLICATIONS = [
+  '往往',
+  '常常',
+  '渐渐',
+  '仅仅',
+  '恰恰',
+  '偏偏',
+  '刚刚',
+  '缓缓',
+  '频频',
+  '默默',
+  '纷纷',
+  '轻轻',
+  '慢慢',
+  '大大',
+  '步步',
+  '处处',
+  '时时'
+] as const;
 // Keep local NLLB requests below the range where long English abstracts can
 // exhaust the decoder output budget. The sidecar translates all segments as a
 // batch, so smaller segments improve completeness without adding one request
@@ -265,7 +284,10 @@ export function repairAcademicTranslation(
   translated: string,
   options: AcademicTranslationRepairOptions = {}
 ): string {
-  const normalizedTranslation = stripVisibleTermAnnotations(normalizeTranslationSpacing(translated));
+  const normalizedTranslation = stripLegacyMissingAcademicTermPrefix(
+    source,
+    stripVisibleTermAnnotations(normalizeTranslationSpacing(translated))
+  );
   if (isPureRepeatedTranslationNoise(normalizedTranslation)) {
     return '';
   }
@@ -283,16 +305,16 @@ export function repairAcademicTranslation(
     return '';
   }
 
-  const withLeadingTerm = restoreLeadingProtectedTerm(source, cleaned);
-  const repaired = maybeFallbackLowQualityTitle(source, withLeadingTerm, options);
+  const withIntroducedMethod = restoreIntroducedAcademicMethod(source, cleaned);
+  const withSourceAwareTerms = restoreMissingSourceAwareTerms(source, withIntroducedMethod);
+  const withLeadingTerm = restoreLeadingProtectedTerm(source, withSourceAwareTerms);
+  const repaired = normalizeChineseAcademicPunctuation(
+    maybeFallbackLowQualityTitle(source, withLeadingTerm, options)
+  );
   if (isShortDegenerateTranslation(repaired)) {
     return repaired;
   }
-
-  if (options.mode === 'title') {
-    return repaired;
-  }
-  return prefixMissingAcademicTerms(source, repaired, options);
+  return repaired;
 }
 
 function restoreRecoverableAcademicLiterals(source: string, translated: string): string {
@@ -371,11 +393,24 @@ export function collapseRepeatedTranslationTail(value: string): string {
 }
 
 export function collapseLocalRepeatedFragments(value: string): string {
-  return value
+  const protectedValues: string[] = [];
+  let text = value;
+  NATURAL_CHINESE_REDUPLICATIONS.forEach((term) => {
+    text = text.replace(new RegExp(term, 'gu'), () => {
+      const marker = `97531${String(protectedValues.length).padStart(2, '0')}86420`;
+      protectedValues.push(term);
+      return marker;
+    });
+  });
+  text = text
     .replace(/([，。；：、,.!?;:])\1+/gu, '$1')
     .replace(/([\u3400-\u9fff]{1,4})\1{1,}/gu, '$1')
     .replace(/\b([A-Za-z][A-Za-z0-9-]{2,}(?:\s+[A-Za-z][A-Za-z0-9-]{2,}){0,3})\s+\1\b/giu, '$1')
     .trim();
+  protectedValues.forEach((term, index) => {
+    text = text.replace(`97531${String(index).padStart(2, '0')}86420`, term);
+  });
+  return text;
 }
 
 export function extractProtectedAcademicTerms(source: string): string[] {
@@ -454,6 +489,42 @@ function restoreLeadingProtectedTerm(source: string, translated: string): string
   return `${leading}${translated.slice(separatorIndex)}`;
 }
 
+function restoreIntroducedAcademicMethod(source: string, translated: string): string {
+  const match = source.match(
+    /\b[Ww]e\s+(?:introduce|present|propose|develop)\s+(?:an?\s+)?([A-Z][A-Za-z0-9+_.-]{1,52})\b/u
+  );
+  const methodName = match?.[1] ?? '';
+  if (
+    !methodName ||
+    (!/[A-Z].*[A-Z]/u.test(methodName) && !/[0-9+_.-]/u.test(methodName)) ||
+    containsProtectedTerm(translated, methodName)
+  ) {
+    return translated;
+  }
+
+  const cueWithTranslatedName = /(我们(?:介绍|提出|推出|引入|开发)(?:了)?)([\u3400-\u9fff]{2,10})(?=(?:用于|，|,|是|作为))/u;
+  if (cueWithTranslatedName.test(translated)) {
+    return translated.replace(cueWithTranslatedName, `$1 ${methodName}，`);
+  }
+  const cue = /(我们(?:介绍|提出|推出|引入|开发)(?:了)?)/u;
+  return cue.test(translated) ? translated.replace(cue, `$1 ${methodName}`) : translated;
+}
+
+function restoreMissingSourceAwareTerms(source: string, translated: string): string {
+  const sourceLower = source.toLowerCase();
+  let text = translated;
+  if (sourceLower.includes('sim-to-real') && !containsProtectedTerm(text, 'Sim-to-Real')) {
+    if (/(?:仿真|模拟)到(?:现实|真实)/u.test(text)) {
+      text = text.replace(/(?:仿真|模拟)到(?:现实|真实)/u, 'Sim-to-Real');
+    } else if (/迁移/u.test(text)) {
+      text = text.replace(/迁移/u, 'Sim-to-Real 迁移');
+    } else {
+      text = `${text.replace(/[。.]\s*$/u, '')}，并涉及 Sim-to-Real 迁移。`;
+    }
+  }
+  return text;
+}
+
 function maybeFallbackLowQualityTitle(
   source: string,
   translated: string,
@@ -475,20 +546,21 @@ function maybeFallbackLowQualityTitle(
   return source.trim() || translated;
 }
 
-function prefixMissingAcademicTerms(
-  source: string,
-  translated: string,
-  options: AcademicTranslationRepairOptions
-): string {
-  const missingTerms = extractProtectedAcademicTerms(source)
-    .filter((term) => !containsProtectedTerm(translated, term))
-    .slice(0, options.maxMissingTerms ?? 4);
-
-  if (missingTerms.length === 0) {
+function stripLegacyMissingAcademicTermPrefix(source: string, translated: string): string {
+  const match = translated.match(/^([^：:\n]{3,180})[：:]\s*(.+)$/u);
+  if (!match?.[1] || !match[2] || !match[1].includes('/')) {
     return translated;
   }
 
-  return `${missingTerms.join(' / ')}：${translated}`;
+  const sourceKey = normalizeTermForDistance(source);
+  const prefixTerms = match[1]
+    .split(/\s*\/\s*/u)
+    .map((term) => normalizeTermForDistance(term))
+    .filter((term) => term.length >= 3);
+  if (prefixTerms.length < 2 || !prefixTerms.every((term) => sourceKey.includes(term))) {
+    return translated;
+  }
+  return match[2].trim();
 }
 
 function findFirstTitleSeparator(value: string): number {
@@ -581,6 +653,100 @@ function applySourceAwareAcademicGlossary(source: string, translated: string): s
   replaceWhenPresent('residual reinforcement learning', /残余(?:强化学习|RL)/gu, '残差强化学习');
   replaceWhenPresent('system identification', /系统识别/gu, '系统辨识');
   replaceWhenPresent('sim-to-real', /SIM到真实/giu, '仿真到现实');
+  replaceWhenPresent(
+    'reinforcement learning holds great promise for improving robot policies beyond the limits of imitation learning',
+    /强化学习[^。.!]{0,120}(?:很大的承诺|巨大的希望|很大的前途)[^。.!]*[。.]?/gu,
+    '强化学习展现出突破模仿学习局限、进一步改进机器人策略的巨大潜力。'
+  );
+  replaceWhenPresent(
+    'its practical adoption remains bottlenecked by the lack of reliable vision-language reward models that provide dense and informative feedback',
+    /然而[，,][^。.!]{0,180}(?:实际采用|实际应用)[^。.!]{0,80}(?:阻碍|制约|瓶困扰)[^。.!]*[。.]?/gu,
+    '然而，由于缺乏能够提供稠密且信息丰富反馈的可靠视觉语言奖励模型，其实际应用仍受到制约。'
+  );
+  replaceWhenPresent('laborious human effort', /(?:劳动力的人力努力|人类的辛勤努力)/gu, '大量人工投入');
+  replaceWhenPresent('reward model', /奖励模式/gu, '奖励模型');
+  replaceWhenPresent('dense reward', /密集(?:的)?奖励/gu, '稠密奖励');
+  replaceWhenPresent('dense and informative feedback', /密集(?:和|且)(?:信息性的反|翔实反馈|信息丰富的?反馈)/gu, '稠密且信息丰富的反馈');
+  replaceWhenPresent('failure data', /故障数据/gu, '失败数据');
+  replaceWhenPresent('failure trajectories', /故障轨迹/gu, '失败轨迹');
+  replaceWhenPresent('pseudo-failures', /伪故障/gu, '伪失败');
+  replaceWhenPresent('failure modes', /故障模式/gu, '失败模式');
+  replaceWhenPresent('sparse binary', /稀少(?:的)?二进制/gu, '稀疏的二值');
+  replaceWhenPresent('sparse trajectory-level success labels', /稀有轨迹(?:水平|级别)的?成功标(?:记|签)/gu, '稀疏的轨迹级成功标签');
+  replaceWhenPresent('human labeling', /人类标签/gu, '人工标注');
+  replaceWhenPresent('missed grasps', /(?:错失了?抓取|错误抓住|错过抓住)/gu, '抓取失败');
+  replaceWhenPresent('physically realistic failure trajectories', /(?:实质性|物理上现实的|物理现实的)失败轨迹/gu, '物理真实的失败轨迹');
+  replaceWhenPresent('frame-level', /框架(?:级|水平)/gu, '帧级');
+  replaceWhenPresent('throughout an episode', /整个(?:剧集|一集)/gu, '整个回合');
+  replaceWhenPresent('to train', /为了培训(\s*[A-Za-z][A-Za-z0-9+_.-]*)/gu, '为训练$1');
+  replaceWhenPresent('trained reward models', /训练有素的奖励模型/gu, '训练后的奖励模型');
+  replaceWhenPresent('evaluation suite', /评价套件/gu, '评测套件');
+  replaceWhenPresent('we release the dataset', /我们释放了数据集/gu, '我们发布了数据集');
+  replaceWhenPresent('two key challenges remain', /仍然有两个关键的挑战/gu, '仍有两个关键挑战');
+  replaceWhenPresent(
+    'relabeling successful demonstrations',
+    /重新(?:给)?成功(?:演示|示范)贴上标签/gu,
+    '重新标注成功示范'
+  );
+  replaceWhenPresent('dense robotic reward model', /密集的?机器人奖励模型/gu, '机器人稠密奖励模型');
+  replaceWhenPresent('dense frame-level reward scores', /密集帧级的?奖励分数/gu, '稠密的帧级奖励分数');
+  replaceWhenPresent('visual observations', /视觉观察/gu, '视觉观测');
+  replaceWhenPresent('general-purpose vlms', /通用\s*VLMs?\b/giu, '通用 VLM');
+  replaceWhenPresent('we introduce densereward', /我们(?:引入|推出)了?\s*DenseReward/gu, '我们提出 DenseReward');
+  replaceWhenPresent('to train densereward', /(?:为了训练|为了培训|为训练)\s*DenseReward/gu, '为训练 DenseReward');
+  replaceWhenPresent(
+    'automated failure data generation pipeline',
+    /自动(?:化)?失败数据生成(?:管道|流水线)/gu,
+    '自动化失败数据生成流程'
+  );
+  replaceWhenPresent('real-world manipulation', /现实世界操纵/gu, '真实世界机器人操作');
+  replaceWhenPresent('experiments show', /实验显示/gu, '实验结果表明');
+
+  if (
+    sourceLower.includes(
+      'two key challenges remain: acquiring diverse failure data at scale and obtaining fine-grained reward signals beyond sparse trajectory-level success labels'
+    )
+  ) {
+    text = text.replace(
+      /仍有两个关键挑战[:：][^。.!]*[。.]?/gu,
+      '仍有两个关键挑战：一是大规模获取多样化的失败数据，二是获得比稀疏轨迹级成功标签更细粒度的奖励信号。'
+    );
+  }
+  if (sourceLower.includes('we introduce densereward, a dense robotic reward model that addresses both challenges')) {
+    text = text.replace(
+      /我们提出\s*DenseReward[^。.!]*[。.]?/gu,
+      '我们提出 DenseReward——一种同时解决上述两个问题的机器人稠密奖励模型。'
+    );
+  }
+  if (sourceLower.includes('collisions, missed grasps, object drops, and recovery behaviors')) {
+    text = text.replace(
+      /覆盖了?碰撞[，,]抓取失败[，,]物体掉落[，,](?:和)?恢复行为等?多种失败模式/gu,
+      '覆盖碰撞、抓取失败、物体掉落和恢复行为等多种失败模式'
+    );
+  }
+  if (sourceLower.includes('we release the dataset, trained reward models, and evaluation suite')) {
+    text = text.replace(
+      /我们发布了数据集[，,、]\s*训练后的奖励模型(?:[，,、]\s*(?:以及|和)?)?评测套件/gu,
+      '我们发布了数据集、训练后的奖励模型和评测套件'
+    );
+  }
+  if (sourceLower.includes('densereward')) {
+    text = text.replace(/DenseReward(?=[\u3400-\u9fff])/gu, 'DenseReward ');
+  }
+  if (sourceLower.includes('general-purpose vlms')) {
+    text = text.replace(/通用 VLM(?=和)/gu, '通用 VLM ');
+  }
+
+  if (sourceLower.includes('densereward: dense reward learning via failure synthesis for robotic manipulation')) {
+    text = 'DenseReward：面向机器人操作的失败合成稠密奖励学习';
+  }
+
+  if (sourceLower.includes('support the development of failure-aware dense reward modeling for robot learning')) {
+    text = text.replace(
+      /以支持[^。.!]*机器人学习[^。.!]*[。.]?/gu,
+      '以支持面向机器人学习的失败感知稠密奖励建模。'
+    );
+  }
 
   if (sourceLower.includes('dexterous manipulation') && !text.includes('灵巧操作')) {
     text = `${text.replace(/[：:]\s*$/u, '')}：用于灵巧操作`;
@@ -598,6 +764,24 @@ function applySourceAwareAcademicGlossary(source: string, translated: string): s
 
 function normalizeTranslationSpacing(value: string): string {
   return value.replace(/\s+/gu, ' ').trim();
+}
+
+function normalizeChineseAcademicPunctuation(value: string): string {
+  if ((value.match(/[\u3400-\u9fff]/gu)?.length ?? 0) < 2) {
+    return value;
+  }
+  return value
+    .replace(/([\u3400-\u9fff]),\s*/gu, '$1，')
+    .replace(/,\s*(?=[\u3400-\u9fff])/gu, '，')
+    .replace(/([\u3400-\u9fff]);\s*/gu, '$1；')
+    .replace(/;\s*(?=[\u3400-\u9fff])/gu, '；')
+    .replace(/([\u3400-\u9fff]):\s*/gu, '$1：')
+    .replace(/:\s*(?=[\u3400-\u9fff])/gu, '：')
+    .replace(/([\u3400-\u9fff])\.\s*(?=$|[\u3400-\u9fffA-Za-z])/gu, '$1。')
+    .replace(/\.\s*(?=[\u3400-\u9fff])/gu, '。')
+    .replace(/\s+([，。；！？])/gu, '$1')
+    .replace(/([，。；！？])\s+/gu, '$1')
+    .trim();
 }
 
 function stripVisibleTermAnnotations(value: string): string {

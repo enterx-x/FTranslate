@@ -62,6 +62,87 @@ describe('academic translation quality repair', () => {
     expect(repaired).not.toContain('术语');
   });
 
+  it('removes legacy missing-term prefixes and repairs literal DenseReward abstract wording', () => {
+    const source =
+      'Reinforcement learning holds great promise for improving robot policies beyond the limits of imitation learning. ' +
+      'Collecting failure trajectories typically requires laborious human effort. ' +
+      'Existing reward models often predict sparse binary or trajectory-level rewards. ' +
+      'To train DenseReward, the pipeline synthesizes failure trajectories without human labeling, including missed grasps. ' +
+      'DenseReward predicts dense frame-level reward scores throughout an episode. ' +
+      'Experiments compare DenseReward with general-purpose VLMs and vision-language models. ' +
+      'We release the trained reward models and evaluation suite to support the development of failure-aware dense reward modeling for robot learning.';
+    const repaired = repairAcademicTranslation(
+      source,
+      'VLMs / general-purpose VLMs / vision-language：强化学习对超越模仿学习的机器人政策具有很大的承诺。' +
+        '收集故障轨迹通常需要劳动力的人力努力。现有奖励模式通常预测稀少的二进制或轨迹级奖励。' +
+        '为了培训 DenseReward，该管道在没有人类标签的情况下合成故障轨迹，包括错过抓住。' +
+        'DenseReward 预测密集框架水平奖励分数，从而估计整个剧集中的任务进展。' +
+        '我们释放了训练有素的奖励模型和评价套件，以支持机器人学习的失败感密集奖励模型的发展。',
+      { mode: 'abstract' }
+    );
+
+    expect(repaired).not.toContain('VLMs / general-purpose VLMs / vision-language');
+    expect(repaired).toContain('机器人策略');
+    expect(repaired).toContain('巨大潜力');
+    expect(repaired).toContain('失败轨迹');
+    expect(repaired).toContain('大量人工投入');
+    expect(repaired).toContain('奖励模型');
+    expect(repaired).toContain('稀疏的二值');
+    expect(repaired).toContain('训练 DenseReward');
+    expect(repaired).toContain('人工标注');
+    expect(repaired).toContain('抓取失败');
+    expect(repaired).toContain('帧级');
+    expect(repaired).toContain('整个回合');
+    expect(repaired).toContain('训练后的奖励模型');
+    expect(repaired).toContain('评测套件');
+    expect(repaired).toContain('失败感知稠密奖励建模');
+  });
+
+  it('polishes the measured Argos DenseReward output into academic Chinese', () => {
+    const source =
+      'Reinforcement learning holds great promise for improving robot policies beyond the limits of imitation learning. ' +
+      'However, its practical adoption remains bottlenecked by the lack of reliable vision-language reward models that provide dense and informative feedback. ' +
+      'Two key challenges remain: acquiring diverse failure data at scale and obtaining fine-grained reward signals beyond sparse trajectory-level success labels. ' +
+      'Collecting failure trajectories typically requires laborious human effort. Existing reward models often predict sparse binary rewards. ' +
+      'We introduce DenseReward, a dense robotic reward model that addresses both challenges. ' +
+      'To train DenseReward, we develop an automated failure data generation pipeline that synthesizes physically realistic failure trajectories without human labeling, including collisions, missed grasps, object drops, and recovery behaviors. ' +
+      'DenseReward predicts dense frame-level reward scores throughout an episode. ' +
+      'Experiments show that DenseReward outperforms general-purpose VLMs in real-world manipulation. ' +
+      'We release the trained reward models and evaluation suite to support the development of failure-aware dense reward modeling for robot learning.';
+    const repaired = repairAcademicTranslation(
+      source,
+        '强化学习为改进机器人政策提供了巨大的希望,超出了模仿学习的限度。' +
+        '然而,由于缺乏提供密集和翔实反馈的可靠视觉语言奖励模式,其实际采用仍然受到阻碍。' +
+        '仍然有两个关键的挑战:大规模获取各种故障数据,以及获得超出稀有轨迹级别成功标记的精细奖励信号。' +
+        '收集故障轨迹通常需要人类的辛勤努力。现有奖励模式往往预测稀少的二进制奖励。' +
+        '我们引入了 DenseReward,一个密集的机器人奖励模型,来解决两个挑战。' +
+        '为了训练 DenseReward,我们开发了自动故障数据生成管道,在没有人类标签的情况下合成物理上现实的故障轨迹,覆盖了碰撞,错失了抓取,物体掉落,恢复行为等多种故障模式。' +
+        'DenseReward 预测密集帧级的奖励分数,并估计整个一集中的任务进度。' +
+        '实验显示,DenseReward在现实世界操纵中优于通用VLM。' +
+        '我们发布了训练有素的奖励模型和评价套件,以支持机器人学习的失败感密集奖励模型的发展.',
+      { mode: 'abstract' }
+    );
+
+    expect(repaired).toContain('强化学习展现出突破模仿学习局限、进一步改进机器人策略的巨大潜力');
+    expect(repaired).toContain('稠密且信息丰富反馈的可靠视觉语言奖励模型');
+    expect(repaired).toContain('一是大规模获取多样化的失败数据，二是获得比稀疏轨迹级成功标签更细粒度的奖励信号');
+    expect(repaired).toContain('大量人工投入');
+    expect(repaired).toContain('稀疏的二值奖励');
+    expect(repaired).toContain('一种同时解决上述两个问题的机器人稠密奖励模型');
+    expect(repaired).toContain('自动化失败数据生成流程');
+    expect(repaired).toContain('物理真实的失败轨迹');
+    expect(repaired).toContain('人工标注');
+    expect(repaired).toContain('抓取失败');
+    expect(repaired).toContain('整个回合');
+    expect(repaired).toContain('实验结果表明');
+    expect(repaired).toContain('真实世界机器人操作');
+    expect(repaired).toContain('通用 VLM');
+    expect(repaired).toContain('训练后的奖励模型和评测套件');
+    expect(repaired).toContain('失败感知稠密奖励建模');
+    expect(repaired).not.toContain('奖励模式');
+    expect(repaired).not.toContain('巨大的希望');
+  });
+
   it('collapses repeated translation tails without rejecting otherwise useful content', () => {
     expect(collapseRepeatedTranslationTail('本文提出一种机器人导航方法。方法方法方法方法')).toBe(
       '本文提出一种机器人导航方法。方法'
@@ -162,6 +243,18 @@ describe('academic translation quality repair', () => {
     expect(collapseLocalRepeatedFragments('以以Egocentric Vision 为为视角，方法方法有效。')).toBe(
       '以Egocentric Vision 为视角，方法有效。'
     );
+    expect(collapseLocalRepeatedFragments('现有方法往往预测稀疏奖励。')).toBe('现有方法往往预测稀疏奖励。');
+  });
+
+  it('repairs the measured DenseReward title instead of exposing a damaged Latin fragment', () => {
+    const repaired = repairAcademicTranslation(
+      'DenseReward: Dense Reward Learning via Failure Synthesis for Robotic Manipulation',
+      'DenseReward: 通过失败合成学习获得对机器人操纵的ense Reward 学习',
+      { mode: 'title' }
+    );
+
+    expect(repaired).toBe('DenseReward：面向机器人操作的失败合成稠密奖励学习');
+    expect(repaired).not.toContain('ense Reward');
   });
 
   it('strictly protects formulas, code, and citations while leaving recoverable terms visible to translation', () => {

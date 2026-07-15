@@ -109,7 +109,9 @@ export class ArxivTranslationService {
   constructor(options: ArxivTranslationServiceOptions) {
     this.db = new DatabaseSync(options.dbPath);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TRANSLATION_TIMEOUT_MS;
-    const usesInjectedTranslator = Boolean(options.translateText || options.translateTexts);
+    const usesInjectedTranslator = Boolean(
+      options.translateText || options.translateTexts || options.translateTextsWithEngine
+    );
     this.translateTextsWithEngine =
       options.translateTextsWithEngine ??
       (options.translateTexts
@@ -119,11 +121,13 @@ export class ArxivTranslationService {
               texts: await Promise.all(texts.map((text) => options.translateText?.(text) ?? '')),
               engine: 'argos'
             }))
-          : ((texts) => translateTextsWithNllbCTranslate2(texts, this.timeoutMs)));
+          : ((texts) => translateTextsWithArgosEngine(texts, this.timeoutMs)));
     this.fallbackTranslateTextsWithEngine =
       options.fallbackTranslateTextsWithEngine ??
-      (options.translateTextsWithEngine || (!options.translateText && !options.translateTexts)
+      (options.translateTextsWithEngine
         ? ((texts) => translateTextsWithArgosEngine(texts, this.timeoutMs))
+        : !options.translateText && !options.translateTexts
+          ? ((texts) => translateTextsWithNllbCTranslate2(texts, this.timeoutMs))
         : undefined);
     this.now = options.now ?? Date.now;
     this.initDatabase();
@@ -236,11 +240,9 @@ export class ArxivTranslationService {
         let translatedTexts = uniqueBatch.indexes.map((index) => translationResult.texts[index] ?? '');
         let evaluatedTranslations = evaluatePreparedTranslations(preparedItems, translatedTexts);
         const primaryQualityProblems = countTranslationQualityProblems(evaluatedTranslations, translationResult.engine);
-        const shouldTryFallback =
-          translationResult.engine.toLowerCase().includes('nllb') &&
-          evaluatedTranslations.some(
-            (item) => item.hasSevereAbstractLengthLoss || hasSuspiciousRepeatedTranslationTail(item.abstract.text)
-          );
+        const shouldTryFallback = evaluatedTranslations.some(
+          (item) => item.hasSevereAbstractLengthLoss || hasSuspiciousRepeatedTranslationTail(item.abstract.text)
+        );
         if (shouldTryFallback && primaryQualityProblems > 0 && this.fallbackTranslateTextsWithEngine) {
           try {
             const fallbackResult = await this.fallbackTranslateTextsWithEngine(uniqueBatch.texts);
@@ -589,7 +591,7 @@ function buildTranslationCacheKey(input: { stableId: string; title: string; summ
     .createHash('sha256')
     .update(
       JSON.stringify({
-        version: 4,
+        version: 6,
         target: 'zh',
         stableId: input.stableId,
         title: input.title,

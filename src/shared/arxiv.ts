@@ -170,6 +170,7 @@ const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
   [/机器人导航|导航机器人/gu, 'robot navigation robotic navigation mobile robot navigation'],
   [/软体机器人/gu, 'soft robot soft robotics'],
   [/人形机器人|仿人机器人/gu, 'humanoid robot humanoid robotics'],
+  [/人形(?!机器人)/gu, 'humanoid robot humanoid robotics'],
   [/移动机器人/gu, 'mobile robot mobile robotics'],
   [/足式机器人|腿式机器人/gu, 'legged robot legged locomotion'],
   [/轮式机器人/gu, 'wheeled robot mobile robot'],
@@ -374,16 +375,11 @@ export function normalizeArxivSearchQuery(
 ): string {
   const cleanValue = normalizeArxivWhitespace(value);
   const queryMode = resolveArxivQueryMode(mode);
-  const expansions = CHINESE_QUERY_EXPANSIONS.flatMap(([pattern, expansion]) => {
-    pattern.lastIndex = 0;
-    if (!pattern.test(cleanValue)) {
-      return [];
-    }
-    return [queryMode === 'strict' ? toStrictQueryExpansion(expansion) : expansion];
-  });
+  const matched = collectChineseQueryExpansions(cleanValue, queryMode);
+  const expansions = matched.expansions;
   const modeExpansions = queryMode === 'strict' ? removeContainedQueryExpansions(expansions) : expansions;
   const latinRemainder = normalizeArxivWhitespace(
-    cleanValue
+    matched.remaining
       .replace(/[\u3400-\u9fff]+/gu, ' ')
       .replace(/[，。；、：？！]/gu, ' ')
   );
@@ -398,10 +394,32 @@ export function normalizeArxivSearchQuery(
   return normalizeArxivWhitespace([balanced, ...exploreExpansions].join(' '));
 }
 
+export function hasDeterministicChineseArxivQuery(value: string): boolean {
+  return collectChineseQueryExpansions(normalizeArxivWhitespace(value), 'balanced').expansions.length > 0;
+}
+
+function collectChineseQueryExpansions(
+  value: string,
+  mode: ArxivQueryMode
+): { expansions: string[]; remaining: string } {
+  let remaining = value;
+  const expansions: string[] = [];
+  CHINESE_QUERY_EXPANSIONS.forEach(([pattern, expansion]) => {
+    pattern.lastIndex = 0;
+    if (!pattern.test(remaining)) {
+      return;
+    }
+    expansions.push(mode === 'strict' ? toStrictQueryExpansion(expansion) : expansion);
+    pattern.lastIndex = 0;
+    remaining = remaining.replace(pattern, ' ');
+  });
+  return { expansions, remaining: normalizeArxivWhitespace(remaining) };
+}
+
 export function buildArxivApiUrl(request: ArxivSearchRequest): string {
   const queryMode = resolveArxivQueryMode(request.queryMode);
   const cleanQuery = normalizeArxivSearchQuery(request.searchQuery, queryMode);
-  const query = buildArxivSearchExpression(cleanQuery, request);
+  const query = buildArxivSearchExpression(cleanQuery, request, request.searchQuery);
   const url = new URL(ARXIV_ENDPOINT);
   url.searchParams.set('search_query', query);
   url.searchParams.set('start', String(request.start));
@@ -414,7 +432,7 @@ export function buildArxivApiUrl(request: ArxivSearchRequest): string {
 export function buildArxivCacheKey(request: ArxivSearchRequest): string {
   const queryMode = resolveArxivQueryMode(request.queryMode);
   return JSON.stringify({
-    query_version: 'title-abstract-v5',
+    query_version: 'title-abstract-v6',
     query_mode: queryMode,
     search_query: `${request.category || 'all'}:${normalizeArxivSearchQuery(request.searchQuery, queryMode).toLowerCase()}`,
     yearFrom: normalizeArxivYear(request.yearFrom),
@@ -432,9 +450,12 @@ export function toArxivApiSortBy(sortBy: ArxivSortBy): Exclude<ArxivSortBy, 'com
 
 export function buildArxivSearchExpression(
   cleanQuery: string,
-  request: Pick<ArxivSearchRequest, 'category' | 'yearFrom' | 'yearTo' | 'queryMode'>
+  request: Pick<ArxivSearchRequest, 'category' | 'yearFrom' | 'yearTo' | 'queryMode'>,
+  originalQuery = cleanQuery
 ): string {
-  const queryParts = [buildTitleAbstractExpression(cleanQuery, resolveArxivQueryMode(request.queryMode))];
+  const queryParts = [
+    buildTitleAbstractExpression(cleanQuery, resolveArxivQueryMode(request.queryMode), originalQuery)
+  ];
   const dateRange = buildSubmittedDateRange(request.yearFrom, request.yearTo);
   if (dateRange) {
     queryParts.push(dateRange);
@@ -443,16 +464,73 @@ export function buildArxivSearchExpression(
   return request.category ? `cat:${request.category} AND ${scopedQuery}` : scopedQuery;
 }
 
-function buildTitleAbstractExpression(cleanQuery: string, queryMode: ArxivQueryMode): string {
+function buildTitleAbstractExpression(
+  cleanQuery: string,
+  queryMode: ArxivQueryMode,
+  originalQuery: string
+): string {
   if (queryMode === 'strict') {
     return buildFieldPairClause(cleanQuery, cleanQuery.includes(' '));
   }
+  const chineseConcepts = collectChineseQueryExpansions(originalQuery, 'balanced').expansions;
+  if (chineseConcepts.length > 0) {
+    const conceptClauses = chineseConcepts.map((concept) => {
+      const expandedConcept = normalizeArxivSearchQuery(concept, queryMode).toLowerCase();
+      const conceptGroups = buildSemanticTitleAbstractGroups(expandedConcept, queryMode === 'balanced');
+      if (conceptGroups.length === 0) {
+        return buildFieldPairClause(expandedConcept, expandedConcept.includes(' '));
+      }
+      return wrapBooleanGroup(conceptGroups);
+    });
+    const latinRemainder = normalizeArxivWhitespace(
+      originalQuery.replace(/[\u3400-\u9fff]+/gu, ' ').replace(/[，。；、：？！]/gu, ' ')
+    );
+    if (latinRemainder) {
+      buildSemanticTitleAbstractGroups(latinRemainder.toLowerCase(), queryMode === 'balanced').forEach((group) => {
+        conceptClauses.push(wrapBooleanGroup([group]));
+      });
+    }
+    const operator = queryMode === 'explore' ? ' OR ' : ' AND ';
+    return combineBooleanConcepts(conceptClauses, operator);
+  }
   const normalized = normalizeArxivWhitespace(cleanQuery.toLowerCase());
-  const groups = buildSemanticTitleAbstractGroups(normalized);
+  const groups = buildSemanticTitleAbstractGroups(normalized, queryMode === 'balanced');
   if (groups.length === 0) {
     return `all:${escapeArxivTerm(cleanQuery, cleanQuery.includes(' '))}`;
   }
-  return `(${groups.map((group) => `(${group})`).join(' OR ')})`;
+  const operator = queryMode === 'explore' ? ' OR ' : ' AND ';
+  return combineBooleanConcepts(groups.map((group) => wrapBooleanGroup([group])), operator);
+}
+
+function wrapBooleanGroup(groups: string[]): string {
+  return `(${groups.map(stripWrappingParentheses).join(' OR ')})`;
+}
+
+function combineBooleanConcepts(clauses: string[], operator: ' OR ' | ' AND '): string {
+  if (clauses.length <= 1) {
+    return clauses[0] ?? '';
+  }
+  const combined = clauses.join(operator);
+  return operator === ' OR ' ? `(${combined})` : combined;
+}
+
+function stripWrappingParentheses(value: string): string {
+  const text = value.trim();
+  if (!text.startsWith('(') || !text.endsWith(')')) {
+    return text;
+  }
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '(') {
+      depth += 1;
+    } else if (text[index] === ')') {
+      depth -= 1;
+      if (depth === 0 && index < text.length - 1) {
+        return text;
+      }
+    }
+  }
+  return depth === 0 ? text.slice(1, -1).trim() : text;
 }
 
 function toStrictQueryExpansion(expansion: string): string {
@@ -480,7 +558,7 @@ function buildFieldPairClause(value: string, phrase: boolean): string {
   return `(ti:${term} OR abs:${term})`;
 }
 
-function buildSemanticTitleAbstractGroups(normalized: string): string[] {
+function buildSemanticTitleAbstractGroups(normalized: string, compact = false): string[] {
   const groups: string[] = [];
   const consumedTokens = new Set<string>();
 
@@ -506,17 +584,25 @@ function buildSemanticTitleAbstractGroups(normalized: string): string[] {
     ])
   ) {
     addGroup(
-      orClauses([
-        buildFieldPairClause('tactile', false),
-        buildFieldPairClause('haptic', false),
-        buildFieldPairClause('haptics', false),
-        buildFieldPairClause('visuotactile', false),
-        buildFieldPairClause('tactile sensing', true),
-        buildFieldPairClause('tactile perception', true),
-        buildFieldPairClause('force feedback', true),
-        buildFieldPairClause('touch sensing', true),
-        buildFieldPairClause('contact sensing', true)
-      ]),
+      orClauses(
+        (compact
+          ? [
+              buildFieldPairClause('tactile', false),
+              buildFieldPairClause('haptic', false),
+              buildFieldPairClause('visuotactile', false)
+            ]
+          : [
+              buildFieldPairClause('tactile', false),
+              buildFieldPairClause('haptic', false),
+              buildFieldPairClause('haptics', false),
+              buildFieldPairClause('visuotactile', false),
+              buildFieldPairClause('tactile sensing', true),
+              buildFieldPairClause('tactile perception', true),
+              buildFieldPairClause('force feedback', true),
+              buildFieldPairClause('touch sensing', true),
+              buildFieldPairClause('contact sensing', true)
+            ])
+      ),
       [
         'tactile',
         'haptic',
@@ -533,50 +619,70 @@ function buildSemanticTitleAbstractGroups(normalized: string): string[] {
 
   if (containsAny(normalized, ['reinforcement learning', 'reinforcement-learning', 'rl'])) {
     addGroup(
-      orClauses([
-        buildFieldPairClause('reinforcement learning', true),
-        andClauses([buildFieldPairClause('reinforcement', false), buildFieldPairClause('learning', false)]),
-        buildFieldPairClause('rl', false)
-      ]),
+      orClauses(
+        compact
+          ? [buildFieldPairClause('reinforcement learning', true), buildFieldPairClause('rl', false)]
+          : [
+              buildFieldPairClause('reinforcement learning', true),
+              andClauses([buildFieldPairClause('reinforcement', false), buildFieldPairClause('learning', false)]),
+              buildFieldPairClause('rl', false)
+            ]
+      ),
       ['reinforcement learning', 'reinforcement-learning', 'rl']
     );
   }
 
   if (containsAny(normalized, ['robot navigation', 'robotic navigation', 'mobile robot navigation'])) {
     addGroup(
-      orClauses([
-        buildFieldPairClause('robot navigation', true),
-        buildFieldPairClause('robotic navigation', true),
-        buildFieldPairClause('mobile robot navigation', true),
-        andClauses([
-          orClauses([
-            buildFieldPairClause('robot', false),
-            buildFieldPairClause('robotic', false),
-            buildFieldPairClause('robots', false),
-            buildFieldPairClause('mobile robot', true)
-          ]),
-          buildFieldPairClause('navigation', false)
-        ])
-      ]),
+      orClauses(
+        compact
+          ? [
+              buildFieldPairClause('robot navigation', true),
+              buildFieldPairClause('robotic navigation', true),
+              buildFieldPairClause('mobile robot navigation', true)
+            ]
+          : [
+              buildFieldPairClause('robot navigation', true),
+              buildFieldPairClause('robotic navigation', true),
+              buildFieldPairClause('mobile robot navigation', true),
+              andClauses([
+                orClauses([
+                  buildFieldPairClause('robot', false),
+                  buildFieldPairClause('robotic', false),
+                  buildFieldPairClause('robots', false),
+                  buildFieldPairClause('mobile robot', true)
+                ]),
+                buildFieldPairClause('navigation', false)
+              ])
+            ]
+      ),
       ['robot navigation', 'robotic navigation', 'mobile robot navigation', 'robot', 'robotic', 'robots', 'navigation']
     );
   }
 
   if (containsAny(normalized, ['path planning', 'motion planning', 'trajectory planning'])) {
     addGroup(
-      orClauses([
-        buildFieldPairClause('path planning', true),
-        buildFieldPairClause('motion planning', true),
-        buildFieldPairClause('trajectory planning', true),
-        andClauses([
-          orClauses([
-            buildFieldPairClause('path', false),
-            buildFieldPairClause('motion', false),
-            buildFieldPairClause('trajectory', false)
-          ]),
-          buildFieldPairClause('planning', false)
-        ])
-      ]),
+      orClauses(
+        compact
+          ? [
+              buildFieldPairClause('path planning', true),
+              buildFieldPairClause('motion planning', true),
+              buildFieldPairClause('trajectory planning', true)
+            ]
+          : [
+              buildFieldPairClause('path planning', true),
+              buildFieldPairClause('motion planning', true),
+              buildFieldPairClause('trajectory planning', true),
+              andClauses([
+                orClauses([
+                  buildFieldPairClause('path', false),
+                  buildFieldPairClause('motion', false),
+                  buildFieldPairClause('trajectory', false)
+                ]),
+                buildFieldPairClause('planning', false)
+              ])
+            ]
+      ),
       ['path planning', 'motion planning', 'trajectory planning', 'path', 'motion', 'trajectory', 'planning']
     );
   }
@@ -624,6 +730,25 @@ function buildSemanticTitleAbstractGroups(normalized: string): string[] {
 
   if (
     !containsAny(normalized, ['robot navigation', 'robotic navigation', 'mobile robot navigation']) &&
+    containsAny(normalized, ['humanoid'])
+  ) {
+    addGroup(
+      orClauses(
+        compact
+          ? [buildFieldPairClause('humanoid', false)]
+          : [
+              buildFieldPairClause('humanoid', false),
+              buildFieldPairClause('humanoid robot', true),
+              buildFieldPairClause('humanoid robotics', true)
+            ]
+      ),
+      ['humanoid', 'humanoid robot', 'humanoid robotics']
+    );
+  }
+
+  if (
+    !containsAny(normalized, ['robot navigation', 'robotic navigation', 'mobile robot navigation']) &&
+    !containsAny(normalized, ['humanoid']) &&
     containsAny(normalized, ['robot', 'robotic', 'robots', 'robotics', 'manipulator', 'humanoid'])
   ) {
     addGroup(
@@ -643,10 +768,14 @@ function buildSemanticTitleAbstractGroups(normalized: string): string[] {
   KNOWN_ARXIV_QUERY_PHRASES.forEach((phrase) => {
     if (normalized.includes(phrase) && !phrase.split(/\s+/u).every((token) => consumedTokens.has(token))) {
       addGroup(
-        orClauses([
-          buildFieldPairClause(phrase, true),
-          andClauses(phrase.split(/\s+/u).map((token) => buildFieldPairClause(token, false)))
-        ]),
+        orClauses(
+          compact
+            ? [buildFieldPairClause(phrase, true)]
+            : [
+                buildFieldPairClause(phrase, true),
+                andClauses(phrase.split(/\s+/u).map((token) => buildFieldPairClause(token, false)))
+              ]
+        ),
         [phrase]
       );
     }

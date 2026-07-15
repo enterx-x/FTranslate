@@ -14,6 +14,7 @@ import {
   type ArxivTitleAbstractTranslationResult,
   type ArxivTranslationBatchRequest,
   type ArxivTranslationPriority,
+  hasDeterministicChineseArxivQuery,
   isMojibakeTranslationText
 } from '../lib/arxivClient';
 import {
@@ -86,6 +87,7 @@ export interface ArxivQueuedPaper {
   abstractUrl: string;
   pdfUrl: string;
   addedAt: string;
+  translationQualityVersion?: number;
 }
 
 type ArxivCardTag = {
@@ -102,6 +104,7 @@ const ARXIV_PPT_QUEUE_STORAGE_KEY = 'pdfTranslationReader:arxivPptQueue';
 const ARXIV_READING_QUEUE_STORAGE_KEY = 'pdfTranslationReader:arxivReadingQueue';
 const ARXIV_DETAIL_PANEL_RATIO_KEY = 'pdfTranslationReader:arxivDetailPanelRatio';
 const ARXIV_DETAIL_PANEL_COLLAPSED_KEY = 'pdfTranslationReader:arxivDetailPanelCollapsed';
+const ARXIV_TRANSLATION_QUALITY_VERSION = 6;
 const DEFAULT_ARXIV_DETAIL_PANEL_RATIO = 0.28;
 const OFFLINE_TRANSLATION_NOTICE_TITLE = '离线翻译未配置';
 export const DEFAULT_ARXIV_SEARCH_QUERY = '';
@@ -425,9 +428,13 @@ export interface ArxivExecutedQuerySnapshotSource {
 export function resolveArxivExecutedQuerySnapshot(
   metadata: ArxivExecutedQuerySnapshotSource | null
 ): { query: string; mode: ArxivQueryMode } {
-  return metadata
-    ? { query: metadata.effectiveQuery, mode: metadata.queryMode }
-    : { query: '', mode: 'balanced' };
+  if (!metadata) {
+    return { query: '', mode: 'balanced' };
+  }
+  const query = hasDeterministicChineseArxivQuery(metadata.originalQuery)
+    ? metadata.originalQuery
+    : metadata.effectiveQuery;
+  return { query, mode: metadata.queryMode };
 }
 
 export function resolveArxivPaperInsightForExecutedQuery(
@@ -506,6 +513,7 @@ export function buildArxivTranslationMetaPatch(
     ...translationState,
     titleZh: result.titleZh,
     abstractZh: result.abstractZh,
+    translationQualityVersion: ARXIV_TRANSLATION_QUALITY_VERSION,
     translatedAt: result.translatedAt ?? new Date().toISOString()
   };
 }
@@ -2288,10 +2296,33 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
 function loadArxivMeta(): Record<string, ArxivPaperMeta> {
   try {
     const raw = window.localStorage.getItem(ARXIV_META_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, ArxivPaperMeta>) : {};
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as Record<string, ArxivPaperMeta>;
+    return Object.fromEntries(
+      Object.entries(parsed).map(([stableId, meta]) => [stableId, migrateArxivPaperMeta(meta)])
+    );
   } catch {
     return {};
   }
+}
+
+export function migrateArxivPaperMeta(meta: ArxivPaperMeta): ArxivPaperMeta {
+  if (meta.translationQualityVersion === ARXIV_TRANSLATION_QUALITY_VERSION) {
+    return meta;
+  }
+  const migrated = { ...meta };
+  delete migrated.titleZh;
+  delete migrated.abstractZh;
+  delete migrated.translatedAt;
+  delete migrated.translationStatus;
+  delete migrated.translationMessage;
+  delete migrated.translationEngine;
+  delete migrated.qualityStatus;
+  delete migrated.translationElapsedMs;
+  migrated.translationQualityVersion = ARXIV_TRANSLATION_QUALITY_VERSION;
+  return migrated;
 }
 
 function saveArxivMeta(next: Record<string, ArxivPaperMeta>): void {
@@ -2316,7 +2347,8 @@ export function buildArxivQueuedPaper(
     primaryCategory: paper.primaryCategory,
     abstractUrl: paper.abstractUrl,
     pdfUrl: paper.pdfUrl,
-    addedAt
+    addedAt,
+    translationQualityVersion: meta.translationQualityVersion ?? ARXIV_TRANSLATION_QUALITY_VERSION
   };
 }
 
@@ -2335,6 +2367,16 @@ function loadArxivReadingQueue(): ArxivQueuedPaper[] {
       .filter((item): item is ArxivQueuedPaper => {
         const candidate = item as Partial<ArxivQueuedPaper>;
         return typeof candidate.stableId === 'string' && typeof candidate.title === 'string';
+      })
+      .map((item) => {
+        if (item.translationQualityVersion === ARXIV_TRANSLATION_QUALITY_VERSION) {
+          return item;
+        }
+        const migrated = { ...item };
+        delete migrated.titleZh;
+        delete migrated.abstractZh;
+        migrated.translationQualityVersion = ARXIV_TRANSLATION_QUALITY_VERSION;
+        return migrated;
       })
       .slice(0, 300);
   } catch {

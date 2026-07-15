@@ -112,6 +112,28 @@ describe('arxivUi helpers', () => {
     expect(chineseInsight.tags).toEqual(expect.arrayContaining(['机器人', '路径规划']));
   });
 
+  it('scores balanced multi-concept searches by concept coverage instead of counting every synonym as required', () => {
+    const humanoidTactilePaper: ArxivPaper = {
+      ...robotPaper,
+      title: 'A Humanoid Visual-Tactile-Action Dataset for Contact-Rich Manipulation',
+      summary: 'We present tactile sensing and whole-body manipulation experiments for humanoid robots.'
+    };
+    const hapticsOnlyPaper: ArxivPaper = {
+      ...robotPaper,
+      title: 'Haptic Feedback for Virtual Reality Interfaces',
+      summary: 'This work studies touch feedback in immersive displays.',
+      categories: ['cs.HC'],
+      primaryCategory: 'cs.HC'
+    };
+
+    const matched = buildArxivPaperInsight(humanoidTactilePaper, '人形触觉', 'balanced');
+    const partial = buildArxivPaperInsight(hapticsOnlyPaper, '人形触觉', 'balanced');
+
+    expect(matched.relevance).toBeGreaterThanOrEqual(90);
+    expect(partial.relevance).toBeLessThanOrEqual(40);
+    expect(matched.totalScore).toBeGreaterThan(partial.totalScore);
+  });
+
   it('builds query-specific match reasons instead of relying on fixed research dimensions', () => {
     expect(buildArxivMatchReasons(robotPaper, 'path planning')).toEqual(
       expect.arrayContaining(['path planning', 'path', 'planning'])

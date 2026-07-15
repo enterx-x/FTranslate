@@ -198,12 +198,16 @@ describe('ArxivService', () => {
     }
   });
 
-  it('returns transparent English query metadata for Chinese searches translated locally', async () => {
+  it('uses deterministic research concepts without invoking the model translator for mapped Chinese searches', async () => {
     let requestedExpression = '';
+    let queryTranslationCount = 0;
     const service = new ArxivService({
       dbPath: path.join(tempDir, 'arxiv.sqlite'),
       minRequestGapMs: 0,
-      translateSearchQueryToEnglish: async () => 'tactile perception',
+      translateSearchQueryToEnglish: async () => {
+        queryTranslationCount += 1;
+        return 'The touch of a doll';
+      },
       fetchImpl: async (url) => {
         requestedExpression = new URL(String(url)).searchParams.get('search_query') ?? '';
         return new Response(sampleFeed, { status: 200 });
@@ -211,15 +215,48 @@ describe('ArxivService', () => {
     });
 
     try {
-      const result = await service.search({ ...request, searchQuery: '触觉' }, 'translated-query');
+      const result = await service.search({ ...request, searchQuery: '人形触觉' }, 'translated-query');
 
-      expect(requestedExpression).toContain('tactile perception');
+      expect(queryTranslationCount).toBe(0);
+      expect(requestedExpression).toContain('humanoid');
+      expect(requestedExpression).toContain('tactile');
       expect(requestedExpression).toContain('haptic');
-      expect(requestedExpression).not.toContain('触觉');
-      expect(result.translatedQuery).toBe('tactile perception');
-      expect(result.expandedQueryTerms).toEqual(expect.arrayContaining(['tactile perception', 'tactile', 'haptic']));
-      expect(result.queryNotice).toContain('触觉');
-      expect(result.queryNotice).toContain('tactile perception');
+      expect(requestedExpression).toContain(' AND ');
+      expect(requestedExpression).not.toContain('人形触觉');
+      expect(requestedExpression).not.toContain('doll');
+      expect(result.translatedQuery).toBeUndefined();
+      expect(result.expandedQueryTerms).toEqual(expect.arrayContaining(['humanoid', 'tactile', 'haptic']));
+      expect(result.queryNotice).toContain('人形触觉');
+      expect(result.queryNotice).toContain('humanoid');
+    } finally {
+      service.close();
+    }
+  });
+
+  it('retains model query translation as a fallback for unmapped Chinese terminology', async () => {
+    let queryTranslationCount = 0;
+    let requestedExpression = '';
+    const service = new ArxivService({
+      dbPath: path.join(tempDir, 'arxiv.sqlite'),
+      minRequestGapMs: 0,
+      translateSearchQueryToEnglish: async () => {
+        queryTranslationCount += 1;
+        return 'rare specialist term';
+      },
+      fetchImpl: async (url) => {
+        requestedExpression = new URL(String(url)).searchParams.get('search_query') ?? '';
+        return new Response(sampleFeed, { status: 200 });
+      }
+    });
+
+    try {
+      const result = await service.search({ ...request, searchQuery: '冷门专有名词' }, 'translated-query-fallback');
+
+      expect(queryTranslationCount).toBe(1);
+      expect(requestedExpression).toContain('rare');
+      expect(requestedExpression).toContain('specialist');
+      expect(requestedExpression).toContain('term');
+      expect(result.translatedQuery).toBe('rare specialist term');
     } finally {
       service.close();
     }
@@ -248,7 +285,7 @@ describe('ArxivService', () => {
     }
   });
 
-  it('merges local Chinese-to-English query translation into the arXiv API query before caching', async () => {
+  it('uses deterministic expansions for mapped Chinese concepts before caching', async () => {
     const fetchedUrls: string[] = [];
     const translatedQueries: string[] = [];
     const service = new ArxivService({
@@ -277,7 +314,7 @@ describe('ArxivService', () => {
       const second = await service.search(chineseRequest, 'translated-query');
       const searchQuery = new URL(fetchedUrls[0]).searchParams.get('search_query') ?? '';
 
-      expect(translatedQueries).toEqual(['软体机器人触觉']);
+      expect(translatedQueries).toEqual([]);
       expect(searchQuery).toContain('soft');
       expect(searchQuery).toContain('robot');
       expect(searchQuery).toContain('tactile');
@@ -400,10 +437,7 @@ describe('ArxivService', () => {
         `INSERT INTO arxiv_cache(cache_key, created_at, response_json)
          VALUES (?, ?, ?)`
       ).run(
-        buildArxivCacheKey({
-          ...tactileRequest,
-          searchQuery: `${tactileRequest.searchQuery} ${normalizeArxivSearchQuery(tactileRequest.searchQuery)}`
-        }),
+        buildArxivCacheKey(tactileRequest),
         Date.now(),
         JSON.stringify({
           papers: [

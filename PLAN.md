@@ -1,5 +1,69 @@
 # PLAN.md
 
+## 2026-07-15 arXiv 概念约束检索（0.1.30）
+
+### 当前结论
+
+- 截图中“人形触觉”返回 1,049 篇并混入 XR、针织材料和普通触觉界面，不是用户关键词不够精确，而是查询链路同时存在两个根因：本地 NLLB 把短语改写成 `The touch of a doll`；`balanced` 又把 humanoid 与 tactile 概念用 OR 拼接，导致任意触觉论文都能命中。
+- 不可压缩约束是：同义表达必须保留召回，多个用户概念必须保持交集，完全未知的中文术语仍需可翻译检索，官方 arXiv 请求长度与 3.2 秒节流策略不能被破坏。
+- 最小闭环为“中文科研概念确定性解析 → 概念间 AND / 同义词内 OR → 官方 arXiv 返回真实相关论文 → 本地评分按概念覆盖解释”，不能靠结果出来后隐藏低分论文掩盖错误查询。
+
+### 已完成操作
+
+1. 增加 standalone `人形` 到 humanoid robot 映射，并让中文概念按已消费片段依次解析，避免通用“机器人”等规则重复吞并专用概念。
+2. `balanced` 改为概念间 AND、概念同义词内 OR；`explore` 保持概念间 OR；`strict` 保持完整短语。面向官方 API 的均衡同义词组使用紧凑表达，避免无意义的超长 URL。
+3. 已识别中文科研概念跳过查询翻译模型，彻底阻断 `The touch of a doll` 污染并省去一次本地模型加载；完全未映射的中文仍调用模型翻译作为回退。
+4. 缓存键升级为 `title-abstract-v6`，旧宽泛结果不会继续命中。renderer 洞察改用已执行的原始确定性中文查询，并按概念组评分，避免把每个同义词都当成必需词造成 23/100、38/100 一类误导低分。
+5. 补充共享查询、main service、renderer client、洞察评分和执行查询快照回归，覆盖均衡/探索布尔差异、`人形触觉`、未知中文翻译回退、旧 `doll` 污染阻断与概念覆盖评分。
+6. 打包前检查工作树：当前 `codex/scientific-plot-axis-controls` 最新已提交基线为 2026-07-15；`codex/scientific-plot-ui-refactor` 仍为 2026-07-13；`codex/ios-mobile-reader` 的最新提交只修改移动端页面与部署配置。按用户“当前分支不是 13 号则无需合并”的规则，本轮不做跨分支合并。
+
+### 验证与视觉对抗式审查
+
+- 官方 `export.arxiv.org` 实测表达式为 `(humanoid) AND (tactile OR haptic OR visuotactile) AND submittedDate:[2025...2026]`，URL 长度 337；请求约 1,029 ms，返回总数 28、首批 20 篇。前列包含 Whole-Body Social Tactile Sensing、RoboTacDex、WT-UMI、Touch Dreaming、Humanoid Visual-Tactile-Action Dataset 与 TACT，旧截图中的 knitted textile 与普通 HandPad 不在结果中。
+- `npm run build` 通过：99 个测试文件、654 项测试、两套 TypeScript、Vite renderer 与 Electron main 全部完成；仅保留已有大 chunk 警告。
+- `VISUAL_CHECK_SCENARIO=arxiv npm run visual:check` 通过。1366/1440/1920px、展开高级筛选、三列/双列/单列、详情栏、备选浮层和分页均无重叠、遮挡、截断或横向溢出；人工复查 `.tmp-visual-check/arxiv-search-results-1366.png`、`arxiv-search-advanced.png`、`arxiv-search-results-1920.png` 结论一致。
+- 全量 `npm run visual:check` 在进入 arXiv 场景前停于科研绘图脚本：脚本仍寻找旧按钮文案 `＋ 导入数据`。该失败与本轮 arXiv 改动无关；为避免覆盖另一代理正在调整的绘图 UI，本轮不修改绘图页面，只保留 arXiv 专项视觉证据并记录此跨模块脚本漂移。
+- `npm run dist` 通过：99 个测试文件、654 项测试、TypeScript、Vite renderer、Electron main、win-unpacked 与 NSIS 全部完成；安装包内 `VISUAL_CHECK_PACKAGED=1` 的 arXiv 专项视觉回归再次通过。
+- Windows 安装包为 `dist/PDF Translation Reader Setup 0.1.30.exe`，157,095,532 bytes，SHA-256 `D607491510FD40F9540826EF61F9739531C7B33B5472A6711A14722082FE81B6`。
+- 0.1.30 热更新预览已启动在 CDP 9371、独立 profile `.tmp-visual-check/hot-preview-0.1.30-20260715`。官方 API 因连续验证返回 429 后，使用官方 `arxiv.org/search` HTML 快照写入同一查询的本地缓存，按 2025-2026 与 humanoid+tactile 双概念过滤后显示 23 篇；前列评分 70-82/100。截图 `.tmp-visual-check/arxiv-humanoid-tactile-0.1.30.png` 无错位、遮挡或杂项结果。
+- 最终 `git diff --check` 已通过；仅显式暂存本轮 17 个源码、测试、版本与文档文件，两个受保护的 `.superpowers/brainstorm/` 未跟踪目录保持未触碰。本节随 0.1.30 arXiv 检索与翻译质量提交一并推送。
+
+### 问题与风险
+
+- 确定性词表覆盖已有研究方向与常见计算机科学概念；完全未知术语仍依赖本地查询翻译，其质量不能由词表保证，但会在元数据中保留原查询与翻译结果用于诊断。
+- 官方 arXiv API 偶发对同一合法长表达式返回 500；按 3.2 秒间隔重试后可正常返回 28 篇。本地服务仍保留节流、冷却与陈旧缓存回退，不应通过高频自动重试放大官方限流。
+- 本地评分只是透明启发式，不替代论文质量评审；检索正确性以官方查询表达式与实际论文标题/摘要为主证据。
+
+## 2026-07-15 arXiv 学术翻译质量修复（0.1.29）
+
+### 当前结论
+
+- 截图中的问题不是 UI 换行，而是翻译链路把“模型遗漏的英文术语”拼成斜杠列表放到摘要开头，同时 NLLB 对 DenseReward 摘要产生了大量机器人领域直译。这样的结果虽快，却不能用于论文筛选。
+- 不可压缩约束是：方法名、数字、公式和引用必须保真；摘要语义必须完整；首个可用反馈必须快；不能增加云端 AI token；旧翻译应更新但不能损伤收藏、已读和阅读队列。
+- 最小闭环为“点击后立即显示阶段 → 快速中文标题 → 暖机后约 3 秒内给出完整学术摘要 → 再次打开命中缓存”，质量优先于把劣质全文强行压到 1 秒。
+
+### 已完成操作
+
+1. 删除可见的遗漏术语前缀策略，并兼容清理旧缓存中的斜杠前缀；方法名和 Sim-to-Real 等术语改为回填到自然句子中。
+2. 完整摘要的主引擎从 NLLB 调整为 Argos，NLLB 保留快速标题与严重缺段时的回退。应用启动仍执行后台预热，避免用户首次点击才承担全部模型加载时间。
+3. 增加 DenseReward 实际样本回归及机器人/RL 学术术语修复：稠密奖励、失败轨迹、人工标注、轨迹级成功标签、帧级奖励、回合、评测套件和真实世界机器人操作等不再输出生硬直译。
+4. 翻译缓存与 renderer 元数据升级为 v6；迁移仅移除旧标题、旧摘要和翻译诊断字段，保留收藏、已读、洞察查询、阅读队列等用户状态。
+5. 打包前检查工作树：当前分支 `codex/scientific-plot-axis-controls` 最新提交为 2026-07-15；`codex/scientific-plot-ui-refactor` 最新提交为 2026-07-13。按用户规则，本轮不是需要合并 13 号 UI 分支的情形，未做跨分支合并，也未触碰两个受保护的 `.superpowers/brainstorm/` 未跟踪目录。
+
+### 验证与视觉对抗式审查
+
+- DenseReward 同一真实摘要基准：快速标题约 529 ms；Argos 暖机后的完整摘要约 2,715 ms。全新进程首次加载 Argos 约 14,278 ms，属于本地模型冷加载边界；后续由启动预热和缓存消除。
+- `npm run build` 通过：99 个测试文件、650 项测试、TypeScript、Vite renderer 与 Electron main 全部完成；仅保留已有 Vite 大 chunk 警告。
+- `npm run visual:check` 通过。人工检查 `arxiv-translation-progress.png`、`arxiv-search-results-1366.png` 与 `arxiv-search-results-1920.png`：翻译状态可见，三列卡片、详情栏和分页无重叠、遮挡、横向滚动或长文本越界。
+- `npm run dist` 通过：0.1.29 的 99 个测试文件、650 项测试、TypeScript、Vite renderer、Electron main 与 NSIS 均完成。安装包内 `VISUAL_CHECK_PACKAGED=1` 全量视觉回归通过，人工复查 arXiv 进行中与 1366px 结果页无白屏、遮挡或溢出。
+- Windows 安装包为 `dist/PDF Translation Reader Setup 0.1.29.exe`，157,092,563 bytes，SHA-256 `BCDFBB746C2DAC596FA12D6365E5B4F848868A02C34C02A72FF015F61892BFC0`。
+- 待完成：热更新预览、最终 diff 检查、提交与推送。
+
+### 问题与风险
+
+- 1 秒级适合中文标题和缓存命中，不适合在当前 CPU 本地模型上承诺高质量长摘要；完整摘要的可接受目标保持在暖机约 3 秒。
+- 源文约束修复只处理可确定的领域误译，不用规则重新编写任意摘要；未覆盖的新领域术语仍可能依赖 Argos 原始输出，后续应以真实失败样本扩充回归集。
+
 ## 2026-07-15 arXiv 聚焦检索与论文库空状态（0.1.27）
 
 ### 当前结论

@@ -23,6 +23,7 @@ import {
   getArxivResultDensityConfig,
   getArxivResultDisplay,
   hasUsableArxivChineseMetadata,
+  migrateArxivPaperMeta,
   normalizeArxivResultColumnMode,
   resolveSelectedArxivPaper,
   resolveArxivExecutedQuerySnapshot,
@@ -117,6 +118,26 @@ describe('ArxivSearchPage result display', () => {
 
     expect(hasUsableArxivChineseMetadata(staleBadCache)).toBe(false);
     expect(shouldQueueArxivMetadataTranslation(staleBadCache)).toBe(true);
+  });
+
+  it('invalidates pre-quality-v5 translations without discarding user library state', () => {
+    const migrated = migrateArxivPaperMeta({
+      favorite: true,
+      read: true,
+      titleZh: '旧中文标题',
+      abstractZh: 'VLMs / vision-language：具有很大的承诺。',
+      translationEngine: 'nllb-ct2-int8',
+      translationStatus: 'completed',
+      translatedAt: '2026-07-15T00:00:00.000Z'
+    });
+
+    expect(migrated.favorite).toBe(true);
+    expect(migrated.read).toBe(true);
+    expect(migrated.titleZh).toBeUndefined();
+    expect(migrated.abstractZh).toBeUndefined();
+    expect(migrated.translationEngine).toBeUndefined();
+    expect(migrated.translationStatus).toBeUndefined();
+    expect(migrated.translationQualityVersion).toBe(6);
   });
 
   it('starts as a generic search tool instead of pre-filling a research-direction query', () => {
@@ -371,10 +392,20 @@ describe('ArxivSearchPage result display', () => {
     });
 
     expect(snapshot).toEqual({
-      query: 'robot navigation robotic navigation',
+      query: '机器人导航',
       mode: 'balanced'
     });
     expect(snapshot.query).not.toBe('unsubmitted draft');
+  });
+
+  it('keeps a translated effective query for unrecognized Chinese terminology', () => {
+    expect(
+      resolveArxivExecutedQuerySnapshot({
+        originalQuery: '冷门专有名词',
+        effectiveQuery: 'rare specialist term',
+        queryMode: 'balanced'
+      })
+    ).toEqual({ query: 'rare specialist term', mode: 'balanced' });
   });
 
   it('reuses persisted scoring only when its executed query and mode match', () => {

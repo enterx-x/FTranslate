@@ -51,7 +51,7 @@ describe('arxivClient', () => {
     expect(url).not.toContain('ppt');
   });
 
-  it('builds a broad title and abstract query for multi-keyword searches', () => {
+  it('requires every concept while keeping synonyms interchangeable in balanced searches', () => {
     const url = buildArxivApiUrl({
       searchQuery: 'reinforcement learning robot navigation',
       category: '',
@@ -66,9 +66,10 @@ describe('arxivClient', () => {
     expect(searchQuery).not.toBe('all:reinforcement learning robot navigation');
     expect(searchQuery).toContain('ti:"reinforcement learning"');
     expect(searchQuery).toContain('abs:"reinforcement learning"');
-    expect(searchQuery).toContain('ti:robot');
-    expect(searchQuery).toContain('abs:navigation');
+    expect(searchQuery).toContain('ti:"robot navigation"');
+    expect(searchQuery).toContain('abs:"robotic navigation"');
     expect(searchQuery).toContain(' OR ');
+    expect(searchQuery).toContain(' AND ');
   });
 
   it('adds submittedDate range to the arXiv query and cache key when years are provided', () => {
@@ -127,8 +128,9 @@ describe('arxivClient', () => {
     expect(searchQuery).toContain('reinforcement learning');
     expect(searchQuery).toContain('ti:uav');
     expect(searchQuery).toContain('abs:drone');
-    expect(searchQuery).toContain('obstacle');
-    expect(searchQuery).toContain('abs:avoidance');
+    expect(searchQuery).toContain('abs:"obstacle avoidance"');
+    expect(searchQuery).toContain('abs:"collision avoidance"');
+    expect(searchQuery).toContain(' AND ');
   });
 
   it('expands Chinese haptic terms into English title and abstract synonyms', () => {
@@ -148,10 +150,10 @@ describe('arxivClient', () => {
     expect(searchQuery).not.toContain('触觉');
     expect(searchQuery).toContain('ti:haptic');
     expect(searchQuery).toContain('abs:tactile');
-    expect(searchQuery).toContain('tactile sensing');
+    expect(searchQuery).toContain('visuotactile');
     expect(searchQuery).toContain('robot');
     expect(JSON.parse(cacheKey)).toMatchObject({
-      query_version: 'title-abstract-v5',
+      query_version: 'title-abstract-v6',
       query_mode: 'balanced'
     });
   });

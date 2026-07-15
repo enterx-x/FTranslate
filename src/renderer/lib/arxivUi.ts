@@ -53,6 +53,7 @@ export interface ArxivPaperMeta {
   translationEngine?: ArxivTitleAbstractTranslationEngine;
   qualityStatus?: ArxivTranslationQualityStatus;
   translationElapsedMs?: number;
+  translationQualityVersion?: number;
   insightQuery?: string;
   insightQueryMode?: ArxivQueryMode;
 }
@@ -213,6 +214,84 @@ const MATCH_REASON_STOP_WORDS = new Set([
   'learning'
 ]);
 
+const QUERY_MATCH_CONCEPTS: Array<{ markers: string[]; matches: string[] }> = [
+  {
+    markers: ['reinforcement learning', 'reinforcement-learning', 'policy learning', 'sequential decision making'],
+    matches: ['reinforcement learning', 'reinforcement-learning', 'policy learning', 'rl']
+  },
+  {
+    markers: ['robot navigation', 'robotic navigation', 'mobile robot navigation', 'autonomous navigation'],
+    matches: [
+      'robot navigation',
+      'robotic navigation',
+      'mobile robot navigation',
+      'autonomous navigation',
+      'path planning',
+      'motion planning',
+      'trajectory planning',
+      'collision avoidance'
+    ]
+  },
+  {
+    markers: ['path planning', 'motion planning', 'trajectory planning', 'route planning', 'trajectory generation'],
+    matches: ['path planning', 'motion planning', 'trajectory planning', 'route planning', 'trajectory generation']
+  },
+  {
+    markers: [
+      'tactile',
+      'haptic',
+      'haptics',
+      'visuotactile',
+      'tactile sensing',
+      'tactile perception',
+      'force feedback',
+      'touch sensing',
+      'contact sensing',
+      'somatosensory'
+    ],
+    matches: [
+      'tactile',
+      'haptic',
+      'haptics',
+      'visuotactile',
+      'tactile sensing',
+      'tactile perception',
+      'force feedback',
+      'touch sensing',
+      'contact sensing',
+      'somatosensory'
+    ]
+  },
+  {
+    markers: ['humanoid robot', 'humanoid robotics', 'humanoid'],
+    matches: ['humanoid robot', 'humanoid robotics', 'humanoid']
+  },
+  {
+    markers: ['soft robot', 'soft robotics'],
+    matches: ['soft robot', 'soft robotics']
+  },
+  {
+    markers: ['control barrier function', 'control barrier functions', 'safety filter', 'safe control'],
+    matches: ['control barrier function', 'control barrier functions', 'cbf', 'safety filter']
+  },
+  {
+    markers: ['model predictive control', 'receding horizon control'],
+    matches: ['model predictive control', 'mpc', 'receding horizon control']
+  },
+  {
+    markers: ['physics-informed', 'physics informed', 'physics-informed neural network'],
+    matches: ['physics-informed', 'physics informed', 'physics-informed neural network', 'pinn']
+  },
+  {
+    markers: ['embodied ai', 'embodied intelligence', 'embodied agent'],
+    matches: ['embodied ai', 'embodied intelligence', 'embodied agent', 'embodied']
+  },
+  {
+    markers: ['world model'],
+    matches: ['world model', 'model-based', 'dynamics model', 'latent dynamics']
+  }
+];
+
 export function buildArxivPaperInsight(
   paper: ArxivPaper,
   query: string,
@@ -220,13 +299,13 @@ export function buildArxivPaperInsight(
 ): ArxivPaperInsight {
   const haystack = normalizeText([paper.title, paper.summary, paper.categories.join(' '), paper.primaryCategory].join(' '));
   const normalizedQuery = normalizeText(normalizeArxivSearchQuery(query, queryMode));
-  const queryTerms = queryMode === 'strict' && normalizedQuery.includes(' ')
-    ? [normalizedQuery]
-    : normalizedQuery.split(/\s+/u).filter((term) => term.length >= 3);
-  const queryHits = queryTerms.filter((term) =>
-    queryMode === 'strict' ? keywordMatches(haystack, term) : haystack.includes(term)
-  ).length;
-  const queryScore = queryTerms.length === 0 ? 4 : clampScore(Math.round((queryHits / queryTerms.length) * 10));
+  const queryConcepts = buildArxivQueryMatchConcepts(normalizedQuery, queryMode);
+  const queryHits = queryConcepts.filter((concept) => concept.some((term) => keywordMatches(haystack, term))).length;
+  const queryScore = queryConcepts.length === 0
+    ? 4
+    : queryMode === 'explore'
+      ? clampScore(queryHits === 0 ? 0 : 7 + Math.min(3, queryHits - 1))
+      : clampScore(Math.round((queryHits / queryConcepts.length) * 10));
 
   const topicMatch = Object.fromEntries(
     Object.entries(TOPIC_KEYWORDS).map(([key, config]) => [
@@ -269,6 +348,39 @@ export function buildArxivPaperInsight(
     reasonZh: buildReasonZh(tags, readingPriority, relevance, experimentQuality),
     tags
   };
+}
+
+function buildArxivQueryMatchConcepts(normalizedQuery: string, queryMode: ArxivQueryMode): string[][] {
+  if (!normalizedQuery) {
+    return [];
+  }
+  if (queryMode === 'strict' && normalizedQuery.includes(' ')) {
+    return [[normalizedQuery]];
+  }
+
+  const concepts: string[][] = [];
+  const consumedTokens = new Set<string>();
+  QUERY_MATCH_CONCEPTS.forEach((concept) => {
+    if (!concept.markers.some((marker) => keywordMatches(normalizedQuery, marker))) {
+      return;
+    }
+    concepts.push(concept.matches);
+    [...concept.markers, ...concept.matches].forEach((term) => {
+      tokenizeQueryMatchTerm(term).forEach((token) => consumedTokens.add(token));
+    });
+  });
+
+  tokenizeQueryMatchTerm(normalizedQuery)
+    .filter((term) => term.length >= 3 && !MATCH_REASON_STOP_WORDS.has(term) && !consumedTokens.has(term))
+    .forEach((term) => concepts.push([term]));
+  return concepts;
+}
+
+function tokenizeQueryMatchTerm(value: string): string[] {
+  return normalizeText(value)
+    .split(/[^a-z0-9.+-]+/iu)
+    .map((term) => term.trim())
+    .filter(Boolean);
 }
 
 export function buildArxivTopicCards(

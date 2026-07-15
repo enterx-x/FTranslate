@@ -1,5 +1,24 @@
 # PDF Translation Reader / FTranslate
 
+## 2026-07-15 arXiv 概念约束检索（0.1.30）
+
+- 修复中文组合查询被模型误译和被宽泛 OR 拆散的问题。截图中的“人形触觉”曾被附加为 `The touch of a doll`，同时只要命中 tactile / haptic 就会混入 XR、针织材料和普通触觉界面论文；已识别的中文科研概念现在直接使用确定性术语映射，不再经过本地查询翻译模型。
+- 查询模式现在有明确语义：`严格`匹配完整短语，`均衡`要求每个研究概念都出现、只在概念内部允许同义词，`探索`才允许任一概念命中。`人形触觉`的均衡表达式因此是 `humanoid AND (tactile OR haptic OR visuotactile)`，不会退化为普通触觉检索。
+- 真实官方 arXiv API 验证（2025-2026、按提交时间）：旧界面显示 1,049 篇，修复后为 28 篇，首批结果包括 Whole-Body Social Tactile Sensing、RoboTacDex、WT-UMI、Touch Dreaming 与 Humanoid Visual-Tactile-Action Dataset；请求约 1.03 秒完成。
+- 本地相关性评分改为按“概念覆盖”计算。同一个概念的 tactile / haptic / visuotactile 只算一组，不再错误要求论文同时写出所有同义词；只命中触觉但没有 humanoid 的论文会明显降分。
+- 检索缓存升级到 `title-abstract-v6`，旧的 1,049 篇宽泛缓存会自动失效。未收录的冷门中文术语仍保留模型翻译回退，不会因确定性词表而失去可检索性。
+- 完整构建为 99 个测试文件、654 项测试通过；arXiv 专项视觉回归覆盖 1366/1440/1920px、展开筛选、三列/双列/单列、详情栏和分页，未发现遮挡、截断或横向溢出。
+- Windows 安装包为 `dist/PDF Translation Reader Setup 0.1.30.exe`，157,095,532 bytes，SHA-256 `D607491510FD40F9540826EF61F9739531C7B33B5472A6711A14722082FE81B6`；安装包内 arXiv 专项视觉回归同样通过。
+
+## 2026-07-15 arXiv 学术翻译质量修复（0.1.29）
+
+- 修复 DenseReward 摘要中“VLMs / general-purpose VLMs / vision-language：”被硬塞到正文开头，以及“奖励模式、故障轨迹、人类标签、框架级、剧集”等直译问题。术语现在回到原句语境中表达，不再用可见英文词表冒充译文完整性。
+- 完整摘要默认改用本地 Argos 学术翻译链路，NLLB 保留为快速中文标题与异常回退；标题仍会先返回，摘要随后补全。对同一篇 DenseReward 论文实测：暖机后中文标题约 0.53 秒，完整摘要约 2.72 秒；首次冷加载 Argos 约 14.3 秒，应用启动时会后台预热，已缓存结果再次打开近乎即时。
+- 增加源文约束的学术术语修复，覆盖稠密奖励、失败轨迹、人工标注、轨迹级标签、帧级奖励、回合、真实世界机器人操作、Sim-to-Real 等表达，并保护 DenseReward 等方法名和自然中文叠词。
+- 翻译质量缓存升级到 v6：旧标题/摘要会自动失效并按新链路重译，但收藏、已读、阅读队列和研究状态不会被清除。旧版已生成的斜杠术语前缀也会在读取缓存时自动移除。
+- 完整构建为 99 个测试文件、650 项测试通过；源码版 arXiv 视觉回归覆盖翻译阶段反馈与 1366/1440/1920px 布局，未发现遮挡、截断或横向溢出。截图见 `.tmp-visual-check/arxiv-translation-progress.png`、`.tmp-visual-check/arxiv-search-results-1366.png` 和 `.tmp-visual-check/arxiv-search-results-1920.png`。
+- Windows 安装包为 `dist/PDF Translation Reader Setup 0.1.29.exe`，157,092,563 bytes，SHA-256 `BCDFBB746C2DAC596FA12D6365E5B4F848868A02C34C02A72FF015F61892BFC0`；安装包内视觉回归同样通过。
+
 ## 2026-07-15 arXiv 1 秒级渐进翻译（0.1.28）
 
 - 单篇翻译改为“立即反馈 → 中文标题 → 完整摘要”渐进链路。按钮点击后同步进入“翻译中”，卡片持续显示当前阶段与耗时；暖机后的真实 arXiv 样本中，中文标题约 0.52 秒出现，完整摘要约 1.52 秒完成。

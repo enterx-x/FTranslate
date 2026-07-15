@@ -68,12 +68,28 @@ describe('arXiv query builder', () => {
     expect(expression).not.toContain('ti:manipulation');
   });
 
-  it('keeps multi-keyword searches broad while including all requested semantic terms', () => {
-    const expression = getSearchExpression('tactile robot navigation');
+  it('requires every requested concept in balanced mode while explore mode keeps broad recall', () => {
+    const balancedExpression = getSearchExpression('tactile robot navigation', 'balanced');
+    const exploreExpression = getSearchExpression('tactile robot navigation', 'explore');
 
+    expect(balancedExpression).toContain('ti:tactile');
+    expect(balancedExpression).toContain('ti:"robot navigation"');
+    expect(balancedExpression).toMatch(/\) AND \(/u);
+    expect(exploreExpression).toContain('ti:tactile');
+    expect(exploreExpression).toContain('ti:"robot navigation"');
+    expect(exploreExpression).toMatch(/\) OR \(/u);
+  });
+
+  it('treats Chinese humanoid tactile search as two required research concepts', () => {
+    const normalized = normalizeArxivSearchQuery('人形触觉');
+    const expression = getSearchExpression('人形触觉', 'balanced');
+
+    expect(normalized).toContain('humanoid');
+    expect(normalized).toContain('tactile');
+    expect(expression).toContain('ti:humanoid');
     expect(expression).toContain('ti:tactile');
-    expect(expression).toContain('ti:"robot navigation"');
-    expect(expression).toContain('OR');
+    expect(expression).toMatch(/\) AND \(/u);
+    expect(expression).not.toContain('doll');
   });
 
   it('expands Chinese tactile searches into English tactile and haptic terms', () => {
@@ -123,11 +139,12 @@ describe('arXiv query builder', () => {
     expect(expression).toContain('computer graphics');
   });
 
-  it('does not add standalone sensing or perception clauses for tactile searches', () => {
+  it('keeps balanced tactile searches compact without standalone sensing or perception clauses', () => {
     const expression = getSearchExpression('触觉');
 
-    expect(expression).toContain('ti:"tactile sensing"');
-    expect(expression).toContain('ti:"tactile perception"');
+    expect(expression).toContain('ti:tactile');
+    expect(expression).toContain('ti:haptic');
+    expect(expression).toContain('ti:visuotactile');
     expect(expression).not.toContain('ti:sensing');
     expect(expression).not.toContain('abs:sensing');
     expect(expression).not.toContain('ti:perception');
