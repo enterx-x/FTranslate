@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildArxivApiUrl,
   buildArxivCacheKey,
+  getUnmappedChineseArxivQuery,
   isMojibakeTranslationText,
   normalizeArxivSearchQuery,
   type ArxivQueryMode,
@@ -167,6 +168,74 @@ describe('arXiv query builder', () => {
     expect(expression).toBe('all:*');
     expect(expression).not.toContain('ti:*');
     expect(expression).not.toContain('abs:*');
+  });
+
+  it('matches specific Chinese compound concepts before their generic substrings', () => {
+    const cases = [
+      ['物理信息神经网络', 'physics-informed neural network'],
+      ['机器人操作', 'robot manipulation'],
+      ['视觉语言动作', 'vision language action'],
+      ['模型预测控制', 'model predictive control']
+    ] as const;
+
+    cases.forEach(([query, expected]) => {
+      expect(normalizeArxivSearchQuery(query).toLowerCase()).toContain(expected);
+      expect(getUnmappedChineseArxivQuery(query)).toBe('');
+    });
+  });
+
+  it('treats research acronyms and their full names as alternatives instead of mandatory co-occurrences', () => {
+    const cases = [
+      ['物理信息神经网络', 'physics-informed neural network', 'pinn'],
+      ['图神经网络', 'graph neural network', 'gnn'],
+      ['大语言模型', 'large language model', 'llm'],
+      ['自然语言处理', 'natural language processing', 'nlp'],
+      ['无人机', 'aerial robot', 'uav']
+    ] as const;
+
+    cases.forEach(([query, fullName, acronym]) => {
+      const expression = getSearchExpression(query).toLowerCase();
+      expect(expression).toContain(fullName);
+      expect(expression).toMatch(new RegExp(`(?:ti|abs):${acronym}\\b`, 'u'));
+      expect(expression).not.toMatch(new RegExp(`\\) and \\(ti:${acronym}\\b`, 'u'));
+    });
+  });
+
+  it('does not detect PINN inside an unrelated English word', () => {
+    const expression = getSearchExpression('spinning robot').toLowerCase();
+
+    expect(expression).not.toContain('physics-informed neural network');
+    expect(expression).not.toMatch(/(?:ti|abs):pinn\b/u);
+  });
+
+  it('keeps VLA, VLM, and generic multimodal Chinese concepts distinct', () => {
+    const vla = normalizeArxivSearchQuery('视觉语言动作').toLowerCase();
+    const vlm = normalizeArxivSearchQuery('视觉语言').toLowerCase();
+    const explicitVlm = normalizeArxivSearchQuery('视觉语言模型').toLowerCase();
+    const multimodal = normalizeArxivSearchQuery('多模态').toLowerCase();
+
+    expect(vla).toContain('vision language action vla');
+    expect(vla).not.toContain('vlm');
+    expect(vla).not.toContain('multimodal');
+    expect(vlm).toContain('vision language model vlm');
+    expect(vlm).not.toContain('vla');
+    expect(vlm).not.toContain('multimodal');
+    expect(explicitVlm).toContain('vision language model vlm');
+    expect(explicitVlm).not.toContain('large language model');
+    expect(explicitVlm).not.toContain('llm');
+    expect(getUnmappedChineseArxivQuery('视觉语言模型')).toBe('');
+    expect(multimodal).toBe('multimodal');
+  });
+
+  it('normalizes concise humanoid tactile queries without depending on machine translation', () => {
+    const normalized = normalizeArxivSearchQuery('人形触觉').toLowerCase();
+    const expression = getSearchExpression('人形触觉').toLowerCase();
+
+    expect(getUnmappedChineseArxivQuery('人形触觉')).toBe('');
+    expect(normalized).toContain('humanoid robot');
+    expect(normalized).toContain('tactile');
+    expect(expression).toContain('humanoid');
+    expect(expression).toContain('tactile');
   });
 
   it('does not treat acronym fragments inside ordinary words as research concepts', () => {

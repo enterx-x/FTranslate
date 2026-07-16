@@ -612,6 +612,87 @@ describe('ArxivTranslationService', () => {
     }
   });
 
+  it('does not cache a translated title when the abstract is still an English echo', async () => {
+    const calls: string[][] = [];
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) => {
+        calls.push(texts);
+        return texts.map((text, index) => (index === 0 ? '触觉机器人操作基准' : text));
+      }
+    });
+    const request = {
+      stableId: 'partial-abstract-echo',
+      title: 'A Benchmark for Tactile Robot Manipulation',
+      summary: 'This paper evaluates tactile robot manipulation with reproducible experiments.'
+    };
+
+    try {
+      const first = await service.translatePaper(request);
+      const second = await service.translatePaper(request);
+
+      expect(first.status).toBe('failed');
+      expect(first.cacheHit).toBe(false);
+      expect(first.abstractZh).toBe('');
+      expect(second.status).toBe('failed');
+      expect(second.cacheHit).toBe(false);
+      expect(calls).toHaveLength(2);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('drops legacy title-only cache rows and retranslates the abstract', async () => {
+    const dbPath = path.join(tempDir, 'arxiv-translation.sqlite');
+    const request = {
+      stableId: 'legacy-title-only-cache',
+      title: 'Safe Reinforcement Learning for Robot Navigation',
+      summary: 'This paper evaluates safe reinforcement learning for robot navigation.'
+    };
+    const bootstrap = new ArxivTranslationService({
+      dbPath,
+      translateTexts: async () => [
+        '用于初始化缓存的安全强化学习标题',
+        '这是用于初始化缓存的完整中文摘要，包含机器人导航实验、评价指标和主要结论。'
+      ]
+    });
+    try {
+      expect((await bootstrap.translatePaper(request)).status).toBe('completed');
+    } finally {
+      bootstrap.close();
+    }
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare(`UPDATE arxiv_translation_cache SET abstract_zh = ''`).run();
+    } finally {
+      db.close();
+    }
+
+    const calls: string[][] = [];
+    const service = new ArxivTranslationService({
+      dbPath,
+      translateTexts: async (texts) => {
+        calls.push(texts);
+        return [
+          '机器人导航安全强化学习',
+          '本文评估用于机器人导航的安全强化学习方法，并报告完整的实验设置、评价指标与研究结论。'
+        ];
+      }
+    });
+
+    try {
+      const result = await service.translatePaper(request);
+
+      expect(result.status).toBe('completed');
+      expect(result.cacheHit).toBe(false);
+      expect(result.abstractZh).toContain('完整的实验设置');
+      expect(calls).toHaveLength(1);
+    } finally {
+      service.close();
+    }
+  });
+
   it('upgrades a partial abstract cache when the fast title translator later succeeds', async () => {
     const calls: string[][] = [];
     const service = new ArxivTranslationService({

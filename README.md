@@ -1,5 +1,14 @@
 # PDF Translation Reader / FTranslate
 
+## 2026-07-16 arXiv 复合概念检索与残缺翻译缓存修复（0.1.35）
+
+- 中文复合术语先匹配专用概念，再匹配通用子词；`物理信息神经网络`、`机器人操作`、`视觉语言动作`、`模型预测控制`不再被提前拆成宽泛的 physics / robot / vision / control 条件。PINN、GNN、LLM、NLP、UAV、VLA、VLM 的全称与缩写按同一概念内的候选项处理，不再要求论文同时写出全称和缩写。
+- 混合查询只把真正未映射的中文片段送入本地翻译。例如 `强化学习 故障诊断`只翻译`故障诊断`，不会让模型再次改写已经确定的 reinforcement learning。`PINN`使用完整 token 边界，`spinning`等普通单词不会误触发物理信息神经网络条件。
+- `人形触觉`除远端表达式保持 humanoid AND tactile 外，本地缓存重排也同时检查两个概念；旧缓存中的针织触觉界面、普通触觉材料等非人形论文不会重新混入结果。
+- 翻译服务不再把“只有中文标题、摘要仍是英文回声”的结果写入 SQLite。旧版标题单独缓存会自动淘汰并重新翻译摘要；失败时已通过质量检查的中文标题仍保留，单篇和整页重试都会复用该标题，只补摘要。
+- 完整构建通过 102 个测试文件、681 项测试；源码版与安装包内 arXiv 专项视觉回归均通过，三列翻译状态、备选浮层及 1366/1440/1920px 均无重叠、遮挡和横向溢出。
+- Windows 安装包为 `dist/PDF Translation Reader Setup 0.1.35.exe`（157,110,569 bytes，149.83 MiB，SHA-256 `582B196511CB6BDA17D7C7AEF87B5D71FCABFF6251D8ED77B30D934757755C24`）。确认新包和包内界面后已删除 0.1.34 安装器与 blockmap，并从最新 `win-unpacked` 启动隔离热预览。
+
 ## 2026-07-16 arXiv 检索与渐进翻译链路修复（0.1.34）
 
 - 修复短缩写被当作普通子串的问题：`world model` 不再因为 `world` 内含 `rl` 而被错误追加强化学习条件，探索模式下 `CompCert` 也不会误触发 MPC / receding-horizon 扩展。两到三字符科研缩写现在只按完整 token 命中。
@@ -959,8 +968,8 @@ $env:VISUAL_CHECK_PACKAGED='1'; $env:VISUAL_CHECK_SCENARIO='scientific-plot'; np
 当前 Windows 安装包：
 
 ```text
-dist/PDF Translation Reader Setup 0.1.17.exe
-SHA256 16C9A33F31C07DFB17253D2085323DBC4D07FF21149CCFC0F2CC1759F732D6BA
+dist/PDF Translation Reader Setup 0.1.35.exe
+SHA256 582B196511CB6BDA17D7C7AEF87B5D71FCABFF6251D8ED77B30D934757755C24
 ```
 
 ## 聚焦型 Research OS 界面

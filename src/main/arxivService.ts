@@ -8,8 +8,8 @@ import {
   type ArxivSearchServiceResult,
   buildArxivApiUrl,
   buildArxivCacheKey,
+  getUnmappedChineseArxivQuery,
   hasDeterministicChineseArxivQuery,
-  hasUnmappedChineseArxivQuery,
   isMojibakeTranslationText,
   normalizeArxivWhitespace,
   normalizeArxivSearchQuery,
@@ -260,11 +260,13 @@ export class ArxivService {
 
     const deterministicQuery = normalizedSearchQuery;
     const hasDeterministicQuery = hasDeterministicChineseArxivQuery(searchQuery);
-    const hasUnmappedQuery = hasUnmappedChineseArxivQuery(searchQuery);
+    const unmappedChineseQuery = getUnmappedChineseArxivQuery(searchQuery);
     let translatedQuery = '';
-    if (queryMode !== 'strict' && hasUnmappedQuery && this.translateSearchQueryToEnglish) {
+    if (queryMode !== 'strict' && unmappedChineseQuery && this.translateSearchQueryToEnglish) {
       try {
-        translatedQuery = sanitizeTranslatedSearchQuery(await this.translateSearchQueryToEnglish(searchQuery));
+        translatedQuery = sanitizeTranslatedSearchQuery(
+          await this.translateSearchQueryToEnglish(unmappedChineseQuery)
+        );
       } catch {
         translatedQuery = '';
       }
@@ -725,6 +727,7 @@ function applyLocalArxivSort(result: ArxivParsedSearchResult, request: ArxivSear
 function buildRequiredLocalTermGroups(searchQuery: string, queryMode?: ArxivQueryMode): string[][] {
   const normalized = normalizeArxivSearchQuery(searchQuery, queryMode).toLowerCase();
   const normalizedTokens = tokenizeLocalRankingQuery(normalized);
+  const groups: string[][] = [];
   const tactileFocusedTokens = new Set([
     'tactile',
     'haptic',
@@ -743,20 +746,21 @@ function buildRequiredLocalTermGroups(searchQuery: string, queryMode?: ArxivQuer
     /触觉感知|触觉传感|触觉|力觉|接触感知|接触丰富/u.test(searchQuery) ||
     isEnglishTactileOnly
   ) {
-    return [
-      [
-        'tactile',
-        'haptic',
-        'haptics',
-        'visuotactile',
-        'touch sensing',
-        'contact sensing',
-        'tactile sensing',
-        'tactile perception'
-      ]
-    ];
+    groups.push([
+      'tactile',
+      'haptic',
+      'haptics',
+      'visuotactile',
+      'touch sensing',
+      'contact sensing',
+      'tactile sensing',
+      'tactile perception'
+    ]);
   }
-  return [];
+  if (/人形|仿人/u.test(searchQuery) || normalizedTokens.includes('humanoid')) {
+    groups.push(['humanoid', 'humanoid robot', 'humanoid robotics']);
+  }
+  return groups;
 }
 
 function matchesRequiredTermGroups(paper: ArxivPaper, groups: string[][]): boolean {

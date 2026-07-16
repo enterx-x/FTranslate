@@ -504,7 +504,10 @@ export function buildArxivTranslationMetaPatch(
     translationMessage: result.message,
     translationEngine: result.engine,
     qualityStatus: result.qualityStatus,
-    translationElapsedMs: result.elapsedMs
+    translationElapsedMs: result.elapsedMs,
+    ...(result.titleZh && !isMojibakeTranslationText(result.titleZh)
+      ? { titleZh: result.titleZh }
+      : {})
   };
   if (result.status !== 'completed' && result.status !== 'cached') {
     return translationState;
@@ -1169,8 +1172,19 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         ...Object.fromEntries(batch.map((paper) => [paper.id, true]))
       }));
       try {
+        const pretranslatedTitleByStableId = Object.fromEntries(
+          batch.flatMap((paper) => {
+            const titleZh = getPaperMeta(paper, metaById).titleZh?.trim();
+            return titleZh ? [[paper.stableId, titleZh]] : [];
+          })
+        );
         const results = await window.electronAPI.translateArxivTitleAbstractBatch(
-          buildArxivTranslationBatchRequest(batch, priority, translationSessionId)
+          buildArxivTranslationBatchRequest(
+            batch,
+            priority,
+            translationSessionId,
+            pretranslatedTitleByStableId
+          )
         );
         if (!searchSessionController.isCurrent(translationSessionId)) {
           return;

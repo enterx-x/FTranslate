@@ -87,6 +87,33 @@ const noisyTactileFeed = `<?xml version="1.0" encoding="UTF-8"?>
   </entry>
 </feed>`;
 
+const humanoidTactileFeed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <opensearch:totalResults>2</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <opensearch:itemsPerPage>2</opensearch:itemsPerPage>
+  <entry>
+    <id>http://arxiv.org/abs/2607.00001v1</id>
+    <updated>2026-07-01T00:00:00Z</updated>
+    <published>2026-07-01T00:00:00Z</published>
+    <title>Tactile Sensors for Knitted Textile Interfaces</title>
+    <summary>We study tactile sensing and pressure detection in knitted electronic textiles.</summary>
+    <author><name>Textile Author</name></author>
+    <category term="cs.HC" />
+    <link title="pdf" href="http://arxiv.org/pdf/2607.00001v1" rel="related" type="application/pdf" />
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2607.00002v1</id>
+    <updated>2026-06-30T00:00:00Z</updated>
+    <published>2026-06-30T00:00:00Z</published>
+    <title>Whole-Body Tactile Sensing for Humanoid Robots</title>
+    <summary>We develop haptic perception and tactile control for humanoid robot manipulation.</summary>
+    <author><name>Humanoid Author</name></author>
+    <category term="cs.RO" />
+    <link title="pdf" href="http://arxiv.org/pdf/2607.00002v1" rel="related" type="application/pdf" />
+  </entry>
+</feed>`;
+
 const request: ArxivSearchRequest = {
   searchQuery: 'loco manipulation',
   category: 'cs.RO',
@@ -264,13 +291,15 @@ describe('ArxivService', () => {
 
   it('translates only when a mapped Chinese query still contains an unmapped concept', async () => {
     let queryTranslationCount = 0;
+    let queryTranslationInput = '';
     let requestedExpression = '';
     const service = new ArxivService({
       dbPath: path.join(tempDir, 'arxiv.sqlite'),
       minRequestGapMs: 0,
-      translateSearchQueryToEnglish: async () => {
+      translateSearchQueryToEnglish: async (value) => {
         queryTranslationCount += 1;
-        return 'reinforcement learning fault diagnosis';
+        queryTranslationInput = value;
+        return 'fault diagnosis';
       },
       fetchImpl: async (url) => {
         requestedExpression = new URL(String(url)).searchParams.get('search_query') ?? '';
@@ -285,11 +314,12 @@ describe('ArxivService', () => {
       );
 
       expect(queryTranslationCount).toBe(1);
+      expect(queryTranslationInput).toBe('故障诊断');
       expect(requestedExpression).toContain('reinforcement learning');
       expect(requestedExpression).toContain('fault');
       expect(requestedExpression).toContain('diagnosis');
       expect(requestedExpression).not.toContain('故障诊断');
-      expect(result.translatedQuery).toBe('reinforcement learning fault diagnosis');
+      expect(result.translatedQuery).toBe('fault diagnosis');
     } finally {
       service.close();
     }
@@ -442,6 +472,33 @@ describe('ArxivService', () => {
       );
 
       expect(result.papers.map((paper) => paper.stableId)).toEqual(['2301.00003']);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('requires both humanoid and tactile concepts when locally filtering concise Chinese queries', async () => {
+    const service = new ArxivService({
+      dbPath: path.join(tempDir, 'arxiv.sqlite'),
+      minRequestGapMs: 0,
+      fetchImpl: async () => new Response(humanoidTactileFeed, { status: 200 })
+    });
+
+    try {
+      const result = await service.search(
+        {
+          searchQuery: '人形触觉',
+          category: '',
+          start: 0,
+          maxResults: 10,
+          sortBy: 'comprehensive',
+          sortOrder: 'descending'
+        },
+        'humanoid-tactile-rank'
+      );
+
+      expect(result.papers.map((paper) => paper.stableId)).toEqual(['2607.00002']);
+      expect(result.itemsPerPage).toBe(1);
     } finally {
       service.close();
     }

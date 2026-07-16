@@ -559,6 +559,28 @@ describe('ArxivSearchPage result display', () => {
     expect(buildArxivTranslationUiApplication(failed, 8, 9)).toBeNull();
   });
 
+  it('retains a usable partial title after an abstract quality failure without switching to Chinese', () => {
+    const failed = {
+      stableId: paper.stableId,
+      titleZh: '机器人导航的安全强化学习',
+      abstractZh: '',
+      engine: 'nllb-ct2-int8' as const,
+      status: 'failed' as const,
+      cacheHit: false,
+      qualityStatus: 'failed' as const,
+      elapsedMs: 80,
+      message: '摘要质量门禁未通过'
+    };
+
+    expect(buildArxivTranslationUiApplication(failed, 9, 9)).toMatchObject({
+      shouldShowChinese: false,
+      patch: {
+        titleZh: '机器人导航的安全强化学习',
+        translationStatus: 'failed'
+      }
+    });
+  });
+
   it('keeps only read, translate, and reading-queue actions primary on result cards', () => {
     expect(ARXIV_CARD_PRIMARY_ACTIONS).toEqual(['查看摘要', '翻译', '加入阅读队列']);
     expect(ARXIV_CARD_PRIMARY_ACTIONS).not.toContain('加入 PPT');

@@ -1,5 +1,38 @@
 # PLAN.md
 
+## 2026-07-16 arXiv 复合概念与残缺缓存修复（0.1.35）
+
+### 当前结论
+
+- 检索质量的剩余根因不是 arXiv API 本身：中文词表按顺序替换时，generic physics / robot / vision / control 会抢先消费专用术语；语义构造器又把 PINN 等“全称 + 缩写”拆成多个顶层条件，造成过宽或过窄两种相反错误。
+- 0.1.34 虽能识别混合中文的未知片段，但仍把整条原查询交给模型，已经确定的概念可能再次被改写。`人形触觉`的远端 AND 已正确，本地旧缓存过滤却只要求 tactile，仍会重新出现针织触觉等无关结果。
+- 翻译服务把“标题有效、摘要英文回声”视作可缓存完成项，导致后续点击永远命中残缺缓存；即使质量门禁拒绝摘要，renderer 也会丢掉已合格标题，下一次重复翻译全部内容。
+- 最小闭环是“专用词优先 → 全称/缩写同组 → 只翻译未知片段 → 远端与本地概念门禁一致 → 摘要完整才缓存 → 部分标题可复用”，不更换模型、不增加 AI 润色调用。
+
+### 已完成操作
+
+1. 调整中文查询词表顺序并拆分 VLA、VLM、multimodal；PINN 改为完整 token 匹配，新增 PINN/GNN/LLM/NLP/UAV/VLA/VLM 的同概念别名组。
+2. 新增未映射中文片段提取，查询翻译只接收剩余片段；已确定的强化学习、机器人、控制等概念不再重复进入模型。
+3. 本地综合排序为中文 `人形触觉`同时增加 humanoid 与 tactile 必需组，保证新请求、正常缓存和过期缓存回退使用一致的概念约束。
+4. 摘要不可用时不写缓存；读取旧 SQLite 时主动删除标题单独缓存并重新执行完整翻译。失败结果保留可用标题，renderer 写回部分标题，整页重试也传入 `pretranslatedTitleZh` 以跳过重复标题推理。
+5. 检查了翻译队列真实调用链：当前没有启用自动预览翻译，运行中的 preview 阻塞 foreground 不是可复现产品路径，因此未做无依据的抢占式重构。未合并科研绘图工作树，两个受保护的未跟踪设计目录保持不变。
+
+### 当前验证
+
+- 失败用例覆盖：复合中文优先级、全称/缩写别名、`spinning`边界、VLA/VLM 分离、未知片段输入、旧标题单独缓存、摘要英文回声、失败标题保留和人形触觉旧缓存过滤。
+- arXiv/翻译定向测试 5 个文件、131 项通过；`npm run build`通过 102 个测试文件、681 项测试、两套 TypeScript、Vite renderer 与 Electron main。
+- 源码版 `VISUAL_CHECK_SCENARIO=arxiv` 通过；人工复核 `arxiv-translation-progress.png`、`arxiv-search-results-1366.png`、`arxiv-shortlist-popover.png`，翻译状态附着卡片、三列可扫描、备选浮层不遮挡分页或详情，未见重叠、截断和横向溢出。
+- `npm run dist` 通过，完成 102 个测试文件、681 项测试、两套 TypeScript、Vite renderer、Electron main、win-unpacked 与 NSIS；仅保留既有的大 chunk、缺少 package author 和 Electron Builder 重复依赖警告。
+- 安装包内 `VISUAL_CHECK_SCENARIO=arxiv` 通过；人工复核 `arxiv-translation-progress.png` 与 `arxiv-search-results-1366.png`，卡片翻译阶段、三列结果、详情栏及分页均无重叠、遮挡或横向溢出。
+- 最终安装包为 `dist/PDF Translation Reader Setup 0.1.35.exe`（157,110,569 bytes，149.83 MiB，SHA-256 `582B196511CB6BDA17D7C7AEF87B5D71FCABFF6251D8ED77B30D934757755C24`）。确认产物后仅清理同目录下 0.1.34 安装器与 blockmap，目前只保留 0.1.35 安装器和 blockmap。
+- 打包前确认当前分支不是 13 号分支且没有其他子代理运行，按用户规则未合并 `scientific-plot-ui-refactor`。已从最新 `dist/win-unpacked` 启动可见热预览（PID 32428、CDP 9455、独立 profile `.tmp-visual-check/hot-preview-0.1.35-20260716`），进程命令行与调试端点均已验证。
+
+### 问题台账与剩余风险
+
+- 未映射的新兴中文术语仍依赖本地查询翻译；失败时会保留确定性概念，不会用残缺英文伪装完整查询。
+- NLLB/Argos 对新论文方法名仍可能产生措辞偏差；本轮提高的是概念边界、缓存完整性和重试效率，没有引入用户已否决的“机翻后 AI 润色”。
+- arXiv 官方结果总数仍是远端查询总数，本地概念门禁可能让当前页实际卡片数更少；界面应继续同时显示远端总数与本页数量，避免把两者混为一谈。
+
 ## 2026-07-16 arXiv 检索与渐进翻译链路修复（0.1.34）
 
 ### 当前结论

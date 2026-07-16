@@ -287,12 +287,15 @@ export class ArxivTranslationService {
 
           const titleZh = evaluated.titleUsable ? evaluated.titleZh : '';
           const abstractZh = evaluated.abstractUsable ? evaluated.abstractZh : '';
-          if (!titleZh && !abstractZh) {
-            results[item.index] = buildFailedTranslationResult(
-              item.stableId,
-              '本地翻译返回了乱码或空结果，已丢弃该缓存并保留英文。',
-              'failed'
-            );
+          if (!abstractZh) {
+            results[item.index] = {
+              ...buildFailedTranslationResult(
+                item.stableId,
+                '本地翻译未生成可用的中文摘要，已保留快速标题但未写入缓存，可重新翻译。',
+                'failed'
+              ),
+              titleZh
+            };
             return;
           }
 
@@ -460,7 +463,10 @@ export class ArxivTranslationService {
     const abstractZh = repairAcademicTranslation(row.source_summary, normalizeTranslatedText(row.abstract_zh), {
       mode: 'abstract'
     });
-    if (!titleZh && !abstractZh) {
+    // A cached title without a usable abstract traps every later click in a permanent
+    // cache hit. Keep abstract-only rows because the fast title path can upgrade them,
+    // but evict legacy title-only rows so the full translation can be retried.
+    if (!abstractZh) {
       this.db.prepare(`DELETE FROM arxiv_translation_cache WHERE cache_key = ?`).run(cacheKey);
       return null;
     }

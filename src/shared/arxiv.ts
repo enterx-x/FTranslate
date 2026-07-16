@@ -165,8 +165,11 @@ const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
   [/图神经网络|图网络/gu, 'graph neural network GNN'],
   [/扩散模型|扩散生成/gu, 'diffusion model generative model'],
   [/生成模型/gu, 'generative model'],
+  [/视觉语言动作(?:模型)?/gu, 'vision language action VLA'],
+  [/视觉语言(?:模型)?/gu, 'vision language model VLM'],
   [/大语言模型|语言模型/gu, 'large language model LLM'],
   [/基础模型|基座模型/gu, 'foundation model'],
+  [/机器人操作|操作任务/gu, 'robot manipulation manipulation'],
   [/机器人导航|导航机器人/gu, 'robot navigation robotic navigation mobile robot navigation'],
   [/软体机器人/gu, 'soft robot soft robotics'],
   [/人形机器人|仿人机器人/gu, 'humanoid robot humanoid robotics'],
@@ -177,11 +180,12 @@ const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
   [/机器人|机械臂/gu, 'robot robotics manipulator'],
   [/机器(?!人|学习)|机械(?!臂)/gu, 'machine robot robotics mechanical'],
   [/柔顺操作|柔顺操控/gu, 'compliant manipulation compliant control'],
+  [/操纵|操控/gu, 'robot manipulation manipulation'],
   [/多指抓取|灵巧抓取|抓取/gu, 'dexterous grasping robotic grasping'],
   [/灵巧手/gu, 'dexterous hand robotic hand'],
   [/可变形物体|柔性物体/gu, 'deformable object manipulation'],
-  [/操作任务|机器人操作|操纵|操控/gu, 'robot manipulation manipulation'],
   [/触觉感知|触觉传感|触觉|力觉|接触感知|接触丰富/gu, 'haptic tactile haptics tactile sensing tactile perception force feedback touch sensing contact sensing visuotactile'],
+  [/多模态/gu, 'multimodal'],
   [/视觉感知|计算机视觉|视觉/gu, 'computer vision visual perception vision'],
   [/点云|三维点云/gu, 'point cloud 3D point cloud'],
   [/姿态估计|位姿估计/gu, 'pose estimation state estimation'],
@@ -191,15 +195,14 @@ const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
   [/路径规划|运动规划|轨迹规划/gu, 'path planning motion planning trajectory planning navigation'],
   [/轨迹优化/gu, 'trajectory optimization'],
   [/最优控制/gu, 'optimal control'],
+  [/控制屏障函数|安全屏障|屏障函数/gu, 'control barrier function CBF safety constraint'],
+  [/模型预测控制/gu, 'model predictive control MPC'],
   [/控制系统|控制器|控制/gu, 'control system controller control'],
   [/具身智能|具身/gu, 'embodied intelligence embodied AI'],
+  [/物理信息神经网络|\bPINNs?\b/giu, 'physics-informed neural network PINN'],
   [/物理信息|物理约束|物理先验/gu, 'physics-informed physical constraint physics prior'],
   [/神经网络/gu, 'neural network'],
   [/世界模型/gu, 'world model'],
-  [/视觉语言动作|视觉语言|多模态/gu, 'vision language action VLA vision language model VLM multimodal'],
-  [/控制屏障函数|安全屏障|屏障函数/gu, 'control barrier function CBF safety constraint'],
-  [/模型预测控制/gu, 'model predictive control MPC'],
-  [/物理信息神经网络|PINN/giu, 'physics-informed neural network PINN'],
   [/移动操作|运动操作|locomanipulation|loco-manipulation/giu, 'loco-manipulation mobile manipulation'],
   [/优化算法|优化/gu, 'optimization algorithm optimization'],
   [/材料科学|材料/gu, 'materials science materials'],
@@ -238,6 +241,20 @@ const EXPLORE_QUERY_SYNONYMS: Array<[string[], string]> = [
   [['control barrier function', 'cbf'], 'safety filter safe control'],
   [['model predictive control', 'mpc'], 'receding horizon control']
 ];
+
+const ARXIV_QUERY_ACRONYM_TOKENS = new Set([
+  'ai',
+  'cbf',
+  'gnn',
+  'llm',
+  'mpc',
+  'nlp',
+  'pinn',
+  'rl',
+  'uav',
+  'vla',
+  'vlm'
+]);
 
 const KNOWN_ARXIV_QUERY_PHRASES = [
   'reinforcement learning',
@@ -399,8 +416,12 @@ export function hasDeterministicChineseArxivQuery(value: string): boolean {
 }
 
 export function hasUnmappedChineseArxivQuery(value: string): boolean {
+  return Boolean(getUnmappedChineseArxivQuery(value));
+}
+
+export function getUnmappedChineseArxivQuery(value: string): string {
   const { remaining } = collectChineseQueryExpansions(normalizeArxivWhitespace(value), 'balanced');
-  return /[\u3400-\u9fff]/u.test(remaining);
+  return normalizeArxivWhitespace(remaining.match(/[\u3400-\u9fff]+/gu)?.join(' ') ?? '');
 }
 
 function collectChineseQueryExpansions(
@@ -577,6 +598,36 @@ function buildSemanticTitleAbstractGroups(normalized: string, compact = false): 
       tokenizeArxivQuery(term).forEach((token) => consumedTokens.add(token));
     });
   };
+
+  const addAliasGroup = (needles: string[], aliases: string[]): void => {
+    if (!containsAny(normalized, needles)) {
+      return;
+    }
+    addGroup(
+      orClauses(aliases.map((alias) => buildFieldPairClause(alias, alias.includes(' ')))),
+      needles
+    );
+  };
+
+  addAliasGroup(
+    ['physics-informed neural network', 'physics informed neural network', 'pinn'],
+    ['physics-informed neural network', 'physics informed neural network', 'pinn']
+  );
+  addAliasGroup(['graph neural network', 'gnn'], ['graph neural network', 'gnn']);
+  addAliasGroup(['large language model', 'llm'], ['large language model', 'llm']);
+  addAliasGroup(['natural language processing', 'nlp'], ['natural language processing', 'nlp']);
+  addAliasGroup(
+    ['unmanned aerial vehicle', 'uav', 'drone', 'aerial robot'],
+    ['unmanned aerial vehicle', 'uav', 'drone', 'aerial robot']
+  );
+  addAliasGroup(
+    ['vision language action', 'vision-language-action', 'vla'],
+    ['vision language action', 'vision-language-action', 'vla']
+  );
+  addAliasGroup(
+    ['vision language model', 'vision-language model', 'vlm'],
+    ['vision language model', 'vision-language model', 'vlm']
+  );
 
   if (
     containsAny(normalized, [
@@ -755,6 +806,7 @@ function buildSemanticTitleAbstractGroups(normalized: string, compact = false): 
   if (
     !containsAny(normalized, ['robot navigation', 'robotic navigation', 'mobile robot navigation']) &&
     !containsAny(normalized, ['humanoid']) &&
+    !consumedTokens.has('robot') &&
     containsAny(normalized, ['robot', 'robotic', 'robots', 'robotics', 'manipulator', 'humanoid'])
   ) {
     addGroup(
@@ -806,7 +858,7 @@ function containsAny(value: string, needles: string[]): boolean {
   );
   return needles.some((needle) => {
     const normalizedNeedle = needle.toLowerCase();
-    return /^[a-z0-9.+-]{2,3}$/iu.test(normalizedNeedle)
+    return ARXIV_QUERY_ACRONYM_TOKENS.has(normalizedNeedle) || /^[a-z0-9.+-]{2,3}$/iu.test(normalizedNeedle)
       ? tokens.has(normalizedNeedle)
       : normalizedValue.includes(normalizedNeedle);
   });
