@@ -688,10 +688,24 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 完整验证：`npm run build` 与 `npm run dist` 通过（84 个测试文件、501 项测试、TypeScript、桌面 renderer/Electron 与 Windows NSIS 安装包）；`npm run visual:check`、`npm run visual:check:mobile` 通过；`npm run ios:sync` 已把最新移动资源同步至 iOS 工程；`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。`npm run dist` 首次在受限沙箱内因 `rcedit-x64.exe: Access is denied` 失败，移出沙箱后同一命令成功，确认不是源码或安装包配置错误。
 - 公网发布：Vercel 生产部署 `dpl_GxyM7FmcTeDRjVgX1nkcHmbLwGDW` 已重新绑定 `https://ftranslate-mobile.vercel.app`。直接对固定生产地址运行移动回归，完成真实 arXiv 检索/PDF 下载入库、逐词 OCR 伪输入纠错、退出切换、整页刷新后恢复原 PDF、6 个双语块与 `visual-key`，全部通过。
 
+### 2026-07-16 导入后全文 OCR 与手动全文翻译分离
+
+- 用户最终确认的交互是：导入或保存 PDF 后立即在当前设备后台 OCR 所有页面，但导入阶段不翻译；只有进入阅读页并明确点击“全文翻译”后，才调用 DeepSeek/OpenAI-compatible 纯文本接口。
+- 实现：`MobilePaper` 新增带版本的本地 OCR 状态；应用级单任务队列逐篇、逐页 OCR，识别完一页即替换并保存该页原文，再写入页数和已处理页集合。任务不依赖阅读器挂载，切换原 PDF、退出阅读器或进入其他入口仍继续；旧版缓存会按 OCR 版本迁移并从实际首个缺页恢复。
+- 翻译边界：后台 OCR 路径不读取 API Key，也不调用翻译函数。阅读器仅在 OCR 状态为完成且用户点击“全文翻译”后，按页排序、页内逐段翻译；每段立即落盘，因此每页完成时该页结果已经完整缓存，中止或失败不会丢失前页。
+- 段落修复：过滤 `EE` 等 1–3 字母孤立大写标签、纯页码和 `age manipulation of` 这类无结束标点的短小写裁断片段；保留合法标题、公式、图注，并继续使用整页文本纠正“一词一段”和行尾连字符。
+- UI：论文库显示“等待 OCR / 正在 OCR / OCR 已完成 / OCR 失败”；OCR 完成且尚无译文时显示“翻译全文”，不再为每个原文段落放置常驻翻译按钮。阅读器明确提示 OCR 阶段不调用 DeepSeek。
+- 自动验证：新增 OCR 噪声过滤、OCR 页替换和状态迁移测试；`npm run build` 通过（84 个测试文件、503 项测试）。先执行 `npm run build:mobile` 后，`npm run visual:check:mobile` 通过，并明确断言扫描 PDF 导入 OCR 前后翻译请求数保持不变、切换/退出后 3 页 6 个原文块仍恢复、点击“全文翻译”后才新增 6 次纯文本请求、图片请求始终为 0。
+- 视觉对抗式审查：人工检查 `.tmp-mobile-visual-check/08a-reader-scanned-ocr-running-390x844.png`、`08b-reader-scanned-ocr-only-390x844.png`、`08b-reader-scanned-bilingual-390x844.png` 和 `06-library-paper-managed-390x844.png`；正文保持 17–19px 小说式流式排版，无 `EE`、纯页码或短裁断片段独立成段，无段落按钮、横向溢出和模式切换白屏。检查发现翻译完成状态会被 OCR 完成提示覆盖，已移除错误依赖并改为保留翻译完成状态。
+- 桌面视觉：`npm run visual:check` 首次因 CDP `Runtime.evaluate` 瞬时超时退出；确认无残留 Electron/Node 进程后同一命令重跑通过，未发现本次移动改动破坏桌面页面。
+- 交付验证：`npm run dist` 通过，Windows NSIS 安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,361,166 bytes，SHA-256 为 `DF15C14B12FDC25C8090FA778D2F2365FEAED5D1E58E00D99D6B5A3E43E0E0CB`；`npm run ios:sync` 通过，最新移动网页和 3 个 Capacitor 插件已同步到保留的 iOS 工程；`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。
+- 公网发布：Vercel 生产部署 `dpl_5dWgyBK6gSSk6Atwr52oJR9nT2iJ` 已重新绑定固定地址 `https://ftranslate-mobile.vercel.app`。对该固定地址带版本参数执行完整移动回归通过，包含真实 arXiv 检索、同源 PDF 下载入库、导入 OCR 零翻译请求、点击全文翻译后 6 次纯文本请求、退出和整页刷新恢复。
+
 ### 问题台账
 
 | 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
 | --- | --- | --- | --- | --- |
+| 2026-07-16 | 导入 PDF 后不应自动翻译；应先 OCR 全文，用户点击“全文翻译”后才开始 | 旧扫描件流程把进入连续双语同时当作 OCR 和翻译启动动作，OCR 与 DeepSeek 状态耦合 | 已拆成应用级后台全文 OCR 与阅读器手动全文翻译两阶段；自动化断言 OCR 阶段翻译请求为 0，点击后才按页翻译 | 部署后用原问题 PDF 在 iPhone Safari 真机导入，观察长文 OCR 的耗时、发热和锁屏/切后台后的 WebKit 持续性 |
 | 2026-07-16 | API Key 刷新后丢失，导入/译文缓存缺少明确保证，OCR 出现一词一段或断词 | 配置序列化主动排除 Key；OCR 无条件信任碎片化版面段落 | Key 改为本机 Preferences 持久化；PDF/译文恢复纳入刷新回归；OCR 对逐词结果退回整页自然段并修复跨碎片连字符 | 真机用原问题 PDF 重新 OCR 一页，确认真实 Tesseract 输出能恢复为完整自然段；不要清除 Safari 网站数据 |
 | 2026-07-15 | Vercel CLI 尚未获得部署授权 | 本机没有既有 Vercel 凭据，首次部署必须由用户完成 OAuth 登录 | 已解决：完成 OAuth 并部署到 `https://ftranslate-mobile.vercel.app` | 后续在已关联项目中执行 `npx vercel --prod` 更新同一生产地址 |
 | 2026-07-15 | iPhone Safari 存入 arXiv 论文时报 `BlobURLs are not yet supported` | Capacitor Filesystem 网页实现把 Blob 交给 IndexedDB，Safari 无法持久化该 Blob URL | 已改为独立 IndexedDB `ArrayBuffer` 存储，本地 Chromium 导入/读取闭环通过 | 重新部署后由 iPhone Safari 再保存同一论文，确认真机 WebKit 与浏览器配额行为 |

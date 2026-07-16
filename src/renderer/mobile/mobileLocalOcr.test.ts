@@ -69,6 +69,30 @@ The controller preserves the original paragraph while translating it.`, [
     ]);
   });
 
+  it('drops isolated OCR labels, page numbers, and cropped lowercase fragments', () => {
+    expect(extractLocalOcrParagraphs(`EE
+
+System enables versatile, contact-rich, and dexterous humanoid manipulation.
+
+4
+
+age manipulation of`, [
+      {
+        paragraphs: [
+          { text: 'EE' },
+          { text: 'System enables versatile, contact-rich, and dexterous humanoid manipulation.' },
+          { text: '4' },
+          { text: 'age manipulation of' }
+        ]
+      }
+    ])).toEqual([
+      {
+        type: 'paragraph',
+        original: 'System enables versatile, contact-rich, and dexterous humanoid manipulation.'
+      }
+    ]);
+  });
+
   it('builds stable ordered OCR blocks without pretending they are translated', () => {
     const blocks = buildLocalOcrBlocks(2, [
       { type: 'heading', original: 'Methods' },

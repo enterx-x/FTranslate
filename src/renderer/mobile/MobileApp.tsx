@@ -5,6 +5,11 @@ import { MobileBottomNav, type MobileView } from './MobileBottomNav';
 import { MobileLibraryScreen } from './MobileLibraryScreen';
 import { MobileReaderScreen } from './MobileReaderScreen';
 import {
+  buildCachedLocalOcrBlocks,
+  recognizePdfPagesLocally,
+  resolveLocalOcrResumeState
+} from './mobileLocalOcr';
+import {
   downloadPdfFile,
   loadMobileLibrary,
   loadPaperTranslations,
@@ -24,6 +29,8 @@ import {
   createLocalPaperId,
   isMobilePaperSourceEquivalent,
   mergeTranslationEntry,
+  MOBILE_LOCAL_OCR_VERSION,
+  replaceMobileOcrPageEntries,
   updateMobilePaper,
   upsertMobilePaper,
   type MobilePaper,
@@ -31,6 +38,11 @@ import {
   type MobileTranslationSession
 } from './mobileTypes';
 import './mobile.css';
+
+interface MobileOcrJob {
+  cancelled: boolean;
+  promise: Promise<void>;
+}
 
 function MobileApp() {
   const [view, setView] = useState<MobileView>('library');
@@ -44,6 +56,7 @@ function MobileApp() {
   const translationsRef = useRef<MobileTranslationEntry[]>([]);
   const translationCacheByPaperRef = useRef(new Map<string, MobileTranslationEntry[]>());
   const translationWriteQueuesRef = useRef(new Map<string, Promise<void>>());
+  const ocrJobsRef = useRef(new Map<string, MobileOcrJob>());
   const [translationSession, setTranslationSession] = useState<MobileTranslationSession>({
     baseURL: 'https://api.openai.com/v1',
     model: 'gpt-4.1-mini',
@@ -138,9 +151,7 @@ function MobileApp() {
       const nextLibrary = await commitLibrary((current) => upsertMobilePaper(current, paper));
       const cleanupWarning = await clearReplacedSourceData(existing, paper);
       await handleOpenPaper(nextLibrary.find((item) => item.id === paperId) ?? paper);
-      if (cleanupWarning) {
-        setNotice(cleanupWarning);
-      }
+      setNotice(cleanupWarning);
     } catch (error) {
       setNotice(`导入 PDF 失败：${formatError(error)}`);
     } finally {
@@ -174,9 +185,7 @@ function MobileApp() {
       const nextLibrary = await commitLibrary((current) => upsertMobilePaper(current, mobilePaper));
       const cleanupWarning = await clearReplacedSourceData(existing, mobilePaper);
       await handleOpenPaper(nextLibrary.find((item) => item.id === mobilePaper.id) ?? mobilePaper);
-      if (cleanupWarning) {
-        setNotice(cleanupWarning);
-      }
+      setNotice(cleanupWarning);
     } catch (error) {
       setNotice(`保存 arXiv 论文失败：${formatError(error)}`);
     } finally {
@@ -193,6 +202,11 @@ function MobileApp() {
     }
     setBusy(true);
     try {
+      const ocrJob = ocrJobsRef.current.get(paper.id);
+      if (ocrJob) {
+        ocrJob.cancelled = true;
+        await ocrJob.promise.catch(() => undefined);
+      }
       await commitLibrary((current) => current.filter((item) => item.id !== paper.id));
       if (activePaperId === paper.id) {
         activePaperIdRef.current = null;
@@ -255,9 +269,171 @@ function MobileApp() {
     }
   }
 
+  async function replacePaperOcrPage(
+    paperId: string,
+    page: number,
+    entries: MobileTranslationEntry[]
+  ): Promise<void> {
+    await waitForPaperTranslationWrites(paperId);
+    let cachedEntries = translationCacheByPaperRef.current.get(paperId);
+    if (!cachedEntries) {
+      cachedEntries = await loadPaperTranslations(paperId);
+    }
+    const next = replaceMobileOcrPageEntries(cachedEntries, page, entries);
+    await persistPaperTranslationSet(paperId, next);
+  }
+
+  async function persistPaperTranslationSet(
+    paperId: string,
+    next: MobileTranslationEntry[]
+  ): Promise<void> {
+    translationCacheByPaperRef.current.set(paperId, next);
+    if (activePaperIdRef.current === paperId) {
+      translationsRef.current = next;
+      setTranslations(next);
+    }
+    const previousWrite = translationWriteQueuesRef.current.get(paperId) ?? Promise.resolve();
+    const currentWrite = previousWrite
+      .catch(() => undefined)
+      .then(() => savePaperTranslations(paperId, next));
+    translationWriteQueuesRef.current.set(paperId, currentWrite);
+    try {
+      await currentWrite;
+    } finally {
+      if (translationWriteQueuesRef.current.get(paperId) === currentWrite) {
+        translationWriteQueuesRef.current.delete(paperId);
+      }
+    }
+  }
+
   async function waitForPaperTranslationWrites(paperId: string): Promise<void> {
     await translationWriteQueuesRef.current.get(paperId);
   }
+
+  function startPaperLocalOcr(paper: MobilePaper, restart = false): Promise<void> {
+    const existing = ocrJobsRef.current.get(paper.id);
+    if (existing) {
+      return existing.promise;
+    }
+    const job: MobileOcrJob = { cancelled: false, promise: Promise.resolve() };
+    job.promise = (async () => {
+      const resetCache = restart
+        || paper.localOcrVersion !== MOBILE_LOCAL_OCR_VERSION
+        || (paper.localOcrStatus === 'failed' && paper.visionOcrCompleted === true);
+      try {
+        await commitLibrary((current) => updateMobilePaper(current, paper.id, {
+          localOcrVersion: MOBILE_LOCAL_OCR_VERSION,
+          localOcrStatus: 'running',
+          localOcrError: undefined,
+          ...(resetCache ? {
+            visionOcrLastPage: undefined,
+            visionOcrCompleted: false,
+            visionOcrProcessedPages: []
+          } : {})
+        }));
+        const [sourceBytes, loadedEntries] = await Promise.all([
+          readPdfBytes(paper.sourcePdf),
+          loadPaperTranslations(paper.id)
+        ]);
+        let cachedEntries = translationCacheByPaperRef.current.get(paper.id) ?? loadedEntries;
+        if (resetCache) {
+          cachedEntries = cachedEntries.filter((entry) => entry.origin !== 'ocr' && entry.origin !== 'vision');
+          await persistPaperTranslationSet(paper.id, cachedEntries);
+        } else {
+          translationCacheByPaperRef.current.set(paper.id, cachedEntries);
+        }
+        const currentPaper = libraryRef.current.find((item) => item.id === paper.id) ?? paper;
+        const cachedBlocks = buildCachedLocalOcrBlocks(cachedEntries);
+        const resume = resolveLocalOcrResumeState({
+          textBlockCount: 0,
+          cachedBlocks,
+          pageCount: Math.max(currentPaper.pageCount ?? 0, 1),
+          processedPages: resetCache ? [] : currentPaper.visionOcrProcessedPages,
+          legacyLastPage: resetCache ? undefined : currentPaper.visionOcrLastPage,
+          legacyCompleted: resetCache ? false : currentPaper.visionOcrCompleted
+        });
+        const result = await recognizePdfPagesLocally(sourceBytes, {
+          startPage: resume.startPage,
+          isCancelled: () => job.cancelled,
+          onPageRecognized: async ({ page, pageCount: totalPages, blocks: pageBlocks }) => {
+            const entries = pageBlocks.map((item) => ({
+              sourceHash: item.block.sourceHash,
+              page: item.block.page,
+              original: item.block.original,
+              translation: '',
+              translatedAt: new Date().toISOString(),
+              model: '',
+              origin: 'ocr' as const,
+              order: item.order,
+              blockType: item.block.type
+            }));
+            await replacePaperOcrPage(paper.id, page, entries);
+            await commitLibrary((current) => {
+              const target = current.find((item) => item.id === paper.id);
+              const processedPages = Array.from(new Set([
+                ...(target?.visionOcrProcessedPages ?? []),
+                page
+              ])).sort((left, right) => left - right);
+              return updateMobilePaper(current, paper.id, {
+                pageCount: totalPages,
+                visionOcrLastPage: page,
+                visionOcrCompleted: false,
+                visionOcrProcessedPages: processedPages,
+                localOcrVersion: MOBILE_LOCAL_OCR_VERSION,
+                localOcrStatus: 'running',
+                localOcrError: undefined
+              });
+            });
+          }
+        });
+        if (result.cancelled) {
+          return;
+        }
+        const finalEntries = translationCacheByPaperRef.current.get(paper.id) ?? [];
+        const finalBlockCount = buildCachedLocalOcrBlocks(finalEntries).length;
+        await commitLibrary((current) => updateMobilePaper(current, paper.id, {
+          pageCount: result.pageCount,
+          visionOcrLastPage: Math.max(1, result.lastProcessedPage),
+          visionOcrCompleted: true,
+          localOcrVersion: MOBILE_LOCAL_OCR_VERSION,
+          localOcrStatus: finalBlockCount > 0 ? 'completed' : 'failed',
+          localOcrError: finalBlockCount > 0 ? undefined : '本地 OCR 没有识别到有效正文。'
+        }));
+      } catch (error) {
+        if (!job.cancelled) {
+          await commitLibrary((current) => updateMobilePaper(current, paper.id, {
+            localOcrVersion: MOBILE_LOCAL_OCR_VERSION,
+            localOcrStatus: 'failed',
+            localOcrError: formatError(error),
+            visionOcrCompleted: false
+          }));
+        }
+      } finally {
+        ocrJobsRef.current.delete(paper.id);
+        // Wake the single-job scheduler after the current paper releases its slot.
+        // A library commit normally renders before `finally`, while the job is still
+        // registered, so queued papers otherwise have no later state change to start them.
+        setLibrary((current) => [...current]);
+      }
+    })();
+    ocrJobsRef.current.set(paper.id, job);
+    return job.promise;
+  }
+
+  useEffect(() => {
+    if (busy || ocrJobsRef.current.size > 0) {
+      return;
+    }
+    const nextPaper = library.find((paper) => (
+      paper.localOcrVersion !== MOBILE_LOCAL_OCR_VERSION ||
+      !paper.localOcrStatus ||
+      paper.localOcrStatus === 'pending' ||
+      paper.localOcrStatus === 'running'
+    ));
+    if (nextPaper) {
+      void startPaperLocalOcr(nextPaper);
+    }
+  }, [busy, library]);
 
   const handleProgressChange = useCallback((page: number, pageCount: number) => {
     if (!activePaperId) {
@@ -270,25 +446,6 @@ function MobileApp() {
       return next;
     });
   }, [activePaperId]);
-
-  const handleOcrProgressChange = useCallback(async (lastPage: number, completed: boolean) => {
-    if (!activePaperId) {
-      return;
-    }
-    const normalizedPage = Math.max(1, Math.trunc(lastPage));
-    await commitLibrary((current) => {
-      const activePaper = current.find((paper) => paper.id === activePaperId);
-      const processedPages = Array.from(new Set([
-        ...(activePaper?.visionOcrProcessedPages ?? []),
-        normalizedPage
-      ])).sort((left, right) => left - right);
-      return updateMobilePaper(current, activePaperId, {
-        visionOcrLastPage: normalizedPage,
-        visionOcrCompleted: completed,
-        visionOcrProcessedPages: processedPages
-      });
-    });
-  }, [activePaperId, commitLibrary]);
 
   async function handleTranslationSessionChange(session: MobileTranslationSession): Promise<void> {
     if (!session.baseURL.trim() || !session.model.trim()) {
@@ -348,9 +505,8 @@ function MobileApp() {
               translationSession={translationSession}
               onBack={() => setView('library')}
               onProgressChange={handleProgressChange}
-              onOcrProgressChange={handleOcrProgressChange}
+              onRequestOcr={() => startPaperLocalOcr(activePaper)}
               onSaveTranslation={(entry) => handleSaveTranslations(activePaper.id, [entry])}
-              onSaveTranslations={(entries) => handleSaveTranslations(activePaper.id, entries)}
               onTranslationSessionChange={handleTranslationSessionChange}
             />
           </div>

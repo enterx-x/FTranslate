@@ -5,7 +5,9 @@ import {
   isMobilePaperSourceEquivalent,
   isTranslationEntryCurrent,
   mergeTranslationEntry,
+  MOBILE_LOCAL_OCR_VERSION,
   parseMobileLibrary,
+  replaceMobileOcrPageEntries,
   normalizeMobilePaperTags,
   sanitizeFileName,
   updateMobilePaper,
@@ -28,6 +30,8 @@ describe('mobile paper model', () => {
     expect(paper.title).toBe('robot-navigation');
     expect(paper.source).toBe('import');
     expect(paper.lastPage).toBe(1);
+    expect(paper.localOcrVersion).toBe(MOBILE_LOCAL_OCR_VERSION);
+    expect(paper.localOcrStatus).toBe('pending');
   });
 
   it('maps arXiv metadata into the mobile library record', () => {
@@ -103,8 +107,10 @@ describe('mobile paper model', () => {
     expect(merged.lastPage).toBe(1);
     expect(merged.pageCount).toBeUndefined();
     expect(merged.visionOcrLastPage).toBeUndefined();
-    expect(merged.visionOcrCompleted).toBeUndefined();
-    expect(merged.visionOcrProcessedPages).toBeUndefined();
+    expect(merged.visionOcrCompleted).toBe(false);
+    expect(merged.visionOcrProcessedPages).toEqual([]);
+    expect(merged.localOcrVersion).toBe(MOBILE_LOCAL_OCR_VERSION);
+    expect(merged.localOcrStatus).toBe('pending');
   });
 
   it('rejects malformed library JSON and sanitizes file names', () => {
@@ -212,5 +218,25 @@ describe('mobile translation cache', () => {
       origin: 'ocr'
     };
     expect(isTranslationEntryCurrent(entry, { model: 'deepseek-chat', baseURL: 'https://api.deepseek.com/v1' })).toBe(false);
+  });
+
+  it('replaces stale OCR fragments for one page without touching other pages or text entries', () => {
+    const stalePageOne: MobileTranslationEntry = {
+      sourceHash: 'stale-ee',
+      page: 1,
+      original: 'EE',
+      translation: 'EE',
+      translatedAt: '1',
+      model: 'm',
+      origin: 'ocr'
+    };
+    const pageTwo = { ...stalePageOne, sourceHash: 'page-two', page: 2, original: 'Page two.' };
+    const textLayer = { ...stalePageOne, sourceHash: 'text-layer', origin: 'text' as const };
+    const replacement = { ...stalePageOne, sourceHash: 'clean-page-one', original: 'A complete paragraph.', translation: '' };
+    expect(replaceMobileOcrPageEntries([stalePageOne, pageTwo, textLayer], 1, [replacement])).toEqual([
+      pageTwo,
+      textLayer,
+      replacement
+    ]);
   });
 });

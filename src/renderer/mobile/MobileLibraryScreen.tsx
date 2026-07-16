@@ -155,6 +155,9 @@ export function MobileLibraryScreen({
                       {paper.tags.length > 3 ? <i>+{paper.tags.length - 3}</i> : null}
                     </span>
                   ) : null}
+                  <small className={`mobile-paper-ocr is-${paper.localOcrStatus ?? 'pending'}`}>
+                    {formatPaperOcrStatus(paper)}
+                  </small>
                   <small>{formatPaperMeta(paper)}</small>
                 </span>
                 <span className="mobile-paper-chevron" aria-hidden="true">›</span>
@@ -220,4 +223,17 @@ function formatPaperMeta(paper: MobilePaper): string {
   return [authors, paper.year, paper.pageCount ? `${paper.pageCount} 页` : '', paper.arxivId ? `arXiv:${paper.arxivId}` : '本地导入']
     .filter(Boolean)
     .join(' · ');
+}
+
+function formatPaperOcrStatus(paper: MobilePaper): string {
+  if (paper.localOcrStatus === 'completed') {
+    return `OCR 已完成${paper.pageCount ? ` · ${paper.pageCount} 页` : ''} · 可手动全文翻译`;
+  }
+  if (paper.localOcrStatus === 'failed') {
+    return 'OCR 失败 · 打开论文后可从断点继续';
+  }
+  if (paper.localOcrStatus === 'running') {
+    return `正在本机 OCR · ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页`;
+  }
+  return '等待本机全文 OCR · 不会自动翻译';
 }

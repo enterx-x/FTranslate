@@ -275,7 +275,13 @@ try {
     const fragmentedParagraphs = (heading + ' ' + body).split(/\\s+/).map(word => ({ text: word }));
     return {
       text: heading + '\\n\\n' + body,
-      blocks: page === 1 ? [{ paragraphs: fragmentedParagraphs }] : [
+      blocks: page === 1 ? [{ paragraphs: fragmentedParagraphs }] : page === 2 ? [
+        { paragraphs: [{ text: heading }] },
+        { paragraphs: [{ text: 'EE' }] },
+        { paragraphs: [{ text: body }] },
+        { paragraphs: [{ text: '4' }] },
+        { paragraphs: [{ text: 'age manipulation of' }] }
+      ] : [
         { paragraphs: [{ text: heading }] },
         { paragraphs: [{ text: body }] }
       ]
@@ -513,6 +519,7 @@ try {
   await waitForSelector(client, '.mobile-bilingual-reader');
   console.log('Imported fallback PDF and opened reader.');
 
+  await waitForSelector(client, '.mobile-bilingual-intro button', 20000);
   await evaluate(client, `document.querySelector('.mobile-bilingual-intro button').click()`);
   const translationStartState = await waitForExpression(
     client,
@@ -576,10 +583,10 @@ try {
   })()`);
   await wait(350);
   const staleTranslationState = await evaluate(client, `(() => ({
-    button: document.querySelector('.mobile-block-original button')?.textContent ?? '',
+    paragraphActionCount: document.querySelectorAll('.mobile-block-original button').length,
     toolbar: document.querySelector('.mobile-bilingual-toolbar span')?.textContent ?? ''
   }))()`);
-  if (!staleTranslationState.button.includes('更新译文') || !staleTranslationState.toolbar.includes('待更新')) {
+  if (staleTranslationState.paragraphActionCount !== 0 || !staleTranslationState.toolbar.includes('待更新')) {
     throw new Error(`Mobile stale translation state was not exposed: ${JSON.stringify(staleTranslationState)}`);
   }
   await capture(client, '03b-reader-stale-translation-390x844.png');
@@ -704,6 +711,7 @@ try {
   await capture(client, '07-library-paper-deleted-390x844.png');
   console.log('Deleted the paper without an IndexedDB cursor transaction failure.');
 
+  const translationRequestsBeforeScannedOcr = translationMockState.textRequestCount;
   const scannedPdfBase64 = createScannedFallbackPdfBuffer().toString('base64');
   await evaluate(client, `(() => {
     const binary = atob(${JSON.stringify(scannedPdfBase64)});
@@ -716,13 +724,17 @@ try {
     input.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
   })()`);
-  await waitForSelector(client, '.mobile-ocr-empty', 20000);
-  await capture(client, '08a-reader-scanned-pdf-390x844.png');
-  await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[1].click()`);
-  await waitForSelector(client, '.mobile-pdf-reader');
-  await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[0].click()`);
+  await waitForSelector(client, '.mobile-reader-screen', 20000);
   await waitForExpression(client, `document.querySelectorAll('.mobile-bilingual-block').length >= 2 ? 'page-one' : ''`, 20000);
-  await waitForExpression(client, `document.querySelectorAll('.mobile-block-translation').length >= 2 ? 'page-one-translated' : ''`, 20000);
+  const pageOneOcrOnlyState = await evaluate(client, `(() => ({
+    blockCount: document.querySelectorAll('.mobile-bilingual-block').length,
+    translationCount: document.querySelectorAll('.mobile-block-translation').length,
+    toolbar: document.querySelector('.mobile-bilingual-toolbar')?.textContent ?? ''
+  }))()`);
+  if (pageOneOcrOnlyState.translationCount !== 0 || translationMockState.textRequestCount !== translationRequestsBeforeScannedOcr) {
+    throw new Error(`Import OCR triggered translation before user confirmation: ${JSON.stringify({ pageOneOcrOnlyState, translationMockState, translationRequestsBeforeScannedOcr })}`);
+  }
+  await capture(client, '08a-reader-scanned-ocr-running-390x844.png');
   await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[1].click()`);
   await waitForSelector(client, '.mobile-pdf-reader');
   await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[0].click()`);
@@ -733,7 +745,27 @@ try {
   await waitForSelector(client, '.mobile-reader-screen');
   await waitForExpression(client, `document.body.textContent.includes('Vision Safety Policy Page 1') ? 'page-one-preserved-after-reader-exit' : ''`);
   await waitForExpression(client, `document.querySelectorAll('.mobile-bilingual-block').length === 6 ? 'all-pages' : ''`, 20000);
+  const completedOcrOnlyState = await evaluate(client, `(() => ({
+    originals: Array.from(document.querySelectorAll('.mobile-block-original p, .mobile-block-original h2')).map(node => node.textContent),
+    translationCount: document.querySelectorAll('.mobile-block-translation').length,
+    toolbar: document.querySelector('.mobile-bilingual-toolbar')?.textContent ?? '',
+    intro: document.querySelector('.mobile-bilingual-intro')?.textContent ?? ''
+  }))()`);
+  if (
+    completedOcrOnlyState.translationCount !== 0 ||
+    translationMockState.textRequestCount !== translationRequestsBeforeScannedOcr ||
+    completedOcrOnlyState.originals.some(original => ['EE', '4', 'age manipulation of'].includes(original.trim())) ||
+    !completedOcrOnlyState.intro.includes('尚未调用翻译接口')
+  ) {
+    throw new Error(`Completed import OCR was not clean and translation-free: ${JSON.stringify({ completedOcrOnlyState, translationMockState, translationRequestsBeforeScannedOcr })}`);
+  }
+  await capture(client, '08b-reader-scanned-ocr-only-390x844.png');
+  await evaluate(client, `document.querySelector('.mobile-bilingual-toolbar button').click()`);
   await waitForExpression(client, `document.querySelectorAll('.mobile-block-translation').length === 6 ? 'all-pages-translated' : ''`, 20000);
+  await waitForExpression(client, `document.querySelector('.mobile-reader-status')?.textContent.includes('全文翻译完成') ? 'translation-finished' : ''`, 20000);
+  if (translationMockState.textRequestCount - translationRequestsBeforeScannedOcr < 6) {
+    throw new Error(`Full translation did not start after the explicit user click: ${JSON.stringify({ translationMockState, translationRequestsBeforeScannedOcr })}`);
+  }
   await capture(client, '08b-reader-scanned-bilingual-390x844.png');
   const novelReadingTypography = await evaluate(client, `(() => {
     const original = document.querySelector('.mobile-bilingual-block.is-paragraph .mobile-block-original p');
@@ -822,8 +854,8 @@ try {
     screenWidth: 390,
     screenHeight: 844
   });
-  console.log('Started scanned-PDF OCR directly by tapping Continuous bilingual from Original PDF.');
-  console.log('Preserved earlier OCR pages across PDF mode switching and a reader exit while later pages were still processing.');
+  console.log('Started full local OCR immediately after PDF import without sending a translation request.');
+  console.log('Preserved earlier OCR pages across PDF mode switching and a reader exit, then translated only after the explicit Full translation click.');
   console.log('Verified compact novel-style paragraph typography and reversible immersive scrolling without inline action chrome.');
   await evaluate(client, `document.querySelector('.mobile-reader-back').click()`);
   await waitForSelector(client, '.mobile-library-screen');
@@ -875,6 +907,7 @@ try {
     restoredVisionState.translations.length !== 6 ||
     !restoredVisionState.originals.some(original => original.includes('Page 1')) ||
     !restoredVisionState.originals.some(original => original.includes('Page 3')) ||
+    restoredVisionState.originals.some(original => ['EE', '4', 'age manipulation of'].includes(original.trim())) ||
     restoredVisionState.ocrPromptVisible ||
     translationMockState.imageRequestCount !== 0 ||
     translationMockState.textRequestCount < 6
@@ -882,7 +915,7 @@ try {
     throw new Error(`Scanned PDF local OCR / DeepSeek text flow failed: ${JSON.stringify({ restoredVisionState, translationMockState })}`);
   }
   console.log('Reloaded the web app and restored the imported PDF, all six bilingual blocks, and the locally cached API key.');
-  console.log('Rejected one-word OCR layout fragments and restored two coherent paragraphs per page.');
+  console.log('Rejected one-word OCR layout fragments, page numbers, and cropped lowercase fragments while restoring two coherent paragraphs per page.');
   console.log(`Mobile visual check passed. Screenshots: ${outputDir}`);
 } finally {
   client?.close();

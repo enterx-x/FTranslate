@@ -198,7 +198,8 @@ export function extractLocalOcrParagraphs(
   const fallbackParagraphs = splitOcrTextIntoParagraphStrings(text);
   const fragmentedLayout = looksLikeFragmentedOcrLayout(layoutParagraphs);
   const preferFallback = shouldPreferFallbackOcrParagraphs(layoutParagraphs, fallbackParagraphs, fragmentedLayout);
-  const candidates = preferFallback ? fallbackParagraphs : layoutParagraphs.length > 0 ? layoutParagraphs : fallbackParagraphs;
+  const candidates = (preferFallback ? fallbackParagraphs : layoutParagraphs.length > 0 ? layoutParagraphs : fallbackParagraphs)
+    .filter(isUsefulOcrCandidate);
   return repairOcrParagraphFragments(candidates, fragmentedLayout && !preferFallback)
     .map((original) => ({ original, type: classifyOcrParagraph(original) }))
     .slice(0, 120);
@@ -373,6 +374,25 @@ function canonicalOcrText(paragraphs: string[]): string {
 
 function countOcrWords(value: string): number {
   return value.trim().split(/\s+/u).filter(Boolean).length;
+}
+
+function isUsefulOcrCandidate(value: string): boolean {
+  const text = normalizeOcrParagraph(value);
+  if (!text || /^\d{1,5}$/u.test(text) || /^[A-Z]{1,3}$/u.test(text)) {
+    return false;
+  }
+  const words = text.split(/\s+/u).filter(Boolean);
+  const letters = text.match(/[A-Za-z]/gu) ?? [];
+  if (letters.length === 0) {
+    return /[=≈∑∫]/u.test(text);
+  }
+  if (words.length <= 3 && /^[a-z]/u.test(text) && !/[.!?;:]$/u.test(text)) {
+    return false;
+  }
+  if (words.length === 1 && letters.length < 4) {
+    return false;
+  }
+  return true;
 }
 
 function normalizeOcrParagraph(value: string): string {

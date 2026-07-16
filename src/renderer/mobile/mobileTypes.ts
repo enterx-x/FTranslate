@@ -2,6 +2,8 @@ import type { ArxivPaper } from '../../shared/arxiv';
 
 export type MobilePaperSource = 'import' | 'arxiv';
 export type MobilePdfKind = 'source' | 'translated';
+export type MobileLocalOcrStatus = 'pending' | 'running' | 'completed' | 'failed';
+export const MOBILE_LOCAL_OCR_VERSION = 3;
 
 export interface MobileStoredPdf {
   path: string;
@@ -34,6 +36,9 @@ export interface MobilePaper {
   visionOcrLastPage?: number;
   visionOcrCompleted?: boolean;
   visionOcrProcessedPages?: number[];
+  localOcrVersion?: number;
+  localOcrStatus?: MobileLocalOcrStatus;
+  localOcrError?: string;
 }
 
 export interface MobileTranslationEntry {
@@ -76,7 +81,11 @@ export function createImportedMobilePaper(input: {
     sourcePdf: input.storedPdf,
     addedAt: now,
     lastOpenedAt: now,
-    lastPage: 1
+    lastPage: 1,
+    localOcrVersion: MOBILE_LOCAL_OCR_VERSION,
+    localOcrStatus: 'pending',
+    visionOcrCompleted: false,
+    visionOcrProcessedPages: []
   };
 }
 
@@ -104,7 +113,11 @@ export function createArxivMobilePaper(input: {
     sourcePdf: input.storedPdf,
     addedAt: now,
     lastOpenedAt: now,
-    lastPage: 1
+    lastPage: 1,
+    localOcrVersion: MOBILE_LOCAL_OCR_VERSION,
+    localOcrStatus: 'pending',
+    visionOcrCompleted: false,
+    visionOcrProcessedPages: []
   };
 }
 
@@ -114,6 +127,9 @@ export function upsertMobilePaper(library: MobilePaper[], incoming: MobilePaper)
     return [incoming, ...library];
   }
   const sourceEquivalent = isMobilePaperSourceEquivalent(existing, incoming);
+  const resetLocalOcr = !sourceEquivalent || (
+    incoming.localOcrStatus === 'pending' && existing.localOcrVersion !== incoming.localOcrVersion
+  );
   return [
     {
       ...existing,
@@ -124,11 +140,16 @@ export function upsertMobilePaper(library: MobilePaper[], incoming: MobilePaper)
       addedAt: existing.addedAt,
       lastPage: sourceEquivalent ? existing.lastPage : incoming.lastPage,
       pageCount: sourceEquivalent ? existing.pageCount ?? incoming.pageCount : incoming.pageCount,
-      visionOcrLastPage: sourceEquivalent ? existing.visionOcrLastPage ?? incoming.visionOcrLastPage : incoming.visionOcrLastPage,
-      visionOcrCompleted: sourceEquivalent ? existing.visionOcrCompleted ?? incoming.visionOcrCompleted : incoming.visionOcrCompleted,
-      visionOcrProcessedPages: sourceEquivalent
+      visionOcrLastPage: sourceEquivalent && !resetLocalOcr ? existing.visionOcrLastPage ?? incoming.visionOcrLastPage : incoming.visionOcrLastPage,
+      visionOcrCompleted: sourceEquivalent && !resetLocalOcr ? existing.visionOcrCompleted ?? incoming.visionOcrCompleted : incoming.visionOcrCompleted,
+      visionOcrProcessedPages: sourceEquivalent && !resetLocalOcr
         ? existing.visionOcrProcessedPages ?? incoming.visionOcrProcessedPages
-        : incoming.visionOcrProcessedPages
+        : incoming.visionOcrProcessedPages,
+      localOcrVersion: incoming.localOcrVersion ?? existing.localOcrVersion,
+      localOcrStatus: resetLocalOcr
+        ? incoming.localOcrStatus
+        : existing.localOcrStatus ?? incoming.localOcrStatus,
+      localOcrError: resetLocalOcr ? incoming.localOcrError : existing.localOcrError
     },
     ...library.filter((paper) => paper.id !== incoming.id)
   ];
@@ -212,6 +233,20 @@ export function mergeTranslationEntry(
   incoming: MobileTranslationEntry
 ): MobileTranslationEntry[] {
   return [...entries.filter((entry) => entry.sourceHash !== incoming.sourceHash), incoming];
+}
+
+export function replaceMobileOcrPageEntries(
+  entries: MobileTranslationEntry[],
+  page: number,
+  incoming: MobileTranslationEntry[]
+): MobileTranslationEntry[] {
+  const normalizedPage = Math.max(1, Math.trunc(page));
+  return [
+    ...entries.filter((entry) => (
+      entry.page !== normalizedPage || (entry.origin !== 'ocr' && entry.origin !== 'vision')
+    )),
+    ...incoming
+  ];
 }
 
 export function isMobilePaperSourceEquivalent(left: MobilePaper, right: MobilePaper): boolean {
@@ -314,6 +349,20 @@ function normalizeMobilePaper(value: unknown): MobilePaper | null {
   const visionOcrProcessedPages = normalizePageNumbers(paper.visionOcrProcessedPages);
   if (visionOcrProcessedPages.length > 0) {
     normalized.visionOcrProcessedPages = visionOcrProcessedPages;
+  }
+  if (Number.isFinite(paper.localOcrVersion) && Number(paper.localOcrVersion) > 0) {
+    normalized.localOcrVersion = Math.trunc(Number(paper.localOcrVersion));
+  }
+  if (
+    paper.localOcrStatus === 'pending' ||
+    paper.localOcrStatus === 'running' ||
+    paper.localOcrStatus === 'completed' ||
+    paper.localOcrStatus === 'failed'
+  ) {
+    normalized.localOcrStatus = paper.localOcrStatus;
+  }
+  if (typeof paper.localOcrError === 'string' && paper.localOcrError.trim()) {
+    normalized.localOcrError = paper.localOcrError.trim().slice(0, 500);
   }
   return normalized;
 }

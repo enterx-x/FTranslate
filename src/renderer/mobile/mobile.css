@@ -386,6 +386,19 @@
   overflow: hidden;
 }
 
+.mobile-paper-copy .mobile-paper-ocr {
+  color: #536b94;
+  font-weight: 650;
+}
+
+.mobile-paper-copy .mobile-paper-ocr.is-running {
+  color: #315ca2;
+}
+
+.mobile-paper-copy .mobile-paper-ocr.is-failed {
+  color: #a44747;
+}
+
 .mobile-paper-tags {
   display: flex;
   min-width: 0;
@@ -989,10 +1002,6 @@
   text-wrap: pretty;
 }
 
-.mobile-block-original.has-action {
-  padding-right: 52px;
-}
-
 .mobile-bilingual-block.is-caption .mobile-block-original p {
   color: #444;
   font-size: clamp(15px, 4.2vw, 17px);
@@ -1005,19 +1014,6 @@
   border-block: 1px solid #d9dfe7;
   text-align: center;
   white-space: nowrap;
-}
-
-.mobile-block-original > button {
-  position: absolute;
-  top: 2px;
-  right: 0;
-  margin: 0;
-  padding: 5px 7px;
-  border: 0;
-  border-radius: 7px;
-  background: var(--mobile-accent-soft);
-  color: var(--mobile-accent);
-  font-size: 9px;
 }
 
 .mobile-block-translation {
