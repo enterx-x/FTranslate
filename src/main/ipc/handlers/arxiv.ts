@@ -37,6 +37,9 @@ function parseArxivTranslationPaper(
       stableId: candidate.stableId,
       title: candidate.title,
       summary: candidate.summary,
+      ...(typeof candidate.pretranslatedTitleZh === 'string' && candidate.pretranslatedTitleZh.trim()
+        ? { pretranslatedTitleZh: candidate.pretranslatedTitleZh.trim() }
+        : {}),
       ...(candidate.targetLanguage === 'zh' ? { targetLanguage: 'zh' as const } : {})
     };
   } catch {

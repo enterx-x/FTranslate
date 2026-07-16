@@ -262,6 +262,39 @@ describe('ArxivService', () => {
     }
   });
 
+  it('translates only when a mapped Chinese query still contains an unmapped concept', async () => {
+    let queryTranslationCount = 0;
+    let requestedExpression = '';
+    const service = new ArxivService({
+      dbPath: path.join(tempDir, 'arxiv.sqlite'),
+      minRequestGapMs: 0,
+      translateSearchQueryToEnglish: async () => {
+        queryTranslationCount += 1;
+        return 'reinforcement learning fault diagnosis';
+      },
+      fetchImpl: async (url) => {
+        requestedExpression = new URL(String(url)).searchParams.get('search_query') ?? '';
+        return new Response(sampleFeed, { status: 200 });
+      }
+    });
+
+    try {
+      const result = await service.search(
+        { ...request, searchQuery: '强化学习 故障诊断' },
+        'partially-mapped-query'
+      );
+
+      expect(queryTranslationCount).toBe(1);
+      expect(requestedExpression).toContain('reinforcement learning');
+      expect(requestedExpression).toContain('fault');
+      expect(requestedExpression).toContain('diagnosis');
+      expect(requestedExpression).not.toContain('故障诊断');
+      expect(result.translatedQuery).toBe('reinforcement learning fault diagnosis');
+    } finally {
+      service.close();
+    }
+  });
+
   it('bypasses SQLite cache when an explicit force refresh is requested', async () => {
     let fetchCount = 0;
     const service = new ArxivService({

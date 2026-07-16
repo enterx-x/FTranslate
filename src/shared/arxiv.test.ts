@@ -169,6 +169,36 @@ describe('arXiv query builder', () => {
     expect(expression).not.toContain('abs:*');
   });
 
+  it('does not treat acronym fragments inside ordinary words as research concepts', () => {
+    const worldModelExpression = getSearchExpression('world model');
+    const compCertExpression = getSearchExpression('CompCert verification', 'explore');
+
+    expect(worldModelExpression).toContain('world model');
+    expect(worldModelExpression).not.toContain('reinforcement learning');
+    expect(worldModelExpression).not.toMatch(/(?:ti|abs):rl\b/u);
+    expect(compCertExpression).not.toContain('model predictive control');
+    expect(compCertExpression).not.toContain('receding horizon control');
+    expect(compCertExpression).not.toMatch(/(?:ti|abs):mpc\b/u);
+    expect(compCertExpression).not.toMatch(/(?:ti|abs):(receding|horizon)\b/u);
+  });
+
+  it('normalizes reversed year bounds for both requests and cache identity', () => {
+    const baseRequest: ArxivSearchRequest = {
+      searchQuery: 'robot navigation',
+      category: '',
+      start: 0,
+      maxResults: 50,
+      sortBy: 'relevance',
+      sortOrder: 'descending'
+    };
+    const reversedRequest = { ...baseRequest, yearFrom: '2026', yearTo: '2024' };
+    const orderedRequest = { ...baseRequest, yearFrom: '2024', yearTo: '2026' };
+    const expression = new URL(buildArxivApiUrl(reversedRequest)).searchParams.get('search_query') ?? '';
+
+    expect(expression).toContain('submittedDate:[202401010000 TO 202612312359]');
+    expect(buildArxivCacheKey(reversedRequest)).toBe(buildArxivCacheKey(orderedRequest));
+  });
+
   it('treats repeated local translation artifacts as unusable text', () => {
     expect(isMojibakeTranslationText('互出强化代理互出')).toBe(true);
     expect(isMojibakeTranslationText('分析分析分析分析分析')).toBe(true);

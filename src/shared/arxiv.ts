@@ -389,13 +389,18 @@ export function normalizeArxivSearchQuery(
   }
   const normalized = balanced.toLowerCase();
   const exploreExpansions = EXPLORE_QUERY_SYNONYMS.flatMap(([needles, expansion]) =>
-    needles.some((needle) => normalized.includes(needle)) ? [expansion] : []
+    containsAny(normalized, needles) ? [expansion] : []
   );
   return normalizeArxivWhitespace([balanced, ...exploreExpansions].join(' '));
 }
 
 export function hasDeterministicChineseArxivQuery(value: string): boolean {
   return collectChineseQueryExpansions(normalizeArxivWhitespace(value), 'balanced').expansions.length > 0;
+}
+
+export function hasUnmappedChineseArxivQuery(value: string): boolean {
+  const { remaining } = collectChineseQueryExpansions(normalizeArxivWhitespace(value), 'balanced');
+  return /[\u3400-\u9fff]/u.test(remaining);
 }
 
 function collectChineseQueryExpansions(
@@ -431,12 +436,13 @@ export function buildArxivApiUrl(request: ArxivSearchRequest): string {
 
 export function buildArxivCacheKey(request: ArxivSearchRequest): string {
   const queryMode = resolveArxivQueryMode(request.queryMode);
+  const yearRange = normalizeArxivYearRange(request.yearFrom, request.yearTo);
   return JSON.stringify({
-    query_version: 'title-abstract-v6',
+    query_version: 'title-abstract-v7',
     query_mode: queryMode,
     search_query: `${request.category || 'all'}:${normalizeArxivSearchQuery(request.searchQuery, queryMode).toLowerCase()}`,
-    yearFrom: normalizeArxivYear(request.yearFrom),
-    yearTo: normalizeArxivYear(request.yearTo),
+    yearFrom: yearRange.from,
+    yearTo: yearRange.to,
     start: request.start,
     max_results: request.maxResults,
     sortBy: request.sortBy,
@@ -791,7 +797,19 @@ function buildSemanticTitleAbstractGroups(normalized: string, compact = false): 
 }
 
 function containsAny(value: string, needles: string[]): boolean {
-  return needles.some((needle) => value.includes(needle));
+  const normalizedValue = value.toLowerCase();
+  const tokens = new Set(
+    normalizedValue
+      .split(/[^a-z0-9.+-]+/iu)
+      .map((token) => token.trim())
+      .filter(Boolean)
+  );
+  return needles.some((needle) => {
+    const normalizedNeedle = needle.toLowerCase();
+    return /^[a-z0-9.+-]{2,3}$/iu.test(normalizedNeedle)
+      ? tokens.has(normalizedNeedle)
+      : normalizedValue.includes(normalizedNeedle);
+  });
 }
 
 function orClauses(clauses: string[]): string {
@@ -819,14 +837,19 @@ function escapeArxivTerm(value: string, phrase: boolean): string {
 }
 
 function buildSubmittedDateRange(yearFrom?: string, yearTo?: string): string {
-  const from = normalizeArxivYear(yearFrom);
-  const to = normalizeArxivYear(yearTo);
+  const { from, to } = normalizeArxivYearRange(yearFrom, yearTo);
   if (!from && !to) {
     return '';
   }
   const startYear = from || '1991';
   const endYear = to || String(new Date().getFullYear());
   return `submittedDate:[${startYear}01010000 TO ${endYear}12312359]`;
+}
+
+function normalizeArxivYearRange(yearFrom?: string, yearTo?: string): { from: string; to: string } {
+  const from = normalizeArxivYear(yearFrom);
+  const to = normalizeArxivYear(yearTo);
+  return from && to && from > to ? { from: to, to: from } : { from, to };
 }
 
 function normalizeArxivYear(value?: string): string {

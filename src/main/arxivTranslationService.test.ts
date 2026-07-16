@@ -612,6 +612,45 @@ describe('ArxivTranslationService', () => {
     }
   });
 
+  it('upgrades a partial abstract cache when the fast title translator later succeeds', async () => {
+    const calls: string[][] = [];
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) => {
+        calls.push(texts);
+        return texts.map((text, index) =>
+          index === 0 ? text : '本文完整研究机器人操作中的触觉感知方法，并报告实验设置、评价指标与主要结论。'
+        );
+      }
+    });
+    const request = {
+      stableId: 'partial-cache-upgrade',
+      title: 'TACTO: A Benchmark for Tactile Robot Manipulation',
+      summary: 'This paper studies tactile perception for robot manipulation.'
+    };
+
+    try {
+      const partial = await service.translatePaper(request);
+      const upgraded = await service.translatePaper({
+        ...request,
+        pretranslatedTitleZh: 'TACTO：触觉机器人操作基准'
+      });
+      const cached = await service.translatePaper(request);
+
+      expect(partial.titleZh).toBe('');
+      expect(upgraded).toMatchObject({
+        status: 'cached',
+        cacheHit: true,
+        titleZh: 'TACTO：触觉机器人操作基准',
+        abstractZh: partial.abstractZh
+      });
+      expect(cached.titleZh).toBe('TACTO：触觉机器人操作基准');
+      expect(calls).toHaveLength(1);
+    } finally {
+      service.close();
+    }
+  });
+
   it('drops cached English echo rows and retranslates them on manual retry', async () => {
     const dbPath = path.join(tempDir, 'arxiv-translation.sqlite');
     const request = {

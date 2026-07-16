@@ -153,7 +153,7 @@ describe('arxivClient', () => {
     expect(searchQuery).toContain('visuotactile');
     expect(searchQuery).toContain('robot');
     expect(JSON.parse(cacheKey)).toMatchObject({
-      query_version: 'title-abstract-v6',
+      query_version: 'title-abstract-v7',
       query_mode: 'balanced'
     });
   });

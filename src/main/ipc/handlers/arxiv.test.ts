@@ -23,6 +23,19 @@ describe('parseArxivTranslationBatchRequest', () => {
     ).toEqual({ papers: [paper], priority: 'preview', sessionId: 7 });
   });
 
+  it('preserves a validated fast Chinese title across the IPC boundary', () => {
+    const parsed = parseArxivTranslationBatchRequest({
+      papers: [{ ...paper, pretranslatedTitleZh: '安全强化学习' }],
+      priority: 'foreground',
+      sessionId: 8
+    });
+
+    expect(parsed.papers[0]).toMatchObject({
+      ...paper,
+      pretranslatedTitleZh: '安全强化学习'
+    });
+  });
+
   it('keeps legacy raw-array requests compatible and clamps batches to 100 papers', () => {
     const papers = Array.from({ length: 105 }, (_, index) => ({
       ...paper,

@@ -9,6 +9,7 @@ import {
   buildArxivApiUrl,
   buildArxivCacheKey,
   hasDeterministicChineseArxivQuery,
+  hasUnmappedChineseArxivQuery,
   isMojibakeTranslationText,
   normalizeArxivWhitespace,
   normalizeArxivSearchQuery,
@@ -259,8 +260,9 @@ export class ArxivService {
 
     const deterministicQuery = normalizedSearchQuery;
     const hasDeterministicQuery = hasDeterministicChineseArxivQuery(searchQuery);
+    const hasUnmappedQuery = hasUnmappedChineseArxivQuery(searchQuery);
     let translatedQuery = '';
-    if (queryMode !== 'strict' && !hasDeterministicQuery && this.translateSearchQueryToEnglish) {
+    if (queryMode !== 'strict' && hasUnmappedQuery && this.translateSearchQueryToEnglish) {
       try {
         translatedQuery = sanitizeTranslatedSearchQuery(await this.translateSearchQueryToEnglish(searchQuery));
       } catch {
@@ -269,9 +271,9 @@ export class ArxivService {
     }
 
     const expandedQuery = mergeSearchQuerySegments(
-      queryMode === 'strict' || hasDeterministicQuery
+      queryMode === 'strict' || !translatedQuery
         ? [deterministicQuery]
-        : [searchQuery, deterministicQuery, translatedQuery]
+        : [deterministicQuery, translatedQuery]
     );
     const expandedQueryTerms = buildExpandedQueryTerms(deterministicQuery, translatedQuery);
     const metadata: ArxivSearchMetadata & { searchQuery: string } = {

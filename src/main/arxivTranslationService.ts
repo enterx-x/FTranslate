@@ -188,7 +188,15 @@ export class ArxivTranslationService {
       const cacheKey = buildTranslationCacheKey({ stableId, title, summary });
       const cached = this.readCache(cacheKey);
       if (cached) {
-        results[index] = buildCachedTranslationResult(stableId, cached);
+        results[index] = buildCachedTranslationResult(
+          stableId,
+          this.upgradeCachedTitle(cacheKey, cached, {
+            stableId,
+            title,
+            summary,
+            pretranslatedTitleZh
+          })
+        );
         return;
       }
 
@@ -215,7 +223,10 @@ export class ArxivTranslationService {
       missing.forEach((item) => {
         const rechecked = this.readCache(item.cacheKey);
         if (rechecked) {
-          results[item.index] = buildCachedTranslationResult(item.stableId, rechecked);
+          results[item.index] = buildCachedTranslationResult(
+            item.stableId,
+            this.upgradeCachedTitle(item.cacheKey, rechecked, item)
+          );
           return;
         }
         remaining.push(item);
@@ -463,6 +474,44 @@ export class ArxivTranslationService {
       ...row,
       title_zh: titleZh,
       abstract_zh: abstractZh
+    };
+  }
+
+  private upgradeCachedTitle(
+    cacheKey: string,
+    cached: CachedTranslationRow,
+    value: {
+      stableId: string;
+      title: string;
+      summary: string;
+      pretranslatedTitleZh: string;
+    }
+  ): CachedTranslationRow {
+    if (cached.title_zh || !value.pretranslatedTitleZh) {
+      return cached;
+    }
+    const titleZh = repairAcademicTranslation(
+      value.title,
+      normalizeTranslatedText(value.pretranslatedTitleZh),
+      { mode: 'title' }
+    );
+    if (!isUsableTranslatedText(titleZh, value.title)) {
+      return cached;
+    }
+    const translatedAt = new Date(this.now()).toISOString();
+    this.writeCache(cacheKey, {
+      stableId: value.stableId,
+      title: value.title,
+      summary: value.summary,
+      titleZh,
+      abstractZh: cached.abstract_zh,
+      translatedAt,
+      engine: cached.engine
+    });
+    return {
+      ...cached,
+      title_zh: titleZh,
+      translated_at: translatedAt
     };
   }
 
