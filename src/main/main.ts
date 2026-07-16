@@ -54,7 +54,11 @@ import {
   type ArxivTranslationBatchRequest
 } from '../shared/arxiv';
 import { ArxivService } from './arxivService';
-import { ArxivTranslationService, translateTextsWithArgosEngine } from './arxivTranslationService';
+import {
+  ArxivTranslationService,
+  resolveArxivTranslationEngineOrder,
+  translateTextsWithArgosEngine
+} from './arxivTranslationService';
 import { scanCodeRepository } from './codeRepositoryScanner';
 import {
   PDF_TRANSLATION_POSTPROCESS_VERSION,
@@ -84,11 +88,13 @@ import {
   checkLocalTranslationInstall,
   getLocalTranslationStatus,
   resetNllbRuntime,
+  resolveLocalTranslationPreference,
   type LocalTranslateBatchResult,
   type LocalTranslationLanguage,
   translateTextsWithNllbCTranslate2,
-  warmUpNllbTranslator
+  warmUpLocalTranslator
 } from './localTranslationService';
+import { resetHyMt2Runtime, translateTextsWithHyMt2 } from './hyMtTranslationService';
 import { buildRuntimeCenterSnapshot } from './runtimeCenter';
 import { PlotFileImportService, type PlotDataFileReadRequest } from './plotFileImport';
 import { PlotRendererService } from './plotRenderer';
@@ -137,7 +143,7 @@ interface ArxivDownloadPdfRequest {
 
 interface LocalTranslateBatchRequest {
   texts: string[];
-  forceEngine?: 'nllb-ct2' | 'argos';
+  forceEngine?: 'hy-mt2' | 'nllb-ct2' | 'argos';
   sourceLanguage?: LocalTranslationLanguage;
   targetLanguage?: LocalTranslationLanguage;
   timeoutMs?: number;
@@ -503,10 +509,16 @@ function showMainWindow(): void {
 function scheduleLocalTranslationWarmup(): void {
   setTimeout(() => {
     const status = getLocalTranslationStatus();
-    if (status.preferredEngine === 'argos-only' || !status.nllb.configured || status.nllb.available) {
+    if (
+      status.preferredEngine === 'argos-only' ||
+      ((status.preferredEngine === 'hy-mt-first' || status.preferredEngine === 'hy-mt-only') &&
+        status.hymt.available) ||
+      ((status.preferredEngine === 'nllb-first' || status.preferredEngine === 'nllb-only') &&
+        status.nllb.available)
+    ) {
       return;
     }
-    void warmUpNllbTranslator().catch(() => undefined);
+    void warmUpLocalTranslator().catch(() => undefined);
   }, 2_000);
 }
 
@@ -1480,6 +1492,13 @@ async function translateWithLocalEngine(request: LocalTranslateBatchRequest): Pr
     });
   }
 
+  if (request.forceEngine === 'hy-mt2') {
+    return translateTextsWithHyMt2(texts, timeoutMs, {
+      sourceLanguage: request.sourceLanguage,
+      targetLanguage: request.targetLanguage
+    });
+  }
+
   if (request.forceEngine === 'nllb-ct2') {
     return translateTextsWithNllbCTranslate2(texts, timeoutMs, {
       sourceLanguage: request.sourceLanguage,
@@ -1487,17 +1506,25 @@ async function translateWithLocalEngine(request: LocalTranslateBatchRequest): Pr
     });
   }
 
-  try {
-    return await translateTextsWithNllbCTranslate2(texts, timeoutMs, {
-      sourceLanguage: request.sourceLanguage,
-      targetLanguage: request.targetLanguage
-    });
-  } catch {
-    return translateTextsWithArgosEngine(texts, timeoutMs, {
-      sourceLanguage: request.sourceLanguage,
-      targetLanguage: request.targetLanguage
-    });
+  const options = {
+    sourceLanguage: request.sourceLanguage,
+    targetLanguage: request.targetLanguage
+  };
+  let lastError: unknown = new Error('没有可用的本地翻译引擎。');
+  for (const engine of resolveArxivTranslationEngineOrder(resolveLocalTranslationPreference())) {
+    try {
+      if (engine === 'hy-mt2') {
+        return await translateTextsWithHyMt2(texts, timeoutMs, options);
+      }
+      if (engine === 'nllb-ct2') {
+        return await translateTextsWithNllbCTranslate2(texts, timeoutMs, options);
+      }
+      return await translateTextsWithArgosEngine(texts, timeoutMs, options);
+    } catch (error) {
+      lastError = error;
+    }
   }
+  throw lastError;
 }
 
 async function translateArxivSearchQueryToEnglish(query: string): Promise<string> {
@@ -3800,7 +3827,7 @@ function registerIpcHandlers(): void {
       getAiModels,
       getLocalTranslationStatus,
       checkLocalTranslationInstall,
-      warmUpNllbTranslator,
+      warmUpNllbTranslator: warmUpLocalTranslator,
       translateWithLocalEngine
     },
     dictionary: {
@@ -3898,6 +3925,7 @@ app.on('will-quit', () => {
   plotRendererService?.dispose();
   plotRendererService = null;
   resetNllbRuntime();
+  resetHyMt2Runtime();
 });
 
 app.on('window-all-closed', () => {

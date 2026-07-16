@@ -4723,7 +4723,64 @@ async function runSettingsScenario(client) {
     writeFile(path.join(outputDir, 'settings-page.png'), Buffer.from(shot.data, 'base64'))
   );
 
-  return snapshot;
+  const aiOpened = await evaluateJson(client, `() => {
+    const button = [...document.querySelectorAll('.settings-nav button')]
+      .find((item) => /AI 设置/.test(item.textContent ?? ''));
+    button?.click();
+    return Boolean(button);
+  }`);
+  if (!aiOpened) {
+    throw new Error('settings: AI settings navigation item was not found');
+  }
+  await wait(700);
+
+  const localTranslation = await evaluateJson(client, `() => {
+    const cards = [...document.querySelectorAll('.settings-card')];
+    const card = cards.find((item) => /本地离线翻译/.test(item.querySelector('h2')?.textContent ?? ''));
+    const content = document.querySelector('.settings-content');
+    const cardRect = card?.getBoundingClientRect();
+    const contentRect = content?.getBoundingClientRect();
+    const buttons = card ? [...card.querySelectorAll('button')] : [];
+    const pathValues = card ? [...card.querySelectorAll('.settings-summary-list p span')] : [];
+    return {
+      hasCard: Boolean(card),
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+      cardWithinContent: Boolean(
+        cardRect && contentRect &&
+        cardRect.left >= contentRect.left - 2 &&
+        cardRect.right <= contentRect.right + 2
+      ),
+      hasHyMtModelPath: pathValues.some((item) => /Hy-MT2-7B-Q4_K_M\.gguf/.test(item.textContent ?? '')),
+      hasHyMtRuntimePath: pathValues.some((item) => /llama-server\.exe/.test(item.textContent ?? '')),
+      pathRightOverflowCount: pathValues.filter((item) => {
+        const rect = item.getBoundingClientRect();
+        return Boolean(cardRect && rect.right > cardRect.right + 2);
+      }).length,
+      buttonLabels: buttons.map((item) => (item.textContent ?? '').trim()),
+      clippedButtonCount: buttons.filter((item) => item.scrollWidth > item.clientWidth + 2).length,
+      badgeText: card?.querySelector('.badge')?.textContent?.trim() ?? ''
+    };
+  }`);
+
+  if (
+    !localTranslation.hasCard ||
+    localTranslation.hasHorizontalOverflow ||
+    !localTranslation.cardWithinContent ||
+    !localTranslation.hasHyMtModelPath ||
+    !localTranslation.hasHyMtRuntimePath ||
+    localTranslation.pathRightOverflowCount > 0 ||
+    localTranslation.clippedButtonCount > 0 ||
+    !/7B 质量档/.test(localTranslation.badgeText) ||
+    !localTranslation.buttonLabels.includes('预热翻译引擎')
+  ) {
+    throw new Error(`settings: local translation layout failed: ${JSON.stringify(localTranslation)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'settings-local-translation.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  return { ...snapshot, localTranslation };
 }
 
 async function runScientificPlotScenario(client) {
@@ -5069,6 +5126,13 @@ async function main() {
       const aiAssistant = await runAiAssistantScenario(client);
       client.close();
       console.log(JSON.stringify({ pdfPath, aiAssistant, outputDir }, null, 2));
+      return;
+    }
+
+    if (visualScenario === 'settings') {
+      const settings = await runSettingsScenario(client);
+      client.close();
+      console.log(JSON.stringify({ pdfPath, settings, outputDir }, null, 2));
       return;
     }
 

@@ -1,3 +1,5 @@
+import { collectAcademicGlossaryMatches } from './academicTranslationGlossary';
+
 export type AcademicTranslationMode = 'title' | 'abstract' | 'paragraph';
 
 interface AcademicTranslationRepairOptions {
@@ -61,6 +63,7 @@ const DEFAULT_TRANSLATION_SEGMENT_LENGTH = 480;
 const PROTECTED_PLACEHOLDER_PREFIX = '86753';
 const PROTECTED_PLACEHOLDER_SUFFIX = '901';
 const PROTECTED_PLACEHOLDER_PATTERN_SOURCE = String.raw`\b86753\d{2}901\b`;
+const MAX_PROTECTED_MARKERS_PER_SEGMENT = 4;
 
 interface ProtectedAcademicSpan {
   start: number;
@@ -72,6 +75,10 @@ interface ProtectedAcademicSpan {
 export interface PreparedAcademicTranslation {
   segments: string[];
   restore: (translatedSegments: string[]) => PreparedAcademicTranslationRestoreResult;
+}
+
+export interface AcademicTranslationPreparationOptions {
+  protectGlossary?: boolean;
 }
 
 export interface PreparedAcademicTranslationRestoreResult {
@@ -87,10 +94,14 @@ export interface PreparedAcademicTranslationRestoreResult {
  */
 export function prepareAcademicTranslation(
   source: string,
-  maxSegmentLength = DEFAULT_TRANSLATION_SEGMENT_LENGTH
+  maxSegmentLength = DEFAULT_TRANSLATION_SEGMENT_LENGTH,
+  options: AcademicTranslationPreparationOptions = {}
 ): PreparedAcademicTranslation {
   const translatableSource = normalizeTranslatableAcademicMarkup(source);
-  const protectedSpans = collectProtectedAcademicSpans(translatableSource);
+  const protectedSpans = collectProtectedAcademicSpans(
+    translatableSource,
+    options.protectGlossary !== false
+  );
   const protectedText = applyProtectedAcademicSpans(translatableSource, protectedSpans);
   const segments = splitAcademicTranslationSegments(protectedText, maxSegmentLength);
   const expectedMarkerSequences = segments.map(extractProtectedMarkers);
@@ -120,16 +131,16 @@ export function hasSevereAcademicTranslationLengthLoss(
   return translatedLength < Math.max(24, Math.floor(sourceLength * 0.12));
 }
 
-function collectProtectedAcademicSpans(source: string): ProtectedAcademicSpan[] {
-  const candidates: Array<{ start: number; end: number; value: string }> = [];
-  const addMatches = (pattern: RegExp): void => {
+function collectProtectedAcademicSpans(source: string, protectGlossary: boolean): ProtectedAcademicSpan[] {
+  const candidates: Array<{ start: number; end: number; value: string; priority: number }> = [];
+  const addMatches = (pattern: RegExp, priority = 100): void => {
     for (const match of source.matchAll(pattern)) {
       const value = match[0] ?? '';
       const start = match.index ?? -1;
       if (!value || start < 0) {
         continue;
       }
-      candidates.push({ start, end: start + value.length, value });
+      candidates.push({ start, end: start + value.length, value, priority });
     }
   };
 
@@ -143,10 +154,30 @@ function collectProtectedAcademicSpans(source: string): ProtectedAcademicSpan[] 
   addMatches(/\\\[[\s\S]+?\\\]/gu);
   addMatches(/\\\([\s\S]+?\\\)/gu);
   addMatches(/\[(?:\s*\d+\s*(?:[-–]\s*\d+)?\s*)(?:,\s*\d+\s*(?:[-–]\s*\d+)?\s*)*\]/gu);
+  addMatches(/\bhttps?:\/\/[^\s<>()\]]+/giu);
+  addMatches(/\b(?:doi:\s*)?10\.\d{4,9}\/[\w.()/:;-]+/giu);
+  addMatches(/\barXiv:\s*\d{4}\.\d{4,5}(?:v\d+)?\b/giu);
+  addMatches(/\barXiv:\s*[a-z-]+(?:\.[a-z-]+)?\/\d{7}(?:v\d+)?\b/giu);
 
-  const selected: Array<{ start: number; end: number; value: string }> = [];
+  if (protectGlossary) {
+    collectAcademicGlossaryMatches(source).forEach((match) => {
+      candidates.push({
+        start: match.start,
+        end: match.end,
+        value: match.target,
+        priority: 10
+      });
+    });
+  }
+
+  const selected: Array<{ start: number; end: number; value: string; priority: number }> = [];
   candidates
-    .sort((left, right) => left.start - right.start || right.end - right.start - (left.end - left.start))
+    .sort(
+      (left, right) =>
+        left.start - right.start ||
+        right.priority - left.priority ||
+        right.end - right.start - (left.end - left.start)
+    )
     .forEach((candidate) => {
       if (selected.some((item) => candidate.start < item.end && candidate.end > item.start)) {
         return;
@@ -228,7 +259,10 @@ function extractProtectedMarkers(value: string): string[] {
 function splitAcademicTranslationSegments(value: string, maxSegmentLength: number): string[] {
   const limit = Math.max(1, Math.floor(maxSegmentLength));
   const normalized = value.trim();
-  if (!normalized || normalized.length <= limit) {
+  if (
+    !normalized ||
+    (normalized.length <= limit && countProtectedMarkers(normalized) <= MAX_PROTECTED_MARKERS_PER_SEGMENT)
+  ) {
     return [normalized];
   }
 
@@ -242,7 +276,10 @@ function splitAcademicTranslationSegments(value: string, maxSegmentLength: numbe
         current = piece;
         return;
       }
-      if (current.length + 1 + piece.length <= limit) {
+      if (
+        current.length + 1 + piece.length <= limit &&
+        countProtectedMarkers(current) + countProtectedMarkers(piece) <= MAX_PROTECTED_MARKERS_PER_SEGMENT
+      ) {
         current = `${current} ${piece}`;
         return;
       }
@@ -257,22 +294,47 @@ function splitAcademicTranslationSegments(value: string, maxSegmentLength: numbe
 }
 
 function splitOversizedAcademicSegment(value: string, limit: number): string[] {
-  if (value.length <= limit) {
-    return [value];
-  }
-
-  const pieces: string[] = [];
+  const lengthPieces: string[] = [];
   let remaining = value;
   while (remaining.length > limit) {
     const boundary = remaining.lastIndexOf(' ', limit);
     const splitAt = boundary > Math.floor(limit / 2) ? boundary : limit;
-    pieces.push(remaining.slice(0, splitAt).trim());
+    lengthPieces.push(remaining.slice(0, splitAt).trim());
     remaining = remaining.slice(splitAt).trim();
   }
   if (remaining) {
-    pieces.push(remaining);
+    lengthPieces.push(remaining);
+  }
+  return lengthPieces.flatMap(splitMarkerDenseAcademicSegment);
+}
+
+function splitMarkerDenseAcademicSegment(value: string): string[] {
+  if (countProtectedMarkers(value) <= MAX_PROTECTED_MARKERS_PER_SEGMENT) {
+    return [value];
+  }
+
+  const pieces: string[] = [];
+  let current = '';
+  let currentMarkerCount = 0;
+  value.split(/\s+/u).filter(Boolean).forEach((token) => {
+    const tokenMarkerCount = countProtectedMarkers(token);
+    if (current && currentMarkerCount + tokenMarkerCount > MAX_PROTECTED_MARKERS_PER_SEGMENT) {
+      pieces.push(current);
+      current = token;
+      currentMarkerCount = tokenMarkerCount;
+      return;
+    }
+    current = current ? `${current} ${token}` : token;
+    currentMarkerCount += tokenMarkerCount;
+  });
+  if (current) {
+    pieces.push(current);
   }
   return pieces;
+}
+
+function countProtectedMarkers(value: string): number {
+  return extractProtectedMarkers(value).length;
 }
 
 function countMeaningfulTranslationCharacters(value: string): number {
@@ -859,9 +921,10 @@ function shouldPreserveAcademicPhrase(value: string): boolean {
 }
 
 function shouldAlwaysShowInTitle(term: string): boolean {
+  const isSingleToken = !/\s/u.test(term.trim());
   return (
     /^[A-Z]{2,}(?:[-_][A-Z0-9]{2,})*$/u.test(term) ||
-    /[A-Za-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*/u.test(term) ||
+    (isSingleToken && /[A-Za-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*/u.test(term)) ||
     /\b(Egocentric Vision|Full-Hand Tactile|Vision-Based|Sim-to-Real|World Model|Foundation Model|Control Barrier|CBF|MPC|PINN|VLA|VLM|FEM)\b/iu.test(term)
   );
 }

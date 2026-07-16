@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,11 +8,16 @@ import {
   ArxivTranslationService,
   type ArxivTranslationPriority,
   buildArgosCombinedPayload,
+  buildTranslationCacheKey,
   decodeArgosCliOutput,
+  resolveArxivTranslationEngineOrder,
   resolveArgosChildEnv,
   resolveArgosCliCommand,
-  splitArgosCombinedOutput
+  splitArgosCombinedOutput,
+  translateTextsWithProtectedAcademicGlossary
 } from './arxivTranslationService';
+import { ACADEMIC_TRANSLATION_GLOSSARY_VERSION } from '../shared/academicTranslationGlossary';
+import { resolveHyMt2ModelCacheIdentity } from './hyMtTranslationService';
 
 function preserveProtectedAcademicMarkers(source: string, translated: string): string {
   const markers = source.match(/\b86753\d{2}901\b/gu) ?? [];
@@ -27,6 +33,42 @@ describe('ArxivTranslationService', () => {
 
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('maps every local translation preference to an explicit arXiv engine chain', () => {
+    expect(resolveArxivTranslationEngineOrder('hy-mt-first')).toEqual(['hy-mt2', 'nllb-ct2', 'argos']);
+    expect(resolveArxivTranslationEngineOrder('hy-mt-only')).toEqual(['hy-mt2']);
+    expect(resolveArxivTranslationEngineOrder('nllb-first')).toEqual(['nllb-ct2', 'argos']);
+    expect(resolveArxivTranslationEngineOrder('argos-first')).toEqual(['argos', 'nllb-ct2']);
+    expect(resolveArxivTranslationEngineOrder('nllb-only')).toEqual(['nllb-ct2']);
+    expect(resolveArxivTranslationEngineOrder('argos-only')).toEqual(['argos']);
+  });
+
+  it('versions cache identity with the constrained academic glossary', () => {
+    const input = {
+      stableId: '2607.00001',
+      title: 'Humanoid Fall Recovery with Diffusion Policies',
+      summary: 'The policy is evaluated with ablation studies.'
+    };
+    const legacyKey = crypto
+      .createHash('sha256')
+      .update(JSON.stringify({ version: 6, target: 'zh', ...input }))
+      .digest('hex');
+    const expectedKey = crypto
+      .createHash('sha256')
+      .update(
+        JSON.stringify({
+          version: 9,
+          glossary: ACADEMIC_TRANSLATION_GLOSSARY_VERSION,
+          hyMt2Model: resolveHyMt2ModelCacheIdentity(),
+          target: 'zh',
+          ...input
+        })
+      )
+      .digest('hex');
+
+    expect(buildTranslationCacheKey(input)).toBe(expectedKey);
+    expect(buildTranslationCacheKey(input)).not.toBe(legacyKey);
   });
 
   it('uses FTRANSLATE_ARGOS_CLI before falling back to PATH lookup', () => {
@@ -113,13 +155,14 @@ describe('ArxivTranslationService', () => {
 
       expect(first).toMatchObject({
         stableId: '2601.17440',
-        abstractZh: '该摘要完整介绍了机器人导航中的强化学习方法、实验设置与主要研究结论。',
         engine: 'argos',
         status: 'completed',
         cacheHit: false,
         qualityStatus: 'passed',
         elapsedMs: 250
       });
+      expect(first.abstractZh).toContain('强化学习');
+      expect(first.abstractZh).toContain('该摘要完整介绍了机器人导航');
       expect(first.titleZh).toContain('PILOT');
       expect(first.titleZh).toContain('低层控制器');
       expect(second).toMatchObject({
@@ -173,12 +216,32 @@ describe('ArxivTranslationService', () => {
       expect(batches).toHaveLength(1);
       expect(batches[0]).toHaveLength(4);
       expect(batches[0]).toContain(requests[0].title);
-      expect(batches[0]).toContain(requests[0].summary);
-      expect(batches[0].some((text) => text.includes('The policy learns'))).toBe(true);
+      expect(batches[0]).not.toContain(requests[0].summary);
+      expect(batches[0].some((text) => text.includes('We use 86753'))).toBe(true);
+      expect(batches[0].some((text) => text.includes('The 86753'))).toBe(true);
       expect(batches[0].some((text) => text.includes('CBF'))).toBe(true);
     } finally {
       service.close();
     }
+  });
+
+  it('protects academic terminology when HY-MT2 falls back to NLLB or Argos', async () => {
+    let protectedInput = '';
+    const result = await translateTextsWithProtectedAcademicGlossary(
+      ['The policy and training procedure use reinforcement learning.'],
+      async (texts) => {
+        protectedInput = texts[0] ?? '';
+        return { texts, engine: 'nllb-ct2-int8', device: 'cpu' };
+      }
+    );
+
+    expect(protectedInput).not.toContain('policy');
+    expect(protectedInput).not.toContain('training');
+    expect(protectedInput).not.toContain('reinforcement learning');
+    expect(protectedInput.match(/97531\d{3}809/gu)).toHaveLength(3);
+    expect(result.texts[0]).toContain('策略');
+    expect(result.texts[0]).toContain('训练');
+    expect(result.texts[0]).toContain('强化学习');
   });
 
   it('reuses a validated fast title and sends only the abstract to the full translation pass', async () => {
@@ -187,7 +250,9 @@ describe('ArxivTranslationService', () => {
       dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
       translateTexts: async (texts) => {
         batches.push(texts);
-        return texts.map(() => '这是完整的中文摘要，说明了研究方法、实验设置与主要结论。');
+        return texts.map((text) =>
+          preserveProtectedAcademicMarkers(text, '这是完整的中文摘要，说明了研究方法、实验设置与主要结论。')
+        );
       }
     });
 
@@ -394,7 +459,17 @@ describe('ArxivTranslationService', () => {
       dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
       translateTexts: async (texts) => {
         batches.push(texts);
-        return texts.map((text) => `这是足够中文的译文：${text}`);
+        return texts.map((text) => {
+          const sentenceIds = text.match(/Sentence-\d+/gu) ?? [];
+          return sentenceIds.length > 0
+            ? sentenceIds
+                .map(
+                  (sentenceId) =>
+                    `${sentenceId} 对应的实验描述已完整翻译，包含可复现设置、方法细节、评价指标与主要结论。`
+                )
+                .join(' ')
+            : '这是足够完整的中文标题译文。';
+        });
       }
     });
 
@@ -579,6 +654,65 @@ describe('ArxivTranslationService', () => {
     }
   });
 
+  it('keeps a substantive Chinese title that preserves benchmark proper names', async () => {
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) =>
+        texts.map((text, index) =>
+          preserveProtectedAcademicMarkers(
+            text,
+            index === 0
+              ? 'RoboMamba：在 RoboCasa、ManiSkill 与 MetaWorld 上进行基准评测'
+              : '本文在三个机器人学习基准上系统比较该方法，并报告可复现的实验结果。'
+          )
+        )
+    });
+
+    const request = {
+      stableId: 'mixed-proper-names',
+      title: 'RoboMamba: Benchmarking RoboCasa, ManiSkill, and MetaWorld',
+      summary: 'This paper compares the method across three robot learning benchmarks with reproducible experiments.'
+    };
+
+    try {
+      const first = await service.translatePaper(request);
+      const cached = await service.translatePaper(request);
+
+      expect(first.status).toBe('completed');
+      expect(first.titleZh).toBe('RoboMamba：在 RoboCasa、ManiSkill 与 MetaWorld 上进行基准评测');
+      expect(cached.status).toBe('cached');
+      expect(cached.titleZh).toBe(first.titleZh);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('still rejects a tiny Chinese prefix followed by an English echo', async () => {
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTexts: async (texts) =>
+        texts.map((text) => preserveProtectedAcademicMarkers(text, `中文：${text}`))
+    });
+
+    const request = {
+      stableId: 'prefixed-echo',
+      title: 'RoboMamba: Benchmarking RoboCasa, ManiSkill, and MetaWorld',
+      summary: 'This paper compares the method across three robot learning benchmarks with reproducible experiments.'
+    };
+
+    try {
+      const first = await service.translatePaper(request);
+      const second = await service.translatePaper(request);
+
+      expect(first.status).toBe('failed');
+      expect(first.cacheHit).toBe(false);
+      expect(second.status).toBe('failed');
+      expect(second.cacheHit).toBe(false);
+    } finally {
+      service.close();
+    }
+  });
+
   it('keeps a translated abstract when the local translator only echoes the title', async () => {
     const service = new ArxivTranslationService({
       dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
@@ -651,10 +785,15 @@ describe('ArxivTranslationService', () => {
     };
     const bootstrap = new ArxivTranslationService({
       dbPath,
-      translateTexts: async () => [
-        '用于初始化缓存的安全强化学习标题',
-        '这是用于初始化缓存的完整中文摘要，包含机器人导航实验、评价指标和主要结论。'
-      ]
+      translateTexts: async (texts) =>
+        texts.map((text, index) =>
+          preserveProtectedAcademicMarkers(
+            text,
+            index === 0
+              ? '用于初始化缓存的安全标题'
+              : '这是用于初始化缓存的完整中文摘要，包含机器人导航实验、评价指标和主要结论。'
+          )
+        )
     });
     try {
       expect((await bootstrap.translatePaper(request)).status).toBe('completed');
@@ -674,10 +813,14 @@ describe('ArxivTranslationService', () => {
       dbPath,
       translateTexts: async (texts) => {
         calls.push(texts);
-        return [
-          '机器人导航安全强化学习',
-          '本文评估用于机器人导航的安全强化学习方法，并报告完整的实验设置、评价指标与研究结论。'
-        ];
+        return texts.map((text, index) =>
+          preserveProtectedAcademicMarkers(
+            text,
+            index === 0
+              ? '机器人导航安全方法'
+              : '本文评估用于机器人导航的方法，并报告完整的实验设置、评价指标与研究结论。'
+          )
+        );
       }
     });
 
@@ -837,7 +980,10 @@ describe('ArxivTranslationService', () => {
         status: 'cached',
         cacheHit: true
       });
-      expect(batches).toEqual([[request.title, request.summary]]);
+      expect(batches).toHaveLength(1);
+      expect(batches[0][0]).toBe(request.title);
+      expect(batches[0][1]).not.toBe(request.summary);
+      expect(batches[0][1]).toMatch(/86753\d{2}901/u);
     } finally {
       service.close();
     }
@@ -1069,7 +1215,7 @@ describe('ArxivTranslationService', () => {
       translateText: async (text) =>
         preserveProtectedAcademicMarkers(
           text,
-          text.includes('Improved Policy') ? '：改进策略蒸馏' : '提出机器人导航策略蒸馏方法。'
+          text.includes('Improved') ? '：改进策略蒸馏' : '提出机器人导航策略蒸馏方法。'
         )
     });
     await bootstrap.translatePaper(request);
@@ -1092,7 +1238,7 @@ describe('ArxivTranslationService', () => {
         calls.push(text);
         return preserveProtectedAcademicMarkers(
           text,
-          text.includes('Improved Policy') ? '：改进策略蒸馏' : '提出机器人导航策略蒸馏方法。'
+          text.includes('Improved') ? '：改进策略蒸馏' : '提出机器人导航策略蒸馏方法。'
         );
       }
     });

@@ -93,7 +93,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkRuntimeCenter: () => ipcRenderer.invoke('runtime-center:check'),
   translateLocalBatch: (request: {
     texts: string[];
-    forceEngine?: 'nllb-ct2' | 'argos';
+    forceEngine?: 'hy-mt2' | 'nllb-ct2' | 'argos';
     sourceLanguage?: 'en' | 'zh';
     targetLanguage?: 'en' | 'zh';
     timeoutMs?: number;

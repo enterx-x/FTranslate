@@ -78,6 +78,7 @@ export function SettingsPage(props: SettingsPageProps) {
       .then((status) => {
         if (!disposed) {
           setLocalTranslationStatus(status);
+          setLocalTranslationMessage(describeLocalTranslationMessage(status));
         }
       })
       .catch((error) => {
@@ -137,7 +138,7 @@ export function SettingsPage(props: SettingsPageProps) {
       setLocalTranslationMessage('正在检查本地翻译环境...');
       const status = await window.electronAPI.checkLocalTranslationInstall();
       setLocalTranslationStatus(status);
-      setLocalTranslationMessage(status.nllb.message);
+      setLocalTranslationMessage(describeLocalTranslationMessage(status));
     } catch (error) {
       setLocalTranslationMessage(`本地翻译环境检查失败：${String(error)}`);
     }
@@ -145,12 +146,12 @@ export function SettingsPage(props: SettingsPageProps) {
 
   async function warmUpLocalTranslation(): Promise<void> {
     try {
-      setLocalTranslationMessage('正在预热 NLLB worker...');
+      setLocalTranslationMessage('正在加载首选本地翻译引擎...');
       const status = await window.electronAPI.warmUpLocalTranslation();
       setLocalTranslationStatus(status);
-      setLocalTranslationMessage(status.nllb.message);
+      setLocalTranslationMessage(describeLocalTranslationMessage(status));
     } catch (error) {
-      setLocalTranslationMessage(`NLLB 预热失败：${String(error)}`);
+      setLocalTranslationMessage(`本地翻译引擎预热失败：${String(error)}`);
     }
   }
 
@@ -678,9 +679,17 @@ export function SettingsPage(props: SettingsPageProps) {
             <SettingsCard
               title="本地离线翻译"
               badge={describeLocalTranslationBadge(localTranslationStatus)}
-              description="arXiv 标题/摘要和 JSON 段落翻译优先使用 NLLB-200 distilled 600M + CTranslate2 int8；未配置或失败时回退 Argos。"
+              description="默认优先使用 HY-MT2 7B Q4 质量档；1.8B 仅作为低显存快速档，失败时再依次回退 NLLB 与 Argos。"
             >
               <div className="settings-summary-list">
+                <p>
+                  <strong>HY-MT2 模型</strong>
+                  <span>{localTranslationStatus?.hymt.modelPath ?? 'E:\\FTranslateTools\\hy-mt2\\models\\Hy-MT2-7B-Q4_K_M.gguf'}</span>
+                </p>
+                <p>
+                  <strong>HY-MT2 Runtime</strong>
+                  <span>{localTranslationStatus?.hymt.serverPath ?? 'E:\\FTranslateTools\\hy-mt2\\runtime\\llama-server.exe'}</span>
+                </p>
                 <p>
                   <strong>NLLB Python</strong>
                   <span>{localTranslationStatus?.nllb.pythonPath ?? 'E:\\FTranslateTools\\nllb-ctranslate2\\Scripts\\python.exe'}</span>
@@ -713,11 +722,11 @@ export function SettingsPage(props: SettingsPageProps) {
                   <span>检查环境</span>
                 </button>
                 <button type="button" className="primary-button" onClick={warmUpLocalTranslation}>
-                  预热 NLLB
+                  预热翻译引擎
                 </button>
               </div>
               <p className="inline-message">
-                {localTranslationMessage || '安装命令：powershell -ExecutionPolicy Bypass -File .\\scripts\\install-nllb-ct2.ps1'}
+                {localTranslationMessage || '推荐安装：powershell -ExecutionPolicy Bypass -File .\\scripts\\install-hymt2-gguf.ps1'}
               </p>
             </SettingsCard>
           ) : null}
@@ -911,12 +920,33 @@ function CheckboxSetting(props: {
   );
 }
 
-function describeLocalTranslationBadge(status: LocalTranslationStatus | null): string {
+export function describeLocalTranslationBadge(status: LocalTranslationStatus | null): string {
   if (!status) {
     return '状态未知';
   }
   if (status.preferredEngine === 'argos-only') {
     return 'Argos only';
+  }
+  if (status.preferredEngine === 'hy-mt-first' || status.preferredEngine === 'hy-mt-only') {
+    const hyMtLabel = describeHyMt2Tier(status.hymt.modelPath);
+    if (status.hymt.runtimeState === 'warming') {
+      return `${hyMtLabel}加载中`;
+    }
+    if (status.hymt.runtimeState === 'ready' && status.hymt.available) {
+      return `${hyMtLabel}可用 · ${status.hymt.runtimeDevice === 'unknown' ? '设备未确认' : status.hymt.runtimeDevice.toUpperCase()}`;
+    }
+    if (status.preferredEngine === 'hy-mt-only') {
+      return `${hyMtLabel}不可用`;
+    }
+    if (status.hymt.configured && status.hymt.runtimeState === 'not_checked') {
+      return `${hyMtLabel}待预热`;
+    }
+    if (status.hymt.configured && status.hymt.runtimeState === 'failed') {
+      if (status.nllb.runtimeState === 'ready' && status.nllb.available) {
+        return `NLLB fallback · ${formatLocalTranslationDevice(status)}`;
+      }
+      return `${hyMtLabel}降级`;
+    }
   }
   if (!status.nllb.configured) {
     return 'Argos fallback';
@@ -933,7 +963,28 @@ function describeLocalTranslationBadge(status: LocalTranslationStatus | null): s
   if (status.nllb.runtimeState === 'failed') {
     return 'NLLB 不可用';
   }
-  return 'Argos fallback';
+  return 'NLLB 已配置 · 待检查';
+}
+
+function describeHyMt2Tier(modelPath: string): string {
+  const normalized = modelPath.toLowerCase();
+  if (normalized.includes('7b')) {
+    return 'HY-MT2 7B 质量档 · ';
+  }
+  if (normalized.includes('1.8b')) {
+    return 'HY-MT2 1.8B 快速档 · ';
+  }
+  return 'HY-MT2 ';
+}
+
+function describeLocalTranslationMessage(status: LocalTranslationStatus): string {
+  if (
+    (status.preferredEngine === 'hy-mt-first' || status.preferredEngine === 'hy-mt-only') &&
+    status.hymt.configured
+  ) {
+    return status.hymt.message;
+  }
+  return status.nllb.message;
 }
 
 function formatLocalTranslationDevice(status: LocalTranslationStatus): string {

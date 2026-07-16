@@ -1,5 +1,14 @@
 # PDF Translation Reader / FTranslate
 
+## 2026-07-17 HY-MT2 本地学术翻译引擎（0.1.36）
+
+- 标题、摘要、PDF 划词和段落翻译默认改为 `HY-MT2-7B Q4_K_M 质量档 -> NLLB -> Argos`。7B 是本机 8 GB 显存下可稳定全量驻留的最高质量档；`1.8B Q4_K_M` 仍可用 `-Profile fast` 安装为低显存快速档。HY-MT2 是专用机器翻译模型，不调用聊天 API、不消耗云端 AI token。
+- 新增带版本号的通用科研术语层，覆盖强化学习、机器人、触觉、安全控制、PINN、ODE/PDE 与论文常用表达。HY-MT2 在生成前接收术语约束；HY 运行失败后，NLLB/Argos 也会重新套用独立、可逆的术语占位符，避免 `policy -> 政策`、`training -> 培训` 等降级误译。公式、代码、引用、URL、DOI 和 arXiv 标识不会被模型改写。
+- 本地 `llama-server` 只监听 `127.0.0.1`，每次启动生成随机 API key，并复用两个推理 slot；应用退出时关闭子进程。模型、运行时和 CUDA DLL 独立安装在 `E:\FTranslateTools\hy-mt2`，不污染系统 Python，也不把约 4.31 GiB 的 7B 权重塞进应用安装包。
+- RTX 4060 Laptop 8 GB 实测：7B 冷启动并完成首组标题/短句约 4.13 秒，模型常驻后的完整 arXiv 标题、摘要、质量门禁和 SQLite 缓存链约 1.08 秒。缓存身份升级到 v9，并包含术语表和实际模型版本；切换 7B/1.8B 会自动淘汰旧译文，但不影响收藏、已读和阅读队列。
+- 修复专有名词混排误判：`RoboMamba：在 RoboCasa、ManiSkill 与 MetaWorld 上进行基准评测` 这类有效中文标题不会再被回退成英文后清空；仅在中文内容不足时才把高英文重合结果视为回声。设置页与 arXiv 页面会显示“7B 质量档 / 1.8B 快速档”、CUDA、预热和真实降级状态。
+- 完整构建通过 104 个测试文件、701 项测试；源码版与安装包内 Settings/arXiv 视觉回归均通过。Windows 安装包为 `dist/PDF Translation Reader Setup 0.1.36.exe`（157,124,149 bytes，149.85 MiB，SHA-256 `0AE1C1BAA24F68951EE8802BC931DB3E8B751B0BCDE93418F83361C7053F49F8`）。确认新包后已删除 0.1.35 安装器与 blockmap，并从最新 `win-unpacked` 启动隔离热预览。
+
 ## 2026-07-16 arXiv 复合概念检索与残缺翻译缓存修复（0.1.35）
 
 - 中文复合术语先匹配专用概念，再匹配通用子词；`物理信息神经网络`、`机器人操作`、`视觉语言动作`、`模型预测控制`不再被提前拆成宽泛的 physics / robot / vision / control 条件。PINN、GNN、LLM、NLP、UAV、VLA、VLM 的全称与缩写按同一概念内的候选项处理，不再要求论文同时写出全称和缩写。
@@ -469,10 +478,10 @@ arXiv 检索是一个独立模块，不会自动改写论文库或 PPT 草稿。
 - 显示标题、中文标题、作者、发布日期、更新时间、分类、英文摘要、中文摘要、arXiv 链接和 PDF 链接；摘要中的 `$...$` / `$$...$$` 会走公式渲染；
 - 使用本地启发式评分生成相关性、新颖性、实验线索、阅读优先级和研究标签；“本页相关排序”只重排 arXiv 已返回的当前页，不冒充全局相关性排序，评分始终绑定最后一次成功执行的查询和查询模式；
 - 搜索完成后不再隐藏地自动预翻译摘要；“翻译本页”会显式提交当前页剩余论文，单篇手动翻译保持最高优先级；翻译结果只允许写回发起它的当前搜索会话；
-- 标题和摘要翻译优先使用本地 NLLB + CTranslate2，失败后回退 Argos Translate + SQLite 缓存，不消耗 AI API token；IPC 批次最多接收 100 个有效论文对象，并过滤非法项目；
-- 离线翻译使用批量队列和持久 Python worker：首次翻译需要加载模型，后续同一运行期间会复用 worker，批量标题 / 摘要翻译会明显更快；NLLB 可用时界面会显示 CUDA / CPU 回退等运行状态；
+- 标题和摘要翻译默认使用本地 HY-MT2 专用翻译模型，失败后依次回退 NLLB + CTranslate2 和 Argos Translate，并通过 SQLite 缓存复用有效结果；整条链路不消耗 AI API token。IPC 批次最多接收 100 个有效论文对象，并过滤非法项目；
+- 离线翻译使用批量队列和常驻运行时：HY-MT2 复用本地 `llama-server` 与两个推理 slot，NLLB 复用持久 Python worker；首次翻译需要加载模型，后续同一运行期间不重复加载。界面会显示各引擎的真实就绪、预热和降级状态；
 - 翻译前会严格保护公式、代码和引用；DOI、URL、新旧 arXiv ID 作为可恢复字面量在模型省略时确定性补回，方法名与专业术语由源文本约束修复。翻译后拒绝严重截断、严格占位符错位、重复尾巴、英文回声和常见乱码结果进入缓存；旧缓存中如果出现 `���`、`æœºå™¨`、`鏈哄櫒` 等编码损坏文本，界面会退回英文并允许重新翻译；
-- 如果未安装 Argos Translate 或未安装 en -> zh 模型，界面会保留英文标题/摘要并提示本地翻译不可用；AI 翻译仍只在 AI 助手或明确 AI 操作中使用；
+- 如果三种本地引擎都不可用，界面会保留英文标题/摘要并明确提示配置缺失；AI 翻译仍只在 AI 助手或明确 AI 操作中使用，不会被静默用作本地翻译回退；
 - 结果卡片只保留“阅读 / 翻译 / 加入阅读队列”三个主操作；评分、收藏、BibTeX、Markdown 导出和 PPT 候选操作集中在右侧论文详情，减少大结果页按钮噪声；
 - 可收藏论文，或在右侧详情中加入组会 PPT 候选队列；PPT 生成仍只读取用户已下载或手动选择的本地 PDF；
 - 下载 arXiv PDF 到用户选择的本地路径；
@@ -481,7 +490,29 @@ arXiv 检索是一个独立模块，不会自动改写论文库或 PPT 草稿。
 
 #### arXiv 离线翻译配置
 
-arXiv 标题和摘要翻译优先调用本机 NLLB worker；如果 NLLB 不可用，会回退到本机 `argos-translate`，不会自动切到 AI API。如果界面提示“离线翻译未配置”或需要配置 Argos fallback，可以在 Windows PowerShell 中按下面步骤安装：
+默认顺序是 `HY-MT2 -> NLLB -> Argos`，三者都在本机运行，不会自动切到 AI API。推荐先在 Windows PowerShell 中安装 HY-MT2：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-hymt2-gguf.ps1
+```
+
+不带参数时安装并校验官方 `Hy-MT2-7B-Q4_K_M.gguf` 质量档、llama.cpp Windows CUDA 运行时及其 CUDA DLL，默认创建：
+
+```text
+E:\FTranslateTools\hy-mt2\models\Hy-MT2-7B-Q4_K_M.gguf
+E:\FTranslateTools\hy-mt2\runtime\llama-server.exe
+E:\FTranslateTools\hy-mt2\licenses
+```
+
+显存较小或更看重速度时可另外安装 1.8B；脚本会保留两个模型，只切换当前用户的默认模型：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-hymt2-gguf.ps1 -Profile fast
+```
+
+脚本同时写入当前用户的 `FTRANSLATE_HYMT_MODEL`、`FTRANSLATE_HYMT_SERVER`、`FTRANSLATE_HYMT_PROFILE` 和 `FTRANSLATE_LOCAL_TRANSLATION_ENGINE=hy-mt-first`。安装后完全退出并重启 FTranslate；设置页中的“预热翻译引擎”可检查模型是否真实使用 CUDA。模型采用 Apache-2.0 许可证；安装脚本固定 SHA-256，下载损坏或上游文件变更时会中止，而不会继续使用未知文件。
+
+如果不安装 HY-MT2，应用仍可使用已有 NLLB 或 Argos。需要配置最轻量的 Argos fallback 时，可按下面步骤安装：
 
 ```powershell
 $venv = "$env:LOCALAPPDATA\FTranslate\argos-translate"
@@ -526,13 +557,13 @@ if ($userPath -notlike "*$argosScripts*") {
 
 修改后重启 FTranslate。SQLite 翻译缓存位于 Electron 用户数据目录下的 `arxiv-translation-cache.sqlite`，同一篇论文标题 / 摘要命中缓存后不会重复调用 Argos。
 
-### NLLB + CTranslate2 离线高质量翻译
+### NLLB + CTranslate2 离线回退翻译
 
 FTranslate 现在支持本地 `NLLB-200 distilled 600M + CTranslate2 int8` 翻译层，用于：
 
 - arXiv 检索页标题和摘要的本地批量翻译；
 - JSON / 段落翻译队列的本地批量翻译；
-- Argos 翻译质量不足时的高质量离线替代。
+- HY-MT2 未安装或暂时不可用时的离线回退。
 
 它不会替换 PDFMathTranslate / pdf2zh 的整篇中文 PDF 引擎。整篇 PDF 排版翻译仍由 PDFMathTranslate 处理；NLLB 主要负责标题、摘要和段落级文本。
 
@@ -561,7 +592,7 @@ FTRANSLATE_NLLB_DEVICE
 
 `FTRANSLATE_NLLB_DEVICE` 默认是 `auto`：应用会优先尝试 CUDA，失败后自动回退 CPU。安装后请重启 FTranslate，让 Electron 读取新的用户环境变量。
 
-如果 NLLB 环境不可用，应用会自动回退到 Argos。SQLite 缓存会记录实际使用的 engine，避免同一标题/摘要重复翻译。
+如果 NLLB 环境也不可用，应用会继续回退到 Argos。SQLite 缓存会记录实际使用的 engine 与术语表版本，避免同一标题/摘要重复翻译，也不会让旧引擎的低质量缓存覆盖 HY-MT2 结果。
 
 ### AI 问答
 
@@ -881,10 +912,12 @@ src/
       translation.ts        JSON/Markdown/TXT 兼容解析
   shared/
     aiTranslation.ts        OpenAI-compatible chat completions
-    academicTranslationQuality.ts 学术标题/摘要翻译质量修复
+      academicTranslationQuality.ts 学术标题/摘要翻译质量修复
+      academicTranslationGlossary.ts 通用科研术语约束与版本
     pdfTranslation.ts       PDFMathTranslate 命令、缓存和输出路径
 scripts/
   visual-check.mjs          开发/打包后 UI 视觉回归检查脚本
+  install-hymt2-gguf.ps1    HY-MT2 GGUF + llama.cpp 独立运行时安装脚本
   install-nllb-ct2.ps1      NLLB + CTranslate2 本地翻译环境安装脚本
 assets/
   icon.ico                  Windows 安装包与快捷方式图标

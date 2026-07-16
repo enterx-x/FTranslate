@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   getLocalTranslationStatus,
+  resolveLocalTranslationPreference,
   resolveNllbBeamSize,
   resolveNllbCudaDllDirs,
   resolveNllbMaxDecodingLength
@@ -15,6 +16,7 @@ const originalTokenizerDir = process.env.FTRANSLATE_NLLB_TOKENIZER_DIR;
 const originalDevice = process.env.FTRANSLATE_NLLB_DEVICE;
 const originalBeamSize = process.env.FTRANSLATE_NLLB_BEAM_SIZE;
 const originalMaxDecodingLength = process.env.FTRANSLATE_NLLB_MAX_DECODING_LENGTH;
+const originalLocalTranslationEngine = process.env.FTRANSLATE_LOCAL_TRANSLATION_ENGINE;
 
 afterEach(() => {
   if (originalCudaDllDirs === undefined) {
@@ -47,6 +49,21 @@ afterEach(() => {
   } else {
     process.env.FTRANSLATE_NLLB_MAX_DECODING_LENGTH = originalMaxDecodingLength;
   }
+  if (originalLocalTranslationEngine === undefined) {
+    delete process.env.FTRANSLATE_LOCAL_TRANSLATION_ENGINE;
+  } else {
+    process.env.FTRANSLATE_LOCAL_TRANSLATION_ENGINE = originalLocalTranslationEngine;
+  }
+});
+
+describe('localTranslationService engine preference', () => {
+  it('defaults to the dedicated HY-MT2 engine and preserves explicit legacy overrides', () => {
+    delete process.env.FTRANSLATE_LOCAL_TRANSLATION_ENGINE;
+    expect(resolveLocalTranslationPreference()).toBe('hy-mt-first');
+
+    process.env.FTRANSLATE_LOCAL_TRANSLATION_ENGINE = 'nllb-only';
+    expect(resolveLocalTranslationPreference()).toBe('nllb-only');
+  });
 });
 
 describe('localTranslationService CUDA runtime discovery', () => {

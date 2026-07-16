@@ -1,10 +1,21 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  getHyMt2RuntimeStatus,
+  hasConfiguredHyMt2,
+  warmUpHyMt2Translator
+} from './hyMtTranslationService';
 
-export type LocalTranslationCacheEngine = 'nllb-ct2-int8' | 'argos';
-export type LocalTranslationRuntimeEngine = 'nllb-ct2' | 'argos';
-export type LocalTranslationPreference = 'nllb-first' | 'argos-first' | 'nllb-only' | 'argos-only';
+export type LocalTranslationCacheEngine = 'hy-mt2-q4' | 'nllb-ct2-int8' | 'argos';
+export type LocalTranslationRuntimeEngine = 'hy-mt2' | 'nllb-ct2' | 'argos';
+export type LocalTranslationPreference =
+  | 'hy-mt-first'
+  | 'hy-mt-only'
+  | 'nllb-first'
+  | 'argos-first'
+  | 'nllb-only'
+  | 'argos-only';
 export type LocalTranslationDevicePreference = 'auto' | 'cuda' | 'cpu';
 export type LocalTranslationRuntimeState = 'not_checked' | 'warming' | 'ready' | 'cpu_fallback' | 'failed';
 export type LocalTranslationLanguage = 'en' | 'zh';
@@ -25,6 +36,18 @@ export interface LocalTranslateDirectionOptions {
 
 export interface LocalTranslationStatus {
   preferredEngine: LocalTranslationPreference;
+  hymt: {
+    configured: boolean;
+    available: boolean;
+    serverPath: string;
+    modelPath: string;
+    runtimeDevice: 'cuda' | 'cpu' | 'unknown';
+    runtimeState: LocalTranslationRuntimeState;
+    lastRuntimeError: string;
+    lastCheckedAt: string;
+    warmupMs: number;
+    message: string;
+  };
   nllb: {
     configured: boolean;
     available: boolean;
@@ -139,6 +162,8 @@ export function resolveNllbCudaDllDirs(): string[] {
 export function resolveLocalTranslationPreference(): LocalTranslationPreference {
   const configured = process.env.FTRANSLATE_LOCAL_TRANSLATION_ENGINE?.trim().toLowerCase();
   if (
+    configured === 'hy-mt-first' ||
+    configured === 'hy-mt-only' ||
     configured === 'nllb-first' ||
     configured === 'argos-first' ||
     configured === 'nllb-only' ||
@@ -146,7 +171,7 @@ export function resolveLocalTranslationPreference(): LocalTranslationPreference 
   ) {
     return configured;
   }
-  return 'nllb-first';
+  return 'hy-mt-first';
 }
 
 export function resolveNllbChildEnv(): NodeJS.ProcessEnv {
@@ -172,6 +197,7 @@ export function resolveNllbChildEnv(): NodeJS.ProcessEnv {
 }
 
 export function getLocalTranslationStatus(): LocalTranslationStatus {
+  const hymt = getHyMt2RuntimeStatus();
   const pythonPath = resolveNllbPythonCommand();
   const modelDir = resolveNllbModelDir();
   const tokenizerDir = resolveNllbTokenizerDir();
@@ -183,6 +209,18 @@ export function getLocalTranslationStatus(): LocalTranslationStatus {
   const cudaDllDirs = resolveNllbCudaDllDirs();
   return {
     preferredEngine: resolveLocalTranslationPreference(),
+    hymt: {
+      configured: hymt.configured,
+      available: hymt.available,
+      serverPath: hymt.serverPath,
+      modelPath: hymt.modelPath,
+      runtimeDevice: hymt.runtimeDevice,
+      runtimeState: hymt.runtimeState,
+      lastRuntimeError: hymt.lastRuntimeError,
+      lastCheckedAt: hymt.lastCheckedAt,
+      warmupMs: hymt.warmupMs,
+      message: hymt.message
+    },
     nllb: {
       configured,
       available,
@@ -210,17 +248,31 @@ export function getLocalTranslationStatus(): LocalTranslationStatus {
     },
     fallback: {
       engine: 'argos',
-      message: 'Argos 仍作为轻量 fallback 保留。'
+      message: 'NLLB 与 Argos 仍作为离线 fallback 保留。'
     },
     worker: {
-      running: Boolean(runtime),
-      pending: runtime?.pendingCount() ?? 0
+      running: hymt.workerRunning || Boolean(runtime),
+      pending: hymt.pending + (runtime?.pendingCount() ?? 0)
     }
   };
 }
 
 export async function checkLocalTranslationInstall(): Promise<LocalTranslationStatus> {
-  return warmUpNllbTranslator();
+  return warmUpLocalTranslator();
+}
+
+export async function warmUpLocalTranslator(timeoutMs = 60_000): Promise<LocalTranslationStatus> {
+  const preference = resolveLocalTranslationPreference();
+  if ((preference === 'hy-mt-first' || preference === 'hy-mt-only') && hasConfiguredHyMt2()) {
+    const hymt = await warmUpHyMt2Translator(timeoutMs);
+    if (hymt.available || preference === 'hy-mt-only') {
+      return getLocalTranslationStatus();
+    }
+  }
+  if (preference !== 'argos-only' && preference !== 'hy-mt-only') {
+    return warmUpNllbTranslator(Math.min(timeoutMs, 45_000));
+  }
+  return getLocalTranslationStatus();
 }
 
 export async function warmUpNllbTranslator(timeoutMs = 45_000): Promise<LocalTranslationStatus> {

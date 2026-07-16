@@ -257,17 +257,18 @@ describe('academic translation quality repair', () => {
     expect(repaired).not.toContain('ense Reward');
   });
 
-  it('strictly protects formulas, code, and citations while leaving recoverable terms visible to translation', () => {
+  it('strictly protects formulas, code, citations, URLs, and audited terminology', () => {
     const source =
       'OmniAgent uses $x^2 + y^2$ and $$\\mathcal{L}=\\lambda \\|x\\|$$ with `policy.step()` and ``policy batch``; constraints are \\(E = mc^2\\) and \\[\\int_a^b f(x)dx\\]. See https://example.org/paper, doi:10.48550/arXiv.2607.01234, arXiv:2607.01234, arXiv:hep-th/9901001, and [1-3, 5] for Sim-to-Real CBF-MPC.';
     const prepared = prepareAcademicTranslation(source);
+    const preparedText = prepared.segments.join(' ');
 
-    expect(prepared.segments).toHaveLength(1);
-    expect(prepared.segments[0]).toContain('OmniAgent');
-    expect(prepared.segments[0]).toContain('https://example.org/paper');
-    expect(prepared.segments[0]).not.toContain('$x^2 + y^2$');
+    expect(prepared.segments.length).toBeGreaterThan(1);
+    expect(preparedText).toContain('OmniAgent');
+    expect(preparedText).not.toContain('https://example.org/paper');
+    expect(preparedText).not.toContain('$x^2 + y^2$');
 
-    const restored = prepared.restore([`这是译文：${prepared.segments[0]}`]);
+    const restored = prepared.restore(prepared.segments.map((segment) => `这是译文：${segment}`));
 
     expect(restored.ok).toBe(true);
     expect(restored.text).toContain('OmniAgent');
@@ -282,8 +283,53 @@ describe('academic translation quality repair', () => {
     expect(restored.text).toContain('arXiv:2607.01234');
     expect(restored.text).toContain('arXiv:hep-th/9901001');
     expect(restored.text).toContain('[1-3, 5]');
-    expect(restored.text).toContain('Sim-to-Real');
+    expect(restored.text).toContain('仿真到现实');
     expect(restored.text).toContain('CBF-MPC');
+  });
+
+  it('constrains recurring academic terms before inference and restores audited Chinese targets', () => {
+    const source =
+      'Humanoid fall recovery uses a diffusion policy during training; KL-divergence and ablation studies ' +
+      'are evaluated with $x^2$, `policy.step()`, https://example.org/paper, and [1].';
+    const prepared = prepareAcademicTranslation(source);
+    const translatedSegments = prepared.segments.map((segment) => {
+      const markers = segment.match(/\b86753\d{2}901\b/gu) ?? [];
+      return `译文保留项：${markers.join('，')}`;
+    });
+
+    const restored = prepared.restore(translatedSegments);
+
+    expect(restored.ok).toBe(true);
+    expect(restored.text).toContain('人形机器人');
+    expect(restored.text).toContain('跌倒恢复');
+    expect(restored.text).toContain('扩散策略');
+    expect(restored.text).toContain('训练');
+    expect(restored.text).toContain('KL 散度');
+    expect(restored.text).toContain('消融实验');
+    expect(restored.text).toContain('$x^2$');
+    expect(restored.text).toContain('`policy.step()`');
+    expect(restored.text).toContain('https://example.org/paper');
+    expect(restored.text).toContain('[1]');
+    expect(restored.text).not.toMatch(/\b86753\d{2}901\b/gu);
+  });
+
+  it('splits marker-dense prose so the local NMT does not drop later terminology', () => {
+    const prepared = prepareAcademicTranslation(
+      'Reinforcement learning improves humanoid motion tracking and fall recovery while ablation studies evaluate the policy and training efficiency.'
+    );
+
+    expect(prepared.segments.length).toBeGreaterThan(1);
+    expect(
+      prepared.segments.every((segment) => (segment.match(/\b86753\d{2}901\b/gu) ?? []).length <= 4)
+    ).toBe(true);
+  });
+
+  it('keeps glossary terms visible when a dedicated MT engine supports native terminology intervention', () => {
+    const source = 'Reinforcement learning improves fall recovery for humanoid robots.';
+    const prepared = prepareAcademicTranslation(source, 480, { protectGlossary: false });
+
+    expect(prepared.segments).toEqual([source]);
+    expect(prepared.restore([source])).toEqual({ ok: true, text: source });
   });
 
   it('restores project URLs deterministically when the translator omits metadata trailers', () => {

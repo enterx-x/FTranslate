@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { prepareAcademicTranslation } from '../../shared/academicTranslationQuality';
 import type { ArxivPaper } from '../lib/arxivClient';
 import { buildArxivPaperInsight, type ArxivPaperMeta } from '../lib/arxivUi';
 import {
@@ -31,6 +32,7 @@ import {
   restoreArxivFastTitleTranslation,
   runArxivTranslationBatches,
   shouldQueueArxivMetadataTranslation,
+  shouldWarmLocalTranslation,
   upsertArxivQueuedPaper
 } from './ArxivSearchPage';
 
@@ -284,6 +286,18 @@ describe('ArxivSearchPage result display', () => {
   it('describes warmed CUDA, CPU fallback, warming, and failed local translation states', () => {
     const baseStatus = {
       preferredEngine: 'nllb-first' as const,
+      hymt: {
+        configured: false,
+        available: false,
+        serverPath: 'llama-server.exe',
+        modelPath: 'Hy-MT2-7B-Q4_K_M.gguf',
+        runtimeDevice: 'unknown' as const,
+        runtimeState: 'failed' as const,
+        lastRuntimeError: 'not configured',
+        lastCheckedAt: '',
+        warmupMs: 0,
+        message: 'HY-MT2 未配置'
+      },
       nllb: {
         configured: true,
         available: false,
@@ -328,6 +342,41 @@ describe('ArxivSearchPage result display', () => {
       ...baseStatus,
       nllb: { ...baseStatus.nllb, runtimeState: 'failed', lastRuntimeError: 'No CTranslate2 device available' }
     })).toBe('NLLB 不可用 · Argos fallback');
+    expect(describeLocalTranslationStatus({
+      ...baseStatus,
+      preferredEngine: 'hy-mt-first',
+      hymt: {
+        ...baseStatus.hymt,
+        configured: true,
+        available: true,
+        runtimeState: 'ready',
+        runtimeDevice: 'cuda'
+      }
+    })).toBe('HY-MT2 7B 质量档 · 可用 · CUDA');
+    expect(describeLocalTranslationStatus({
+      ...baseStatus,
+      preferredEngine: 'hy-mt-first',
+      hymt: {
+        ...baseStatus.hymt,
+        configured: true,
+        runtimeState: 'not_checked'
+      }
+    })).toBe('HY-MT2 7B 质量档 · 已配置 · 待预热');
+
+    const hyMtWaiting = {
+      ...baseStatus,
+      preferredEngine: 'hy-mt-first' as const,
+      hymt: {
+        ...baseStatus.hymt,
+        configured: true,
+        runtimeState: 'not_checked' as const
+      }
+    };
+    expect(shouldWarmLocalTranslation(hyMtWaiting)).toBe(true);
+    expect(shouldWarmLocalTranslation({
+      ...hyMtWaiting,
+      hymt: { ...hyMtWaiting.hymt, available: true, runtimeState: 'ready' }
+    })).toBe(false);
   });
 
   it('upserts queued arXiv papers by stable id', () => {
@@ -478,7 +527,8 @@ describe('ArxivSearchPage result display', () => {
   });
 
   it('accepts a fast title preview only when it restores to a real Chinese translation', () => {
-    expect(restoreArxivFastTitleTranslation(paper.title, ['用于机器人导航的安全强化学习'])).toBe(
+    const marker = prepareAcademicTranslation(paper.title).segments[0].match(/\b86753\d{2}901\b/u)?.[0] ?? '';
+    expect(restoreArxivFastTitleTranslation(paper.title, [`用于机器人导航的安全${marker}`])).toBe(
       '用于机器人导航的安全强化学习'
     );
     expect(restoreArxivFastTitleTranslation(paper.title, [paper.title])).toBe('');

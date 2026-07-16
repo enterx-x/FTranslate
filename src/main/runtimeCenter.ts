@@ -3,7 +3,7 @@ import type { LocalTranslationStatus } from './localTranslationService';
 export type RuntimeCapabilityStatus = 'ready' | 'degraded' | 'unavailable' | 'unknown';
 
 export interface RuntimeCapability {
-  id: 'nllb' | 'argos' | 'pdf2zh' | 'ai-provider';
+  id: 'hy-mt2' | 'nllb' | 'argos' | 'pdf2zh' | 'ai-provider';
   label: string;
   status: RuntimeCapabilityStatus;
   message: string;
@@ -53,6 +53,7 @@ export interface BuildRuntimeCenterSnapshotInput {
 export function buildRuntimeCenterSnapshot(input: BuildRuntimeCenterSnapshotInput): RuntimeCenterSnapshot {
   const queueItems = input.queue ?? [];
   const capabilities = [
+    buildHyMt2Capability(input.localTranslationStatus),
     buildNllbCapability(input.localTranslationStatus),
     buildArgosCapability(input.localTranslationStatus),
     buildPdfCapability(input.pdfTranslationEngine),
@@ -67,6 +68,33 @@ export function buildRuntimeCenterSnapshot(input: BuildRuntimeCenterSnapshotInpu
     capabilities,
     queue,
     actions
+  };
+}
+
+function buildHyMt2Capability(status: LocalTranslationStatus): RuntimeCapability {
+  const runtimeState = status.hymt.runtimeState;
+  const capabilityStatus: RuntimeCapabilityStatus = !status.hymt.configured
+    ? status.nllb.configured
+      ? 'degraded'
+      : 'unavailable'
+    : status.hymt.available || runtimeState === 'ready'
+      ? 'ready'
+      : runtimeState === 'failed'
+        ? 'degraded'
+        : 'unknown';
+  return {
+    id: 'hy-mt2',
+    label: 'HY-MT2',
+    status: capabilityStatus,
+    message: status.hymt.message || status.hymt.lastRuntimeError,
+    details: {
+      runtimeDevice: status.hymt.runtimeDevice,
+      runtimeState,
+      modelPath: status.hymt.modelPath,
+      serverPath: status.hymt.serverPath,
+      warmupMs: status.hymt.warmupMs,
+      lastCheckedAt: status.hymt.lastCheckedAt
+    }
   };
 }
 
@@ -169,6 +197,9 @@ function buildRuntimeActions(
   const actions: string[] = [];
   if (!aiProvider.hasApiKey) {
     actions.push('Configure an AI API key before using cloud-backed analysis.');
+  }
+  if (capabilities.find((capability) => capability.id === 'hy-mt2')?.status !== 'ready') {
+    actions.push('Install HY-MT2 for the highest-quality local academic translation.');
   }
   if (capabilities.find((capability) => capability.id === 'nllb')?.status === 'degraded') {
     const reason = localTranslationStatus.nllb.lastFallbackReason || localTranslationStatus.nllb.lastRuntimeError;

@@ -7,7 +7,19 @@ function makeLocalTranslationStatus(
   worker: Partial<LocalTranslationStatus['worker']> = {}
 ): LocalTranslationStatus {
   return {
-    preferredEngine: 'nllb-first',
+    preferredEngine: 'hy-mt-first',
+    hymt: {
+      configured: true,
+      available: true,
+      serverPath: 'E:\\FTranslateTools\\hy-mt2\\runtime\\llama-server.exe',
+      modelPath: 'E:\\FTranslateTools\\hy-mt2\\models\\Hy-MT2-1.8B-Q4_K_M.gguf',
+      runtimeDevice: 'cuda',
+      runtimeState: 'ready',
+      lastRuntimeError: '',
+      lastCheckedAt: '2026-07-01T00:00:00.000Z',
+      warmupMs: 900,
+      message: 'HY-MT2 ready'
+    },
     nllb: {
       configured: true,
       available: true,
@@ -55,6 +67,7 @@ describe('buildRuntimeCenterSnapshot', () => {
     expect(snapshot.generatedAt).toBe('2026-07-01T00:00:00.000Z');
     expect(snapshot.overallStatus).toBe('ready');
     expect(snapshot.capabilities.map((item) => item.id)).toEqual([
+      'hy-mt2',
       'nllb',
       'argos',
       'pdf2zh',
@@ -119,5 +132,37 @@ describe('buildRuntimeCenterSnapshot', () => {
     expect(snapshot.overallStatus).toBe('unavailable');
     expect(snapshot.capabilities.find((item) => item.id === 'ai-provider')?.status).toBe('unavailable');
     expect(snapshot.actions).toContain('Configure an AI API key before using cloud-backed analysis.');
+  });
+
+  it('marks a missing HY-MT2 runtime as degraded when NLLB remains available', () => {
+    const localTranslationStatus = makeLocalTranslationStatus();
+    localTranslationStatus.hymt = {
+      ...localTranslationStatus.hymt,
+      configured: false,
+      available: false,
+      runtimeState: 'not_checked'
+    };
+
+    const snapshot = buildRuntimeCenterSnapshot({
+      now: '2026-07-01T00:00:00.000Z',
+      localTranslationStatus,
+      pdfTranslationEngine: {
+        status: 'available',
+        message: 'Ready',
+        command: 'pdf2zh',
+        installCommand: ''
+      },
+      aiProvider: {
+        provider: 'deepseek',
+        baseURL: 'https://api.deepseek.com',
+        model: 'deepseek-chat',
+        hasApiKey: true
+      },
+      queue: []
+    });
+
+    expect(snapshot.overallStatus).toBe('degraded');
+    expect(snapshot.capabilities.find((item) => item.id === 'hy-mt2')?.status).toBe('degraded');
+    expect(snapshot.actions).toContain('Install HY-MT2 for the highest-quality local academic translation.');
   });
 });

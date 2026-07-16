@@ -103,7 +103,19 @@ export interface AiModelsResult {
 }
 
 export interface LocalTranslationStatus {
-  preferredEngine: 'nllb-first' | 'argos-first' | 'nllb-only' | 'argos-only';
+  preferredEngine: 'hy-mt-first' | 'hy-mt-only' | 'nllb-first' | 'argos-first' | 'nllb-only' | 'argos-only';
+  hymt: {
+    configured: boolean;
+    available: boolean;
+    serverPath: string;
+    modelPath: string;
+    runtimeDevice: 'cuda' | 'cpu' | 'unknown';
+    runtimeState: 'not_checked' | 'warming' | 'ready' | 'cpu_fallback' | 'failed';
+    lastRuntimeError: string;
+    lastCheckedAt: string;
+    warmupMs: number;
+    message: string;
+  };
   nllb: {
     configured: boolean;
     available: boolean;
@@ -132,7 +144,7 @@ export interface LocalTranslationStatus {
 
 export interface LocalTranslateBatchResult {
   texts: string[];
-  engine: 'nllb-ct2-int8' | 'argos';
+  engine: 'hy-mt2-q4' | 'nllb-ct2-int8' | 'argos';
   device?: 'cuda' | 'cpu' | 'unknown';
   model?: string;
   warning?: string;
@@ -145,7 +157,7 @@ export interface RuntimeCenterSnapshot {
   generatedAt: string;
   overallStatus: RuntimeCapabilityStatus;
   capabilities: Array<{
-    id: 'nllb' | 'argos' | 'pdf2zh' | 'ai-provider';
+    id: 'hy-mt2' | 'nllb' | 'argos' | 'pdf2zh' | 'ai-provider';
     label: string;
     status: RuntimeCapabilityStatus;
     message: string;
@@ -335,7 +347,7 @@ export interface ElectronApi {
   checkRuntimeCenter: () => Promise<RuntimeCenterSnapshot>;
   translateLocalBatch: (request: {
     texts: string[];
-    forceEngine?: 'nllb-ct2' | 'argos';
+    forceEngine?: 'hy-mt2' | 'nllb-ct2' | 'argos';
     sourceLanguage?: 'en' | 'zh';
     targetLanguage?: 'en' | 'zh';
     timeoutMs?: number;

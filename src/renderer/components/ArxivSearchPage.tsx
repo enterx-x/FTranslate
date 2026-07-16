@@ -667,15 +667,25 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       .then((result) => {
         if (!disposed) {
           setLocalTranslationStatus(result);
-          if (result.preferredEngine !== 'argos-only' && result.nllb.configured && !result.nllb.available) {
-            setLocalTranslationStatus({
-              ...result,
-              nllb: {
-                ...result.nllb,
-                runtimeState: 'warming',
-                message: '正在预热 NLLB worker。'
-              }
-            });
+          if (shouldWarmLocalTranslation(result)) {
+            const warmHyMt2 = isHyMt2Preferred(result) && result.hymt.configured;
+            setLocalTranslationStatus(warmHyMt2
+              ? {
+                  ...result,
+                  hymt: {
+                    ...result.hymt,
+                    runtimeState: 'warming',
+                    message: '正在预热 HY-MT2 质量模型。'
+                  }
+                }
+              : {
+                  ...result,
+                  nllb: {
+                    ...result.nllb,
+                    runtimeState: 'warming',
+                    message: '正在预热 NLLB worker。'
+                  }
+                });
             void window.electronAPI
               .warmUpLocalTranslation()
               .then((status) => {
@@ -1013,10 +1023,10 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     }
     const startedAt = Date.now();
     const isModelWarming = Boolean(
-      localTranslationStatus &&
-        localTranslationStatus.preferredEngine !== 'argos-only' &&
-        localTranslationStatus.nllb.configured &&
-        !localTranslationStatus.nllb.available
+      localTranslationStatus && shouldWarmLocalTranslation(localTranslationStatus)
+    );
+    const isHyMt2Warming = Boolean(
+      localTranslationStatus && isHyMt2Preferred(localTranslationStatus) && localTranslationStatus.hymt.configured
     );
     try {
       setTranslatingId(paper.id);
@@ -1027,7 +1037,9 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       });
       setMessage(
         isModelWarming
-          ? '正在首次加载本地 NLLB 模型；卡片内会持续显示阶段与耗时，模型就绪后后续标题进入 1 秒级。'
+          ? isHyMt2Warming
+            ? '正在首次加载 HY-MT2 7B 质量模型；卡片内会持续显示阶段与耗时，模型常驻后将直接使用高质量本地翻译。'
+            : '正在首次加载本地 NLLB 模型；卡片内会持续显示阶段与耗时。'
           : '正在优先生成中文标题；标题显示后会继续完成摘要，不会调用 AI API。'
       );
 
@@ -2450,22 +2462,76 @@ export function describeLocalTranslationStatus(status: LocalTranslationStatus | 
   if (status.preferredEngine === 'argos-only') {
     return 'Argos only';
   }
+  if (status.preferredEngine === 'hy-mt-first' || status.preferredEngine === 'hy-mt-only') {
+    const hyMtLabel = describeHyMt2Tier(status.hymt.modelPath);
+    if (status.hymt.runtimeState === 'warming') {
+      return `${hyMtLabel} · 加载中`;
+    }
+    if (status.hymt.runtimeState === 'ready' && status.hymt.available) {
+      const device = status.hymt.runtimeDevice === 'unknown'
+        ? '设备未确认'
+        : status.hymt.runtimeDevice.toUpperCase();
+      return `${hyMtLabel} · 可用 · ${device}`;
+    }
+    if (status.preferredEngine === 'hy-mt-only') {
+      return status.hymt.configured ? `${hyMtLabel} · 不可用` : `${hyMtLabel} · 未配置`;
+    }
+    if (status.hymt.configured && status.hymt.runtimeState === 'not_checked') {
+      return `${hyMtLabel} · 已配置 · 待预热`;
+    }
+  }
   if (!status.nllb.configured) {
-    return 'NLLB 未配置 · Argos fallback';
+    return status.preferredEngine === 'hy-mt-first'
+      ? 'HY-MT2 未就绪 · NLLB 未配置 · Argos fallback'
+      : 'NLLB 未配置 · Argos fallback';
   }
   if (status.nllb.runtimeState === 'warming') {
-    return 'NLLB 预热中';
+    return status.preferredEngine === 'hy-mt-first' ? 'HY-MT2 降级 · NLLB 预热中' : 'NLLB 预热中';
   }
   if (status.nllb.runtimeState === 'cpu_fallback') {
     return 'NLLB CPU 回退';
   }
   if (status.nllb.runtimeState === 'ready' && status.nllb.available) {
-    return `NLLB 可用 · ${formatLocalTranslationDevice(status)}`;
+    const prefix = status.preferredEngine === 'hy-mt-first'
+      ? status.hymt.configured
+        ? 'HY-MT2 降级 · '
+        : 'HY-MT2 未配置 · '
+      : '';
+    return `${prefix}NLLB 可用 · ${formatLocalTranslationDevice(status)}`;
   }
   if (status.nllb.runtimeState === 'failed') {
-    return 'NLLB 不可用 · Argos fallback';
+    return status.preferredEngine === 'hy-mt-first'
+      ? 'HY-MT2 降级 · NLLB 不可用 · Argos fallback'
+      : 'NLLB 不可用 · Argos fallback';
   }
-  return 'NLLB 已配置 · 未检查';
+  return status.preferredEngine === 'hy-mt-first'
+    ? 'HY-MT2 降级 · NLLB 已配置 · 未检查'
+    : 'NLLB 已配置 · 未检查';
+}
+
+export function shouldWarmLocalTranslation(status: LocalTranslationStatus): boolean {
+  if (isHyMt2Preferred(status) && status.hymt.configured) {
+    return !status.hymt.available;
+  }
+  if (status.preferredEngine === 'argos-only' || status.preferredEngine === 'hy-mt-only') {
+    return false;
+  }
+  return status.nllb.configured && !status.nllb.available;
+}
+
+function isHyMt2Preferred(status: LocalTranslationStatus): boolean {
+  return status.preferredEngine === 'hy-mt-first' || status.preferredEngine === 'hy-mt-only';
+}
+
+function describeHyMt2Tier(modelPath: string): string {
+  const normalized = modelPath.toLowerCase();
+  if (normalized.includes('7b')) {
+    return 'HY-MT2 7B 质量档';
+  }
+  if (normalized.includes('1.8b')) {
+    return 'HY-MT2 1.8B 快速档';
+  }
+  return 'HY-MT2';
 }
 
 function formatLocalTranslationDevice(status: LocalTranslationStatus): string {

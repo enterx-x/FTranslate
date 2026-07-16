@@ -19,11 +19,26 @@ import {
   type PreparedAcademicTranslationRestoreResult
 } from '../shared/academicTranslationQuality';
 import {
+  ACADEMIC_TRANSLATION_GLOSSARY_VERSION,
+  collectAcademicGlossaryMatches
+} from '../shared/academicTranslationGlossary';
+import {
   type LocalTranslateBatchResult,
   type LocalTranslateDirectionOptions,
+  type LocalTranslationPreference,
+  type LocalTranslationRuntimeEngine,
   resetNllbRuntime,
-  translateTextsWithNllbCTranslate2
+  resolveLocalTranslationPreference,
+  translateTextsWithNllbCTranslate2,
+  warmUpNllbTranslator
 } from './localTranslationService';
+import {
+  hasConfiguredHyMt2,
+  resetHyMt2Runtime,
+  resolveHyMt2ModelCacheIdentity,
+  translateTextsWithHyMt2,
+  warmUpHyMt2Translator
+} from './hyMtTranslationService';
 
 interface ArxivTranslationServiceOptions {
   dbPath: string;
@@ -92,12 +107,90 @@ function normalizeTranslationPriority(priority?: ArxivTranslationPriority): Arxi
   }
 }
 
+export function resolveArxivTranslationEngineOrder(
+  preference: LocalTranslationPreference
+): LocalTranslationRuntimeEngine[] {
+  switch (preference) {
+    case 'hy-mt-first':
+      return ['hy-mt2', 'nllb-ct2', 'argos'];
+    case 'hy-mt-only':
+      return ['hy-mt2'];
+    case 'argos-first':
+      return ['argos', 'nllb-ct2'];
+    case 'nllb-only':
+      return ['nllb-ct2'];
+    case 'argos-only':
+      return ['argos'];
+    case 'nllb-first':
+    default:
+      return ['nllb-ct2', 'argos'];
+  }
+}
+
+const FALLBACK_GLOSSARY_MARKER_PATTERN = /\b97531\d{3}809\b/gu;
+
+export async function translateTextsWithProtectedAcademicGlossary(
+  texts: string[],
+  translator: (texts: string[]) => Promise<LocalTranslateBatchResult>
+): Promise<LocalTranslateBatchResult> {
+  const prepared = texts.map(prepareFallbackGlossaryText);
+  const result = await translator(prepared.map((item) => item.text));
+  if (result.texts.length !== prepared.length) {
+    throw new Error('后备翻译引擎返回的文本数量与请求不一致。');
+  }
+  return {
+    ...result,
+    texts: result.texts.map((text, index) => prepared[index]?.restore(text) ?? text)
+  };
+}
+
+function prepareFallbackGlossaryText(source: string): {
+  text: string;
+  restore: (translated: string) => string;
+} {
+  const matches = collectAcademicGlossaryMatches(source).slice(0, 999);
+  if (matches.length === 0) {
+    return { text: source, restore: (translated) => translated };
+  }
+
+  const spans = matches.map((match, index) => ({
+    ...match,
+    marker: `97531${String(index).padStart(3, '0')}809`
+  }));
+  let cursor = 0;
+  let protectedText = '';
+  spans.forEach((span) => {
+    protectedText += `${source.slice(cursor, span.start)}${span.marker}`;
+    cursor = span.end;
+  });
+  protectedText += source.slice(cursor);
+
+  return {
+    text: protectedText,
+    restore: (translated) => {
+      const actualMarkers = translated.match(FALLBACK_GLOSSARY_MARKER_PATTERN) ?? [];
+      const expectedMarkers = spans.map((span) => span.marker);
+      if (
+        actualMarkers.length !== expectedMarkers.length ||
+        expectedMarkers.some((marker) => actualMarkers.filter((item) => item === marker).length !== 1)
+      ) {
+        throw new Error('后备翻译引擎损坏了学术术语占位符。');
+      }
+      return spans.reduce(
+        (restored, span) => restored.replace(span.marker, () => span.target),
+        translated
+      );
+    }
+  };
+}
+
 export class ArxivTranslationService {
   private readonly db: DatabaseSync;
   private readonly translateTextsWithEngine: (texts: string[]) => Promise<LocalTranslateBatchResult>;
   private readonly fallbackTranslateTextsWithEngine?: (texts: string[]) => Promise<LocalTranslateBatchResult>;
   private readonly now: () => number;
   private readonly timeoutMs: number;
+  private readonly protectGlossaryTerms: boolean;
   private readonly translationQueues: Record<ArxivTranslationPriority, QueuedTranslationJob[]> = {
     foreground: [],
     preview: [],
@@ -112,27 +205,86 @@ export class ArxivTranslationService {
     const usesInjectedTranslator = Boolean(
       options.translateText || options.translateTexts || options.translateTextsWithEngine
     );
-    this.translateTextsWithEngine =
-      options.translateTextsWithEngine ??
-      (options.translateTexts
-        ? (async (texts) => ({ texts: (await options.translateTexts?.(texts)) ?? [], engine: 'argos' }))
-        : options.translateText
-          ? (async (texts) => ({
-              texts: await Promise.all(texts.map((text) => options.translateText?.(text) ?? '')),
-              engine: 'argos'
-            }))
-          : ((texts) => translateTextsWithArgosEngine(texts, this.timeoutMs)));
-    this.fallbackTranslateTextsWithEngine =
-      options.fallbackTranslateTextsWithEngine ??
-      (options.translateTextsWithEngine
-        ? ((texts) => translateTextsWithArgosEngine(texts, this.timeoutMs))
-        : !options.translateText && !options.translateTexts
-          ? ((texts) => translateTextsWithNllbCTranslate2(texts, this.timeoutMs))
-        : undefined);
+    const defaultEngineOrder = usesInjectedTranslator
+      ? []
+      : resolveArxivTranslationEngineOrder(resolveLocalTranslationPreference());
+    this.protectGlossaryTerms = !(
+      !usesInjectedTranslator &&
+      defaultEngineOrder[0] === 'hy-mt2' &&
+      hasConfiguredHyMt2()
+    );
+    const createTranslator = (
+      engine: LocalTranslationRuntimeEngine
+    ): ((texts: string[]) => Promise<LocalTranslateBatchResult>) => {
+      const translator: (texts: string[]) => Promise<LocalTranslateBatchResult> = engine === 'hy-mt2'
+        ? ((texts) => translateTextsWithHyMt2(texts, this.timeoutMs))
+        : engine === 'nllb-ct2'
+        ? ((texts) => translateTextsWithNllbCTranslate2(texts, this.timeoutMs))
+        : ((texts) => translateTextsWithArgosEngine(texts, this.timeoutMs));
+      return engine !== 'hy-mt2' && !this.protectGlossaryTerms
+        ? ((texts) => translateTextsWithProtectedAcademicGlossary(texts, translator))
+        : translator;
+    };
+    const createTranslatorChain = (
+      engines: LocalTranslationRuntimeEngine[],
+      startIndex: number,
+      onResolved?: (index: number) => void
+    ): ((texts: string[]) => Promise<LocalTranslateBatchResult>) => async (texts) => {
+      let lastError: unknown = new Error('没有可用的本地翻译引擎。');
+      for (let index = 0; index < engines.length; index += 1) {
+        try {
+          const result = await createTranslator(engines[index] as LocalTranslationRuntimeEngine)(texts);
+          onResolved?.(startIndex + index);
+          return result;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw lastError;
+    };
+    if (options.translateTextsWithEngine) {
+      this.translateTextsWithEngine = options.translateTextsWithEngine;
+      this.fallbackTranslateTextsWithEngine =
+        options.fallbackTranslateTextsWithEngine ?? createTranslator('argos');
+    } else if (options.translateTexts) {
+      this.translateTextsWithEngine = async (texts) => ({
+        texts: (await options.translateTexts?.(texts)) ?? [],
+        engine: 'argos'
+      });
+      this.fallbackTranslateTextsWithEngine = options.fallbackTranslateTextsWithEngine;
+    } else if (options.translateText) {
+      this.translateTextsWithEngine = async (texts) => ({
+        texts: await Promise.all(texts.map((text) => options.translateText?.(text) ?? '')),
+        engine: 'argos'
+      });
+      this.fallbackTranslateTextsWithEngine = options.fallbackTranslateTextsWithEngine;
+    } else {
+      let resolvedPrimaryIndex = 0;
+      this.translateTextsWithEngine = createTranslatorChain(
+        defaultEngineOrder.length > 0 ? defaultEngineOrder : ['nllb-ct2'],
+        0,
+        (index) => {
+          resolvedPrimaryIndex = index;
+        }
+      );
+      this.fallbackTranslateTextsWithEngine = options.fallbackTranslateTextsWithEngine ?? (async (texts) => {
+        const fallbackEngines = defaultEngineOrder.slice(resolvedPrimaryIndex + 1);
+        if (fallbackEngines.length === 0) {
+          throw new Error('没有可用的后备本地翻译引擎。');
+        }
+        return createTranslatorChain(fallbackEngines, resolvedPrimaryIndex + 1)(texts);
+      });
+    }
     this.now = options.now ?? Date.now;
     this.initDatabase();
     if (!usesInjectedTranslator) {
-      void warmUpArgosTranslator(Math.min(this.timeoutMs, 30_000));
+      if (defaultEngineOrder[0] === 'hy-mt2') {
+        void warmUpHyMt2Translator(Math.min(this.timeoutMs, 60_000));
+      } else if (defaultEngineOrder[0] === 'argos') {
+        void warmUpArgosTranslator(Math.min(this.timeoutMs, 30_000));
+      } else {
+        void warmUpNllbTranslator(Math.min(this.timeoutMs, 45_000));
+      }
     }
   }
 
@@ -143,6 +295,7 @@ export class ArxivTranslationService {
       argosPythonRuntime = null;
     }
     resetNllbRuntime();
+    resetHyMt2Runtime();
   }
 
   async translatePaper(
@@ -242,8 +395,12 @@ export class ArxivTranslationService {
           sourceAbstract: item.summary,
           title: isUsableTranslatedText(item.pretranslatedTitleZh, item.title)
             ? preparePretranslatedAcademicText(item.pretranslatedTitleZh)
-            : prepareAcademicTranslation(item.title),
-          abstract: prepareAcademicTranslation(item.summary)
+            : prepareAcademicTranslation(item.title, undefined, {
+                protectGlossary: this.protectGlossaryTerms
+              }),
+          abstract: prepareAcademicTranslation(item.summary, undefined, {
+            protectGlossary: this.protectGlossaryTerms
+          })
         }));
         const texts = preparedItems.flatMap((item) => [...item.title.segments, ...item.abstract.segments]);
         const uniqueBatch = buildUniqueTranslationBatch(texts);
@@ -641,12 +798,14 @@ function evaluatePreparedTranslations(
   });
 }
 
-function buildTranslationCacheKey(input: { stableId: string; title: string; summary: string }): string {
+export function buildTranslationCacheKey(input: { stableId: string; title: string; summary: string }): string {
   return crypto
     .createHash('sha256')
     .update(
       JSON.stringify({
-        version: 6,
+        version: 9,
+        glossary: ACADEMIC_TRANSLATION_GLOSSARY_VERSION,
+        hyMt2Model: resolveHyMt2ModelCacheIdentity(),
         target: 'zh',
         stableId: input.stableId,
         title: input.title,
@@ -731,17 +890,30 @@ function isProbablyUntranslatedText(value: string, source: string): boolean {
   if (translated === original) {
     return true;
   }
-  const cjkCount = value.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
-  if (cjkCount >= 4) {
-    return false;
-  }
   const translatedTokens = new Set(translated.split(/\s+/u).filter((token) => token.length >= 4));
   const originalTokens = original.split(/\s+/u).filter((token) => token.length >= 4);
   if (translatedTokens.size === 0 || originalTokens.length === 0) {
     return false;
   }
   const overlap = originalTokens.filter((token) => translatedTokens.has(token)).length / originalTokens.length;
-  return overlap >= 0.75;
+  if (overlap < 0.6) {
+    return false;
+  }
+
+  // Academic titles often retain model, benchmark, and dataset names. Treat a
+  // high Latin-token overlap as an echo only when the Chinese contribution is
+  // too small to be a substantive translation. This keeps titles such as
+  // "RoboMamba：在 RoboCasa、ManiSkill 与 MetaWorld 上进行基准评测" while
+  // still rejecting outputs that merely prepend "中文：" to the source.
+  const cjkCount = value.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
+  const translatedLatinCount = value.match(/[A-Za-z]/gu)?.length ?? 0;
+  const sourceLatinCount = source.match(/[A-Za-z]/gu)?.length ?? 0;
+  const chineseToSourceRatio = cjkCount / Math.max(1, sourceLatinCount);
+  const chineseOutputShare = cjkCount / Math.max(1, cjkCount + translatedLatinCount);
+  const hasSubstantiveChinese =
+    cjkCount >= 6 && chineseToSourceRatio >= 0.12 && chineseOutputShare >= 0.12;
+
+  return !hasSubstantiveChinese;
 }
 
 function normalizeComparableText(value: string): string {
@@ -753,9 +925,13 @@ function normalizeComparableText(value: string): string {
 }
 
 function buildCompletedTranslationMessage(engine: LocalTranslateBatchResult['engine']): string {
-  return engine === 'nllb-ct2-int8'
-    ? '已使用本地 NLLB CTranslate2 int8 批量翻译并写入 SQLite 缓存。'
-    : '已使用本地 Argos 批量翻译并写入 SQLite 缓存。';
+  if (engine === 'hy-mt2-q4') {
+    return '已使用本地 HY-MT2 专用翻译模型批量翻译并写入 SQLite 缓存。';
+  }
+  if (engine === 'nllb-ct2-int8') {
+    return '已使用本地 NLLB CTranslate2 int8 批量翻译并写入 SQLite 缓存。';
+  }
+  return '已使用本地 Argos 批量翻译并写入 SQLite 缓存。';
 }
 
 function buildCachedTranslationResult(
