@@ -8,7 +8,9 @@ import {
   selectNativePdfImageForCropBox,
   selectNativePdfImagesForCropBox,
   mergePdfFigureAssetUpdate,
-  mergeExtractedFigureAssetsIntoDraft
+  mergeExtractedFigureAssetsIntoDraft,
+  shouldCollectNativePdfImages,
+  buildPdfPageRenderRegion
 } from './presentationFigureAssets';
 
 const cropBox: PresentationFigureCropBox = {
@@ -21,6 +23,46 @@ const cropBox: PresentationFigureCropBox = {
 };
 
 describe('presentationFigureAssets native image selection', () => {
+  it('skips expensive native-image discovery for ordinary charts and tables', () => {
+    const methodFigure = buildFigureCandidate('method-figure');
+    const resultFigure = {
+      ...buildFigureCandidate('result-figure'),
+      figureKind: 'result' as const
+    };
+
+    expect(shouldCollectNativePdfImages([methodFigure, resultFigure])).toBe(false);
+  });
+
+  it('keeps native-image guidance for unadjusted photo-heavy setup figures only', () => {
+    const setupFigure = {
+      ...buildFigureCandidate('setup-figure'),
+      figureKind: 'setup' as const
+    };
+    const manuallyAdjustedSetup = {
+      ...setupFigure,
+      cropManuallyAdjusted: true
+    };
+
+    expect(shouldCollectNativePdfImages([setupFigure])).toBe(true);
+    expect(shouldCollectNativePdfImages([manuallyAdjustedSetup])).toBe(false);
+  });
+
+  it('renders only the expanded figure region instead of rasterizing the full PDF page', () => {
+    const figure = {
+      ...buildFigureCandidate('region-figure'),
+      cropBox
+    };
+
+    const region = buildPdfPageRenderRegion([figure]);
+
+    expect(region).not.toBeNull();
+    expect(region!.x).toBeCloseTo(27);
+    expect(region!.y).toBeCloseTo(109.6);
+    expect(region!.width).toBeCloseTo(546);
+    expect(region!.height).toBeCloseTo(274.4);
+    expect(region!.width * region!.height).toBeLessThan(cropBox.pageWidth * cropBox.pageHeight * 0.4);
+  });
+
   it('keeps resolved native images when PDF.js records extra image coordinates', () => {
     installMockCanvasDocument();
     const rgba = new Uint8ClampedArray(80 * 60 * 4).fill(255);

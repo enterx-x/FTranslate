@@ -12,6 +12,8 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 interface RenderedPdfPage {
   canvas: HTMLCanvasElement;
   scale: number;
+  renderOriginX: number;
+  renderOriginY: number;
   pageNumber: number;
   pageWidth: number;
   pageHeight: number;
@@ -130,6 +132,55 @@ export interface FindPixelBoundsOptions {
   minContentPixels?: number;
 }
 
+export function shouldCollectNativePdfImages(
+  figures: PresentationFigureCandidate[]
+): boolean {
+  return figures.some(
+    (figure) =>
+      figure.cropManuallyAdjusted !== true &&
+      (figure.figureKind === 'setup' || figure.figureKind === 'case')
+  );
+}
+
+export function buildPdfPageRenderRegion(
+  figures: PresentationFigureCandidate[]
+): PresentationFigureCropBox | null {
+  const cropBoxes = figures
+    .filter((figure) => figure.cropBox)
+    .map((figure) =>
+      figure.cropManuallyAdjusted === true
+        ? figure.cropBox!
+        : expandCropBoxForRendering(figure.cropBox!)
+    );
+  if (cropBoxes.length === 0) {
+    return null;
+  }
+
+  const pageWidth = cropBoxes[0].pageWidth;
+  const pageHeight = cropBoxes[0].pageHeight;
+  const left = clamp(Math.min(...cropBoxes.map((box) => box.x)), 0, pageWidth - 1);
+  const top = clamp(Math.min(...cropBoxes.map((box) => box.y)), 0, pageHeight - 1);
+  const right = clamp(
+    Math.max(...cropBoxes.map((box) => box.x + box.width)),
+    left + 1,
+    pageWidth
+  );
+  const bottom = clamp(
+    Math.max(...cropBoxes.map((box) => box.y + box.height)),
+    top + 1,
+    pageHeight
+  );
+
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+    pageWidth,
+    pageHeight
+  };
+}
+
 export async function enrichPresentationDraftWithPdfFigureCrops(
   draft: PresentationDraft,
   pdfData: Uint8Array,
@@ -198,7 +249,15 @@ export async function extractPdfFigureAssets(
         stage: 'rendering-page'
       });
       const renderedPages = new Map<number, RenderedPdfPage>();
-      const page = await getRenderedPage(pdfDocument, renderedPages, pageNumber, options.renderScale);
+      const collectNativeImages = shouldCollectNativePdfImages(pageFigures);
+      const page = await getRenderedPage(
+        pdfDocument,
+        renderedPages,
+        pageNumber,
+        options.renderScale,
+        collectNativeImages,
+        collectNativeImages ? null : buildPdfPageRenderRegion(pageFigures)
+      );
       try {
         for (const figure of pageFigures) {
           if (options.isCancelled?.()) {
@@ -405,7 +464,9 @@ async function getRenderedPage(
   pdfDocument: PDFDocumentProxy,
   cache: Map<number, RenderedPdfPage>,
   pageNumber: number,
-  renderScale = DEFAULT_RENDER_SCALE
+  renderScale = DEFAULT_RENDER_SCALE,
+  collectNativeImages = false,
+  renderRegion: PresentationFigureCropBox | null = null
 ): Promise<RenderedPdfPage> {
   const cached = cache.get(pageNumber);
   if (cached) {
@@ -415,17 +476,39 @@ async function getRenderedPage(
   const page = await pdfDocument.getPage(pageNumber);
   const viewport = page.getViewport({ scale: renderScale });
   const unitViewport = page.getViewport({ scale: 1 });
-  const operatorListPromise = page.getOperatorList().catch(() => null);
+  const safeRenderRegion = renderRegion
+    ? {
+        x: clamp(renderRegion.x, 0, unitViewport.width - 1),
+        y: clamp(renderRegion.y, 0, unitViewport.height - 1),
+        width: clamp(renderRegion.width, 1, unitViewport.width - renderRegion.x),
+        height: clamp(renderRegion.height, 1, unitViewport.height - renderRegion.y)
+      }
+    : null;
+  // `getOperatorList()` plus `recordImages` can be substantially slower than
+  // the high-resolution page render itself. Most scientific charts are
+  // vector-heavy and are exported from the rendered page, so only collect
+  // embedded-image geometry for photo-heavy setup/case candidates.
+  const operatorListPromise = collectNativeImages
+    ? page.getOperatorList().catch(() => null)
+    : null;
   const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.ceil(viewport.width));
-  canvas.height = Math.max(1, Math.ceil(viewport.height));
+  canvas.width = Math.max(1, Math.ceil((safeRenderRegion?.width ?? unitViewport.width) * renderScale));
+  canvas.height = Math.max(1, Math.ceil((safeRenderRegion?.height ?? unitViewport.height) * renderScale));
   const context = canvas.getContext('2d');
   if (!context) {
     throw new Error('Cannot create canvas context for PDF figure crop.');
   }
 
-  await page.render({ canvas, canvasContext: context, viewport, recordImages: true }).promise;
-  const operatorList = await operatorListPromise;
+  await page.render({
+    canvas,
+    canvasContext: context,
+    viewport,
+    transform: safeRenderRegion
+      ? [1, 0, 0, 1, -safeRenderRegion.x * renderScale, -safeRenderRegion.y * renderScale]
+      : undefined,
+    recordImages: collectNativeImages
+  }).promise;
+  const operatorList = operatorListPromise ? await operatorListPromise : null;
   const nativeImages = operatorList
     ? extractNativePdfImagesFromRenderedPage(
         page as unknown as PdfPageWithImageObjects,
@@ -438,6 +521,8 @@ async function getRenderedPage(
   const renderedPage = {
     canvas,
     scale: renderScale,
+    renderOriginX: safeRenderRegion?.x ?? 0,
+    renderOriginY: safeRenderRegion?.y ?? 0,
     pageNumber,
     pageWidth: unitViewport.width,
     pageHeight: unitViewport.height,
@@ -577,8 +662,8 @@ function cropFigureFromPage(
   options: { expand?: boolean; trim?: boolean } = {}
 ): ExtractedFigureImageAsset | null {
   const safeCropBox = options.expand === false ? cropBox : expandCropBoxForRendering(cropBox);
-  const sx = clamp(Math.round(safeCropBox.x * page.scale), 0, page.canvas.width - 1);
-  const sy = clamp(Math.round(safeCropBox.y * page.scale), 0, page.canvas.height - 1);
+  const sx = clamp(Math.round((safeCropBox.x - page.renderOriginX) * page.scale), 0, page.canvas.width - 1);
+  const sy = clamp(Math.round((safeCropBox.y - page.renderOriginY) * page.scale), 0, page.canvas.height - 1);
   const sw = clamp(Math.round(safeCropBox.width * page.scale), 1, page.canvas.width - sx);
   const sh = clamp(Math.round(safeCropBox.height * page.scale), 1, page.canvas.height - sy);
   if (sw <= 1 || sh <= 1) {

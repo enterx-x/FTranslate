@@ -24,6 +24,36 @@ describe('summarizePdfFigureAssets', () => {
 });
 
 describe('PdfFigureWorkspaceDialog', () => {
+  it('labels not-yet-rendered candidates as waiting while extraction is active', () => {
+    const markup = renderToStaticMarkup(createElement(PdfFigureWorkspaceDialog, {
+      open: true,
+      figures: [buildFigure('pending')],
+      isExtracting: true,
+      progress: { processed: 0, total: 1, pageNumber: 1, stage: 'rendering-page' },
+      onClose: () => undefined,
+      onToggleFigure: () => undefined,
+      onSetSelection: () => undefined,
+      onNavigateToPage: () => undefined,
+      onExtractPending: () => undefined,
+      onRescan: () => undefined,
+      onCancelExtraction: () => undefined,
+      onExportSelected: () => undefined,
+      onGeneratePresentation: () => undefined,
+      onLoadPagePreview: async () => ({
+        pageNumber: 1,
+        pageWidth: 100,
+        pageHeight: 100,
+        pixelWidth: 350,
+        pixelHeight: 350,
+        dataUrl: 'data:image/png;base64,a'
+      }),
+      onApplyCrop: async () => undefined
+    }));
+
+    expect(markup).toContain('等待提取');
+    expect(markup).not.toContain('需调整');
+  });
+
   it('keeps the progress track mounted while idle so the content remains in the third grid row', () => {
     const markup = renderToStaticMarkup(createElement(PdfFigureWorkspaceDialog, {
       open: true,

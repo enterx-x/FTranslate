@@ -253,7 +253,7 @@ export function PdfFigureWorkspaceDialog(props: PdfFigureWorkspaceDialogProps) {
                 ['all', `全部 ${summary.totalCount}`],
                 ['selected', `已选 ${selectedCount}`],
                 ['ready', `可用 ${summary.readyCount}`],
-                ['review', `待调整 ${summary.totalCount - summary.readyCount}`],
+                ['review', `${props.isExtracting ? '待提取' : '待调整'} ${summary.totalCount - summary.readyCount}`],
                 ['figure', '图像'],
                 ['table', '表格']
               ] as Array<[FigureFilter, string]>).map(([value, label]) => (
@@ -293,7 +293,7 @@ export function PdfFigureWorkspaceDialog(props: PdfFigureWorkspaceDialogProps) {
                     </button>
                     <div className="figure-assets-card-meta">
                       <strong>{figure.figureLabel ?? `第 ${figure.pageNumber} 页图表`}</strong>
-                      <span>{getFigureStatusLabel(figure)}</span>
+                      <span>{getFigureStatusLabel(figure, props.isExtracting)}</span>
                     </div>
                     <p>{figure.caption}</p>
                   </article>
@@ -427,8 +427,8 @@ function FigureCropEditor({
   );
 }
 
-function getFigureStatusLabel(figure: PresentationFigureCandidate): string {
-  if (!figure.imageDataUrl) return '需调整';
+function getFigureStatusLabel(figure: PresentationFigureCandidate, isExtracting = false): string {
+  if (!figure.imageDataUrl) return isExtracting ? '等待提取' : '需调整';
   const pixelWidth = figure.imagePixelWidth ?? 0;
   const pixelHeight = figure.imagePixelHeight ?? 0;
   const cropDensity = figure.cropBox
