@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPdfDocumentOutline,
   buildPdfPageOutline,
+  hashText,
   orderPositionedTextItemsForReading,
   type PositionedPdfTextItem
 } from './pdfTextStructure';
@@ -11,6 +12,16 @@ function item(str: string, x: number, y: number, width = 120, height = 10): Posi
 }
 
 describe('PDF text structure extraction', () => {
+  it('hashes string-like PDF text without requiring a string iterator', () => {
+    const safariString = new String('Abstract—Safe robot learning.') as unknown as string;
+    Object.defineProperty(safariString, Symbol.iterator, {
+      configurable: true,
+      value: undefined
+    });
+
+    expect(hashText(safariString)).toBe(hashText('Abstract—Safe robot learning.'));
+  });
+
   it('rebuilds reading order for two-column academic pages', () => {
     const outline = buildPdfPageOutline(1, [
       item('right column later', 330, 120),

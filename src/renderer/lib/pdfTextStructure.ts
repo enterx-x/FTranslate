@@ -112,7 +112,7 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
       return;
     }
 
-    const previousLine = currentParagraph.at(-1);
+    const previousLine = currentParagraph[currentParagraph.length - 1];
     const paragraphGapThreshold = previousLine
       ? Math.max(medianLineHeight * 2.4, previousLine.height * 1.75, line.height * 1.75)
       : PARAGRAPH_GAP_THRESHOLD;
@@ -157,7 +157,7 @@ function mergeDocumentParagraphContinuations(blocks: ExtractedPdfBlock[]): Extra
     const inheritedSection = isDefaultPageSection(block.section) && activeSection ? activeSection : block.section;
     const paragraphBlock =
       inheritedSection === block.section ? block : createBlock(block.page, block.type, inheritedSection, block.original, block.bounds);
-    const previous = merged.at(-1);
+    const previous = merged[merged.length - 1];
 
     if (previous && shouldMergeAdjacentParagraphs(previous, paragraphBlock)) {
       const mergedOriginal = joinParagraphLines([previous.original, paragraphBlock.original]);
@@ -277,8 +277,8 @@ function buildLines<TItem extends PositionedPdfTextItem>(items: TItem[]): Array<
     const segments: TItem[][] = [];
 
     orderedItems.forEach((item) => {
-      const currentSegment = segments.at(-1);
-      const previousItem = currentSegment?.at(-1);
+      const currentSegment = segments[segments.length - 1];
+      const previousItem = currentSegment?.[currentSegment.length - 1];
       const horizontalGap = previousItem ? item.x - (previousItem.x + previousItem.width) : 0;
       const baselineDrift = previousItem ? Math.abs(previousItem.y - item.y) : 0;
       const currentSegmentWidth =
@@ -808,8 +808,12 @@ function mergeBounds(left?: PdfBlockBounds, right?: PdfBlockBounds): PdfBlockBou
 
 export function hashText(value: string): string {
   let hash = 2166136261;
-  for (const character of value) {
-    hash ^= character.charCodeAt(0);
+  const text = String(value);
+  // Use UTF-16 indexing instead of String's iterator. Some iPhone Safari
+  // runtimes expose an incomplete iterator while processing PDF.js text items,
+  // which made `for...of` fail before the first extracted block was cached.
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);

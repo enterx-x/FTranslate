@@ -711,10 +711,19 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 完整验证：新增混合首页双栏、浮点基线漂移、科研复合词、OCR 坐标排序、图片块过滤和 AI JSON 兜底测试；`npm run build` 与 `npm run dist` 均通过（84 个测试文件、509 项测试，TypeScript、桌面 renderer/Electron 与 Windows NSIS 安装包成功），`npm run visual:check`、本地和固定生产地址的 `npm run visual:check:mobile` 均通过，相关桌面与 390px/430px 手机截图经人工复查未见新增重叠、遮挡、横向溢出或英文—中文错配。`npm run ios:sync` 已同步最新网页与 3 个 Capacitor 插件；安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,361,395 bytes，SHA-256 为 `EA258EF70DB973129C739EE107D18F9977252A4AB1644A664FD663D17EBFD5ED`；`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。
 - 公网发布：Vercel 生产部署 `dpl_GgPDX9xokkyTEzNUw8442BgGSy8s` 已绑定固定地址 `https://ftranslate-mobile.vercel.app`，带缓存破除参数访问返回 200。线上完整移动回归确认：导入仅提取不翻译、切换/退出后保留 3 页 6 个原文块、点击“全文翻译”后才产生 3 次按页 AI 请求、刷新后恢复 PDF/双语结果/API Key，并继续通过真实 arXiv PDF 下载入库、改名标签和 IndexedDB 删除闭环。
 
+### 2026-07-17 iPhone Safari 文字层提取兼容修复
+
+- 真机错误：`Dreamtouch 2026.4.14` 第 1 页直接显示“全文原文提取失败”，底部错误为 `undefined is not a function (near '...r of e...')`；原始 PDF 可打开，错误发生在直接读取文字层后的首个正文块落盘前。
+- 根因复现：移动生产包中 `hashText` 被构建为 `for (const r of e)`，Safari 在该 PDF.js 文字对象路径上无法提供可用的字符串迭代器。新增一个显式移除 `Symbol.iterator` 的字符串对象回归用例后，旧实现稳定复现 `TypeError: value is not iterable`，与真机错误位置一致。
+- 修复：`hashText` 改用 `String(value)` 与 UTF-16 下标/`charCodeAt(index)`，并移除同一重排路径的 `Array.prototype.at` 依赖。单页文字层读取或重排若仍抛出浏览器异常，会记录警告并自动改用本地 OCR，而不是把整篇标记为失败。
+- 完整验证：专项 `pdfTextStructure` 与 `mobileLocalOcr` 测试通过（4 个测试文件、109 项测试）；`npm run build` 通过（84 个测试文件、510 项测试），`npm run build:mobile`、`npm run visual:check` 与本地/固定生产地址的 `npm run visual:check:mobile` 均通过。人工复查 390px OCR-only 与双语截图，未见新增重叠、截断、横向溢出或英中错配。构建产物检查确认旧的字符串 `for...of` 哈希循环已消失，UTF-16 下标循环已进入 `MobileApp-Dy0-l9yR.js`。
+- 交付验证：`npm run dist` 与 `npm run ios:sync` 通过；Windows 安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,361,707 bytes，SHA-256 为 `A33D4BE4212F59D285ABDBC846B23A5D58A47F96CE4C6FAD7FF7346F729B777D`；`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。Vercel 生产部署 `dpl_5oWyZQKoWynAoXBhJXYMzZYNDYei` 已绑定 `https://ftranslate-mobile.vercel.app`，线上 HTML 返回 200 并加载最新 `index-CiK3lVQU.js` / `MobileApp-Dy0-l9yR.js`，固定生产地址完整手机回归通过。
+
 ### 问题台账
 
 | 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
 | --- | --- | --- | --- | --- |
+| 2026-07-17 | iPhone Safari 第 1 页直接原文提取报 `undefined is not a function (near '...r of e...')` | PDF 文字块哈希使用字符串 `for...of`，真机该路径返回不可迭代的字符串对象；且文字层异常没有页级 OCR 降级 | 已用不可迭代字符串对象稳定复现并改为 UTF-16 下标哈希；文字层单页异常现在自动降级 OCR | 部署后在同一 iPhone 对 `Dreamtouch 2026.4.14` 点击“重新提取”，无需清除 Safari 数据 |
 | 2026-07-16 | 图文混排、双栏论文首页 OCR 出现明显错字、裁断和阅读顺序错误 | 所有 PDF 都被降采样 JPEG 整页 OCR；忽略文字层和 OCR 坐标/块类型；摘要右栏未继承 `Abstract` section | 已改为文字层优先、2600px PNG 本地 OCR 兜底、坐标版面重排和仅在翻译时启用的 AI 保守校对；真实论文首页复现已恢复完整双栏摘要并发布生产站点 | 用截图中的原始匿名 PDF 在 iPhone Safari 重新打开；版本 4 会自动清除旧错误原文并重做，真机确认该文件是否直接命中文字层 |
 | 2026-07-16 | 导入 PDF 后不应自动翻译；应先 OCR 全文，用户点击“全文翻译”后才开始 | 旧扫描件流程把进入连续双语同时当作 OCR 和翻译启动动作，OCR 与 DeepSeek 状态耦合 | 已拆成应用级后台全文 OCR 与阅读器手动全文翻译两阶段；自动化断言 OCR 阶段翻译请求为 0，点击后才按页翻译 | 部署后用原问题 PDF 在 iPhone Safari 真机导入，观察长文 OCR 的耗时、发热和锁屏/切后台后的 WebKit 持续性 |
 | 2026-07-16 | API Key 刷新后丢失，导入/译文缓存缺少明确保证，OCR 出现一词一段或断词 | 配置序列化主动排除 Key；OCR 无条件信任碎片化版面段落 | Key 改为本机 Preferences 持久化；PDF/译文恢复纳入刷新回归；OCR 对逐词结果退回整页自然段并修复跨碎片连字符 | 真机用原问题 PDF 重新 OCR 一页，确认真实 Tesseract 输出能恢复为完整自然段；不要清除 Safari 网站数据 |

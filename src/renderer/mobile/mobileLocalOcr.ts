@@ -191,7 +191,18 @@ export async function recognizePdfPagesLocally(
       });
       const page = await pdfDocument.getPage(pageNumber);
       try {
-        const embeddedBlocks = await extractEmbeddedPdfTextBlocks(page, pageNumber);
+        let embeddedBlocks: LocalOcrBlock[] = [];
+        try {
+          embeddedBlocks = await extractEmbeddedPdfTextBlocks(page, pageNumber);
+        } catch (textLayerError) {
+          console.warn(`PDF page ${pageNumber} text-layer extraction failed; falling back to local OCR.`, textLayerError);
+          options.onProgress?.({
+            page: pageNumber,
+            pageCount,
+            progress: 0,
+            status: `第 ${pageNumber} / ${pageCount} 页文字层读取异常，正在改用本地 OCR…`
+          });
+        }
         let blocks: LocalOcrBlock[];
         let source: 'text' | 'ocr';
         if (embeddedBlocks.length > 0) {
@@ -475,7 +486,7 @@ function repairOcrParagraphFragments(candidates: string[], coalesceFragmentedSet
     if (!normalized) {
       continue;
     }
-    const previous = repaired.at(-1);
+    const previous = repaired[repaired.length - 1];
     if (previous && shouldJoinOcrParagraphFragments(previous, normalized)) {
       repaired[repaired.length - 1] = joinOcrParagraphFragments(previous, normalized);
     } else {
