@@ -42,4 +42,4 @@
 - [x] 运行聚焦测试、typecheck、build 与必要视觉检查。
 - [x] 检查非 13 号绘图 worktree，不合并其改动。
 - [x] 运行 `npm run dist` 并校验安装包 SHA-256。
-- [ ] 检查 diff，提交并推送当前分支。
+- [x] 检查 diff，提交并推送当前分支。
