@@ -4,7 +4,9 @@ import {
   assertMobilePdfByteLength,
   copyPdfBytesForIndexedDb,
   formatMobilePdfDownloadHttpError,
+  parseMobileTranslationPreferences,
   readMobilePdfResponse,
+  serializeMobileTranslationPreferences,
   validateMobilePdfHeader
 } from './mobileStorage';
 
@@ -43,5 +45,39 @@ describe('mobile PDF storage guards', () => {
     expect(formatMobilePdfDownloadHttpError(404)).toContain('PDF 暂未开放');
     expect(formatMobilePdfDownloadHttpError(429)).toContain('请求过于频繁');
     expect(formatMobilePdfDownloadHttpError(500)).toBe('PDF 下载失败：HTTP 500');
+  });
+
+  it('persists the API key with the local translation endpoint settings', () => {
+    const serialized = serializeMobileTranslationPreferences({
+      baseURL: ' https://api.deepseek.com/v1/ ',
+      model: ' deepseek-chat ',
+      apiKey: ' sk-local-only '
+    });
+    expect(JSON.parse(serialized)).toEqual({
+      baseURL: 'https://api.deepseek.com/v1/',
+      model: 'deepseek-chat',
+      apiKey: 'sk-local-only'
+    });
+    expect(parseMobileTranslationPreferences(serialized)).toEqual({
+      baseURL: 'https://api.deepseek.com/v1/',
+      model: 'deepseek-chat',
+      apiKey: 'sk-local-only'
+    });
+  });
+
+  it('recovers safe defaults from an old or malformed translation preference record', () => {
+    expect(parseMobileTranslationPreferences(JSON.stringify({
+      baseURL: 'https://api.deepseek.com/v1',
+      model: 'deepseek-chat'
+    }))).toEqual({
+      baseURL: 'https://api.deepseek.com/v1',
+      model: 'deepseek-chat',
+      apiKey: ''
+    });
+    expect(parseMobileTranslationPreferences('{bad')).toEqual({
+      baseURL: 'https://api.openai.com/v1',
+      model: 'gpt-4.1-mini',
+      apiKey: ''
+    });
   });
 });

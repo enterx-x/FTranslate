@@ -9,7 +9,8 @@ import {
   type MobilePaper,
   type MobilePdfKind,
   type MobileStoredPdf,
-  type MobileTranslationEntry
+  type MobileTranslationEntry,
+  type MobileTranslationSession
 } from './mobileTypes';
 import { buildMobileWebPdfUrl } from './mobileWeb';
 import { validatePdfDocumentData } from '../lib/pdfOutlineExtraction';
@@ -18,6 +19,11 @@ const MOBILE_LIBRARY_KEY = 'pdfTranslationReader:mobileLibrary:v1';
 const MOBILE_TRANSLATION_PREFERENCES_KEY = 'pdfTranslationReader:mobileTranslationPreferences:v1';
 const MOBILE_PDF_DATABASE_NAME = 'pdfTranslationReader:mobilePdfFiles:v1';
 const MOBILE_PDF_OBJECT_STORE = 'pdfFiles';
+const DEFAULT_MOBILE_TRANSLATION_SESSION: MobileTranslationSession = {
+  baseURL: 'https://api.openai.com/v1',
+  model: 'gpt-4.1-mini',
+  apiKey: ''
+};
 export const MAX_MOBILE_PDF_BYTES = 64 * 1024 * 1024;
 const MOBILE_PDF_DOWNLOAD_TIMEOUT_MS = 45_000;
 
@@ -194,28 +200,60 @@ export async function savePaperTranslations(
   });
 }
 
-export async function loadTranslationPreferences(): Promise<{ baseURL: string; model: string }> {
-  const defaults = { baseURL: 'https://api.openai.com/v1', model: 'gpt-4.1-mini' };
+export async function loadTranslationPreferences(): Promise<MobileTranslationSession> {
   const { value } = await Preferences.get({ key: MOBILE_TRANSLATION_PREFERENCES_KEY });
+  return parseMobileTranslationPreferences(value);
+}
+
+export function parseMobileTranslationPreferences(value: string | null): MobileTranslationSession {
   if (!value) {
-    return defaults;
+    return { ...DEFAULT_MOBILE_TRANSLATION_SESSION };
   }
   try {
-    const parsed = JSON.parse(value) as Partial<typeof defaults>;
+    const parsed = JSON.parse(value) as Partial<MobileTranslationSession>;
     return {
-      baseURL: typeof parsed.baseURL === 'string' && parsed.baseURL.trim() ? parsed.baseURL : defaults.baseURL,
-      model: typeof parsed.model === 'string' && parsed.model.trim() ? parsed.model : defaults.model
+      baseURL: typeof parsed.baseURL === 'string' && parsed.baseURL.trim()
+        ? parsed.baseURL.trim()
+        : DEFAULT_MOBILE_TRANSLATION_SESSION.baseURL,
+      model: typeof parsed.model === 'string' && parsed.model.trim()
+        ? parsed.model.trim()
+        : DEFAULT_MOBILE_TRANSLATION_SESSION.model,
+      apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : ''
     };
   } catch {
-    return defaults;
+    return { ...DEFAULT_MOBILE_TRANSLATION_SESSION };
   }
 }
 
-export async function saveTranslationPreferences(value: { baseURL: string; model: string }): Promise<void> {
+export function serializeMobileTranslationPreferences(value: MobileTranslationSession): string {
+  return JSON.stringify({
+    baseURL: value.baseURL.trim(),
+    model: value.model.trim(),
+    apiKey: value.apiKey.trim()
+  });
+}
+
+export async function saveTranslationPreferences(value: MobileTranslationSession): Promise<void> {
   await Preferences.set({
     key: MOBILE_TRANSLATION_PREFERENCES_KEY,
-    value: JSON.stringify({ baseURL: value.baseURL.trim(), model: value.model.trim() })
+    value: serializeMobileTranslationPreferences(value)
   });
+}
+
+export async function requestPersistentMobileStorage(): Promise<boolean> {
+  if (Capacitor.isNativePlatform()) {
+    return true;
+  }
+  // file:// pages have an opaque origin, so a persistence request cannot make
+  // their browser storage durable. The deployed mobile reader uses HTTPS.
+  if (window.location.protocol === 'file:') {
+    return false;
+  }
+  try {
+    return await navigator.storage?.persist?.() ?? false;
+  } catch {
+    return false;
+  }
 }
 
 export function uint8ArrayToBase64(bytes: Uint8Array): string {

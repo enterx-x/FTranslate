@@ -2,6 +2,7 @@ const path = require('node:path');
 const { app, BrowserWindow } = require('electron');
 
 const root = path.resolve(__dirname, '..');
+app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-gpu');

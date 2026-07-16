@@ -636,7 +636,7 @@ export function MobileReaderScreen({
             const pending = pendingTranslationRef.current;
             pendingTranslationRef.current = null;
             setSettingsOpen(false);
-            setStatus('翻译设置已更新；API Key 仅保留在本次运行会话。');
+            setStatus('翻译设置已更新；API Key 已保存在当前设备。');
             if (pending?.type === 'all') {
               void handleTranslateAll(next);
             } else if (pending?.type === 'block') {

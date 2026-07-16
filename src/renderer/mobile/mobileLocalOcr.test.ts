@@ -26,6 +26,49 @@ The policy remains safe under boun-\nded disturbances.`)).toEqual([
     ]);
   });
 
+  it('rejects one-word layout fragmentation and keeps fallback paragraphs intact', () => {
+    expect(extractLocalOcrParagraphs(`The policy remains safe under bounded disturbances.
+
+The controller preserves the original paragraph while translating it.`, [
+      {
+        paragraphs: [
+          { text: 'The' },
+          { text: 'policy' },
+          { text: 'remains' },
+          { text: 'safe' },
+          { text: 'under' },
+          { text: 'bounded' },
+          { text: 'disturbances.' },
+          { text: 'The' },
+          { text: 'controller' },
+          { text: 'preserves' },
+          { text: 'the' },
+          { text: 'original' },
+          { text: 'paragraph' },
+          { text: 'while' },
+          { text: 'translating' },
+          { text: 'it.' }
+        ]
+      }
+    ])).toEqual([
+      { type: 'paragraph', original: 'The policy remains safe under bounded disturbances.' },
+      { type: 'paragraph', original: 'The controller preserves the original paragraph while translating it.' }
+    ]);
+  });
+
+  it('repairs a word split across adjacent OCR layout fragments', () => {
+    expect(extractLocalOcrParagraphs('', [
+      {
+        paragraphs: [
+          { text: 'The inter-' },
+          { text: 'action remains stable under bounded disturbances.' }
+        ]
+      }
+    ])).toEqual([
+      { type: 'paragraph', original: 'The interaction remains stable under bounded disturbances.' }
+    ]);
+  });
+
   it('builds stable ordered OCR blocks without pretending they are translated', () => {
     const blocks = buildLocalOcrBlocks(2, [
       { type: 'heading', original: 'Methods' },

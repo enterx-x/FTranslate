@@ -677,10 +677,22 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 全量验证：`npm run dist` 通过（84 个测试文件、497 项测试、TypeScript、桌面 renderer/Electron 和 Windows NSIS 安装包）；`npm run ios:sync` 同步最新移动资源和 3 个 Capacitor 插件；`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。本地与最终生产地址的移动回归均通过。
 - 公网发布：最终 Vercel 部署 `dpl_6jeMe7tr2Yxb96wZtLAbKBRTXQnF` 已绑定 `https://ftranslate-mobile.vercel.app`。带缓存参数 `?v=20260715-ocr-gap-recovery-final` 通过真实 arXiv 检索/PDF 入库、OCR 中途切换与退出恢复、三页完成后整页刷新恢复 6 个双语块、紧凑字号、改名标签和删除闭环；首缺页迁移由专项单元测试覆盖。
 
+### 2026-07-16 本机完整缓存与 OCR 段落完整性
+
+- 用户要求：API Key 与 Base URL/模型一起缓存；导入 PDF、OCR 原文和译文在退出或刷新后继续存在；OCR 不能把一个单词或一个原文段落拆成多个双语块。
+- 根因：`saveTranslationPreferences` 只序列化 Base URL 与模型，主动丢弃 API Key；OCR 只要拿到 `blocks[].paragraphs` 就无条件优先使用，部分扫描页返回“一词一个 paragraph”时会直接生成大量碎片翻译。
+- 实现：翻译配置本地记录升级为 `baseURL + model + apiKey`，兼容没有 Key 的旧记录，清空 Key 后保存即可删除；网页启动时申请持久存储。导入/arXiv PDF 继续以 IndexedDB `ArrayBuffer` 保存，OCR 原文与译文继续按论文串行落盘。OCR 新增碎片质量判断：版面段落明显过碎且与整页文本一致时使用整页自然段；跨段的 `inter-` + `action` 会重连为 `interaction`，只有整页文本同样无法提供结构时才保守合并碎片。
+- 安全边界：API Key 不上传 FTranslate/Vercel，但浏览器 Preferences 不是 iOS Keychain；共享设备不应保存。清除 Safari 网站数据仍会删除论文库、PDF、译文和 Key，当前版本不提供账号或云同步。
+- 回归：单元测试覆盖 Key 的序列化、旧配置迁移、损坏配置回退、一词一段回退与跨碎片断词修复；移动视觉脚本把第 1 页 OCR 版面故意拆成逐词结果，并在整页 reload 后检查导入 PDF、每页两个完整双语段落及 `visual-key` 均恢复。
+- 视觉对抗式审查：`npm run visual:check:mobile` 在沙箱外真实 Electron 中通过；人工检查 `.tmp-mobile-visual-check/08b-reader-scanned-bilingual-390x844.png`、`08d-reader-scanned-novel-430x932.png`、`03-reader-inline-translation-390x844.png` 与 `06-library-paper-managed-390x844.png`，未发现单词独立成段、原文/译文错位、按钮遮挡、横向溢出或字号重新膨胀。测试运行器显式关闭硬件加速，避免受限 Windows 会话的 GPU 子进程干扰视觉回归。
+- 完整验证：`npm run build` 与 `npm run dist` 通过（84 个测试文件、501 项测试、TypeScript、桌面 renderer/Electron 与 Windows NSIS 安装包）；`npm run visual:check`、`npm run visual:check:mobile` 通过；`npm run ios:sync` 已把最新移动资源同步至 iOS 工程；`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。`npm run dist` 首次在受限沙箱内因 `rcedit-x64.exe: Access is denied` 失败，移出沙箱后同一命令成功，确认不是源码或安装包配置错误。
+- 公网发布：Vercel 生产部署 `dpl_GxyM7FmcTeDRjVgX1nkcHmbLwGDW` 已重新绑定 `https://ftranslate-mobile.vercel.app`。直接对固定生产地址运行移动回归，完成真实 arXiv 检索/PDF 下载入库、逐词 OCR 伪输入纠错、退出切换、整页刷新后恢复原 PDF、6 个双语块与 `visual-key`，全部通过。
+
 ### 问题台账
 
 | 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
 | --- | --- | --- | --- | --- |
+| 2026-07-16 | API Key 刷新后丢失，导入/译文缓存缺少明确保证，OCR 出现一词一段或断词 | 配置序列化主动排除 Key；OCR 无条件信任碎片化版面段落 | Key 改为本机 Preferences 持久化；PDF/译文恢复纳入刷新回归；OCR 对逐词结果退回整页自然段并修复跨碎片连字符 | 真机用原问题 PDF 重新 OCR 一页，确认真实 Tesseract 输出能恢复为完整自然段；不要清除 Safari 网站数据 |
 | 2026-07-15 | Vercel CLI 尚未获得部署授权 | 本机没有既有 Vercel 凭据，首次部署必须由用户完成 OAuth 登录 | 已解决：完成 OAuth 并部署到 `https://ftranslate-mobile.vercel.app` | 后续在已关联项目中执行 `npx vercel --prod` 更新同一生产地址 |
 | 2026-07-15 | iPhone Safari 存入 arXiv 论文时报 `BlobURLs are not yet supported` | Capacitor Filesystem 网页实现把 Blob 交给 IndexedDB，Safari 无法持久化该 Blob URL | 已改为独立 IndexedDB `ArrayBuffer` 存储，本地 Chromium 导入/读取闭环通过 | 重新部署后由 iPhone Safari 再保存同一论文，确认真机 WebKit 与浏览器配额行为 |
 | 2026-07-15 | iPhone Safari 存入论文继续报 `Load failed` | PDF 下载绕过同源代理直接访问 arXiv，部分论文被 Safari 的跨域或重定向策略阻断 | 已恢复固定目标的 `/api/arxiv-pdf/*` 同源代理；生产实际下载 `1910.00399v1` 返回有效 PDF，线上 UI 已完成下载、IndexedDB 写入、读回和打开阅读器闭环 | 由 iPhone 强制刷新后重试；若某条论文明确返回 HTTP 404，需区分 arXiv 源站尚未提供该 PDF，而非本地保存故障 |

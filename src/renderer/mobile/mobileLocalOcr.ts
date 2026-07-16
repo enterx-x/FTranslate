@@ -195,10 +195,11 @@ export function extractLocalOcrParagraphs(
     .flatMap((block) => block.paragraphs ?? [])
     .map((paragraph) => normalizeOcrParagraph(paragraph.text ?? ''))
     .filter(Boolean);
-  const candidates = layoutParagraphs.length > 0
-    ? layoutParagraphs
-    : splitOcrTextIntoParagraphStrings(text);
-  return candidates
+  const fallbackParagraphs = splitOcrTextIntoParagraphStrings(text);
+  const fragmentedLayout = looksLikeFragmentedOcrLayout(layoutParagraphs);
+  const preferFallback = shouldPreferFallbackOcrParagraphs(layoutParagraphs, fallbackParagraphs, fragmentedLayout);
+  const candidates = preferFallback ? fallbackParagraphs : layoutParagraphs.length > 0 ? layoutParagraphs : fallbackParagraphs;
+  return repairOcrParagraphFragments(candidates, fragmentedLayout && !preferFallback)
     .map((original) => ({ original, type: classifyOcrParagraph(original) }))
     .slice(0, 120);
 }
@@ -303,6 +304,75 @@ function splitOcrTextIntoParagraphStrings(text: string): string[] {
     .split(/\n\s*\n+/gu)
     .map(normalizeOcrParagraph)
     .filter(Boolean);
+}
+
+function shouldPreferFallbackOcrParagraphs(
+  layoutParagraphs: string[],
+  fallbackParagraphs: string[],
+  fragmentedLayout: boolean
+): boolean {
+  return fragmentedLayout
+    && fallbackParagraphs.length > 0
+    && fallbackParagraphs.length < layoutParagraphs.length
+    && canonicalOcrText(layoutParagraphs) === canonicalOcrText(fallbackParagraphs);
+}
+
+function repairOcrParagraphFragments(candidates: string[], coalesceFragmentedSet: boolean): string[] {
+  const repaired: string[] = [];
+  for (const candidate of candidates) {
+    const normalized = normalizeOcrParagraph(candidate);
+    if (!normalized) {
+      continue;
+    }
+    const previous = repaired.at(-1);
+    if (previous && shouldJoinOcrParagraphFragments(previous, normalized)) {
+      repaired[repaired.length - 1] = joinOcrParagraphFragments(previous, normalized);
+    } else {
+      repaired.push(normalized);
+    }
+  }
+  if (coalesceFragmentedSet && looksLikeFragmentedOcrLayout(repaired)) {
+    return repaired.length > 0
+      ? [repaired.reduce(joinOcrParagraphFragments)]
+      : [];
+  }
+  return repaired;
+}
+
+function shouldJoinOcrParagraphFragments(previous: string, next: string): boolean {
+  if (/[A-Za-z]-$/u.test(previous) && /^[a-z]/u.test(next)) {
+    return true;
+  }
+  return !/[.!?;:]$/u.test(previous)
+    && /^[a-z]/u.test(next)
+    && classifyOcrParagraph(previous) === 'paragraph'
+    && classifyOcrParagraph(next) === 'paragraph';
+}
+
+function joinOcrParagraphFragments(previous: string, next: string): string {
+  if (/[A-Za-z]-$/u.test(previous) && /^[a-z]/u.test(next)) {
+    return normalizeOcrParagraph(`${previous.slice(0, -1)}${next}`);
+  }
+  return normalizeOcrParagraph(`${previous} ${next}`);
+}
+
+function looksLikeFragmentedOcrLayout(paragraphs: string[]): boolean {
+  if (paragraphs.length < 3) {
+    return false;
+  }
+  const wordCounts = paragraphs.map(countOcrWords);
+  const shortFragments = wordCounts.filter((count) => count <= 3).length;
+  const sorted = [...wordCounts].sort((left, right) => left - right);
+  const medianWordCount = sorted[Math.floor(sorted.length / 2)] ?? 0;
+  return shortFragments / paragraphs.length >= 0.45 || medianWordCount <= 5;
+}
+
+function canonicalOcrText(paragraphs: string[]): string {
+  return paragraphs.join(' ').toLocaleLowerCase().replace(/[^a-z0-9]+/gu, '');
+}
+
+function countOcrWords(value: string): number {
+  return value.trim().split(/\s+/u).filter(Boolean).length;
 }
 
 function normalizeOcrParagraph(value: string): string {

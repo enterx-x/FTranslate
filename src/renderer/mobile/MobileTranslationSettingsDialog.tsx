@@ -37,10 +37,10 @@ export function MobileTranslationSettingsDialog({
       <section className="mobile-translation-dialog" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
         <div className="mobile-dialog-handle" />
         <header><strong>{title}</strong><button type="button" onClick={onClose}>关闭</button></header>
-        <p>支持允许浏览器访问的 OpenAI 兼容接口。API Key 只保存在当前网页内存，刷新或关闭网页后不会写入设备。</p>
+        <p>支持允许浏览器访问的 OpenAI 兼容接口。Base URL、模型和 API Key 都只保存在当前浏览器/手机本地，不会上传到 FTranslate 或 Vercel；清空 API Key 后保存即可移除本地记录。</p>
         <label>Base URL<input value={form.baseURL} onChange={(event) => setForm((value) => ({ ...value, baseURL: event.target.value }))} /></label>
         <label>Model<input value={form.model} onChange={(event) => setForm((value) => ({ ...value, model: event.target.value }))} /></label>
-        <label>API Key<input type="password" value={form.apiKey} onChange={(event) => setForm((value) => ({ ...value, apiKey: event.target.value }))} placeholder="仅本次会话" /></label>
+        <label>API Key<input type="password" value={form.apiKey} onChange={(event) => setForm((value) => ({ ...value, apiKey: event.target.value }))} placeholder="保存在当前设备" autoComplete="off" /></label>
         {error ? <p className="mobile-dialog-error" role="alert">{error}</p> : null}
         <button type="button" className="mobile-dialog-primary" disabled={saving} onClick={() => void handleSave()}>{saving ? '保存中…' : submitLabel}</button>
       </section>

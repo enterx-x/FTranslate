@@ -272,9 +272,10 @@ try {
     await new Promise(resolve => setTimeout(resolve, page === 2 ? 800 : 80));
     const heading = 'Vision Safety Policy Page ' + page;
     const body = 'Page ' + page + '. Now fill it with water and pour: the shifting liquid continuously redistributes the gravitational load along the gripper fingers, demanding real-time effort modulation that fixed-effort or open-loop grasping cannot achieve. The core difficulty is that grasp stability and object safety are tightly coupled: insufficient effort leads to micro-slip and drop, while only slightly more force causes irreversible deformation. A practical grasp controller must therefore detect and suppress incipient slip in real time, reduce effort when the carried load decreases to prevent over-gripping, and enforce a hard safety limit on contact force.';
+    const fragmentedParagraphs = (heading + ' ' + body).split(/\\s+/).map(word => ({ text: word }));
     return {
       text: heading + '\\n\\n' + body,
-      blocks: [
+      blocks: page === 1 ? [{ paragraphs: fragmentedParagraphs }] : [
         { paragraphs: [{ text: heading }] },
         { paragraphs: [{ text: body }] }
       ]
@@ -854,6 +855,16 @@ try {
   if (reloadedCacheState.blockCount !== 6 || reloadedCacheState.translationCount !== 6) {
     throw new Error(`Reloaded OCR cache is incomplete: ${JSON.stringify(reloadedCacheState)}`);
   }
+  await evaluate(client, `document.querySelector('.mobile-reader-more').click()`);
+  await waitForSelector(client, '.mobile-translation-dialog');
+  const cachedTranslationSettings = await evaluate(client, `(() => {
+    const inputs = Array.from(document.querySelectorAll('.mobile-translation-dialog input'));
+    return { baseURL: inputs[0]?.value ?? '', model: inputs[1]?.value ?? '', apiKey: inputs[2]?.value ?? '' };
+  })()`);
+  if (cachedTranslationSettings.apiKey !== 'visual-key') {
+    throw new Error(`Reloaded API key was not restored from local preferences: ${JSON.stringify(cachedTranslationSettings)}`);
+  }
+  await evaluate(client, `document.querySelector('.mobile-translation-dialog header button').click()`);
   const restoredVisionState = await evaluate(client, `(() => ({
     originals: Array.from(document.querySelectorAll('.mobile-block-original p, .mobile-block-original h2')).map(node => node.textContent),
     translations: Array.from(document.querySelectorAll('.mobile-block-translation p')).map(node => node.textContent),
@@ -870,7 +881,8 @@ try {
   ) {
     throw new Error(`Scanned PDF local OCR / DeepSeek text flow failed: ${JSON.stringify({ restoredVisionState, translationMockState })}`);
   }
-  console.log('Reloaded the web app and restored all six bilingual blocks from three persisted OCR pages.');
+  console.log('Reloaded the web app and restored the imported PDF, all six bilingual blocks, and the locally cached API key.');
+  console.log('Rejected one-word OCR layout fragments and restored two coherent paragraphs per page.');
   console.log(`Mobile visual check passed. Screenshots: ${outputDir}`);
 } finally {
   client?.close();

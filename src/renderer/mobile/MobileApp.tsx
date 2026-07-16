@@ -12,6 +12,7 @@ import {
   readPdfBytes,
   removeStoredPdfFile,
   removeStoredPaper,
+  requestPersistentMobileStorage,
   saveMobileLibrary,
   savePaperTranslations,
   savePdfFile,
@@ -60,6 +61,7 @@ function MobileApp() {
 
   useEffect(() => {
     let cancelled = false;
+    void requestPersistentMobileStorage();
     void Promise.all([loadMobileLibrary(), loadTranslationPreferences()])
       .then(([storedLibrary, preferences]) => {
         if (!cancelled) {
@@ -293,7 +295,7 @@ function MobileApp() {
       throw new Error('Base URL 和 Model 不能为空。');
     }
     setTranslationSession(session);
-    await saveTranslationPreferences({ baseURL: session.baseURL, model: session.model });
+    await saveTranslationPreferences(session);
   }
 
   async function clearReplacedSourceData(existing: MobilePaper | undefined, incoming: MobilePaper): Promise<string> {
