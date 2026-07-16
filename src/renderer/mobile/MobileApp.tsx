@@ -337,7 +337,9 @@ function MobileApp() {
         ]);
         let cachedEntries = translationCacheByPaperRef.current.get(paper.id) ?? loadedEntries;
         if (resetCache) {
-          cachedEntries = cachedEntries.filter((entry) => entry.origin !== 'ocr' && entry.origin !== 'vision');
+          cachedEntries = cachedEntries.filter((entry) => (
+            entry.origin !== 'text' && entry.origin !== 'ocr' && entry.origin !== 'vision'
+          ));
           await persistPaperTranslationSet(paper.id, cachedEntries);
         } else {
           translationCacheByPaperRef.current.set(paper.id, cachedEntries);
@@ -355,7 +357,7 @@ function MobileApp() {
         const result = await recognizePdfPagesLocally(sourceBytes, {
           startPage: resume.startPage,
           isCancelled: () => job.cancelled,
-          onPageRecognized: async ({ page, pageCount: totalPages, blocks: pageBlocks }) => {
+          onPageRecognized: async ({ page, pageCount: totalPages, blocks: pageBlocks, source }) => {
             const entries = pageBlocks.map((item) => ({
               sourceHash: item.block.sourceHash,
               page: item.block.page,
@@ -363,7 +365,7 @@ function MobileApp() {
               translation: '',
               translatedAt: new Date().toISOString(),
               model: '',
-              origin: 'ocr' as const,
+              origin: source,
               order: item.order,
               blockType: item.block.type
             }));
@@ -397,7 +399,7 @@ function MobileApp() {
           visionOcrCompleted: true,
           localOcrVersion: MOBILE_LOCAL_OCR_VERSION,
           localOcrStatus: finalBlockCount > 0 ? 'completed' : 'failed',
-          localOcrError: finalBlockCount > 0 ? undefined : '本地 OCR 没有识别到有效正文。'
+          localOcrError: finalBlockCount > 0 ? undefined : '没有从文字层或本地 OCR 中提取到有效正文。'
         }));
       } catch (error) {
         if (!job.cancelled) {
@@ -507,6 +509,7 @@ function MobileApp() {
               onProgressChange={handleProgressChange}
               onRequestOcr={() => startPaperLocalOcr(activePaper)}
               onSaveTranslation={(entry) => handleSaveTranslations(activePaper.id, [entry])}
+              onReplacePageEntries={(page, entries) => replacePaperOcrPage(activePaper.id, page, entries)}
               onTranslationSessionChange={handleTranslationSessionChange}
             />
           </div>

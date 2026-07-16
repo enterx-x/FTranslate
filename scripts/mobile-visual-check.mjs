@@ -238,13 +238,26 @@ function startTranslationMock() {
         return;
       }
       translationMockState.textRequestCount += 1;
-      const translation = source.includes('Vision Safety Policy')
+      const system = parsed.messages?.[0]?.content ?? '';
+      let translation;
+      if (typeof system === 'string' && system.includes('OCR 校对、版面重排和翻译助手')) {
+        const pageBlocks = JSON.parse(source).blocks ?? [];
+        translation = JSON.stringify({ paragraphs: pageBlocks.map((block) => ({
+          original: block.text,
+          translation: block.text.includes('Vision Safety Policy')
+            ? '视觉安全策略'
+            : '策略更新在有界扰动下保持前向不变性，从而使安全约束在执行过程中持续成立。',
+          type: block.type
+        })) });
+      } else {
+        translation = source.includes('Vision Safety Policy')
         ? '视觉安全策略'
         : source.includes('shifting liquid continuously')
           ? '现在，往杯中注水并倾倒：流动的液体会持续重新分配抓取器指尖上的重力载荷，这要求实时调整抓取力，而固定抓取力或开环抓取无法实现这一点。核心难点在于抓取稳定性与物体安全性紧密耦合：抓取力不足会导致微小滑移和掉落，而稍大的力则会造成不可逆变形。因此，实用的抓取控制器必须实时检测并抑制初始滑移，在承载物载荷减小时降低抓取力以防止过度抓取，并强制执行接触力的硬性安全上限。'
           : source.length < 40
           ? '前向不变性'
           : '策略更新在有界扰动下保持前向不变性，从而使安全约束在执行过程中持续成立。';
+      }
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ choices: [{ message: { content: translation } }] }));
     });
@@ -745,6 +758,7 @@ try {
   await waitForSelector(client, '.mobile-reader-screen');
   await waitForExpression(client, `document.body.textContent.includes('Vision Safety Policy Page 1') ? 'page-one-preserved-after-reader-exit' : ''`);
   await waitForExpression(client, `document.querySelectorAll('.mobile-bilingual-block').length === 6 ? 'all-pages' : ''`, 20000);
+  await waitForSelector(client, '.mobile-bilingual-intro', 20000);
   const completedOcrOnlyState = await evaluate(client, `(() => ({
     originals: Array.from(document.querySelectorAll('.mobile-block-original p, .mobile-block-original h2')).map(node => node.textContent),
     translationCount: document.querySelectorAll('.mobile-block-translation').length,
@@ -755,7 +769,7 @@ try {
     completedOcrOnlyState.translationCount !== 0 ||
     translationMockState.textRequestCount !== translationRequestsBeforeScannedOcr ||
     completedOcrOnlyState.originals.some(original => ['EE', '4', 'age manipulation of'].includes(original.trim())) ||
-    !completedOcrOnlyState.intro.includes('尚未调用翻译接口')
+    !completedOcrOnlyState.intro.includes('点击“翻译全文”后才生成中文')
   ) {
     throw new Error(`Completed import OCR was not clean and translation-free: ${JSON.stringify({ completedOcrOnlyState, translationMockState, translationRequestsBeforeScannedOcr })}`);
   }
@@ -763,7 +777,7 @@ try {
   await evaluate(client, `document.querySelector('.mobile-bilingual-toolbar button').click()`);
   await waitForExpression(client, `document.querySelectorAll('.mobile-block-translation').length === 6 ? 'all-pages-translated' : ''`, 20000);
   await waitForExpression(client, `document.querySelector('.mobile-reader-status')?.textContent.includes('全文翻译完成') ? 'translation-finished' : ''`, 20000);
-  if (translationMockState.textRequestCount - translationRequestsBeforeScannedOcr < 6) {
+  if (translationMockState.textRequestCount - translationRequestsBeforeScannedOcr < 3) {
     throw new Error(`Full translation did not start after the explicit user click: ${JSON.stringify({ translationMockState, translationRequestsBeforeScannedOcr })}`);
   }
   await capture(client, '08b-reader-scanned-bilingual-390x844.png');
@@ -910,7 +924,7 @@ try {
     restoredVisionState.originals.some(original => ['EE', '4', 'age manipulation of'].includes(original.trim())) ||
     restoredVisionState.ocrPromptVisible ||
     translationMockState.imageRequestCount !== 0 ||
-    translationMockState.textRequestCount < 6
+    translationMockState.textRequestCount < translationRequestsBeforeScannedOcr + 3
   ) {
     throw new Error(`Scanned PDF local OCR / DeepSeek text flow failed: ${JSON.stringify({ restoredVisionState, translationMockState })}`);
   }

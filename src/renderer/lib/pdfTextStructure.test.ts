@@ -101,6 +101,17 @@ describe('PDF text structure extraction', () => {
     );
   });
 
+  it('preserves scientific compound hyphens and removes spaces before punctuation', () => {
+    const outline = buildPdfPageOutline(3, [
+      item('The whole-', 60, 100),
+      item('body controller preserves stability , contact-aware execution , and safety.', 60, 113)
+    ]);
+
+    expect(outline[0].original).toBe(
+      'The whole-body controller preserves stability, contact-aware execution, and safety.'
+    );
+  });
+
   it('cleans PDF item spacing around model version tokens', () => {
     const outline = buildPdfPageOutline(2, [
       item('The model', 60, 100, 55, 10),
@@ -253,6 +264,29 @@ describe('PDF text structure extraction', () => {
       original:
         'We present a new robotic foundation model, called π0.7, that can enable strong out-of-the-box performance in a wide range of scenarios.'
     });
+  });
+
+  it('keeps a two-column inline abstract in one section after front-matter headings', () => {
+    const outline = buildPdfDocumentOutline([{ page: 1, items: [
+        item('1 Carnegie Mellon University, 2 UT Arlington, 3 Bosch Center for AI', 150, 142, 310, 10),
+        item('Fig. 1: Our system enables versatile, contact-rich humanoid manipulation.', 54, 584, 504, 7),
+        item('affordance (book organization). C: tight-tolerance insertion with a clearance.', 54, 596, 504, 7),
+        item('Abstract—Humanoid robots promise general-purpose assistance, yet real-world', 54, 632, 245, 9),
+        item('humanoid loco-manipulation remains challenging because it requires stability,', 54, 645, 245, 9),
+        item('motion mapping enables efficient collection of real-world demonstrations.', 313, 631.999, 245, 9),
+        item('We then propose a multimodal Transformer that models touch as a core modality.', 313, 644.999, 245, 9)
+      ] }]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => ({
+      section: block.section,
+      original: block.original
+    }))).toEqual([
+      {
+        section: 'Abstract',
+        original:
+          'Humanoid robots promise general-purpose assistance, yet real-world humanoid loco-manipulation remains challenging because it requires stability, motion mapping enables efficient collection of real-world demonstrations. We then propose a multimodal Transformer that models touch as a core modality.'
+      }
+    ]);
   });
 
   it('merges lowercase paragraph continuations across PDF page boundaries', () => {

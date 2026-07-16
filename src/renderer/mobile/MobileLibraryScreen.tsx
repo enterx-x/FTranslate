@@ -227,13 +227,13 @@ function formatPaperMeta(paper: MobilePaper): string {
 
 function formatPaperOcrStatus(paper: MobilePaper): string {
   if (paper.localOcrStatus === 'completed') {
-    return `OCR 已完成${paper.pageCount ? ` · ${paper.pageCount} 页` : ''} · 可手动全文翻译`;
+    return `原文已提取${paper.pageCount ? ` · ${paper.pageCount} 页` : ''} · 可手动全文翻译`;
   }
   if (paper.localOcrStatus === 'failed') {
-    return 'OCR 失败 · 打开论文后可从断点继续';
+    return '原文提取失败 · 打开论文后可从断点继续';
   }
   if (paper.localOcrStatus === 'running') {
-    return `正在本机 OCR · ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页`;
+    return `正在提取原文 · ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页`;
   }
-  return '等待本机全文 OCR · 不会自动翻译';
+  return '等待全文原文提取 · 不会自动翻译';
 }

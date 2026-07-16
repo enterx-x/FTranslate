@@ -74,6 +74,10 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
     const section = inlineSection?.section ?? currentSection;
     original = inlineSection?.body ?? original;
 
+    if (inlineSection) {
+      currentSection = inlineSection.section;
+    }
+
     if (
       shouldIncludeBlock('paragraph', original) &&
       !looksLikePageOnePreAbstractFragment(page, currentSection, inlineSection, currentParagraph, firstInlineAbstractY)
@@ -88,6 +92,9 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
 
     if (type !== 'paragraph') {
       flushParagraph();
+      if (page === 1 && firstInlineAbstractY !== null && line.y < firstInlineAbstractY - 4) {
+        return;
+      }
       const original = type === 'heading' ? normalizeSectionHeading(line.text) : line.text.trim();
       const block = createBlock(page, type, type === 'heading' ? original : currentSection, original, getLinesBounds([line]));
       const includeBlock = shouldIncludeBlock(type, block.original);
@@ -423,17 +430,17 @@ function looksLikeAcademicParagraph(text: string): boolean {
 
 function looksLikePageOnePreAbstractFragment(
   page: number,
-  currentSection: string,
+  _currentSection: string,
   inlineSection: { section: string; body: string } | null,
   lines: TextLine[],
   firstInlineAbstractY: number | null
 ): boolean {
-  if (page !== 1 || inlineSection || currentSection !== 'Page 1' || lines.length === 0 || firstInlineAbstractY === null) {
+  if (page !== 1 || inlineSection || lines.length === 0 || firstInlineAbstractY === null) {
     return false;
   }
 
   const firstY = Math.min(...lines.map((line) => line.y));
-  return firstY < firstInlineAbstractY;
+  return firstY < firstInlineAbstractY - 4;
 }
 
 function looksLikeSectionHeading(text: string): boolean {
@@ -488,7 +495,9 @@ function joinParagraphLines(lines: string[]): string {
     }
 
     if (/[-\u00ad\u2010-\u2015]$/u.test(paragraph)) {
-      return paragraph.replace(/[-\u00ad\u2010-\u2015]$/u, '') + line.trim();
+      const prefix = paragraph.match(/([A-Za-z]+)[-\u00ad\u2010-\u2015]$/u)?.[1] ?? '';
+      const separator = shouldPreserveCompoundHyphen(prefix) ? '-' : '';
+      return paragraph.replace(/[-\u00ad\u2010-\u2015]$/u, '') + separator + line.trim();
     }
 
     return `${paragraph} ${line.trim()}`;
@@ -496,9 +505,14 @@ function joinParagraphLines(lines: string[]): string {
   return normalizeExtractedText(joined);
 }
 
+function shouldPreserveCompoundHyphen(prefix: string): boolean {
+  return /^(?:whole|multi|real|contact|end|lower|upper|hand|single|loco|thin|tight|tool|low|high|long|short|cross|open|closed)$/iu.test(prefix);
+}
+
 function normalizeExtractedText(text: string): string {
   return text
     .replace(/\s+/gu, ' ')
+    .replace(/\s+([,;:!?]|\.(?!\.))/gu, '$1')
     .replace(/([πΠ])\s+(\d)\s*\.\s*(\d)/gu, '$1$2.$3')
     .trim();
 }

@@ -3,7 +3,7 @@ import type { ArxivPaper } from '../../shared/arxiv';
 export type MobilePaperSource = 'import' | 'arxiv';
 export type MobilePdfKind = 'source' | 'translated';
 export type MobileLocalOcrStatus = 'pending' | 'running' | 'completed' | 'failed';
-export const MOBILE_LOCAL_OCR_VERSION = 3;
+export const MOBILE_LOCAL_OCR_VERSION = 4;
 
 export interface MobileStoredPdf {
   path: string;
@@ -243,7 +243,7 @@ export function replaceMobileOcrPageEntries(
   const normalizedPage = Math.max(1, Math.trunc(page));
   return [
     ...entries.filter((entry) => (
-      entry.page !== normalizedPage || (entry.origin !== 'ocr' && entry.origin !== 'vision')
+      entry.page !== normalizedPage || (entry.origin !== 'text' && entry.origin !== 'ocr' && entry.origin !== 'vision')
     )),
     ...incoming
   ];

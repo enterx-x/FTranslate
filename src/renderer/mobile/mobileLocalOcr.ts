@@ -6,9 +6,11 @@ import tesseractWorkerUrl from 'tesseract.js/dist/worker.min.js?url';
 import tesseractCoreUrl from 'tesseract.js-core/tesseract-core-lstm.wasm.js?url';
 import englishLanguageUrl from '@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz?url';
 import {
+  buildPdfDocumentOutline,
   hashText,
   type ExtractedBlockType,
-  type ExtractedPdfBlock
+  type ExtractedPdfBlock,
+  type PositionedPdfTextItem
 } from '../lib/pdfTextStructure';
 import type { MobileTranslationEntry } from './mobileTypes';
 
@@ -28,6 +30,7 @@ export interface LocalOcrPageResult {
   page: number;
   pageCount: number;
   blocks: LocalOcrBlock[];
+  source: 'text' | 'ocr';
 }
 
 export interface LocalOcrProgress {
@@ -53,8 +56,38 @@ export interface LocalOcrResumeStateInput {
   legacyCompleted?: boolean;
 }
 
-interface OcrLayoutBlock {
-  paragraphs?: Array<{ text?: string }>;
+export interface OcrBoundingBox {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+export interface OcrLayoutLine {
+  text?: string;
+  confidence?: number;
+  bbox?: OcrBoundingBox;
+}
+
+export interface OcrLayoutParagraph {
+  text?: string;
+  confidence?: number;
+  bbox?: OcrBoundingBox;
+  lines?: OcrLayoutLine[];
+}
+
+export interface OcrLayoutBlock {
+  text?: string;
+  confidence?: number;
+  bbox?: OcrBoundingBox;
+  blocktype?: string;
+  paragraphs?: OcrLayoutParagraph[];
+}
+
+export interface OcrPageLayoutContext {
+  page: number;
+  pageWidth: number;
+  pageHeight: number;
 }
 
 type OcrImageRecognizer = (
@@ -79,7 +112,7 @@ export async function recognizePdfPagesLocally(
 ): Promise<LocalOcrRunResult> {
   const loadingTask = pdfjsLib.getDocument({ data: pdfData.slice() });
   let pdfDocument: PDFDocumentProxy | null = null;
-  let ocrWorker: Worker | null = null;
+  const ocrWorkerRef: { current: Worker | null } = { current: null };
   let lastProcessedPage = Math.max(0, (options.startPage ?? 1) - 1);
   let recognizedBlockCount = 0;
   let activePage = Math.max(1, options.startPage ?? 1);
@@ -94,14 +127,17 @@ export async function recognizePdfPagesLocally(
     const injectedRecognizer = options.recognizeImage
       ?? (globalThis as typeof globalThis & OcrTestGlobal).__FTRANSLATE_MOBILE_OCR_TEST__;
     let recognizeImage = injectedRecognizer;
-    if (!recognizeImage) {
+    const ensureOcrRecognizer = async (): Promise<OcrImageRecognizer> => {
+      if (recognizeImage) {
+        return recognizeImage;
+      }
       options.onProgress?.({
         page: activePage,
         pageCount,
         progress: 0,
         status: '正在加载本地 OCR 引擎；首次使用需要下载并缓存英文识别数据…'
       });
-      ocrWorker = await createWorker(
+      ocrWorkerRef.current = await createWorker(
         'eng',
         OEM.LSTM_ONLY,
         {
@@ -118,12 +154,12 @@ export async function recognizePdfPagesLocally(
           }
         }
       );
-      await ocrWorker.setParameters({
+      await ocrWorkerRef.current.setParameters({
         tessedit_pageseg_mode: PSM.AUTO,
-        preserve_interword_spaces: '1',
-        user_defined_dpi: '220'
+        preserve_interword_spaces: '0',
+        user_defined_dpi: '300'
       });
-      const worker = ocrWorker;
+      const worker = ocrWorkerRef.current;
       recognizeImage = async (imageDataUrl) => {
         const result = await worker.recognize(
           imageDataUrl,
@@ -135,7 +171,12 @@ export async function recognizePdfPagesLocally(
           blocks: result.data.blocks as OcrLayoutBlock[] | null
         };
       };
-    }
+      const initializedRecognizer = recognizeImage;
+      if (!initializedRecognizer) {
+        throw new Error('本地 OCR 引擎初始化失败。');
+      }
+      return initializedRecognizer;
+    };
 
     for (let pageNumber = startPage; pageNumber <= pageCount; pageNumber += 1) {
       if (options.isCancelled?.()) {
@@ -150,11 +191,31 @@ export async function recognizePdfPagesLocally(
       });
       const page = await pdfDocument.getPage(pageNumber);
       try {
-        const imageDataUrl = await renderPdfPageForLocalOcr(page);
-        const recognized = await recognizeImage(imageDataUrl, pageNumber);
-        const paragraphs = extractLocalOcrParagraphs(recognized.text, recognized.blocks);
-        const blocks = buildLocalOcrBlocks(pageNumber, paragraphs);
-        await options.onPageRecognized?.({ page: pageNumber, pageCount, blocks });
+        const embeddedBlocks = await extractEmbeddedPdfTextBlocks(page, pageNumber);
+        let blocks: LocalOcrBlock[];
+        let source: 'text' | 'ocr';
+        if (embeddedBlocks.length > 0) {
+          blocks = embeddedBlocks;
+          source = 'text';
+          options.onProgress?.({
+            page: pageNumber,
+            pageCount,
+            progress: 1,
+            status: `第 ${pageNumber} / ${pageCount} 页已直接读取 PDF 文字层。`
+          });
+        } else {
+          const rendered = await renderPdfPageForLocalOcr(page);
+          const recognizer = await ensureOcrRecognizer();
+          const recognized = await recognizer(rendered.imageDataUrl, pageNumber);
+          const paragraphs = extractLocalOcrParagraphs(recognized.text, recognized.blocks, {
+            page: pageNumber,
+            pageWidth: rendered.width,
+            pageHeight: rendered.height
+          });
+          blocks = buildLocalOcrBlocks(pageNumber, paragraphs);
+          source = 'ocr';
+        }
+        await options.onPageRecognized?.({ page: pageNumber, pageCount, blocks, source });
         lastProcessedPage = pageNumber;
         recognizedBlockCount += blocks.length;
       } finally {
@@ -164,8 +225,8 @@ export async function recognizePdfPagesLocally(
 
     return { pageCount, lastProcessedPage, recognizedBlockCount, cancelled: false };
   } finally {
-    if (ocrWorker) {
-      await ocrWorker.terminate();
+    if (ocrWorkerRef.current) {
+      await ocrWorkerRef.current.terminate();
     }
     if (pdfDocument) {
       await pdfDocument.destroy();
@@ -178,19 +239,24 @@ export async function recognizePdfPagesLocally(
 export function calculateLocalOcrRenderScale(
   pageWidth: number,
   pageHeight: number,
-  maxLongEdge = 1800
+  maxLongEdge = 2600
 ): number {
   const longEdge = Math.max(pageWidth, pageHeight);
   if (!Number.isFinite(longEdge) || longEdge <= 0) {
     return 1;
   }
-  return Math.min(2.4, Math.max(0.6, maxLongEdge / longEdge));
+  return Math.min(3.4, Math.max(0.6, maxLongEdge / longEdge));
 }
 
 export function extractLocalOcrParagraphs(
   text: string,
-  blocks?: OcrLayoutBlock[] | null
+  blocks?: OcrLayoutBlock[] | null,
+  layoutContext?: OcrPageLayoutContext
 ): LocalOcrParagraph[] {
+  const positionedParagraphs = extractPositionedOcrParagraphs(blocks, layoutContext);
+  if (positionedParagraphs.length > 0) {
+    return positionedParagraphs;
+  }
   const layoutParagraphs = (blocks ?? [])
     .flatMap((block) => block.paragraphs ?? [])
     .map((paragraph) => normalizeOcrParagraph(paragraph.text ?? ''))
@@ -226,7 +292,7 @@ export function buildLocalOcrBlocks(page: number, paragraphs: LocalOcrParagraph[
 
 export function buildCachedLocalOcrBlocks(entries: MobileTranslationEntry[]): ExtractedPdfBlock[] {
   return entries
-    .filter((entry) => entry.origin === 'ocr' || entry.origin === 'vision')
+    .filter((entry) => entry.origin === 'text' || entry.origin === 'ocr' || entry.origin === 'vision')
     .map((entry, index) => ({ entry, index }))
     .sort((left, right) => {
       const leftOrder = Number.isFinite(left.entry.order) ? Number(left.entry.order) : left.entry.page * 1000 + left.index;
@@ -278,7 +344,48 @@ export function resolveLocalOcrResumeState(input: LocalOcrResumeStateInput): {
   };
 }
 
-async function renderPdfPageForLocalOcr(page: PDFPageProxy): Promise<string> {
+async function extractEmbeddedPdfTextBlocks(page: PDFPageProxy, pageNumber: number): Promise<LocalOcrBlock[]> {
+  const viewport = page.getViewport({ scale: 1 });
+  const textContent = await page.getTextContent();
+  const items = textContent.items.flatMap((rawItem): PositionedPdfTextItem[] => {
+    const item = rawItem as {
+      str?: string;
+      transform?: number[];
+      width?: number;
+      height?: number;
+    };
+    if (!item.str?.trim() || !item.transform || item.transform.length < 6) {
+      return [];
+    }
+    const [x, y] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+    return [{
+      str: item.str,
+      x,
+      y,
+      width: Math.max(1, item.width ?? 1),
+      height: Math.max(1, item.height ?? 1),
+      page: pageNumber,
+      pageWidth: viewport.width,
+      pageHeight: viewport.height
+    }];
+  });
+  const blocks = buildPdfDocumentOutline([{ page: pageNumber, items }]);
+  const rawLetterCount = countOcrLetters(items.map((item) => item.str).join(' '));
+  const extractedLetterCount = countOcrLetters(blocks.map((block) => block.original).join(' '));
+  if (rawLetterCount < 60 || extractedLetterCount < 30 || blocks.length === 0) {
+    return [];
+  }
+  return blocks.map((block, index) => ({
+    block,
+    order: (pageNumber - 1) * 1000 + index
+  }));
+}
+
+async function renderPdfPageForLocalOcr(page: PDFPageProxy): Promise<{
+  imageDataUrl: string;
+  width: number;
+  height: number;
+}> {
   const baseViewport = page.getViewport({ scale: 1 });
   const viewport = page.getViewport({
     scale: calculateLocalOcrRenderScale(baseViewport.width, baseViewport.height)
@@ -293,10 +400,53 @@ async function renderPdfPageForLocalOcr(page: PDFPageProxy): Promise<string> {
   context.fillStyle = '#ffffff';
   context.fillRect(0, 0, canvas.width, canvas.height);
   await page.render({ canvas, canvasContext: context, viewport }).promise;
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  const imageDataUrl = canvas.toDataURL('image/png');
+  const width = canvas.width;
+  const height = canvas.height;
   canvas.width = 1;
   canvas.height = 1;
-  return dataUrl;
+  return { imageDataUrl, width, height };
+}
+
+function extractPositionedOcrParagraphs(
+  blocks?: OcrLayoutBlock[] | null,
+  layoutContext?: OcrPageLayoutContext
+): LocalOcrParagraph[] {
+  if (!layoutContext || !blocks?.length) {
+    return [];
+  }
+  const items = blocks
+    .filter((block) => !isNonTextOcrBlock(block.blocktype))
+    .flatMap((block) => block.paragraphs ?? [])
+    .flatMap((paragraph) => paragraph.lines ?? [])
+    .flatMap((line): PositionedPdfTextItem[] => {
+      const original = normalizeOcrParagraph(line.text ?? '');
+      const bbox = line.bbox;
+      const confidence = Number(line.confidence);
+      if (!original || !bbox || (Number.isFinite(confidence) && confidence < 35 && countOcrWords(original) < 8)) {
+        return [];
+      }
+      return [{
+        str: original,
+        x: bbox.x0,
+        y: bbox.y0,
+        width: Math.max(1, bbox.x1 - bbox.x0),
+        height: Math.max(1, bbox.y1 - bbox.y0),
+        page: layoutContext.page,
+        pageWidth: layoutContext.pageWidth,
+        pageHeight: layoutContext.pageHeight
+      }];
+    });
+  if (items.length === 0) {
+    return [];
+  }
+  return buildPdfDocumentOutline([{ page: layoutContext.page, items }])
+    .map((block) => ({ original: block.original, type: block.type }))
+    .slice(0, 120);
+}
+
+function isNonTextOcrBlock(blockType: string | undefined): boolean {
+  return Boolean(blockType && /(IMAGE|LINE|NOISE|UNKNOWN)/iu.test(blockType));
 }
 
 function splitOcrTextIntoParagraphStrings(text: string): string[] {
@@ -374,6 +524,10 @@ function canonicalOcrText(paragraphs: string[]): string {
 
 function countOcrWords(value: string): number {
   return value.trim().split(/\s+/u).filter(Boolean).length;
+}
+
+function countOcrLetters(value: string): number {
+  return value.match(/\p{L}/gu)?.length ?? 0;
 }
 
 function isUsefulOcrCandidate(value: string): boolean {

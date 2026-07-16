@@ -220,7 +220,7 @@ describe('mobile translation cache', () => {
     expect(isTranslationEntryCurrent(entry, { model: 'deepseek-chat', baseURL: 'https://api.deepseek.com/v1' })).toBe(false);
   });
 
-  it('replaces stale OCR fragments for one page without touching other pages or text entries', () => {
+  it('replaces every extracted fragment for one page without touching other pages', () => {
     const stalePageOne: MobileTranslationEntry = {
       sourceHash: 'stale-ee',
       page: 1,
@@ -235,7 +235,6 @@ describe('mobile translation cache', () => {
     const replacement = { ...stalePageOne, sourceHash: 'clean-page-one', original: 'A complete paragraph.', translation: '' };
     expect(replaceMobileOcrPageEntries([stalePageOne, pageTwo, textLayer], 1, [replacement])).toEqual([
       pageTwo,
-      textLayer,
       replacement
     ]);
   });

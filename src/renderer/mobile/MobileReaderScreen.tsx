@@ -2,8 +2,8 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { PdfViewer } from '../components/PdfViewer';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import { MobileTranslationSettingsDialog } from './MobileTranslationSettingsDialog';
-import { translateAcademicText } from './mobileTranslation';
-import { buildCachedLocalOcrBlocks } from './mobileLocalOcr';
+import { reflowAndTranslateAcademicPage, translateAcademicText } from './mobileTranslation';
+import { buildCachedLocalOcrBlocks, buildLocalOcrBlocks } from './mobileLocalOcr';
 import type {
   MobilePaper,
   MobileTranslationEntry,
@@ -25,6 +25,7 @@ interface MobileReaderScreenProps {
   onProgressChange: (page: number, pageCount: number) => void;
   onRequestOcr: () => Promise<void>;
   onSaveTranslation: (entry: MobileTranslationEntry) => Promise<void>;
+  onReplacePageEntries: (page: number, entries: MobileTranslationEntry[]) => Promise<void>;
   onTranslationSessionChange: (session: MobileTranslationSession) => Promise<void>;
 }
 
@@ -47,6 +48,7 @@ export function MobileReaderScreen({
   onProgressChange,
   onRequestOcr,
   onSaveTranslation,
+  onReplacePageEntries,
   onTranslationSessionChange
 }: MobileReaderScreenProps) {
   const bilingualPageRef = useRef<HTMLDivElement | null>(null);
@@ -184,9 +186,49 @@ export function MobileReaderScreen({
     }
   }
 
+  async function reflowAndTranslateOcrPage(
+    page: number,
+    pageBlocks: ExtractedPdfBlock[],
+    session: MobileTranslationSession
+  ): Promise<number> {
+    setTranslatingHash(pageBlocks[0]?.sourceHash ?? `ocr-page-${page}`);
+    try {
+      const bilingualParagraphs = await reflowAndTranslateAcademicPage(
+        pageBlocks.map((block, index) => ({
+          index,
+          type: block.type,
+          text: block.original
+        })),
+        session
+      );
+      const rebuiltBlocks = buildLocalOcrBlocks(page, bilingualParagraphs.map((paragraph) => ({
+        original: paragraph.original,
+        type: paragraph.type
+      })));
+      const translatedAt = new Date().toISOString();
+      const baseURL = session.baseURL.trim().replace(/\/+$/u, '');
+      const entries = rebuiltBlocks.map((item, index): MobileTranslationEntry => ({
+        sourceHash: item.block.sourceHash,
+        page,
+        original: item.block.original,
+        translation: bilingualParagraphs[index]?.translation ?? '',
+        translatedAt,
+        model: session.model,
+        baseURL,
+        origin: 'ocr',
+        order: item.order,
+        blockType: item.block.type
+      }));
+      await onReplacePageEntries(page, entries);
+      return entries.length;
+    } finally {
+      setTranslatingHash(null);
+    }
+  }
+
   async function handleTranslateAll(session = translationSession): Promise<void> {
     if (paper.localOcrStatus !== 'completed') {
-      setStatus('全文 OCR 尚未完成；导入任务会先逐页识别并缓存全部原文，完成后再点击全文翻译。');
+      setStatus('全文原文尚未提取完成；导入任务会先逐页缓存全部原文，完成后再点击全文翻译。');
       return;
     }
     if (!session.apiKey.trim()) {
@@ -209,6 +251,7 @@ export function MobileReaderScreen({
     let failed = 0;
     let completedPages = 0;
     let failedPage = 0;
+    let failedReason = '';
     const groupedTargets = new Map<number, ExtractedPdfBlock[]>();
     for (const block of targets) {
       groupedTargets.set(block.page, [...(groupedTargets.get(block.page) ?? []), block]);
@@ -218,17 +261,33 @@ export function MobileReaderScreen({
       if (stopTranslationRef.current || failed > 0) {
         break;
       }
-      setStatus(`正在翻译第 ${page} 页（${completedPages + 1} / ${pageTargets.length} 页）…`);
-      for (const block of pageBlocks) {
-        if (stopTranslationRef.current) {
-          break;
-        }
-        if (await translateBlock(block, session, false)) {
-          succeeded += 1;
-        } else {
+      const sourcePageBlocks = blocks.filter((block) => block.page === page);
+      const requiresAiReflow = sourcePageBlocks.some((block) => {
+        const cached = translationByHash.get(block.sourceHash);
+        return cached?.origin === 'ocr' || cached?.origin === 'vision';
+      });
+      if (requiresAiReflow) {
+        setStatus(`正在用 AI 保守校对、重排并翻译第 ${page} 页（${completedPages + 1} / ${pageTargets.length} 页）…`);
+        try {
+          succeeded += await reflowAndTranslateOcrPage(page, sourcePageBlocks, session);
+        } catch (error) {
           failed += 1;
           failedPage = page;
-          break;
+          failedReason = formatError(error);
+        }
+      } else {
+        setStatus(`正在翻译第 ${page} 页（${completedPages + 1} / ${pageTargets.length} 页）…`);
+        for (const block of pageBlocks) {
+          if (stopTranslationRef.current) {
+            break;
+          }
+          if (await translateBlock(block, session, false)) {
+            succeeded += 1;
+          } else {
+            failed += 1;
+            failedPage = page;
+            break;
+          }
         }
       }
       if (!stopTranslationRef.current && failed === 0) {
@@ -240,7 +299,7 @@ export function MobileReaderScreen({
     const stopped = stopTranslationRef.current;
     stopTranslationRef.current = false;
     if (failed > 0) {
-      setStatus(`全文翻译在第 ${failedPage} 页停止：已完成 ${completedPages} 页、${succeeded} 段；成功译文仍保存在本机。`);
+      setStatus(`全文处理在第 ${failedPage} 页停止${failedReason ? `：${failedReason}` : ''}。已完成 ${completedPages} 页、${succeeded} 段；成功译文仍保存在本机。`);
     } else if (stopped) {
       setStatus(`已停止全文翻译；本次完成 ${completedPages} 页、${succeeded} 段，已完成译文仍保存在本机。`);
     } else {
@@ -350,8 +409,8 @@ export function MobileReaderScreen({
           <div className="mobile-bilingual-toolbar">
             <span>{needsLocalOcr
               ? paper.localOcrStatus === 'failed'
-                ? '全文 OCR 失败'
-                : `导入后全文 OCR · ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页`
+                ? '全文原文提取失败'
+                : `导入后全文提取 · ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页`
               : `${translatedCount} / ${blocks.length} 段已译${pendingTranslationCount ? ` · ${pendingTranslationCount} 段待翻译` : staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}`}</span>
             <button
               type="button"
@@ -368,7 +427,7 @@ export function MobileReaderScreen({
                 }
               }}
             >
-              {ocrBusy ? '正在 OCR' : paper.localOcrStatus === 'failed' ? '重新 OCR' : translatingAll ? '停止' : translatedCount || staleTranslationCount ? '翻译剩余' : '翻译全文'}
+              {ocrBusy ? '正在提取' : paper.localOcrStatus === 'failed' ? '重新提取' : translatingAll ? '停止' : translatedCount || staleTranslationCount ? '翻译剩余' : '翻译全文'}
             </button>
           </div>
           <div
@@ -381,21 +440,21 @@ export function MobileReaderScreen({
             {extracting ? <div className="mobile-reader-loading">正在读取本机 OCR 缓存…</div> : null}
             {!extracting && blocks.length === 0 && needsLocalOcr ? (
               <div className="mobile-reader-loading mobile-ocr-empty">
-                <strong>{paper.localOcrStatus === 'failed' ? '全文 OCR 遇到问题' : '正在导入后 OCR 全文'}</strong>
-                <p>导入后会在当前设备逐页识别并逐页保存全部英文原文；这一阶段不会调用 DeepSeek，也不会产生中文。OCR 完成后，再由你点击“翻译全文”。</p>
-                {paper.localOcrStatus === 'failed' ? <button type="button" onClick={() => void onRequestOcr()}>重新 OCR</button> : null}
+                <strong>{paper.localOcrStatus === 'failed' ? '全文原文提取遇到问题' : '正在导入后提取全文'}</strong>
+                <p>每页优先直接读取 PDF 文字层；没有文字层时才在当前设备本地 OCR。此阶段不会调用 DeepSeek，也不会产生中文。</p>
+                {paper.localOcrStatus === 'failed' ? <button type="button" onClick={() => void onRequestOcr()}>重新提取</button> : null}
               </div>
             ) : null}
             {!extracting && needsLocalOcr && blocks.length > 0 ? (
               <div className="mobile-ocr-resume">
-                <span>全文 OCR 尚未完成；已识别页面已经逐页保存在本机，当前不会自动翻译。</span>
+                <span>全文原文尚未提取完成；已完成页面已经逐页保存在本机，当前不会自动翻译。</span>
                 {paper.localOcrStatus === 'failed' ? <button type="button" onClick={() => void onRequestOcr()}>从断点继续</button> : null}
               </div>
             ) : null}
             {!extracting && !needsLocalOcr && blocks.length > 0 && translatedCount === 0 && staleTranslationCount === 0 ? (
               <div className="mobile-bilingual-intro">
-                <strong>全文 OCR 已完成</strong>
-                <p>全部页面的英文原文已经逐页保存在本机，尚未调用翻译接口。点击“翻译全文”后才会按页生成并缓存中文。</p>
+                <strong>全文原文已提取</strong>
+                <p>文字层原文或本地 OCR 结果已逐页保存在本机。点击“翻译全文”后才生成中文；扫描页会同时由 AI 保守校对并重排。</p>
                 <button type="button" onClick={() => void handleTranslateAll()}>开始全文翻译</button>
               </div>
             ) : null}
@@ -485,15 +544,15 @@ export function MobileReaderScreen({
 
 function formatLocalOcrStatus(paper: MobilePaper): string {
   if (paper.localOcrStatus === 'completed') {
-    return `全文 OCR 已完成${paper.pageCount ? `，共 ${paper.pageCount} 页` : ''}；尚未自动翻译。`;
+    return `全文原文已提取${paper.pageCount ? `，共 ${paper.pageCount} 页` : ''}；尚未自动翻译。`;
   }
   if (paper.localOcrStatus === 'failed') {
-    return `全文 OCR 已停止：${paper.localOcrError || '未能识别有效正文'}。已完成页面仍保存在本机。`;
+    return `全文原文提取已停止：${paper.localOcrError || '未能识别有效正文'}。已完成页面仍保存在本机。`;
   }
   if (paper.localOcrStatus === 'running') {
-    return `正在本机 OCR 第 ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页；不会调用 DeepSeek。`;
+    return `正在处理第 ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页；优先文字层、无文字层才本地 OCR，不会调用 DeepSeek。`;
   }
-  return 'PDF 已导入，正在等待本机全文 OCR；不会自动翻译。';
+  return 'PDF 已导入，正在等待全文原文提取；不会自动翻译。';
 }
 
 function formatInitialReaderStatus(
@@ -502,7 +561,7 @@ function formatInitialReaderStatus(
 ): string {
   const restoredCount = translations.filter((entry) => entry.translation.trim()).length;
   return paper.localOcrStatus === 'completed' && restoredCount > 0
-    ? `已恢复 ${restoredCount} 段本地译文和 OCR 原文缓存。`
+    ? `已恢复 ${restoredCount} 段本地译文和原文缓存。`
     : formatLocalOcrStatus(paper);
 }
 

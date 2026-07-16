@@ -701,10 +701,21 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 交付验证：`npm run dist` 通过，Windows NSIS 安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,361,166 bytes，SHA-256 为 `DF15C14B12FDC25C8090FA778D2F2365FEAED5D1E58E00D99D6B5A3E43E0E0CB`；`npm run ios:sync` 通过，最新移动网页和 3 个 Capacitor 插件已同步到保留的 iOS 工程；`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。
 - 公网发布：Vercel 生产部署 `dpl_5dWgyBK6gSSk6Atwr52oJR9nT2iJ` 已重新绑定固定地址 `https://ftranslate-mobile.vercel.app`。对该固定地址带版本参数执行完整移动回归通过，包含真实 arXiv 检索、同源 PDF 下载入库、导入 OCR 零翻译请求、点击全文翻译后 6 次纯文本请求、退出和整页刷新恢复。
 
+### 2026-07-16 论文首页 OCR 准确率与 AI 重排兜底
+
+- 真机反馈：大图、长图注和双栏摘要共存的论文首页出现 `stem`、`mul :`、`ight-tolerance`、`pre` 等明显错字与裁断，图中文字还被混入连续正文。
+- 根因不是单个字符串，而是旧管线对所有 PDF 一律把整页压到最长边 1800px 的 JPEG 后交给 Tesseract，并丢弃 OCR 坐标、置信度和文字块类型；同时既有文字层重排没有把行内 `Abstract—` 传播到右栏，浮点基线微小漂移还会误删同一行的右栏内容。
+- 分层修复：每页先读取 PDF 文字层，按坐标恢复双栏并过滤摘要前的作者单位/图注噪声；无可靠文字层才使用最长边约 2600px 的 PNG、300 DPI Tesseract 参数以及坐标/块类型/置信度重排。OCR 缓存版本升级为 4，旧错误结果会自动重新处理。
+- AI 边界：导入阶段仍不读取 API Key、不调用 DeepSeek。只有用户点击“翻译全文”且该页确实来自 OCR 时，才以一页一次请求执行保守校对、自然段重排和中文翻译；文字层页只翻译，不允许 AI 改写英文。JSON 结果要求英文—中文段落一一对应，提示词明确禁止补写输入中不存在的内容。
+- 真实复现：下载官方 arXiv `2604.13015v1`，第一页 PDF.js 可读取 113 个文字项。修复前重排会混入图注残片并把摘要右栏归到作者单位；修复后第一页输出为一个完整 `Abstract` 段，左右栏顺序正确，图注/单位不再进入小说式正文，`whole-body` 与标点空格也被正确恢复。
+- 完整验证：新增混合首页双栏、浮点基线漂移、科研复合词、OCR 坐标排序、图片块过滤和 AI JSON 兜底测试；`npm run build` 与 `npm run dist` 均通过（84 个测试文件、509 项测试，TypeScript、桌面 renderer/Electron 与 Windows NSIS 安装包成功），`npm run visual:check`、本地和固定生产地址的 `npm run visual:check:mobile` 均通过，相关桌面与 390px/430px 手机截图经人工复查未见新增重叠、遮挡、横向溢出或英文—中文错配。`npm run ios:sync` 已同步最新网页与 3 个 Capacitor 插件；安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,361,395 bytes，SHA-256 为 `EA258EF70DB973129C739EE107D18F9977252A4AB1644A664FD663D17EBFD5ED`；`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。
+- 公网发布：Vercel 生产部署 `dpl_GgPDX9xokkyTEzNUw8442BgGSy8s` 已绑定固定地址 `https://ftranslate-mobile.vercel.app`，带缓存破除参数访问返回 200。线上完整移动回归确认：导入仅提取不翻译、切换/退出后保留 3 页 6 个原文块、点击“全文翻译”后才产生 3 次按页 AI 请求、刷新后恢复 PDF/双语结果/API Key，并继续通过真实 arXiv PDF 下载入库、改名标签和 IndexedDB 删除闭环。
+
 ### 问题台账
 
 | 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
 | --- | --- | --- | --- | --- |
+| 2026-07-16 | 图文混排、双栏论文首页 OCR 出现明显错字、裁断和阅读顺序错误 | 所有 PDF 都被降采样 JPEG 整页 OCR；忽略文字层和 OCR 坐标/块类型；摘要右栏未继承 `Abstract` section | 已改为文字层优先、2600px PNG 本地 OCR 兜底、坐标版面重排和仅在翻译时启用的 AI 保守校对；真实论文首页复现已恢复完整双栏摘要并发布生产站点 | 用截图中的原始匿名 PDF 在 iPhone Safari 重新打开；版本 4 会自动清除旧错误原文并重做，真机确认该文件是否直接命中文字层 |
 | 2026-07-16 | 导入 PDF 后不应自动翻译；应先 OCR 全文，用户点击“全文翻译”后才开始 | 旧扫描件流程把进入连续双语同时当作 OCR 和翻译启动动作，OCR 与 DeepSeek 状态耦合 | 已拆成应用级后台全文 OCR 与阅读器手动全文翻译两阶段；自动化断言 OCR 阶段翻译请求为 0，点击后才按页翻译 | 部署后用原问题 PDF 在 iPhone Safari 真机导入，观察长文 OCR 的耗时、发热和锁屏/切后台后的 WebKit 持续性 |
 | 2026-07-16 | API Key 刷新后丢失，导入/译文缓存缺少明确保证，OCR 出现一词一段或断词 | 配置序列化主动排除 Key；OCR 无条件信任碎片化版面段落 | Key 改为本机 Preferences 持久化；PDF/译文恢复纳入刷新回归；OCR 对逐词结果退回整页自然段并修复跨碎片连字符 | 真机用原问题 PDF 重新 OCR 一页，确认真实 Tesseract 输出能恢复为完整自然段；不要清除 Safari 网站数据 |
 | 2026-07-15 | Vercel CLI 尚未获得部署授权 | 本机没有既有 Vercel 凭据，首次部署必须由用户完成 OAuth 登录 | 已解决：完成 OAuth 并部署到 `https://ftranslate-mobile.vercel.app` | 后续在已关联项目中执行 `npx vercel --prod` 更新同一生产地址 |

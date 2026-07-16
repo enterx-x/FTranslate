@@ -134,9 +134,50 @@ age manipulation of`, [
   });
 
   it('caps local OCR page rendering for iPhone memory use', () => {
-    expect(calculateLocalOcrRenderScale(595, 842)).toBeCloseTo(2.1, 1);
-    expect(calculateLocalOcrRenderScale(3000, 1500)).toBe(0.6);
-    expect(calculateLocalOcrRenderScale(400, 400)).toBe(2.4);
+    expect(calculateLocalOcrRenderScale(595, 842)).toBeCloseTo(3.1, 1);
+    expect(calculateLocalOcrRenderScale(3000, 1500)).toBeCloseTo(0.87, 2);
+    expect(calculateLocalOcrRenderScale(400, 400)).toBe(3.4);
+  });
+
+  it('uses OCR coordinates to keep two-column reading order and ignore image blocks', () => {
+    expect(extractLocalOcrParagraphs('fallback should not win', [
+      {
+        blocktype: 'FLOWING_TEXT',
+        bbox: { x0: 330, y0: 500, x1: 570, y1: 550 },
+        paragraphs: [{
+          text: 'Right column paragraph remains second.',
+          confidence: 92,
+          bbox: { x0: 330, y0: 500, x1: 570, y1: 550 },
+          lines: [{
+            text: 'Right column paragraph remains second.',
+            confidence: 92,
+            bbox: { x0: 330, y0: 500, x1: 570, y1: 520 }
+          }]
+        }]
+      },
+      {
+        blocktype: 'FLOWING_IMAGE',
+        bbox: { x0: 40, y0: 120, x1: 570, y1: 450 },
+        paragraphs: [{ text: 'A D robot label noise', confidence: 80 }]
+      },
+      {
+        blocktype: 'FLOWING_TEXT',
+        bbox: { x0: 50, y0: 500, x1: 290, y1: 550 },
+        paragraphs: [{
+          text: 'Left column paragraph remains first.',
+          confidence: 94,
+          bbox: { x0: 50, y0: 500, x1: 290, y1: 550 },
+          lines: [{
+            text: 'Left column paragraph remains first.',
+            confidence: 94,
+            bbox: { x0: 50, y0: 500, x1: 290, y1: 520 }
+          }]
+        }]
+      }
+    ], { page: 2, pageWidth: 612, pageHeight: 792 })).toEqual([
+      { type: 'paragraph', original: 'Left column paragraph remains first.' },
+      { type: 'paragraph', original: 'Right column paragraph remains second.' }
+    ]);
   });
 
   it('ignores an old completed flag when no OCR paragraphs were actually saved', () => {
