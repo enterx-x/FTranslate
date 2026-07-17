@@ -752,10 +752,21 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 完整验证：专项 `pdfTextStructure` 与 `mobileLocalOcr` 测试通过（4 个测试文件、109 项测试）；`npm run build` 通过（84 个测试文件、510 项测试），`npm run build:mobile`、`npm run visual:check` 与本地/固定生产地址的 `npm run visual:check:mobile` 均通过。人工复查 390px OCR-only 与双语截图，未见新增重叠、截断、横向溢出或英中错配。构建产物检查确认旧的字符串 `for...of` 哈希循环已消失，UTF-16 下标循环已进入 `MobileApp-Dy0-l9yR.js`。
 - 交付验证：`npm run dist` 与 `npm run ios:sync` 通过；Windows 安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,361,707 bytes，SHA-256 为 `A33D4BE4212F59D285ABDBC846B23A5D58A47F96CE4C6FAD7FF7346F729B777D`；`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。Vercel 生产部署 `dpl_5oWyZQKoWynAoXBhJXYMzZYNDYei` 已绑定 `https://ftranslate-mobile.vercel.app`，线上 HTML 返回 200 并加载最新 `index-CiK3lVQU.js` / `MobileApp-Dy0-l9yR.js`，固定生产地址完整手机回归通过。
 
+### 2026-07-17 OCR、删除与图表渲染异步竞态审查
+
+- 对抗式审查发现四类既有测试未覆盖的异步问题：每页缓存超过 30 秒后 `Promise.race` 只结束外层等待，底层写入仍可能继续并把失败状态改回 `running`；删除论文会同步等待最长 120 秒的 OCR 当前页；PDF 图表加载失败没有销毁 loading task，失败页 Promise 还会永久污染三页缓存；阅读器销毁后迟到的页渲染仍可能向旧画布绘制。
+- OCR 修复：每个页保存步骤在执行前后都核对当前 job、取消标记和论文是否仍存在；任何异常先把 job 失活，再记录失败状态；旧 job 的 `finally` 只能删除自身，不能误删未来重试任务。新增延迟写入取消回归，确认旧回调不能继续进入图表写入和进度提交。
+- 删除修复：点击删除后先取消 OCR、移除论文索引并清空当前阅读状态，不再同步等待 OCR 完成；后台清理任务会等待 job 和最新串行写入队列真正结束，再二次删除论文目录。相同本地 ID 或 arXiv ID 在旧清理未结束时不会被直接复用，避免迟到写入污染重新导入的数据。
+- 图表修复：加载文档失败会在 2.5 秒边界内销毁 PDF.js loading task；页面渲染失败会从缓存淘汰并允许下一次重试；淘汰、销毁和失败 Promise 都有拒绝分支，避免未处理异常；`renderRegion` 在异步页返回后再次核对 renderer 状态，不再向已销毁画布绘制。图表迁移在异步落盘后也会再次检查组件是否已取消，避免切换论文后的迟到状态更新。
+- 自动验证：新增 4 项异步/资源回归，`npm test`、`npm run build` 与 `npm run dist` 均通过，共 85 个测试文件 / 520 项测试；`npm run ios:sync` 已同步最新移动资源和 3 个 Capacitor 插件，`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。Windows 安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,361,791 bytes，SHA-256 为 `B3AFEAC9933B65163DF3186104EB66AD86B2467CD0E5C4892162BB5FBBE4245A`。
+- 视觉对抗式审查：本地与固定生产地址的 `npm run visual:check:mobile` 均通过，覆盖真实 arXiv 检索/PDF 下载、原始图表插入、IndexedDB 删除、OCR 前页缓存、切换/退出、手动翻译、整页刷新与 API Key 恢复；人工查看 390px/430px 图表、OCR 运行和小说式双语截图，未发现图表挤压、按钮遮挡、横向溢出、字号回涨或英中错配。`npm run visual:check` 也通过，桌面页面未受移动端修复影响。
+- 公网发布：Vercel 生产部署 `dpl_EfB2eTEo78kM1wPMBmMNMrqinkhv` 已绑定 `https://ftranslate-mobile.vercel.app`；固定地址返回 200 并加载 `assets/index-DqycejUs.js`，部署后的完整手机回归通过。
+
 ### 问题台账
 
 | 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
 | --- | --- | --- | --- | --- |
+| 2026-07-17 | OCR 超时后状态可能复活、删除运行中论文等待过久、图表瞬时失败无法重试 | 超时只结束外层 Promise，底层写入与 PDF.js 页面任务没有 job 生命周期守卫；删除同步等待 OCR；失败 Promise 留在页缓存 | 已加入 job 前后守卫、后台删除排空与二次清理、失败页淘汰、loading task 销毁和销毁后禁止迟到绘制；520 项测试及本地/线上移动回归通过 | 真机对正在处理最后一页的 14 页论文执行一次删除或等待超时，确认状态不会回跳且同文件稍后可重新导入 |
 | 2026-07-17 | iPhone Safari 第 1 页直接原文提取报 `undefined is not a function (near '...r of e...')` | PDF 文字块哈希使用字符串 `for...of`，真机该路径返回不可迭代的字符串对象；且文字层异常没有页级 OCR 降级 | 已用不可迭代字符串对象稳定复现并改为 UTF-16 下标哈希；文字层单页异常现在自动降级 OCR | 部署后在同一 iPhone 对 `Dreamtouch 2026.4.14` 点击“重新提取”，无需清除 Safari 数据 |
 | 2026-07-16 | 图文混排、双栏论文首页 OCR 出现明显错字、裁断和阅读顺序错误 | 所有 PDF 都被降采样 JPEG 整页 OCR；忽略文字层和 OCR 坐标/块类型；摘要右栏未继承 `Abstract` section | 已改为文字层优先、2600px PNG 本地 OCR 兜底、坐标版面重排和仅在翻译时启用的 AI 保守校对；真实论文首页复现已恢复完整双栏摘要并发布生产站点 | 用截图中的原始匿名 PDF 在 iPhone Safari 重新打开；版本 4 会自动清除旧错误原文并重做，真机确认该文件是否直接命中文字层 |
 | 2026-07-16 | 导入 PDF 后不应自动翻译；应先 OCR 全文，用户点击“全文翻译”后才开始 | 旧扫描件流程把进入连续双语同时当作 OCR 和翻译启动动作，OCR 与 DeepSeek 状态耦合 | 已拆成应用级后台全文 OCR 与阅读器手动全文翻译两阶段；自动化断言 OCR 阶段翻译请求为 0，点击后才按页翻译 | 部署后用原问题 PDF 在 iPhone Safari 真机导入，观察长文 OCR 的耗时、发热和锁屏/切后台后的 WebKit 持续性 |

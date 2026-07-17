@@ -305,6 +305,17 @@ export async function settleMobileTaskWithin(promise: Promise<unknown>, timeoutM
   }
 }
 
+export async function runWhileMobileOcrJobActive(
+  isActive: () => boolean,
+  action: () => Promise<void>
+): Promise<boolean> {
+  if (!isActive()) {
+    return false;
+  }
+  await action();
+  return isActive();
+}
+
 export function calculateLocalOcrRenderScale(
   pageWidth: number,
   pageHeight: number,

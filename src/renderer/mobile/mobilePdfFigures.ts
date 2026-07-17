@@ -313,9 +313,25 @@ export interface MobilePdfFigureRenderer {
   destroy: () => Promise<void>;
 }
 
-export async function createMobilePdfFigureRenderer(pdfData: Uint8Array): Promise<MobilePdfFigureRenderer> {
-  const loadingTask = pdfjsLib.getDocument({ data: pdfData.slice() });
-  const pdfDocument = await loadingTask.promise;
+export interface MobilePdfFigureRendererOptions {
+  loadingTask?: {
+    promise: Promise<PDFDocumentProxy>;
+    destroy: () => Promise<void>;
+  };
+}
+
+export async function createMobilePdfFigureRenderer(
+  pdfData: Uint8Array,
+  options: MobilePdfFigureRendererOptions = {}
+): Promise<MobilePdfFigureRenderer> {
+  const loadingTask = options.loadingTask ?? pdfjsLib.getDocument({ data: pdfData.slice() });
+  let pdfDocument: PDFDocumentProxy;
+  try {
+    pdfDocument = await loadingTask.promise;
+  } catch (error) {
+    await settleWithin(Promise.resolve().then(() => loadingTask.destroy()), 2_500);
+    throw error;
+  }
   const pageCache = new Map<number, Promise<{ canvas: HTMLCanvasElement; scale: number }>>();
   let destroyed = false;
 
@@ -356,7 +372,12 @@ export async function createMobilePdfFigureRenderer(pdfData: Uint8Array): Promis
         void evicted?.then(({ canvas }) => {
           canvas.width = 1;
           canvas.height = 1;
-        });
+        }, () => undefined);
+      }
+    }, () => {
+      // A transient Safari canvas or PDF.js failure must not poison retries.
+      if (pageCache.get(pageNumber) === pending) {
+        pageCache.delete(pageNumber);
       }
     });
     return pending;
@@ -368,6 +389,9 @@ export async function createMobilePdfFigureRenderer(pdfData: Uint8Array): Promis
         return;
       }
       const renderedPage = await getPageCanvas(region.page);
+      if (destroyed) {
+        return;
+      }
       const xScale = renderedPage.canvas.width / region.bounds.pageWidth;
       const yScale = renderedPage.canvas.height / region.bounds.pageHeight;
       const sourceX = Math.max(0, Math.round(region.bounds.x * xScale));
@@ -396,6 +420,9 @@ export async function createMobilePdfFigureRenderer(pdfData: Uint8Array): Promis
       );
     },
     async destroy() {
+      if (destroyed) {
+        return;
+      }
       destroyed = true;
       const cachedPages = Array.from(pageCache.values());
       pageCache.clear();
@@ -403,7 +430,7 @@ export async function createMobilePdfFigureRenderer(pdfData: Uint8Array): Promis
         void cachedPage.then(({ canvas }) => {
           canvas.width = 1;
           canvas.height = 1;
-        });
+        }, () => undefined);
       }
       await settleWithin(pdfDocument.destroy(), 2_500);
     }

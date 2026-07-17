@@ -232,6 +232,9 @@ export function MobileReaderScreen({
           return;
         }
         await replaceFigureEntriesRef.current(page, regions.map(createMobileFigureEntry));
+        if (cancelled) {
+          return;
+        }
         setStatus(`正在恢复论文图表：第 ${page} / ${pageTotal} 页…`);
       }
     }).then(async (result) => {
@@ -239,6 +242,9 @@ export function MobileReaderScreen({
         return;
       }
       await figureExtractionCompleteRef.current(result.regions.length);
+      if (cancelled) {
+        return;
+      }
       setStatus(result.regions.length > 0
         ? `已从原 PDF 恢复 ${result.regions.length} 个图表，并插入连续阅读位置。`
         : '全文图表检查完成；该 PDF 未发现可定位的图表。');

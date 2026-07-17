@@ -4,6 +4,7 @@ import {
   buildLocalOcrBlocks,
   calculateLocalOcrRenderScale,
   extractLocalOcrParagraphs,
+  runWhileMobileOcrJobActive,
   resolveLocalOcrResumeState,
   settleMobileTaskWithin,
   withMobileTaskTimeout
@@ -16,6 +17,21 @@ describe('mobile scanned PDF local OCR', () => {
     await expect(withMobileTaskTimeout(never, 5, '第 14 页处理超时')).rejects.toThrow('第 14 页处理超时');
     await expect(settleMobileTaskWithin(never, 5)).resolves.toBe(false);
     await expect(settleMobileTaskWithin(Promise.resolve(), 50)).resolves.toBe(true);
+  });
+
+  it('does not continue a late page-save callback after its OCR job was cancelled', async () => {
+    let active = true;
+    let releaseWrite: (() => void) | undefined;
+    const write = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+
+    const step = runWhileMobileOcrJobActive(() => active, () => write);
+    active = false;
+    releaseWrite?.();
+
+    await expect(step).resolves.toBe(false);
+    await expect(runWhileMobileOcrJobActive(() => false, () => Promise.resolve())).resolves.toBe(false);
   });
 
   it('reflows OCR lines, repairs line-end hyphenation, and classifies headings', () => {

@@ -7,7 +7,9 @@ import { MobileReaderScreen } from './MobileReaderScreen';
 import {
   buildCachedLocalOcrBlocks,
   recognizePdfPagesLocally,
-  resolveLocalOcrResumeState
+  resolveLocalOcrResumeState,
+  runWhileMobileOcrJobActive,
+  settleMobileTaskWithin
 } from './mobileLocalOcr';
 import {
   downloadPdfFile,
@@ -62,6 +64,7 @@ function MobileApp() {
   const translationCacheByPaperRef = useRef(new Map<string, MobileTranslationEntry[]>());
   const translationWriteQueuesRef = useRef(new Map<string, Promise<void>>());
   const ocrJobsRef = useRef(new Map<string, MobileOcrJob>());
+  const paperCleanupJobsRef = useRef(new Map<string, Promise<void>>());
   const [translationSession, setTranslationSession] = useState<MobileTranslationSession>({
     baseURL: 'https://api.openai.com/v1',
     model: 'gpt-4.1-mini',
@@ -150,6 +153,7 @@ function MobileApp() {
     setBusy(true);
     try {
       const paperId = createLocalPaperId(file.name, file.size, file.lastModified);
+      await waitForDeletedPaperCleanup(paperId);
       const existing = libraryRef.current.find((paper) => paper.id === paperId);
       const storedPdf = await savePdfFile({ paperId, file, kind: 'source' });
       const paper = createImportedMobilePaper({ id: paperId, fileName: file.name, storedPdf });
@@ -174,6 +178,7 @@ function MobileApp() {
     setNotice(`正在下载 arXiv:${paper.stableId}…`);
     try {
       const paperId = `arxiv-${paper.stableId.replace(/[^a-z0-9._-]+/giu, '-')}`;
+      await waitForDeletedPaperCleanup(paperId);
       const existing = libraryRef.current.find((item) => item.id === paperId);
       const storedPdf = await downloadPdfFile({
         paperId,
@@ -210,7 +215,6 @@ function MobileApp() {
       const ocrJob = ocrJobsRef.current.get(paper.id);
       if (ocrJob) {
         ocrJob.cancelled = true;
-        await ocrJob.promise.catch(() => undefined);
       }
       await commitLibrary((current) => current.filter((item) => item.id !== paper.id));
       if (activePaperId === paper.id) {
@@ -221,19 +225,59 @@ function MobileApp() {
         translationsRef.current = [];
         setTranslations([]);
       }
-      await waitForPaperTranslationWrites(paper.id);
       translationCacheByPaperRef.current.delete(paper.id);
-      translationWriteQueuesRef.current.delete(paper.id);
+      let removalNotice = '论文已从当前浏览器移除。';
       try {
         await removeStoredPaper(paper.id);
-        setNotice('论文已从当前浏览器移除。');
       } catch (cleanupError) {
-        setNotice(`论文已移除，但部分本地文件未能清理：${formatError(cleanupError)}`);
+        removalNotice = `论文已移除，但部分本地文件未能清理：${formatError(cleanupError)}`;
       }
+      const cleanupJob = finishDeletedPaperCleanup(paper.id, ocrJob?.promise);
+      paperCleanupJobsRef.current.set(paper.id, cleanupJob);
+      void cleanupJob.then(() => {
+        if (paperCleanupJobsRef.current.get(paper.id) === cleanupJob) {
+          paperCleanupJobsRef.current.delete(paper.id);
+        }
+      });
+      setNotice(removalNotice);
     } catch (error) {
       setNotice(`移除论文失败：${formatError(error)}`);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function finishDeletedPaperCleanup(paperId: string, ocrJob?: Promise<void>): Promise<void> {
+    if (ocrJob) {
+      await ocrJob.catch(() => undefined);
+    }
+    // A page-save timeout cannot cancel the underlying Filesystem/IndexedDB
+    // request. Drain the latest queue before the final delete so it cannot
+    // recreate an orphan translation file after the UI already removed it.
+    while (true) {
+      const queuedWrite = translationWriteQueuesRef.current.get(paperId);
+      if (!queuedWrite) {
+        break;
+      }
+      await queuedWrite.catch(() => undefined);
+      if (translationWriteQueuesRef.current.get(paperId) === queuedWrite) {
+        translationWriteQueuesRef.current.delete(paperId);
+      }
+    }
+    translationCacheByPaperRef.current.delete(paperId);
+    if (!libraryRef.current.some((item) => item.id === paperId)) {
+      await removeStoredPaper(paperId).catch(() => undefined);
+    }
+  }
+
+  async function waitForDeletedPaperCleanup(paperId: string): Promise<void> {
+    const cleanupJob = paperCleanupJobsRef.current.get(paperId);
+    if (!cleanupJob) {
+      return;
+    }
+    const settled = await settleMobileTaskWithin(cleanupJob, 5_000);
+    if (!settled) {
+      throw new Error('同一论文的旧 OCR/缓存任务仍在结束，请稍后再导入。');
     }
   }
 
@@ -391,6 +435,14 @@ function MobileApp() {
           startPage: resume.startPage,
           isCancelled: () => job.cancelled,
           onPageRecognized: async ({ page, pageCount: totalPages, blocks: pageBlocks, source, figures }) => {
+            const isCurrentJob = () => (
+              !job.cancelled
+              && ocrJobsRef.current.get(paper.id) === job
+              && libraryRef.current.some((item) => item.id === paper.id)
+            );
+            if (!isCurrentJob()) {
+              return;
+            }
             const previousByHash = new Map(
               (translationCacheByPaperRef.current.get(paper.id) ?? cachedEntries)
                 .map((entry) => [entry.sourceHash, entry])
@@ -410,9 +462,19 @@ function MobileApp() {
                 blockType: item.block.type
               };
             });
-            await replacePaperOcrPage(paper.id, page, entries);
-            await replacePaperFigurePage(paper.id, page, figures.map(createMobileFigureEntry));
-            await commitLibrary((current) => {
+            if (!await runWhileMobileOcrJobActive(
+              isCurrentJob,
+              () => replacePaperOcrPage(paper.id, page, entries)
+            )) {
+              return;
+            }
+            if (!await runWhileMobileOcrJobActive(
+              isCurrentJob,
+              () => replacePaperFigurePage(paper.id, page, figures.map(createMobileFigureEntry))
+            )) {
+              return;
+            }
+            await runWhileMobileOcrJobActive(isCurrentJob, () => commitLibrary((current) => {
               const target = current.find((item) => item.id === paper.id);
               const processedPages = Array.from(new Set([
                 ...(target?.visionOcrProcessedPages ?? []),
@@ -427,10 +489,15 @@ function MobileApp() {
                 localOcrStatus: 'running',
                 localOcrError: undefined
               });
-            });
+            }).then(() => undefined));
           }
         });
-        if (result.cancelled) {
+        if (
+          result.cancelled
+          || job.cancelled
+          || ocrJobsRef.current.get(paper.id) !== job
+          || !libraryRef.current.some((item) => item.id === paper.id)
+        ) {
           return;
         }
         const finalEntries = translationCacheByPaperRef.current.get(paper.id) ?? [];
@@ -449,7 +516,15 @@ function MobileApp() {
           figureCount
         }));
       } catch (error) {
-        if (!job.cancelled) {
+        const shouldReportFailure = (
+          !job.cancelled
+          && ocrJobsRef.current.get(paper.id) === job
+          && libraryRef.current.some((item) => item.id === paper.id)
+        );
+        // Promise.race cannot cancel a timed-out IndexedDB write. Mark the job
+        // inactive first so a late page callback cannot resurrect "running".
+        job.cancelled = true;
+        if (shouldReportFailure) {
           await commitLibrary((current) => updateMobilePaper(current, paper.id, {
             localOcrVersion: MOBILE_LOCAL_OCR_VERSION,
             localOcrStatus: 'failed',
@@ -458,7 +533,9 @@ function MobileApp() {
           }));
         }
       } finally {
-        ocrJobsRef.current.delete(paper.id);
+        if (ocrJobsRef.current.get(paper.id) === job) {
+          ocrJobsRef.current.delete(paper.id);
+        }
         // Wake the single-job scheduler after the current paper releases its slot.
         // A library commit normally renders before `finally`, while the job is still
         // registered, so queued papers otherwise have no later state change to start them.

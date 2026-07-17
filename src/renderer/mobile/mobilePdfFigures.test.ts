@@ -1,10 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { ExtractedPdfBlock, PositionedPdfTextItem } from '../lib/pdfTextStructure';
 import {
   buildPdfCaptionAnchors,
+  createMobilePdfFigureRenderer,
   detectPdfFigureRegions,
+  type MobilePdfFigureRegion,
   type PdfPaintedImageBounds
 } from './mobilePdfFigures';
+
+const originalDocument = globalThis.document;
+
+afterEach(() => {
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: originalDocument });
+});
 
 function block(
   sourceHash: string,
@@ -32,6 +41,117 @@ function item(str: string, x: number, y: number, width: number, height: number):
 }
 
 describe('mobile PDF figure recovery', () => {
+  it('destroys a failed PDF loading task instead of leaking the worker', async () => {
+    const destroy = vi.fn(async () => undefined);
+    const loadingError = new Error('broken PDF');
+
+    await expect(createMobilePdfFigureRenderer(new Uint8Array([1]), {
+      loadingTask: {
+        promise: Promise.reject(loadingError),
+        destroy
+      }
+    })).rejects.toBe(loadingError);
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('evicts a rejected page render so a transient Safari canvas failure can retry', async () => {
+    const cleanup = vi.fn();
+    const render = vi.fn(() => ({ promise: Promise.resolve() }));
+    const page = {
+      cleanup,
+      getViewport: () => ({ width: 100, height: 200 }),
+      render
+    };
+    const getPage = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary page failure'))
+      .mockResolvedValueOnce(page);
+    const destroy = vi.fn(async () => undefined);
+    const context = {
+      drawImage: vi.fn(),
+      fillRect: vi.fn(),
+      fillStyle: ''
+    };
+    const makeCanvas = () => ({
+      width: 0,
+      height: 0,
+      getContext: () => context
+    }) as unknown as HTMLCanvasElement;
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: { createElement: makeCanvas }
+    });
+    const renderer = await createMobilePdfFigureRenderer(new Uint8Array([1]), {
+      loadingTask: {
+        promise: Promise.resolve({ getPage, destroy } as unknown as PDFDocumentProxy),
+        destroy: vi.fn(async () => undefined)
+      }
+    });
+    const region: MobilePdfFigureRegion = {
+      id: 'figure-1',
+      page: 1,
+      kind: 'figure',
+      caption: 'Fig. 1',
+      captionHash: 'caption-1',
+      hasTextCaption: true,
+      order: 0,
+      bounds: { x: 0, y: 0, width: 50, height: 50, pageWidth: 100, pageHeight: 200 },
+      hiddenTextHashes: []
+    };
+
+    await expect(renderer.renderRegion(makeCanvas(), region)).rejects.toThrow('temporary page failure');
+    await expect(renderer.renderRegion(makeCanvas(), region)).resolves.toBeUndefined();
+    expect(getPage).toHaveBeenCalledTimes(2);
+    expect(cleanup).toHaveBeenCalledOnce();
+    await renderer.destroy();
+  });
+
+  it('does not paint a late PDF page into a canvas after the reader was destroyed', async () => {
+    let resolvePage: ((page: unknown) => void) | undefined;
+    const pendingPage = new Promise<unknown>((resolve) => {
+      resolvePage = resolve;
+    });
+    const getPage = vi.fn(() => pendingPage);
+    const documentDestroy = vi.fn(async () => undefined);
+    const drawImage = vi.fn();
+    const context = { drawImage, fillRect: vi.fn(), fillStyle: '' };
+    const makeCanvas = () => ({
+      width: 0,
+      height: 0,
+      getContext: () => context
+    }) as unknown as HTMLCanvasElement;
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: { createElement: makeCanvas }
+    });
+    const renderer = await createMobilePdfFigureRenderer(new Uint8Array([1]), {
+      loadingTask: {
+        promise: Promise.resolve({ getPage, destroy: documentDestroy } as unknown as PDFDocumentProxy),
+        destroy: vi.fn(async () => undefined)
+      }
+    });
+    const region: MobilePdfFigureRegion = {
+      id: 'figure-late',
+      page: 1,
+      kind: 'figure',
+      caption: 'Fig. late',
+      captionHash: 'caption-late',
+      hasTextCaption: true,
+      order: 0,
+      bounds: { x: 0, y: 0, width: 50, height: 50, pageWidth: 100, pageHeight: 200 },
+      hiddenTextHashes: []
+    };
+    const renderPromise = renderer.renderRegion(makeCanvas(), region);
+    await renderer.destroy();
+    resolvePage?.({
+      cleanup: vi.fn(),
+      getViewport: () => ({ width: 100, height: 200 }),
+      render: () => ({ promise: Promise.resolve() })
+    });
+
+    await expect(renderPromise).resolves.toBeUndefined();
+    expect(drawImage).not.toHaveBeenCalled();
+  });
+
   it('groups a split PDF text line into a figure caption anchor', () => {
     const items: PositionedPdfTextItem[] = [
       { str: 'Fig.', x: 313, y: 157, width: 18, height: 10, page: 9, pageWidth: 612, pageHeight: 792 },
