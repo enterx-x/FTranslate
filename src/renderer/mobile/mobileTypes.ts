@@ -237,6 +237,17 @@ export function parseMobileLibrary(value: string | null): MobilePaper[] {
   }
 }
 
+export function mergeHydratedMobileLibrary(
+  storedLibrary: MobilePaper[],
+  inMemoryLibrary: MobilePaper[]
+): MobilePaper[] {
+  const inMemoryIds = new Set(inMemoryLibrary.map((paper) => paper.id));
+  return [
+    ...inMemoryLibrary,
+    ...storedLibrary.filter((paper) => !inMemoryIds.has(paper.id))
+  ].slice(0, 500);
+}
+
 export function parseTranslationEntries(value: string): MobileTranslationEntry[] {
   try {
     const parsed = JSON.parse(value) as unknown;

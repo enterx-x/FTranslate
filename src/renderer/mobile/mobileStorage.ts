@@ -16,6 +16,7 @@ import { buildMobileWebPdfUrl } from './mobileWeb';
 import { validatePdfDocumentData } from '../lib/pdfOutlineExtraction';
 
 const MOBILE_LIBRARY_KEY = 'pdfTranslationReader:mobileLibrary:v1';
+const MOBILE_LIBRARY_WEB_KEY = `CapacitorStorage.${MOBILE_LIBRARY_KEY}`;
 const MOBILE_TRANSLATION_PREFERENCES_KEY = 'pdfTranslationReader:mobileTranslationPreferences:v1';
 const MOBILE_PDF_DATABASE_NAME = 'pdfTranslationReader:mobilePdfFiles:v1';
 const MOBILE_PDF_OBJECT_STORE = 'pdfFiles';
@@ -28,12 +29,34 @@ export const MAX_MOBILE_PDF_BYTES = 64 * 1024 * 1024;
 const MOBILE_PDF_DOWNLOAD_TIMEOUT_MS = 45_000;
 
 export async function loadMobileLibrary(): Promise<MobilePaper[]> {
+  if (!Capacitor.isNativePlatform() && typeof window !== 'undefined') {
+    return parseMobileLibrary(window.localStorage.getItem(MOBILE_LIBRARY_WEB_KEY));
+  }
   const { value } = await Preferences.get({ key: MOBILE_LIBRARY_KEY });
   return parseMobileLibrary(value);
 }
 
 export async function saveMobileLibrary(library: MobilePaper[]): Promise<void> {
-  await Preferences.set({ key: MOBILE_LIBRARY_KEY, value: JSON.stringify(library) });
+  const value = JSON.stringify(library);
+  if (!Capacitor.isNativePlatform() && typeof window !== 'undefined') {
+    window.localStorage.setItem(MOBILE_LIBRARY_WEB_KEY, value);
+    return;
+  }
+  await Preferences.set({ key: MOBILE_LIBRARY_KEY, value });
+}
+
+export function createMobileLibraryWriteQueue(
+  write: (library: MobilePaper[]) => Promise<void> = saveMobileLibrary
+): (library: MobilePaper[]) => Promise<void> {
+  let tail = Promise.resolve();
+  return (library) => {
+    const snapshot = [...library];
+    const currentWrite = tail
+      .catch(() => undefined)
+      .then(() => write(snapshot));
+    tail = currentWrite;
+    return currentWrite;
+  };
 }
 
 export async function savePdfBytes(input: {

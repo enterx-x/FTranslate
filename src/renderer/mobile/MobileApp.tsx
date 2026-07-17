@@ -12,6 +12,7 @@ import {
   settleMobileTaskWithin
 } from './mobileLocalOcr';
 import {
+  createMobileLibraryWriteQueue,
   downloadPdfFile,
   loadMobileLibrary,
   loadPaperTranslations,
@@ -20,7 +21,6 @@ import {
   removeStoredPdfFile,
   removeStoredPaper,
   requestPersistentMobileStorage,
-  saveMobileLibrary,
   savePaperTranslations,
   savePdfFile,
   saveTranslationPreferences
@@ -30,6 +30,7 @@ import {
   createImportedMobilePaper,
   createLocalPaperId,
   isMobilePaperSourceEquivalent,
+  mergeHydratedMobileLibrary,
   mergeTranslationEntry,
   MOBILE_LOCAL_OCR_VERSION,
   replaceMobileFigurePageEntries,
@@ -55,6 +56,10 @@ function MobileApp() {
   const [view, setView] = useState<MobileView>('library');
   const [library, setLibrary] = useState<MobilePaper[]>([]);
   const libraryRef = useRef<MobilePaper[]>([]);
+  const libraryHydratedRef = useRef(false);
+  const libraryChangedBeforeHydrationRef = useRef(false);
+  const libraryWriterRef = useRef<ReturnType<typeof createMobileLibraryWriteQueue> | null>(null);
+  libraryWriterRef.current ??= createMobileLibraryWriteQueue();
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
   const activePaperIdRef = useRef<string | null>(null);
   const activePaperSourceKeyRef = useRef<string | null>(null);
@@ -80,33 +85,44 @@ function MobileApp() {
     [activePaperId, library]
   );
 
+  const commitLibrary = useCallback(async (updater: (current: MobilePaper[]) => MobilePaper[]) => {
+    const nextLibrary = updater(libraryRef.current);
+    if (!libraryHydratedRef.current) {
+      libraryChangedBeforeHydrationRef.current = true;
+    }
+    libraryRef.current = nextLibrary;
+    setLibrary(nextLibrary);
+    await libraryWriterRef.current?.(nextLibrary);
+    return nextLibrary;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     void requestPersistentMobileStorage();
     void Promise.all([loadMobileLibrary(), loadTranslationPreferences()])
-      .then(([storedLibrary, preferences]) => {
+      .then(async ([storedLibrary, preferences]) => {
         if (!cancelled) {
-          setLibrary(storedLibrary);
-          libraryRef.current = storedLibrary;
+          const resolvedLibrary = libraryChangedBeforeHydrationRef.current
+            ? mergeHydratedMobileLibrary(storedLibrary, libraryRef.current)
+            : storedLibrary;
+          libraryHydratedRef.current = true;
+          setLibrary(resolvedLibrary);
+          libraryRef.current = resolvedLibrary;
           setTranslationSession((session) => ({ ...session, ...preferences }));
+          if (libraryChangedBeforeHydrationRef.current) {
+            await libraryWriterRef.current?.(resolvedLibrary);
+          }
         }
       })
       .catch((error) => {
         if (!cancelled) {
+          libraryHydratedRef.current = true;
           setNotice(`读取当前设备资料失败：${formatError(error)}`);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  const commitLibrary = useCallback(async (updater: (current: MobilePaper[]) => MobilePaper[]) => {
-    const nextLibrary = updater(libraryRef.current);
-    libraryRef.current = nextLibrary;
-    setLibrary(nextLibrary);
-    await saveMobileLibrary(nextLibrary);
-    return nextLibrary;
   }, []);
 
   const handleOpenPaper = useCallback(async (paper: MobilePaper) => {
@@ -160,7 +176,7 @@ function MobileApp() {
       const nextLibrary = await commitLibrary((current) => upsertMobilePaper(current, paper));
       const cleanupWarning = await clearReplacedSourceData(existing, paper);
       await handleOpenPaper(nextLibrary.find((item) => item.id === paperId) ?? paper);
-      setNotice(cleanupWarning);
+      setNotice(cleanupWarning || 'PDF 已保存到当前浏览器；全文原文正在后台提取。');
     } catch (error) {
       setNotice(`导入 PDF 失败：${formatError(error)}`);
     } finally {
@@ -195,7 +211,7 @@ function MobileApp() {
       const nextLibrary = await commitLibrary((current) => upsertMobilePaper(current, mobilePaper));
       const cleanupWarning = await clearReplacedSourceData(existing, mobilePaper);
       await handleOpenPaper(nextLibrary.find((item) => item.id === mobilePaper.id) ?? mobilePaper);
-      setNotice(cleanupWarning);
+      setNotice(cleanupWarning || 'arXiv 论文已保存到当前浏览器；全文原文正在后台提取。');
     } catch (error) {
       setNotice(`保存 arXiv 论文失败：${formatError(error)}`);
     } finally {
@@ -565,13 +581,9 @@ function MobileApp() {
     if (!activePaperId) {
       return;
     }
-    setLibrary((current) => {
-      const next = updateMobilePaper(current, activePaperId, { lastPage: page, pageCount });
-      libraryRef.current = next;
-      void saveMobileLibrary(next);
-      return next;
-    });
-  }, [activePaperId]);
+    void commitLibrary((current) => updateMobilePaper(current, activePaperId, { lastPage: page, pageCount }))
+      .catch((error) => setNotice(`保存阅读进度失败：${formatError(error)}`));
+  }, [activePaperId, commitLibrary]);
 
   async function handleTranslationSessionChange(session: MobileTranslationSession): Promise<void> {
     if (!session.baseURL.trim() || !session.model.trim()) {

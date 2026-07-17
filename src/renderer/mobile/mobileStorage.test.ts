@@ -3,14 +3,51 @@ import {
   MAX_MOBILE_PDF_BYTES,
   assertMobilePdfByteLength,
   copyPdfBytesForIndexedDb,
+  createMobileLibraryWriteQueue,
   formatMobilePdfDownloadHttpError,
   parseMobileTranslationPreferences,
   readMobilePdfResponse,
   serializeMobileTranslationPreferences,
   validateMobilePdfHeader
 } from './mobileStorage';
+import { createImportedMobilePaper, type MobileStoredPdf } from './mobileTypes';
 
 describe('mobile PDF storage guards', () => {
+  it('serializes library writes so an older slow save cannot overwrite the newest snapshot', async () => {
+    let releaseFirst: (() => void) | undefined;
+    let markFirstStarted: (() => void) | undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const writes: string[] = [];
+    const sourcePdf: MobileStoredPdf = {
+      path: 'papers/source/paper.pdf',
+      fileName: 'paper.pdf',
+      kind: 'source',
+      byteLength: 120
+    };
+    const firstPaper = createImportedMobilePaper({ id: 'first', fileName: 'first.pdf', storedPdf: sourcePdf });
+    const latestPaper = createImportedMobilePaper({ id: 'latest', fileName: 'latest.pdf', storedPdf: sourcePdf });
+    const write = createMobileLibraryWriteQueue(async (library) => {
+      writes.push(library[0]?.id ?? 'empty');
+      if (writes.length === 1) {
+        markFirstStarted?.();
+        await firstBlocked;
+      }
+    });
+
+    const first = write([firstPaper]);
+    const latest = write([latestPaper]);
+    await firstStarted;
+    expect(writes).toEqual(['first']);
+    releaseFirst?.();
+    await Promise.all([first, latest]);
+    expect(writes).toEqual(['first', 'latest']);
+  });
+
   it('accepts a PDF signature within the mobile size limit', () => {
     expect(() => assertMobilePdfByteLength(1024)).not.toThrow();
     expect(() => validateMobilePdfHeader(new TextEncoder().encode('%PDF-1.7\n'))).not.toThrow();

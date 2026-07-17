@@ -4,6 +4,9 @@ import {
   buildLocalOcrBlocks,
   calculateLocalOcrRenderScale,
   extractLocalOcrParagraphs,
+  MOBILE_OCR_FAST_LONG_EDGE,
+  MOBILE_OCR_PRECISE_LONG_EDGE,
+  needsPreciseLocalOcrRetry,
   runWhileMobileOcrJobActive,
   resolveLocalOcrResumeState,
   settleMobileTaskWithin,
@@ -163,6 +166,28 @@ age manipulation of`, [
     expect(calculateLocalOcrRenderScale(595, 842)).toBeCloseTo(3.1, 1);
     expect(calculateLocalOcrRenderScale(3000, 1500)).toBeCloseTo(0.87, 2);
     expect(calculateLocalOcrRenderScale(400, 400)).toBe(3.4);
+  });
+
+  it('uses a smaller fast pass and only retries weak OCR pages at the precise size', () => {
+    expect(MOBILE_OCR_FAST_LONG_EDGE).toBeLessThan(MOBILE_OCR_PRECISE_LONG_EDGE);
+    expect(calculateLocalOcrRenderScale(595, 842, MOBILE_OCR_FAST_LONG_EDGE)).toBeCloseTo(2.49, 2);
+    expect(calculateLocalOcrRenderScale(595, 842, MOBILE_OCR_PRECISE_LONG_EDGE)).toBeCloseTo(3.09, 2);
+
+    expect(needsPreciseLocalOcrRetry({
+      text: 'The controller remains stable under bounded disturbances and preserves safe operation.',
+      confidence: 91,
+      paragraphs: [{ type: 'paragraph', original: 'The controller remains stable under bounded disturbances and preserves safe operation.' }]
+    })).toBe(false);
+    expect(needsPreciseLocalOcrRetry({
+      text: 'The controller remains stable under bounded disturbances.',
+      confidence: 61,
+      paragraphs: [{ type: 'paragraph', original: 'The controller remains stable under bounded disturbances.' }]
+    })).toBe(true);
+    expect(needsPreciseLocalOcrRetry({
+      text: 'EE 4 age manipulation of',
+      confidence: 88,
+      paragraphs: []
+    })).toBe(true);
   });
 
   it('uses OCR coordinates to keep two-column reading order and ignore image blocks', () => {

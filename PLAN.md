@@ -762,10 +762,21 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 视觉对抗式审查：本地与固定生产地址的 `npm run visual:check:mobile` 均通过，覆盖真实 arXiv 检索/PDF 下载、原始图表插入、IndexedDB 删除、OCR 前页缓存、切换/退出、手动翻译、整页刷新与 API Key 恢复；人工查看 390px/430px 图表、OCR 运行和小说式双语截图，未发现图表挤压、按钮遮挡、横向溢出、字号回涨或英中错配。`npm run visual:check` 也通过，桌面页面未受移动端修复影响。
 - 公网发布：Vercel 生产部署 `dpl_EfB2eTEo78kM1wPMBmMNMrqinkhv` 已绑定 `https://ftranslate-mobile.vercel.app`；固定地址返回 200 并加载 `assets/index-DqycejUs.js`，部署后的完整手机回归通过。
 
+### 2026-07-17 OCR 快速首扫与论文库可靠落盘
+
+- 真机反馈：扫描 PDF 的本地 OCR 速度偏慢，退出网页后论文似乎没有留在论文库中。
+- OCR 根因与优化：此前所有扫描页都直接渲染为最长边约 2600px，再执行一次完整 Tesseract 识别；清晰页面和疑难页面承担相同像素成本。现改为约 2100px 快速首扫，像素量约为旧路径的 65%；整体置信度低于 70、没有保留有效段落或过滤后正文损失过大的页面，才自动回到 2600px 精扫。文字层优先、双栏重排、图表恢复与“导入时不翻译”的边界不变。
+- 保存根因与修复：启动阶段用 `Promise.all` 异步读取论文库与翻译设置；如果用户在它完成前导入，稍后返回的旧空论文库会覆盖内存中刚落盘的论文。网页端论文索引现直接同步写入与 Capacitor Preferences 相同的 `localStorage` 键；所有论文库写入经串行队列提交，旧慢写入不能覆盖新进度；启动读取若发现期间已有本地改动，会合并旧库与当前库并再次落盘。导入 PDF 或 arXiv 论文成功后明确显示已保存提示，然后才继续后台提取。
+- 回归验证：新增快速/精扫质量门、启动水合合并与串行写入顺序测试。`npm run build` 通过（85 个测试文件、523 项测试，TypeScript、桌面 renderer/Electron 构建成功）；`npm run build:mobile` 与 `npm run visual:check:mobile` 通过，自动执行导入、OCR 中途切换/退出、三页完成后整页刷新，确认 PDF、6 个原文/译文块和 API Key 均恢复。人工检查 `.tmp-mobile-visual-check/08a-reader-scanned-ocr-running-390x844.png` 与 `08b-reader-scanned-ocr-only-390x844.png`，保存提示无遮挡、正文无横向溢出。`npm run visual:check` 通过，桌面端未受影响。
+- 交付验证：`npm run dist` 再次通过全部 523 项测试、TypeScript、桌面构建与 NSIS 打包；安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,361,791 bytes，SHA-256 为 `13FFA9D0700781FDF82EC9C95BBBD3D90A3468869BD80408370DE53690C962D3`。`npm run ios:sync` 已同步最新移动资源和 3 个 Capacitor 插件，`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。
+- 公网发布：Vercel 生产部署 `dpl_4Zg9X6NdoXH29T9XY1pk6BPuGp4q` 已绑定固定地址 `https://ftranslate-mobile.vercel.app`；线上 HTML 返回 200 并加载 `assets/index-DhaU0PSE.js`。带缓存破除参数的固定地址完整移动回归通过，覆盖真实 arXiv 检索/PDF 下载、导入扫描件、OCR 中途退出、手动全文翻译、整页刷新后恢复 PDF/6 个双语块/API Key、改名标签与删除闭环。
+- 运行边界：Safari 被切到系统后台或被系统冻结后，网页 JavaScript 仍可能暂停，纯静态网页无法保证关闭 Safari 后继续 OCR；本轮保证的是 PDF 和已经完成的逐页结果先保存，重新打开后从首个缺页续跑。2100px 路径的真机耗时仍需用原 14 页扫描件测量；质量不足页会多做一次识别，换取不牺牲疑难页准确率。
+
 ### 问题台账
 
 | 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
 | --- | --- | --- | --- | --- |
+| 2026-07-17 | 扫描 OCR 偏慢，退出后论文似乎未保存 | 所有扫描页固定使用 2600px 高精度识别；启动异步读取的旧空论文库可能晚返回并覆盖导入结果，论文库进度写入也没有全局顺序 | 已改为 2100px 快速首扫、低质量页 2600px 精扫；网页索引同步落盘、写入串行、启动水合合并；523 项测试及导入后整页刷新恢复回归通过 | 用原 14 页扫描论文真机记录普通页/精扫页耗时；不要清除 Safari 网站数据，若系统冻结 OCR，重开后应从首个缺页续跑 |
 | 2026-07-17 | OCR 超时后状态可能复活、删除运行中论文等待过久、图表瞬时失败无法重试 | 超时只结束外层 Promise，底层写入与 PDF.js 页面任务没有 job 生命周期守卫；删除同步等待 OCR；失败 Promise 留在页缓存 | 已加入 job 前后守卫、后台删除排空与二次清理、失败页淘汰、loading task 销毁和销毁后禁止迟到绘制；520 项测试及本地/线上移动回归通过 | 真机对正在处理最后一页的 14 页论文执行一次删除或等待超时，确认状态不会回跳且同文件稍后可重新导入 |
 | 2026-07-17 | iPhone Safari 第 1 页直接原文提取报 `undefined is not a function (near '...r of e...')` | PDF 文字块哈希使用字符串 `for...of`，真机该路径返回不可迭代的字符串对象；且文字层异常没有页级 OCR 降级 | 已用不可迭代字符串对象稳定复现并改为 UTF-16 下标哈希；文字层单页异常现在自动降级 OCR | 部署后在同一 iPhone 对 `Dreamtouch 2026.4.14` 点击“重新提取”，无需清除 Safari 数据 |
 | 2026-07-16 | 图文混排、双栏论文首页 OCR 出现明显错字、裁断和阅读顺序错误 | 所有 PDF 都被降采样 JPEG 整页 OCR；忽略文字层和 OCR 坐标/块类型；摘要右栏未继承 `Abstract` section | 已改为文字层优先、2600px PNG 本地 OCR 兜底、坐标版面重排和仅在翻译时启用的 AI 保守校对；真实论文首页复现已恢复完整双栏摘要并发布生产站点 | 用截图中的原始匿名 PDF 在 iPhone Safari 重新打开；版本 4 会自动清除旧错误原文并重做，真机确认该文件是否直接命中文字层 |

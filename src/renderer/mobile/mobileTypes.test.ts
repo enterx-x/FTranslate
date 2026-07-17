@@ -5,6 +5,7 @@ import {
   isMobilePaperSourceEquivalent,
   isTranslationEntryCurrent,
   mergeTranslationEntry,
+  mergeHydratedMobileLibrary,
   MOBILE_LOCAL_OCR_VERSION,
   parseMobileLibrary,
   replaceMobileFigurePageEntries,
@@ -167,6 +168,25 @@ describe('mobile paper model', () => {
     const [merged] = upsertMobilePaper([original], refreshed);
     expect(merged.customTitle).toBe('我的论文');
     expect(merged.tags).toEqual(['RL']);
+  });
+
+  it('does not let a late startup load erase a paper imported before hydration finished', () => {
+    const storedPaper = createImportedMobilePaper({
+      id: 'stored-paper',
+      fileName: 'stored.pdf',
+      storedPdf: { ...storedPdf, path: 'papers/stored/source/stored.pdf' }
+    });
+    const importedPaper = createImportedMobilePaper({
+      id: 'new-import',
+      fileName: 'new-import.pdf',
+      storedPdf: { ...storedPdf, path: 'papers/new-import/source/new-import.pdf' }
+    });
+    const inMemoryProgress = { ...storedPaper, lastPage: 9, localOcrStatus: 'running' as const };
+
+    expect(mergeHydratedMobileLibrary([storedPaper], [importedPaper, inMemoryProgress])).toEqual([
+      importedPaper,
+      inMemoryProgress
+    ]);
   });
 });
 
