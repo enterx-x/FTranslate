@@ -1,5 +1,38 @@
 # PLAN.md
 
+## 2026-07-17：连续双语恢复原图与 OCR 末页收尾
+
+### 当前结论
+
+- 连续双语的数据流已从“纯文字列表”扩展为“文字块 + 原 PDF 图表区域”的单一阅读流；图片不经过 DeepSeek，原 PDF 不被覆盖。
+- OCR 停在最后一页的根因不是第 14 页内容本身，而是页面保存完成后仍无上限等待 Tesseract worker 或 PDF.js document 销毁。单页和收尾均已加入时间边界；已有完整页面覆盖的旧任务会直接完成，不再重跑最后一页。
+- 旧缓存按 `figureExtractionVersion` 迁移。首次打开已完成 OCR 的旧论文时逐页补提图表并写入原论文翻译缓存；无图论文也记录完成版本，避免每次打开重复扫描。
+
+### 已完成操作
+
+- 新增 `mobilePdfFigures.ts`：识别 `Fig. / Figure / Table` 图注，结合 PDF 绘制指令与版面边界确定图表裁切区；位图优先使用实际绘制并集，纯矢量图使用图注锚点裁切。
+- 连续阅读器把图表与原文段落按页内 order 合并，接近视口时才从本地 PDF 渲染；图中坐标轴、图例等误提文字会从正文流隐藏，正文图注继续保留。
+- OCR 每页处理上限为 120 秒、每页缓存写入上限为 30 秒，worker/document 清理上限为 2.5 秒；最后一页写入后显示收尾状态。刷新后若 `visionOcrProcessedPages` 已覆盖全部页面且存在正文缓存，则直接修复为 completed。
+- OCR/AI 重排的文字页写入和图表页写入相互独立，AI 重排某页不会删除该页已缓存图表。
+
+### 验证记录
+
+- `npx vitest run src/renderer/mobile/mobilePdfFigures.test.ts src/renderer/mobile/mobileLocalOcr.test.ts src/renderer/mobile/mobileTypes.test.ts`：4 个测试文件、38 项测试通过。
+- 用用户截图对应的 arXiv `2604.13015v1`（14 页）做临时真实 PDF 验证：14 页图表分析在约 2 秒内结束；首页位图、纯矢量架构图、第 9 页 Fig. 6 / Fig. 7 与第 14 页图表均被定位，测试后已删除临时 PDF，未加入仓库。
+- `npm run build:mobile`：通过。
+- `npm run visual:check:mobile`：通过；新增矢量图夹具验证原图位于图注前、画布实际渲染、工具栏显示图表数量且无横向越界。人工检查 `.tmp-mobile-visual-check/03b-reader-inline-figure-390x844.png`，390×844 下图表、图注、原文和操作栏无重叠或横向溢出。
+- `npm run build`：85 个测试文件、516 项测试全部通过，TypeScript、桌面 renderer 与 Electron 主进程构建通过。
+- `npm run visual:check`：桌面端视觉回归通过；移动端共享依赖变更没有破坏桌面工作台。
+- `npm run ios:sync`：通过；最新移动网页资源已同步到保留的 Capacitor iOS 工程，3 个原生插件声明保持完整。
+- `npm run dist`：通过；Windows 安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,361,795 字节，SHA-256 为 `37E19257D256B5A6424494D7700D8BAFC3134A930EDC10AB54036D52CE3DB36D`。
+- `npx vercel --prod`：生产部署 `dpl_2yMJj3g8AJwfpzLfQtF4bZasmcC2` 已完成并重新绑定固定地址 `https://ftranslate-mobile.vercel.app`；随后 HTTP 验证返回 200，首页引用本轮 `index-Cks0MXl6.js`。首次 CLI 下载因本机 npm 缓存缺失 `ajv` 内容失败，运行 `npm cache verify` 修复索引后重试成功，未清除项目或浏览器数据。
+
+### 问题与风险
+
+- PDF 图表定位依赖可识别的英文图注或表题。整页扫描件没有文字层时仍能 OCR 正文，但无法可靠地把整页像素自动分割成每一幅独立图；此类文件继续以“原始 PDF”作为完整图像核对入口。
+- iOS Safari 把网页挂到系统后台后可能暂停 JavaScript，普通网页无法保证浏览器被彻底退出后仍持续计算；当前保证的是逐页落盘、重开续跑和完整覆盖后自动收尾，而不是绕过 iOS 后台限制。
+- 图表按需渲染会短暂占用一个 PDF 页画布，页面缓存上限为 3 页；仍需在 50 MB / 100 页论文上继续做 Safari 内存压力验证。
+
 ## 2026-07-14：iPhone 局域网网页阅读
 
 ### 当前结论

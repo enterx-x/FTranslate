@@ -18,24 +18,7 @@ function wait(ms) {
 }
 
 function createFallbackPdfBuffer() {
-  return Buffer.from(
-    `%PDF-1.4
-1 0 obj
-<< /Type /Catalog /Pages 2 0 R >>
-endobj
-2 0 obj
-<< /Type /Pages /Count 1 /Kids [3 0 R] >>
-endobj
-3 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
-endobj
-4 0 obj
-<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
-endobj
-5 0 obj
-<< /Length 143 >>
-stream
-BT
+  const content = `BT
 /F1 24 Tf
 72 760 Td
 (Safe Policy Optimization with Control Barrier Functions) Tj
@@ -43,24 +26,55 @@ BT
 /F1 14 Tf
 (The policy update preserves forward invariance under bounded disturbances.) Tj
 ET
-endstream
-endobj
-xref
-0 6
-0000000000 65535 f${' '}
-0000000009 00000 n${' '}
-0000000058 00000 n${' '}
-0000000115 00000 n${' '}
-0000000241 00000 n${' '}
-0000000311 00000 n${' '}
-trailer
-<< /Size 6 /Root 1 0 R >>
-startxref
-559
-%%EOF
-`,
-    'ascii'
-  );
+q
+0.96 g
+72 450 451 180 re f
+0.25 g
+102 470 55 92 re f
+180 470 55 128 re f
+258 470 55 74 re f
+336 470 55 146 re f
+414 470 55 110 re f
+Q
+BT
+/F1 10 Tf
+105 456 Td
+(Baseline) Tj
+78 0 Td
+(CBF) Tj
+78 0 Td
+(MPC) Tj
+78 0 Td
+(Ours) Tj
+78 0 Td
+(Safe RL) Tj
+ET
+BT
+/F1 11 Tf
+72 425 Td
+(Fig. 1: Constraint satisfaction across five safety-policy variants.) Tj
+0 -42 Td
+/F1 14 Tf
+(The proposed controller reduces violations while preserving task performance.) Tj
+ET`;
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Count 1 /Kids [3 0 R] >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${Buffer.byteLength(content, 'ascii')} >>\nstream\n${content}\nendstream`
+  ];
+  let source = '%PDF-1.4\n';
+  const offsets = [0];
+  for (let index = 0; index < objects.length; index += 1) {
+    offsets.push(Buffer.byteLength(source, 'ascii'));
+    source += `${index + 1} 0 obj\n${objects[index]}\nendobj\n`;
+  }
+  const xrefOffset = Buffer.byteLength(source, 'ascii');
+  source += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  source += offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  source += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(source, 'ascii');
 }
 
 function createScannedFallbackPdfBuffer(pageCount = 3) {
@@ -531,6 +545,35 @@ try {
   await evaluate(client, `document.querySelectorAll('.mobile-reader-mode-bar button')[0].click()`);
   await waitForSelector(client, '.mobile-bilingual-reader');
   console.log('Imported fallback PDF and opened reader.');
+
+  await waitForSelector(client, '.mobile-pdf-figure', 20000);
+  await waitForExpression(client, `document.querySelector('.mobile-pdf-figure-canvas.is-ready canvas')?.width > 100 ? 'figure-ready' : ''`, 20000);
+  const inlineFigureLayout = await evaluate(client, `(() => {
+    const figure = document.querySelector('.mobile-pdf-figure');
+    const canvas = figure?.querySelector('canvas');
+    const caption = document.querySelector('.mobile-bilingual-block.is-caption');
+    const page = document.querySelector('.mobile-bilingual-page');
+    return {
+      figureWidth: figure?.getBoundingClientRect().width ?? 0,
+      pageWidth: page?.getBoundingClientRect().width ?? 0,
+      canvasWidth: canvas?.width ?? 0,
+      canvasHeight: canvas?.height ?? 0,
+      caption: caption?.textContent ?? '',
+      toolbar: document.querySelector('.mobile-bilingual-toolbar')?.textContent ?? ''
+    };
+  })()`);
+  if (
+    inlineFigureLayout.figureWidth <= 100 ||
+    inlineFigureLayout.figureWidth > inlineFigureLayout.pageWidth + 1 ||
+    inlineFigureLayout.canvasWidth <= 100 ||
+    inlineFigureLayout.canvasHeight <= 50 ||
+    !inlineFigureLayout.caption.includes('Fig. 1') ||
+    !inlineFigureLayout.toolbar.includes('1 个图表')
+  ) {
+    throw new Error(`Inline PDF figure layout is invalid: ${JSON.stringify(inlineFigureLayout)}`);
+  }
+  await capture(client, '03b-reader-inline-figure-390x844.png');
+  console.log('Captured an original PDF figure inserted before its caption.');
 
   await waitForSelector(client, '.mobile-bilingual-intro button', 20000);
   await evaluate(client, `document.querySelector('.mobile-bilingual-intro button').click()`);

@@ -12,6 +12,7 @@ import {
   type ExtractedPdfBlock,
   type PositionedPdfTextItem
 } from '../lib/pdfTextStructure';
+import { extractPdfFigureRegionsFromPage, type MobilePdfFigureRegion } from './mobilePdfFigures';
 import type { MobileTranslationEntry } from './mobileTypes';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -31,6 +32,7 @@ export interface LocalOcrPageResult {
   pageCount: number;
   blocks: LocalOcrBlock[];
   source: 'text' | 'ocr';
+  figures: MobilePdfFigureRegion[];
 }
 
 export interface LocalOcrProgress {
@@ -108,6 +110,9 @@ export async function recognizePdfPagesLocally(
     onProgress?: (progress: LocalOcrProgress) => void;
     onPageRecognized?: (result: LocalOcrPageResult) => Promise<void> | void;
     recognizeImage?: OcrImageRecognizer;
+    pageTimeoutMs?: number;
+    saveTimeoutMs?: number;
+    cleanupTimeoutMs?: number;
   } = {}
 ): Promise<LocalOcrRunResult> {
   const loadingTask = pdfjsLib.getDocument({ data: pdfData.slice() });
@@ -189,32 +194,47 @@ export async function recognizePdfPagesLocally(
         progress: 0,
         status: `正在本地识别第 ${pageNumber} / ${pageCount} 页…`
       });
-      const page = await pdfDocument.getPage(pageNumber);
+      const page = await withMobileTaskTimeout(
+        pdfDocument.getPage(pageNumber),
+        options.pageTimeoutMs ?? 120_000,
+        `第 ${pageNumber} 页加载超时，请重新打开后从该页继续。`
+      );
       try {
-        let embeddedBlocks: LocalOcrBlock[] = [];
-        try {
-          embeddedBlocks = await extractEmbeddedPdfTextBlocks(page, pageNumber);
-        } catch (textLayerError) {
-          console.warn(`PDF page ${pageNumber} text-layer extraction failed; falling back to local OCR.`, textLayerError);
-          options.onProgress?.({
-            page: pageNumber,
-            pageCount,
-            progress: 0,
-            status: `第 ${pageNumber} / ${pageCount} 页文字层读取异常，正在改用本地 OCR…`
-          });
-        }
-        let blocks: LocalOcrBlock[];
-        let source: 'text' | 'ocr';
-        if (embeddedBlocks.length > 0) {
-          blocks = embeddedBlocks;
-          source = 'text';
-          options.onProgress?.({
-            page: pageNumber,
-            pageCount,
-            progress: 1,
-            status: `第 ${pageNumber} / ${pageCount} 页已直接读取 PDF 文字层。`
-          });
-        } else {
+        const pageResult = await withMobileTaskTimeout((async (): Promise<{
+          blocks: LocalOcrBlock[];
+          source: 'text' | 'ocr';
+          figures: MobilePdfFigureRegion[];
+        }> => {
+          let embedded: EmbeddedPdfTextResult = { blocks: [], outlineBlocks: [], items: [] };
+          try {
+            embedded = await extractEmbeddedPdfTextBlocks(page, pageNumber);
+          } catch (textLayerError) {
+            console.warn(`PDF page ${pageNumber} text-layer extraction failed; falling back to local OCR.`, textLayerError);
+            options.onProgress?.({
+              page: pageNumber,
+              pageCount,
+              progress: 0,
+              status: `第 ${pageNumber} / ${pageCount} 页文字层读取异常，正在改用本地 OCR…`
+            });
+          }
+          let figures: MobilePdfFigureRegion[] = [];
+          try {
+            figures = await extractPdfFigureRegionsFromPage(page, pageNumber, {
+              items: embedded.items,
+              blocks: embedded.outlineBlocks
+            });
+          } catch (figureError) {
+            console.warn(`PDF page ${pageNumber} figure extraction failed; continuing with text.`, figureError);
+          }
+          if (embedded.blocks.length > 0) {
+            options.onProgress?.({
+              page: pageNumber,
+              pageCount,
+              progress: 1,
+              status: `第 ${pageNumber} / ${pageCount} 页已直接读取 PDF 文字层和图表。`
+            });
+            return { blocks: embedded.blocks, source: 'text', figures };
+          }
           const rendered = await renderPdfPageForLocalOcr(page);
           const recognizer = await ensureOcrRecognizer();
           const recognized = await recognizer(rendered.imageDataUrl, pageNumber);
@@ -223,26 +243,64 @@ export async function recognizePdfPagesLocally(
             pageWidth: rendered.width,
             pageHeight: rendered.height
           });
-          blocks = buildLocalOcrBlocks(pageNumber, paragraphs);
-          source = 'ocr';
-        }
-        await options.onPageRecognized?.({ page: pageNumber, pageCount, blocks, source });
+          return { blocks: buildLocalOcrBlocks(pageNumber, paragraphs), source: 'ocr', figures };
+        })(), options.pageTimeoutMs ?? 120_000, `第 ${pageNumber} 页处理超过 120 秒，已保存前面页面；重新打开后会从本页继续。`);
+        await withMobileTaskTimeout(
+          Promise.resolve(options.onPageRecognized?.({ page: pageNumber, pageCount, ...pageResult })),
+          options.saveTimeoutMs ?? 30_000,
+          `第 ${pageNumber} 页写入本地缓存超时；已保存的更早页面不会丢失，重新打开后会从该页继续。`
+        );
         lastProcessedPage = pageNumber;
-        recognizedBlockCount += blocks.length;
+        recognizedBlockCount += pageResult.blocks.length;
       } finally {
         page.cleanup();
       }
     }
 
+    options.onProgress?.({
+      page: pageCount,
+      pageCount,
+      progress: 1,
+      status: '最后一页已保存，正在完成全文原文索引…'
+    });
     return { pageCount, lastProcessedPage, recognizedBlockCount, cancelled: false };
   } finally {
     if (ocrWorkerRef.current) {
-      await ocrWorkerRef.current.terminate();
+      await settleMobileTaskWithin(ocrWorkerRef.current.terminate(), options.cleanupTimeoutMs ?? 2_500);
     }
     if (pdfDocument) {
-      await pdfDocument.destroy();
+      await settleMobileTaskWithin(pdfDocument.destroy(), options.cleanupTimeoutMs ?? 2_500);
     } else {
-      await loadingTask.destroy();
+      await settleMobileTaskWithin(loadingTask.destroy(), options.cleanupTimeoutMs ?? 2_500);
+    }
+  }
+}
+
+export async function withMobileTaskTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = globalThis.setTimeout(() => reject(new Error(message)), Math.max(1, timeoutMs));
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId !== undefined) {
+      globalThis.clearTimeout(timeoutId);
+    }
+  }
+}
+
+export async function settleMobileTaskWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined;
+  const settled = promise.then(() => true, () => true);
+  const timeout = new Promise<false>((resolve) => {
+    timeoutId = globalThis.setTimeout(() => resolve(false), Math.max(1, timeoutMs));
+  });
+  try {
+    return await Promise.race([settled, timeout]);
+  } finally {
+    if (timeoutId !== undefined) {
+      globalThis.clearTimeout(timeoutId);
     }
   }
 }
@@ -355,7 +413,13 @@ export function resolveLocalOcrResumeState(input: LocalOcrResumeStateInput): {
   };
 }
 
-async function extractEmbeddedPdfTextBlocks(page: PDFPageProxy, pageNumber: number): Promise<LocalOcrBlock[]> {
+interface EmbeddedPdfTextResult {
+  blocks: LocalOcrBlock[];
+  outlineBlocks: ExtractedPdfBlock[];
+  items: PositionedPdfTextItem[];
+}
+
+async function extractEmbeddedPdfTextBlocks(page: PDFPageProxy, pageNumber: number): Promise<EmbeddedPdfTextResult> {
   const viewport = page.getViewport({ scale: 1 });
   const textContent = await page.getTextContent();
   const items = textContent.items.flatMap((rawItem): PositionedPdfTextItem[] => {
@@ -384,12 +448,16 @@ async function extractEmbeddedPdfTextBlocks(page: PDFPageProxy, pageNumber: numb
   const rawLetterCount = countOcrLetters(items.map((item) => item.str).join(' '));
   const extractedLetterCount = countOcrLetters(blocks.map((block) => block.original).join(' '));
   if (rawLetterCount < 60 || extractedLetterCount < 30 || blocks.length === 0) {
-    return [];
+    return { blocks: [], outlineBlocks: blocks, items };
   }
-  return blocks.map((block, index) => ({
-    block,
-    order: (pageNumber - 1) * 1000 + index
-  }));
+  return {
+    blocks: blocks.map((block, index) => ({
+      block,
+      order: (pageNumber - 1) * 1000 + index
+    })),
+    outlineBlocks: blocks,
+    items
+  };
 }
 
 async function renderPdfPageForLocalOcr(page: PDFPageProxy): Promise<{

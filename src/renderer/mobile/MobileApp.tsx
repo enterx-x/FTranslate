@@ -30,6 +30,7 @@ import {
   isMobilePaperSourceEquivalent,
   mergeTranslationEntry,
   MOBILE_LOCAL_OCR_VERSION,
+  replaceMobileFigurePageEntries,
   replaceMobileOcrPageEntries,
   updateMobilePaper,
   upsertMobilePaper,
@@ -37,6 +38,10 @@ import {
   type MobileTranslationEntry,
   type MobileTranslationSession
 } from './mobileTypes';
+import {
+  createMobileFigureEntry,
+  MOBILE_PDF_FIGURE_VERSION
+} from './mobilePdfFigures';
 import './mobile.css';
 
 interface MobileOcrJob {
@@ -283,6 +288,20 @@ function MobileApp() {
     await persistPaperTranslationSet(paperId, next);
   }
 
+  async function replacePaperFigurePage(
+    paperId: string,
+    page: number,
+    entries: MobileTranslationEntry[]
+  ): Promise<void> {
+    await waitForPaperTranslationWrites(paperId);
+    let cachedEntries = translationCacheByPaperRef.current.get(paperId);
+    if (!cachedEntries) {
+      cachedEntries = await loadPaperTranslations(paperId);
+    }
+    const next = replaceMobileFigurePageEntries(cachedEntries, page, entries);
+    await persistPaperTranslationSet(paperId, next);
+  }
+
   async function persistPaperTranslationSet(
     paperId: string,
     next: MobileTranslationEntry[]
@@ -338,7 +357,10 @@ function MobileApp() {
         let cachedEntries = translationCacheByPaperRef.current.get(paper.id) ?? loadedEntries;
         if (resetCache) {
           cachedEntries = cachedEntries.filter((entry) => (
-            entry.origin !== 'text' && entry.origin !== 'ocr' && entry.origin !== 'vision'
+            entry.origin !== 'text' &&
+            entry.origin !== 'ocr' &&
+            entry.origin !== 'vision' &&
+            entry.origin !== 'figure'
           ));
           await persistPaperTranslationSet(paper.id, cachedEntries);
         } else {
@@ -354,22 +376,42 @@ function MobileApp() {
           legacyLastPage: resetCache ? undefined : currentPaper.visionOcrLastPage,
           legacyCompleted: resetCache ? false : currentPaper.visionOcrCompleted
         });
+        if (!resume.required && cachedBlocks.length > 0) {
+          await commitLibrary((current) => updateMobilePaper(current, paper.id, {
+            pageCount: Math.max(currentPaper.pageCount ?? currentPaper.visionOcrLastPage ?? 1, 1),
+            visionOcrLastPage: Math.max(currentPaper.pageCount ?? currentPaper.visionOcrLastPage ?? 1, 1),
+            visionOcrCompleted: true,
+            localOcrVersion: MOBILE_LOCAL_OCR_VERSION,
+            localOcrStatus: 'completed',
+            localOcrError: undefined
+          }));
+          return;
+        }
         const result = await recognizePdfPagesLocally(sourceBytes, {
           startPage: resume.startPage,
           isCancelled: () => job.cancelled,
-          onPageRecognized: async ({ page, pageCount: totalPages, blocks: pageBlocks, source }) => {
-            const entries = pageBlocks.map((item) => ({
-              sourceHash: item.block.sourceHash,
-              page: item.block.page,
-              original: item.block.original,
-              translation: '',
-              translatedAt: new Date().toISOString(),
-              model: '',
-              origin: source,
-              order: item.order,
-              blockType: item.block.type
-            }));
+          onPageRecognized: async ({ page, pageCount: totalPages, blocks: pageBlocks, source, figures }) => {
+            const previousByHash = new Map(
+              (translationCacheByPaperRef.current.get(paper.id) ?? cachedEntries)
+                .map((entry) => [entry.sourceHash, entry])
+            );
+            const entries = pageBlocks.map((item): MobileTranslationEntry => {
+              const previous = previousByHash.get(item.block.sourceHash);
+              return {
+                sourceHash: item.block.sourceHash,
+                page: item.block.page,
+                original: item.block.original,
+                translation: previous?.translation ?? '',
+                translatedAt: previous?.translatedAt ?? new Date().toISOString(),
+                model: previous?.model ?? '',
+                ...(previous?.baseURL ? { baseURL: previous.baseURL } : {}),
+                origin: source,
+                order: item.order,
+                blockType: item.block.type
+              };
+            });
             await replacePaperOcrPage(paper.id, page, entries);
+            await replacePaperFigurePage(paper.id, page, figures.map(createMobileFigureEntry));
             await commitLibrary((current) => {
               const target = current.find((item) => item.id === paper.id);
               const processedPages = Array.from(new Set([
@@ -393,13 +435,18 @@ function MobileApp() {
         }
         const finalEntries = translationCacheByPaperRef.current.get(paper.id) ?? [];
         const finalBlockCount = buildCachedLocalOcrBlocks(finalEntries).length;
+        const figureCount = finalEntries.filter((entry) => (
+          entry.origin === 'figure' && entry.figureVersion === MOBILE_PDF_FIGURE_VERSION
+        )).length;
         await commitLibrary((current) => updateMobilePaper(current, paper.id, {
           pageCount: result.pageCount,
           visionOcrLastPage: Math.max(1, result.lastProcessedPage),
           visionOcrCompleted: true,
           localOcrVersion: MOBILE_LOCAL_OCR_VERSION,
           localOcrStatus: finalBlockCount > 0 ? 'completed' : 'failed',
-          localOcrError: finalBlockCount > 0 ? undefined : '没有从文字层或本地 OCR 中提取到有效正文。'
+          localOcrError: finalBlockCount > 0 ? undefined : '没有从文字层或本地 OCR 中提取到有效正文。',
+          figureExtractionVersion: MOBILE_PDF_FIGURE_VERSION,
+          figureCount
         }));
       } catch (error) {
         if (!job.cancelled) {
@@ -510,6 +557,11 @@ function MobileApp() {
               onRequestOcr={() => startPaperLocalOcr(activePaper)}
               onSaveTranslation={(entry) => handleSaveTranslations(activePaper.id, [entry])}
               onReplacePageEntries={(page, entries) => replacePaperOcrPage(activePaper.id, page, entries)}
+              onReplaceFigureEntries={(page, entries) => replacePaperFigurePage(activePaper.id, page, entries)}
+              onFigureExtractionComplete={(figureCount) => commitLibrary((current) => updateMobilePaper(current, activePaper.id, {
+                figureExtractionVersion: MOBILE_PDF_FIGURE_VERSION,
+                figureCount
+              })).then(() => undefined)}
               onTranslationSessionChange={handleTranslationSessionChange}
             />
           </div>

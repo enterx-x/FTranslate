@@ -4,10 +4,20 @@ import {
   buildLocalOcrBlocks,
   calculateLocalOcrRenderScale,
   extractLocalOcrParagraphs,
-  resolveLocalOcrResumeState
+  resolveLocalOcrResumeState,
+  settleMobileTaskWithin,
+  withMobileTaskTimeout
 } from './mobileLocalOcr';
 
 describe('mobile scanned PDF local OCR', () => {
+  it('does not let the final page or PDF worker cleanup remain pending forever', async () => {
+    const never = new Promise<void>(() => undefined);
+
+    await expect(withMobileTaskTimeout(never, 5, '第 14 页处理超时')).rejects.toThrow('第 14 页处理超时');
+    await expect(settleMobileTaskWithin(never, 5)).resolves.toBe(false);
+    await expect(settleMobileTaskWithin(Promise.resolve(), 50)).resolves.toBe(true);
+  });
+
   it('reflows OCR lines, repairs line-end hyphenation, and classifies headings', () => {
     expect(extractLocalOcrParagraphs(`SAFE REINFORCEMENT LEARNING
 

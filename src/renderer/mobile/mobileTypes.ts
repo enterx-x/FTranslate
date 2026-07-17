@@ -39,6 +39,17 @@ export interface MobilePaper {
   localOcrVersion?: number;
   localOcrStatus?: MobileLocalOcrStatus;
   localOcrError?: string;
+  figureExtractionVersion?: number;
+  figureCount?: number;
+}
+
+export interface MobileFigureBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  pageWidth: number;
+  pageHeight: number;
 }
 
 export interface MobileTranslationEntry {
@@ -49,9 +60,15 @@ export interface MobileTranslationEntry {
   translatedAt: string;
   model: string;
   baseURL?: string;
-  origin?: 'text' | 'ocr' | 'vision';
+  origin?: 'text' | 'ocr' | 'vision' | 'figure';
   order?: number;
   blockType?: 'heading' | 'paragraph' | 'formula' | 'caption';
+  figureVersion?: number;
+  figureKind?: 'figure' | 'table';
+  figureBounds?: MobileFigureBounds;
+  figureCaptionHash?: string;
+  figureHasTextCaption?: boolean;
+  figureTextHashes?: string[];
 }
 
 export interface MobileTranslationPreferences {
@@ -149,7 +166,11 @@ export function upsertMobilePaper(library: MobilePaper[], incoming: MobilePaper)
       localOcrStatus: resetLocalOcr
         ? incoming.localOcrStatus
         : existing.localOcrStatus ?? incoming.localOcrStatus,
-      localOcrError: resetLocalOcr ? incoming.localOcrError : existing.localOcrError
+      localOcrError: resetLocalOcr ? incoming.localOcrError : existing.localOcrError,
+      figureExtractionVersion: sourceEquivalent
+        ? existing.figureExtractionVersion ?? incoming.figureExtractionVersion
+        : incoming.figureExtractionVersion,
+      figureCount: sourceEquivalent ? existing.figureCount ?? incoming.figureCount : incoming.figureCount
     },
     ...library.filter((paper) => paper.id !== incoming.id)
   ];
@@ -245,6 +266,18 @@ export function replaceMobileOcrPageEntries(
     ...entries.filter((entry) => (
       entry.page !== normalizedPage || (entry.origin !== 'text' && entry.origin !== 'ocr' && entry.origin !== 'vision')
     )),
+    ...incoming
+  ];
+}
+
+export function replaceMobileFigurePageEntries(
+  entries: MobileTranslationEntry[],
+  page: number,
+  incoming: MobileTranslationEntry[]
+): MobileTranslationEntry[] {
+  const normalizedPage = Math.max(1, Math.trunc(page));
+  return [
+    ...entries.filter((entry) => entry.page !== normalizedPage || entry.origin !== 'figure'),
     ...incoming
   ];
 }
@@ -363,6 +396,12 @@ function normalizeMobilePaper(value: unknown): MobilePaper | null {
   }
   if (typeof paper.localOcrError === 'string' && paper.localOcrError.trim()) {
     normalized.localOcrError = paper.localOcrError.trim().slice(0, 500);
+  }
+  if (Number.isFinite(paper.figureExtractionVersion) && Number(paper.figureExtractionVersion) > 0) {
+    normalized.figureExtractionVersion = Math.trunc(Number(paper.figureExtractionVersion));
+  }
+  if (Number.isFinite(paper.figureCount) && Number(paper.figureCount) >= 0) {
+    normalized.figureCount = Math.trunc(Number(paper.figureCount));
   }
   return normalized;
 }

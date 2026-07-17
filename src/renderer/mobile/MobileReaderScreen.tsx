@@ -4,6 +4,14 @@ import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import { MobileTranslationSettingsDialog } from './MobileTranslationSettingsDialog';
 import { reflowAndTranslateAcademicPage, translateAcademicText } from './mobileTranslation';
 import { buildCachedLocalOcrBlocks, buildLocalOcrBlocks } from './mobileLocalOcr';
+import {
+  createMobileFigureEntry,
+  createMobilePdfFigureRenderer,
+  extractPdfFigureRegions,
+  MOBILE_PDF_FIGURE_VERSION,
+  type MobilePdfFigureRegion,
+  type MobilePdfFigureRenderer
+} from './mobilePdfFigures';
 import type {
   MobilePaper,
   MobileTranslationEntry,
@@ -26,8 +34,14 @@ interface MobileReaderScreenProps {
   onRequestOcr: () => Promise<void>;
   onSaveTranslation: (entry: MobileTranslationEntry) => Promise<void>;
   onReplacePageEntries: (page: number, entries: MobileTranslationEntry[]) => Promise<void>;
+  onReplaceFigureEntries: (page: number, entries: MobileTranslationEntry[]) => Promise<void>;
+  onFigureExtractionComplete: (figureCount: number) => Promise<void>;
   onTranslationSessionChange: (session: MobileTranslationSession) => Promise<void>;
 }
+
+type MobileReaderFeedItem =
+  | { kind: 'block'; block: ExtractedPdfBlock; page: number; order: number }
+  | { kind: 'figure'; entry: MobileTranslationEntry; region: MobilePdfFigureRegion; page: number; order: number };
 
 interface SelectionPopoverState {
   text: string;
@@ -49,6 +63,8 @@ export function MobileReaderScreen({
   onRequestOcr,
   onSaveTranslation,
   onReplacePageEntries,
+  onReplaceFigureEntries,
+  onFigureExtractionComplete,
   onTranslationSessionChange
 }: MobileReaderScreenProps) {
   const bilingualPageRef = useRef<HTMLDivElement | null>(null);
@@ -57,6 +73,9 @@ export function MobileReaderScreen({
   const restoredFeedRef = useRef(false);
   const stopTranslationRef = useRef(false);
   const pendingTranslationRef = useRef<PendingTranslation | null>(null);
+  const figureMigrationRef = useRef('');
+  const replaceFigureEntriesRef = useRef(onReplaceFigureEntries);
+  const figureExtractionCompleteRef = useRef(onFigureExtractionComplete);
   const [mode, setMode] = useState<MobileReaderMode>('bilingual');
   const [currentPage, setCurrentPage] = useState(Math.max(1, paper.lastPage));
   const [pageCount, setPageCount] = useState(Math.max(0, paper.pageCount ?? 0));
@@ -70,6 +89,12 @@ export function MobileReaderScreen({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<SelectionPopoverState | null>(null);
   const [readingImmersive, setReadingImmersive] = useState(false);
+  const [figureRenderer, setFigureRenderer] = useState<MobilePdfFigureRenderer | null>(null);
+
+  useEffect(() => {
+    replaceFigureEntriesRef.current = onReplaceFigureEntries;
+    figureExtractionCompleteRef.current = onFigureExtractionComplete;
+  }, [onFigureExtractionComplete, onReplaceFigureEntries]);
 
   useEffect(() => {
     restoredFeedRef.current = false;
@@ -130,15 +155,113 @@ export function MobileReaderScreen({
     () => new Map(translations.map((entry) => [entry.sourceHash, entry])),
     [translations]
   );
-  const translatedCount = blocks.filter((block) => {
+  const figureEntries = useMemo(() => translations.filter((entry) => (
+    entry.origin === 'figure' &&
+    entry.figureVersion === MOBILE_PDF_FIGURE_VERSION &&
+    Boolean(entry.figureBounds)
+  )), [translations]);
+  const hiddenFigureTextHashes = useMemo(() => new Set(
+    figureEntries.flatMap((entry) => entry.figureTextHashes ?? [])
+  ), [figureEntries]);
+  const readableBlocks = useMemo(
+    () => blocks.filter((block) => !hiddenFigureTextHashes.has(block.sourceHash)),
+    [blocks, hiddenFigureTextHashes]
+  );
+  const feedItems = useMemo(() => {
+    const textItems: MobileReaderFeedItem[] = readableBlocks.map((block, index) => ({
+      kind: 'block',
+      block,
+      page: block.page,
+      order: translationByHash.get(block.sourceHash)?.order ?? (block.page - 1) * 1000 + index
+    }));
+    const figureItems: MobileReaderFeedItem[] = figureEntries.flatMap((entry) => {
+      const region = figureEntryToRegion(entry);
+      return region
+        ? [{ kind: 'figure', entry, region, page: entry.page, order: entry.order ?? region.order }]
+        : [];
+    });
+    return [...textItems, ...figureItems].sort((left, right) => left.order - right.order || left.page - right.page);
+  }, [figureEntries, readableBlocks, translationByHash]);
+
+  useEffect(() => {
+    const hasFigures = figureEntries.length > 0;
+    if (!hasFigures) {
+      setFigureRenderer(null);
+      return;
+    }
+    let cancelled = false;
+    let activeRenderer: MobilePdfFigureRenderer | null = null;
+    void createMobilePdfFigureRenderer(pdfData).then((renderer) => {
+      if (cancelled) {
+        void renderer.destroy();
+        return;
+      }
+      activeRenderer = renderer;
+      setFigureRenderer(renderer);
+    }).catch((error) => {
+      if (!cancelled) {
+        setStatus(`论文插图读取失败：${formatError(error)}`);
+      }
+    });
+    return () => {
+      cancelled = true;
+      if (activeRenderer) {
+        void activeRenderer.destroy();
+      }
+    };
+  }, [figureEntries.length > 0, paper.id, pdfData]);
+
+  useEffect(() => {
+    if (
+      paper.localOcrStatus !== 'completed' ||
+      paper.figureExtractionVersion === MOBILE_PDF_FIGURE_VERSION
+    ) {
+      return;
+    }
+    const migrationKey = `${paper.id}:${MOBILE_PDF_FIGURE_VERSION}`;
+    if (figureMigrationRef.current === migrationKey) {
+      return;
+    }
+    figureMigrationRef.current = migrationKey;
+    let cancelled = false;
+    setStatus('正在从本机原 PDF 恢复论文图表；不会上传，也不会调用 DeepSeek…');
+    void extractPdfFigureRegions(pdfData, {
+      isCancelled: () => cancelled,
+      onPageExtracted: async (page, pageTotal, regions) => {
+        if (cancelled) {
+          return;
+        }
+        await replaceFigureEntriesRef.current(page, regions.map(createMobileFigureEntry));
+        setStatus(`正在恢复论文图表：第 ${page} / ${pageTotal} 页…`);
+      }
+    }).then(async (result) => {
+      if (cancelled || result.cancelled) {
+        return;
+      }
+      await figureExtractionCompleteRef.current(result.regions.length);
+      setStatus(result.regions.length > 0
+        ? `已从原 PDF 恢复 ${result.regions.length} 个图表，并插入连续阅读位置。`
+        : '全文图表检查完成；该 PDF 未发现可定位的图表。');
+    }).catch((error) => {
+      if (!cancelled) {
+        figureMigrationRef.current = '';
+        setStatus(`图表恢复未完成：${formatError(error)}；文字与译文缓存不受影响。`);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [paper.figureExtractionVersion, paper.id, paper.localOcrStatus, pdfData]);
+
+  const translatedCount = readableBlocks.filter((block) => {
     const cached = translationByHash.get(block.sourceHash);
     return Boolean(cached && isTranslationEntryCurrent(cached, translationSession));
   }).length;
-  const staleTranslationCount = blocks.filter((block) => {
+  const staleTranslationCount = readableBlocks.filter((block) => {
     const cached = translationByHash.get(block.sourceHash);
     return Boolean(cached?.translation.trim() && !isTranslationEntryCurrent(cached, translationSession));
   }).length;
-  const pendingTranslationCount = blocks.filter((block) => {
+  const pendingTranslationCount = readableBlocks.filter((block) => {
     const cached = translationByHash.get(block.sourceHash);
     return Boolean(cached && !cached.translation.trim());
   }).length;
@@ -236,7 +359,7 @@ export function MobileReaderScreen({
       setSettingsOpen(true);
       return;
     }
-    const targets = blocks.filter((block) => {
+    const targets = readableBlocks.filter((block) => {
       const cached = translationByHash.get(block.sourceHash);
       return !cached || !isTranslationEntryCurrent(cached, session);
     });
@@ -261,7 +384,7 @@ export function MobileReaderScreen({
       if (stopTranslationRef.current || failed > 0) {
         break;
       }
-      const sourcePageBlocks = blocks.filter((block) => block.page === page);
+      const sourcePageBlocks = readableBlocks.filter((block) => block.page === page);
       const requiresAiReflow = sourcePageBlocks.some((block) => {
         const cached = translationByHash.get(block.sourceHash);
         return cached?.origin === 'ocr' || cached?.origin === 'vision';
@@ -411,10 +534,10 @@ export function MobileReaderScreen({
               ? paper.localOcrStatus === 'failed'
                 ? '全文原文提取失败'
                 : `导入后全文提取 · ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页`
-              : `${translatedCount} / ${blocks.length} 段已译${pendingTranslationCount ? ` · ${pendingTranslationCount} 段待翻译` : staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}`}</span>
+              : `${translatedCount} / ${readableBlocks.length} 段已译${figureEntries.length ? ` · ${figureEntries.length} 个图表` : ''}${pendingTranslationCount ? ` · ${pendingTranslationCount} 段待翻译` : staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}`}</span>
             <button
               type="button"
-              disabled={ocrBusy || (!translatingAll && (extracting || (!needsLocalOcr && blocks.length === 0) || Boolean(translatingHash)))}
+              disabled={ocrBusy || (!translatingAll && (extracting || (!needsLocalOcr && readableBlocks.length === 0) || Boolean(translatingHash)))}
               className={translatingAll ? 'is-stop' : ''}
               onClick={() => {
                 if (translatingAll) {
@@ -438,29 +561,41 @@ export function MobileReaderScreen({
             onTouchEnd={captureSelection}
           >
             {extracting ? <div className="mobile-reader-loading">正在读取本机 OCR 缓存…</div> : null}
-            {!extracting && blocks.length === 0 && needsLocalOcr ? (
+            {!extracting && readableBlocks.length === 0 && needsLocalOcr ? (
               <div className="mobile-reader-loading mobile-ocr-empty">
                 <strong>{paper.localOcrStatus === 'failed' ? '全文原文提取遇到问题' : '正在导入后提取全文'}</strong>
                 <p>每页优先直接读取 PDF 文字层；没有文字层时才在当前设备本地 OCR。此阶段不会调用 DeepSeek，也不会产生中文。</p>
                 {paper.localOcrStatus === 'failed' ? <button type="button" onClick={() => void onRequestOcr()}>重新提取</button> : null}
               </div>
             ) : null}
-            {!extracting && needsLocalOcr && blocks.length > 0 ? (
+            {!extracting && needsLocalOcr && readableBlocks.length > 0 ? (
               <div className="mobile-ocr-resume">
                 <span>全文原文尚未提取完成；已完成页面已经逐页保存在本机，当前不会自动翻译。</span>
                 {paper.localOcrStatus === 'failed' ? <button type="button" onClick={() => void onRequestOcr()}>从断点继续</button> : null}
               </div>
             ) : null}
-            {!extracting && !needsLocalOcr && blocks.length > 0 && translatedCount === 0 && staleTranslationCount === 0 ? (
+            {!extracting && !needsLocalOcr && readableBlocks.length > 0 && translatedCount === 0 && staleTranslationCount === 0 ? (
               <div className="mobile-bilingual-intro">
                 <strong>全文原文已提取</strong>
                 <p>文字层原文或本地 OCR 结果已逐页保存在本机。点击“翻译全文”后才生成中文；扫描页会同时由 AI 保守校对并重排。</p>
                 <button type="button" onClick={() => void handleTranslateAll()}>开始全文翻译</button>
               </div>
             ) : null}
-            {blocks.map((block, index) => {
+            {feedItems.map((item, index) => {
+              const startsPage = index === 0 || feedItems[index - 1].page !== item.page;
+              if (item.kind === 'figure') {
+                return (
+                  <Fragment key={item.entry.sourceHash}>
+                    {startsPage ? <div className="mobile-bilingual-page-break">第 {item.page} 页</div> : null}
+                    <figure data-pdf-page={item.page} className={`mobile-pdf-figure is-${item.region.kind}`}>
+                      <MobilePdfFigureCanvas renderer={figureRenderer} region={item.region} />
+                      {!item.region.hasTextCaption ? <figcaption>{item.region.caption}</figcaption> : null}
+                    </figure>
+                  </Fragment>
+                );
+              }
+              const block = item.block;
               const cached = translationByHash.get(block.sourceHash);
-              const startsPage = index === 0 || blocks[index - 1].page !== block.page;
               return (
                 <Fragment key={block.id}>
                   {startsPage ? <div className="mobile-bilingual-page-break">第 {block.page} 页</div> : null}
@@ -539,6 +674,105 @@ export function MobileReaderScreen({
         />
       ) : null}
     </section>
+  );
+}
+
+function figureEntryToRegion(entry: MobileTranslationEntry): MobilePdfFigureRegion | null {
+  const bounds = entry.figureBounds;
+  if (
+    entry.origin !== 'figure' ||
+    !bounds ||
+    !Number.isFinite(bounds.x) ||
+    !Number.isFinite(bounds.y) ||
+    !Number.isFinite(bounds.width) ||
+    !Number.isFinite(bounds.height) ||
+    !Number.isFinite(bounds.pageWidth) ||
+    !Number.isFinite(bounds.pageHeight) ||
+    bounds.width <= 0 ||
+    bounds.height <= 0 ||
+    bounds.pageWidth <= 0 ||
+    bounds.pageHeight <= 0
+  ) {
+    return null;
+  }
+  return {
+    id: entry.sourceHash,
+    page: Math.max(1, Math.trunc(entry.page)),
+    kind: entry.figureKind === 'table' ? 'table' : 'figure',
+    caption: entry.original,
+    captionHash: entry.figureCaptionHash ?? entry.sourceHash,
+    hasTextCaption: entry.figureHasTextCaption !== false,
+    order: Number.isFinite(entry.order) ? Number(entry.order) : (entry.page - 1) * 1000,
+    bounds,
+    hiddenTextHashes: entry.figureTextHashes ?? []
+  };
+}
+
+function MobilePdfFigureCanvas({
+  renderer,
+  region
+}: {
+  renderer: MobilePdfFigureRenderer | null;
+  region: MobilePdfFigureRegion;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [renderState, setRenderState] = useState<'waiting' | 'rendering' | 'ready' | 'failed'>('waiting');
+
+  useEffect(() => {
+    const host = hostRef.current;
+    const canvas = canvasRef.current;
+    if (!host || !canvas || !renderer) {
+      setRenderState('waiting');
+      return;
+    }
+    let cancelled = false;
+    let started = false;
+    const render = () => {
+      if (started || cancelled) {
+        return;
+      }
+      started = true;
+      setRenderState('rendering');
+      void renderer.renderRegion(canvas, region).then(() => {
+        if (!cancelled) {
+          setRenderState('ready');
+        }
+      }).catch(() => {
+        if (!cancelled) {
+          setRenderState('failed');
+        }
+      });
+    };
+    if (typeof IntersectionObserver === 'undefined') {
+      render();
+      return () => {
+        cancelled = true;
+      };
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        observer.disconnect();
+        render();
+      }
+    }, { rootMargin: '480px 0px' });
+    observer.observe(host);
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
+  }, [region, renderer]);
+
+  return (
+    <div
+      ref={hostRef}
+      className={`mobile-pdf-figure-canvas is-${renderState}`}
+      style={{ aspectRatio: `${region.bounds.width} / ${region.bounds.height}` }}
+    >
+      <canvas ref={canvasRef} aria-label={`${region.kind === 'table' ? '表格' : '插图'}：${region.caption}`} />
+      {renderState === 'waiting' || renderState === 'rendering' ? <span>正在从原 PDF 显示图表…</span> : null}
+      {renderState === 'failed' ? <span>该图表暂时无法显示，可切换到原始 PDF 查看。</span> : null}
+    </div>
   );
 }
 

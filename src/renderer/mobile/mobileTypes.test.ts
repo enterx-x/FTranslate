@@ -7,6 +7,7 @@ import {
   mergeTranslationEntry,
   MOBILE_LOCAL_OCR_VERSION,
   parseMobileLibrary,
+  replaceMobileFigurePageEntries,
   replaceMobileOcrPageEntries,
   normalizeMobilePaperTags,
   sanitizeFileName,
@@ -232,9 +233,31 @@ describe('mobile translation cache', () => {
     };
     const pageTwo = { ...stalePageOne, sourceHash: 'page-two', page: 2, original: 'Page two.' };
     const textLayer = { ...stalePageOne, sourceHash: 'text-layer', origin: 'text' as const };
+    const figure = { ...stalePageOne, sourceHash: 'figure-one', origin: 'figure' as const };
     const replacement = { ...stalePageOne, sourceHash: 'clean-page-one', original: 'A complete paragraph.', translation: '' };
-    expect(replaceMobileOcrPageEntries([stalePageOne, pageTwo, textLayer], 1, [replacement])).toEqual([
+    expect(replaceMobileOcrPageEntries([stalePageOne, pageTwo, textLayer, figure], 1, [replacement])).toEqual([
       pageTwo,
+      figure,
+      replacement
+    ]);
+  });
+
+  it('replaces page figures without deleting text or figures from other pages', () => {
+    const text: MobileTranslationEntry = {
+      sourceHash: 'text-one',
+      page: 1,
+      original: 'Paragraph',
+      translation: '',
+      translatedAt: '1',
+      model: '',
+      origin: 'text'
+    };
+    const oldFigure: MobileTranslationEntry = { ...text, sourceHash: 'old-figure', origin: 'figure' };
+    const pageTwoFigure: MobileTranslationEntry = { ...oldFigure, sourceHash: 'page-two-figure', page: 2 };
+    const replacement: MobileTranslationEntry = { ...oldFigure, sourceHash: 'new-figure' };
+    expect(replaceMobileFigurePageEntries([text, oldFigure, pageTwoFigure], 1, [replacement])).toEqual([
+      text,
+      pageTwoFigure,
       replacement
     ]);
   });
