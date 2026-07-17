@@ -30,7 +30,6 @@ import {
   createImportedMobilePaper,
   createLocalPaperId,
   isMobilePaperSourceEquivalent,
-  mergeHydratedMobileLibrary,
   mergeTranslationEntry,
   MOBILE_LOCAL_OCR_VERSION,
   replaceMobileFigurePageEntries,
@@ -45,6 +44,7 @@ import {
   createMobileFigureEntry,
   MOBILE_PDF_FIGURE_VERSION
 } from './mobilePdfFigures';
+import { resolveMobileStartupState } from './mobileStartup';
 import './mobile.css';
 
 interface MobileOcrJob {
@@ -75,6 +75,9 @@ function MobileApp() {
     model: 'gpt-4.1-mini',
     apiKey: ''
   });
+  const translationSessionRef = useRef(translationSession);
+  const translationSessionHydratedRef = useRef(false);
+  const translationSessionChangedBeforeHydrationRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [savingPaperId, setSavingPaperId] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
@@ -99,25 +102,41 @@ function MobileApp() {
   useEffect(() => {
     let cancelled = false;
     void requestPersistentMobileStorage();
-    void Promise.all([loadMobileLibrary(), loadTranslationPreferences()])
-      .then(async ([storedLibrary, preferences]) => {
-        if (!cancelled) {
-          const resolvedLibrary = libraryChangedBeforeHydrationRef.current
-            ? mergeHydratedMobileLibrary(storedLibrary, libraryRef.current)
-            : storedLibrary;
-          libraryHydratedRef.current = true;
-          setLibrary(resolvedLibrary);
-          libraryRef.current = resolvedLibrary;
-          setTranslationSession((session) => ({ ...session, ...preferences }));
-          if (libraryChangedBeforeHydrationRef.current) {
-            await libraryWriterRef.current?.(resolvedLibrary);
-          }
+    void Promise.allSettled([loadMobileLibrary(), loadTranslationPreferences()])
+      .then(([libraryResult, preferencesResult]) => {
+        if (cancelled) {
+          return;
+        }
+        const resolved = resolveMobileStartupState({
+          libraryResult,
+          preferencesResult,
+          currentLibrary: libraryRef.current,
+          currentPreferences: translationSessionRef.current,
+          libraryChanged: libraryChangedBeforeHydrationRef.current,
+          preferencesChanged: translationSessionChangedBeforeHydrationRef.current
+        });
+        libraryHydratedRef.current = true;
+        translationSessionHydratedRef.current = true;
+        libraryRef.current = resolved.library;
+        translationSessionRef.current = resolved.preferences;
+        setLibrary(resolved.library);
+        setTranslationSession(resolved.preferences);
+        if (libraryChangedBeforeHydrationRef.current && libraryResult.status === 'fulfilled') {
+          void libraryWriterRef.current?.(resolved.library).catch((error) => {
+            if (!cancelled) {
+              setNotice(`合并并保存论文库失败：${formatError(error)}`);
+            }
+          });
+        }
+        if (resolved.errors.length > 0) {
+          setNotice(`读取部分本机资料失败：${resolved.errors.map(formatError).join('；')}`);
         }
       })
       .catch((error) => {
         if (!cancelled) {
           libraryHydratedRef.current = true;
-          setNotice(`读取当前设备资料失败：${formatError(error)}`);
+          translationSessionHydratedRef.current = true;
+          setNotice(`恢复当前设备资料失败：${formatError(error)}`);
         }
       });
     return () => {
@@ -589,6 +608,10 @@ function MobileApp() {
     if (!session.baseURL.trim() || !session.model.trim()) {
       throw new Error('Base URL 和 Model 不能为空。');
     }
+    if (!translationSessionHydratedRef.current) {
+      translationSessionChangedBeforeHydrationRef.current = true;
+    }
+    translationSessionRef.current = session;
     setTranslationSession(session);
     await saveTranslationPreferences(session);
   }

@@ -13,7 +13,7 @@ import {
 import { createImportedMobilePaper, type MobileStoredPdf } from './mobileTypes';
 
 describe('mobile PDF storage guards', () => {
-  it('serializes library writes so an older slow save cannot overwrite the newest snapshot', async () => {
+  it('serializes library writes and coalesces snapshots that have not started yet', async () => {
     let releaseFirst: (() => void) | undefined;
     let markFirstStarted: (() => void) | undefined;
     const firstBlocked = new Promise<void>((resolve) => {
@@ -30,6 +30,7 @@ describe('mobile PDF storage guards', () => {
       byteLength: 120
     };
     const firstPaper = createImportedMobilePaper({ id: 'first', fileName: 'first.pdf', storedPdf: sourcePdf });
+    const middlePaper = createImportedMobilePaper({ id: 'middle', fileName: 'middle.pdf', storedPdf: sourcePdf });
     const latestPaper = createImportedMobilePaper({ id: 'latest', fileName: 'latest.pdf', storedPdf: sourcePdf });
     const write = createMobileLibraryWriteQueue(async (library) => {
       writes.push(library[0]?.id ?? 'empty');
@@ -40,11 +41,12 @@ describe('mobile PDF storage guards', () => {
     });
 
     const first = write([firstPaper]);
+    const middle = write([middlePaper]);
     const latest = write([latestPaper]);
     await firstStarted;
     expect(writes).toEqual(['first']);
     releaseFirst?.();
-    await Promise.all([first, latest]);
+    await Promise.all([first, middle, latest]);
     expect(writes).toEqual(['first', 'latest']);
   });
 

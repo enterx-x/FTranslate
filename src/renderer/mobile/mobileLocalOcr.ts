@@ -93,12 +93,24 @@ export interface OcrPageLayoutContext {
 }
 
 type OcrImageRecognizer = (
-  imageDataUrl: string,
+  image: HTMLCanvasElement,
   page: number
 ) => Promise<{ text: string; confidence?: number; blocks?: OcrLayoutBlock[] | null }>;
 
+interface RenderedLocalOcrPage {
+  canvas: HTMLCanvasElement;
+  width: number;
+  height: number;
+}
+
 export const MOBILE_OCR_FAST_LONG_EDGE = 2100;
 export const MOBILE_OCR_PRECISE_LONG_EDGE = 2600;
+
+export interface LocalOcrCandidate {
+  text: string;
+  confidence?: number;
+  paragraphs: LocalOcrParagraph[];
+}
 
 interface OcrTestGlobal {
   __FTRANSLATE_MOBILE_OCR_TEST__?: OcrImageRecognizer;
@@ -168,9 +180,9 @@ export async function recognizePdfPagesLocally(
         user_defined_dpi: '300'
       });
       const worker = ocrWorkerRef.current;
-      recognizeImage = async (imageDataUrl) => {
+      recognizeImage = async (image) => {
         const result = await worker.recognize(
-          imageDataUrl,
+          image,
           { rotateAuto: true },
           { text: true, blocks: true }
         );
@@ -241,17 +253,17 @@ export async function recognizePdfPagesLocally(
           }
           const recognizer = await ensureOcrRecognizer();
           let rendered = await renderPdfPageForLocalOcr(page, MOBILE_OCR_FAST_LONG_EDGE);
-          let recognized = await recognizer(rendered.imageDataUrl, pageNumber);
-          let paragraphs = extractLocalOcrParagraphs(recognized.text, recognized.blocks, {
-            page: pageNumber,
-            pageWidth: rendered.width,
-            pageHeight: rendered.height
-          });
-          if (needsPreciseLocalOcrRetry({
+          let recognized = await recognizeRenderedLocalOcrPage(recognizer, rendered, pageNumber);
+          let selected: LocalOcrCandidate = {
             text: recognized.text,
             confidence: recognized.confidence ?? resolveOcrLayoutConfidence(recognized.blocks),
-            paragraphs
-          })) {
+            paragraphs: extractLocalOcrParagraphs(recognized.text, recognized.blocks, {
+              page: pageNumber,
+              pageWidth: rendered.width,
+              pageHeight: rendered.height
+            })
+          };
+          if (needsPreciseLocalOcrRetry(selected)) {
             options.onProgress?.({
               page: pageNumber,
               pageCount,
@@ -259,14 +271,19 @@ export async function recognizePdfPagesLocally(
               status: `第 ${pageNumber} / ${pageCount} 页快速识别质量不足，正在自动精扫…`
             });
             rendered = await renderPdfPageForLocalOcr(page, MOBILE_OCR_PRECISE_LONG_EDGE);
-            recognized = await recognizer(rendered.imageDataUrl, pageNumber);
-            paragraphs = extractLocalOcrParagraphs(recognized.text, recognized.blocks, {
-              page: pageNumber,
-              pageWidth: rendered.width,
-              pageHeight: rendered.height
-            });
+            recognized = await recognizeRenderedLocalOcrPage(recognizer, rendered, pageNumber);
+            const precise: LocalOcrCandidate = {
+              text: recognized.text,
+              confidence: recognized.confidence ?? resolveOcrLayoutConfidence(recognized.blocks),
+              paragraphs: extractLocalOcrParagraphs(recognized.text, recognized.blocks, {
+                page: pageNumber,
+                pageWidth: rendered.width,
+                pageHeight: rendered.height
+              })
+            };
+            selected = selectBestLocalOcrCandidate(selected, precise);
           }
-          return { blocks: buildLocalOcrBlocks(pageNumber, paragraphs), source: 'ocr', figures };
+          return { blocks: buildLocalOcrBlocks(pageNumber, selected.paragraphs), source: 'ocr', figures };
         })(), options.pageTimeoutMs ?? 120_000, `第 ${pageNumber} 页处理超过 120 秒，已保存前面页面；重新打开后会从本页继续。`);
         await withMobileTaskTimeout(
           Promise.resolve(options.onPageRecognized?.({ page: pageNumber, pageCount, ...pageResult })),
@@ -368,6 +385,40 @@ export function needsPreciseLocalOcrRetry(input: {
     return true;
   }
   return rawWordCount >= 12 && retainedWordCount / rawWordCount < 0.5;
+}
+
+export function selectBestLocalOcrCandidate<T extends LocalOcrCandidate>(fast: T, precise: T): T {
+  const fastWordCount = countCandidateWords(fast);
+  const preciseWordCount = countCandidateWords(precise);
+  if (fastWordCount >= 8 && preciseWordCount / fastWordCount < 0.55) {
+    return fast;
+  }
+  return scoreLocalOcrCandidate(precise) > scoreLocalOcrCandidate(fast) ? precise : fast;
+}
+
+function countCandidateWords(candidate: LocalOcrCandidate): number {
+  return candidate.paragraphs.reduce(
+    (total, paragraph) => total + countOcrWords(paragraph.original),
+    0
+  );
+}
+
+function scoreLocalOcrCandidate(candidate: LocalOcrCandidate): number {
+  if (candidate.paragraphs.length === 0) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const retainedWordCount = countCandidateWords(candidate);
+  const rawWordCount = countOcrWords(normalizeOcrParagraph(candidate.text));
+  const confidence = Number.isFinite(candidate.confidence) ? Number(candidate.confidence) : 70;
+  const averageParagraphWords = retainedWordCount / candidate.paragraphs.length;
+  const retentionRatio = rawWordCount > 0 ? Math.min(1, retainedWordCount / rawWordCount) : 1;
+  const shortParagraphRatio = candidate.paragraphs.filter((paragraph) => countOcrWords(paragraph.original) < 4).length
+    / candidate.paragraphs.length;
+  return confidence * 2
+    + Math.min(80, retainedWordCount / 4)
+    + Math.min(20, averageParagraphWords)
+    + retentionRatio * 20
+    - shortParagraphRatio * 30;
 }
 
 export function extractLocalOcrParagraphs(
@@ -513,11 +564,7 @@ async function extractEmbeddedPdfTextBlocks(page: PDFPageProxy, pageNumber: numb
   };
 }
 
-async function renderPdfPageForLocalOcr(page: PDFPageProxy, maxLongEdge: number): Promise<{
-  imageDataUrl: string;
-  width: number;
-  height: number;
-}> {
+async function renderPdfPageForLocalOcr(page: PDFPageProxy, maxLongEdge: number): Promise<RenderedLocalOcrPage> {
   const baseViewport = page.getViewport({ scale: 1 });
   const viewport = page.getViewport({
     scale: calculateLocalOcrRenderScale(baseViewport.width, baseViewport.height, maxLongEdge)
@@ -532,12 +579,24 @@ async function renderPdfPageForLocalOcr(page: PDFPageProxy, maxLongEdge: number)
   context.fillStyle = '#ffffff';
   context.fillRect(0, 0, canvas.width, canvas.height);
   await page.render({ canvas, canvasContext: context, viewport }).promise;
-  const imageDataUrl = canvas.toDataURL('image/png');
   const width = canvas.width;
   const height = canvas.height;
-  canvas.width = 1;
-  canvas.height = 1;
-  return { imageDataUrl, width, height };
+  return { canvas, width, height };
+}
+
+async function recognizeRenderedLocalOcrPage(
+  recognizer: OcrImageRecognizer,
+  rendered: RenderedLocalOcrPage,
+  page: number
+): ReturnType<OcrImageRecognizer> {
+  try {
+    return await recognizer(rendered.canvas, page);
+  } finally {
+    // Tesseract has consumed the pixels once the recognition promise settles.
+    // Release the large backing store before rendering a possible precise pass.
+    rendered.canvas.width = 1;
+    rendered.canvas.height = 1;
+  }
 }
 
 function resolveOcrLayoutConfidence(blocks?: OcrLayoutBlock[] | null): number | undefined {

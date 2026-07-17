@@ -48,15 +48,44 @@ export async function saveMobileLibrary(library: MobilePaper[]): Promise<void> {
 export function createMobileLibraryWriteQueue(
   write: (library: MobilePaper[]) => Promise<void> = saveMobileLibrary
 ): (library: MobilePaper[]) => Promise<void> {
-  let tail = Promise.resolve();
-  return (library) => {
-    const snapshot = [...library];
-    const currentWrite = tail
-      .catch(() => undefined)
-      .then(() => write(snapshot));
-    tail = currentWrite;
-    return currentWrite;
+  interface PendingLibraryWrite {
+    library: MobilePaper[];
+    waiters: Array<{ resolve: () => void; reject: (error: unknown) => void }>;
+  }
+  let running = false;
+  let pending: PendingLibraryWrite | undefined;
+
+  const drain = async (): Promise<void> => {
+    if (running) {
+      return;
+    }
+    running = true;
+    try {
+      while (pending) {
+        const current = pending;
+        pending = undefined;
+        try {
+          await write(current.library);
+          current.waiters.forEach((waiter) => waiter.resolve());
+        } catch (error) {
+          current.waiters.forEach((waiter) => waiter.reject(error));
+        }
+      }
+    } finally {
+      running = false;
+    }
   };
+
+  return (library) => new Promise<void>((resolve, reject) => {
+    const waiter = { resolve, reject };
+    if (pending) {
+      pending.library = [...library];
+      pending.waiters.push(waiter);
+    } else {
+      pending = { library: [...library], waiters: [waiter] };
+    }
+    void drain();
+  });
 }
 
 export async function savePdfBytes(input: {

@@ -7,6 +7,7 @@ import {
   MOBILE_OCR_FAST_LONG_EDGE,
   MOBILE_OCR_PRECISE_LONG_EDGE,
   needsPreciseLocalOcrRetry,
+  selectBestLocalOcrCandidate,
   runWhileMobileOcrJobActive,
   resolveLocalOcrResumeState,
   settleMobileTaskWithin,
@@ -188,6 +189,47 @@ age manipulation of`, [
       confidence: 88,
       paragraphs: []
     })).toBe(true);
+  });
+
+  it('does not let an empty or weaker precise retry overwrite a usable fast result', () => {
+    const fast = {
+      text: 'A complete fast-pass paragraph remains readable and should survive a failed retry.',
+      confidence: 74,
+      paragraphs: [{
+        type: 'paragraph' as const,
+        original: 'A complete fast-pass paragraph remains readable and should survive a failed retry.'
+      }]
+    };
+    const emptyPrecise = { text: '', confidence: 0, paragraphs: [] };
+    const betterPrecise = {
+      text: 'A complete precise paragraph remains readable and restores additional scientific details safely.',
+      confidence: 91,
+      paragraphs: [{
+        type: 'paragraph' as const,
+        original: 'A complete precise paragraph remains readable and restores additional scientific details safely.'
+      }]
+    };
+
+    expect(selectBestLocalOcrCandidate(fast, emptyPrecise)).toBe(fast);
+    expect(selectBestLocalOcrCandidate(fast, betterPrecise)).toBe(betterPrecise);
+  });
+
+  it('does not prefer a higher-confidence precise retry that truncated most of the page', () => {
+    const fast = {
+      text: 'The controller remains stable under bounded disturbances and preserves safe operation across every evaluated task.',
+      confidence: 63,
+      paragraphs: [{
+        type: 'paragraph' as const,
+        original: 'The controller remains stable under bounded disturbances and preserves safe operation across every evaluated task.'
+      }]
+    };
+    const truncatedPrecise = {
+      text: 'Safe operation.',
+      confidence: 98,
+      paragraphs: [{ type: 'paragraph' as const, original: 'Safe operation.' }]
+    };
+
+    expect(selectBestLocalOcrCandidate(fast, truncatedPrecise)).toBe(fast);
   });
 
   it('uses OCR coordinates to keep two-column reading order and ignore image blocks', () => {
