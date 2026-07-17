@@ -93,4 +93,3 @@ Unit tests cover prompt composition, context bounds, batch identity, placeholder
 4. The real HY-MT2 7B CUDA benchmark passes all required/forbidden terminology checks.
 5. Existing NLLB/Argos fallbacks, PDF selection translation, and cache-state preservation continue to pass.
 6. Full build, required Settings/arXiv visual checks, Windows packaging, packaged checks, and isolated hot preview complete before release.
-
