@@ -1,16 +1,16 @@
 import { DOMParser as XmldomParser } from '@xmldom/xmldom';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  type ArxivPaper,
   type ArxivParsedSearchResult,
   type ArxivQueryMode,
   type ArxivSearchRequest,
   type ArxivSearchServiceResult,
   buildArxivApiUrl,
   buildArxivCacheKey,
+  buildArxivEffectiveSearchExpression,
   getUnmappedChineseArxivQuery,
-  hasDeterministicChineseArxivQuery,
   isMojibakeTranslationText,
+  normalizeArxivSortBy,
   normalizeArxivWhitespace,
   normalizeArxivSearchQuery,
   parseArxivSearchResult,
@@ -52,6 +52,7 @@ interface ArxivSearchMetadata {
   queryNotice?: string;
   queryMode?: ArxivQueryMode;
   normalizedSearchQuery?: string;
+  effectiveSearchExpression?: string;
 }
 
 const DEFAULT_MIN_REQUEST_GAP_MS = 3200;
@@ -95,13 +96,21 @@ export class ArxivService {
   }
 
   async search(request: ArxivSearchRequest, source = 'renderer:arxiv-search'): Promise<ArxivSearchServiceResult> {
-    const resolved = await this.resolveSearchRequest(request);
+    const normalizedRequest: ArxivSearchRequest = {
+      ...request,
+      sortBy: normalizeArxivSortBy((request as { sortBy?: unknown }).sortBy),
+      sortOrder: request.sortOrder === 'ascending' ? 'ascending' : 'descending'
+    };
+    const resolved = await this.resolveSearchRequest(normalizedRequest);
     const effectiveRequest = resolved.request;
-    const metadata = resolved.metadata;
+    const metadata: ArxivSearchMetadata = {
+      ...resolved.metadata,
+      effectiveSearchExpression: buildArxivEffectiveSearchExpression(effectiveRequest)
+    };
     const cacheKey = buildArxivCacheKey(effectiveRequest);
     const cached = effectiveRequest.forceRefresh ? null : this.readCacheEntry(cacheKey, false);
     if (cached) {
-      const result = applyLocalArxivSort(cached.result, effectiveRequest);
+      const result = cached.result;
       this.writeLog({
         source,
         query: cacheKey,
@@ -130,7 +139,7 @@ export class ArxivService {
     if (cooldown.remainingMs > 0) {
       const staleCache = this.readCacheEntry(cacheKey, true);
       if (staleCache) {
-        const result = applyLocalArxivSort(staleCache.result, effectiveRequest);
+        const result = staleCache.result;
         const warning = `arXiv 正在保护冷却，已显示本地缓存结果；约 ${formatRemainingCooldown(
           cooldown.remainingMs
         )} 后可再次实时刷新。`;
@@ -172,7 +181,7 @@ export class ArxivService {
       try {
         const url = buildArxivApiUrl(effectiveRequest);
         const { text, lastRequestGapMs } = await this.fetchText(url, source, cacheKey, queueSize);
-        const result = applyLocalArxivSort(parseArxivSearchResult(text, XmldomParser as any), effectiveRequest);
+        const result = parseArxivSearchResult(text, XmldomParser as any);
         this.writeCache(cacheKey, result);
         return {
           ...result,
@@ -185,7 +194,7 @@ export class ArxivService {
         const staleCache = this.readCacheEntry(cacheKey, true);
         const cooldownAfterFailure = this.getCooldownStatus();
         if (staleCache) {
-          const result = applyLocalArxivSort(staleCache.result, effectiveRequest);
+          const result = staleCache.result;
           const warning = `arXiv 暂时不可用，已回退到本地缓存结果。原因：${formatSearchError(error)}`;
           this.writeLog({
             source,
@@ -259,7 +268,6 @@ export class ArxivService {
     }
 
     const deterministicQuery = normalizedSearchQuery;
-    const hasDeterministicQuery = hasDeterministicChineseArxivQuery(searchQuery);
     const unmappedChineseQuery = getUnmappedChineseArxivQuery(searchQuery);
     let translatedQuery = '';
     if (queryMode !== 'strict' && unmappedChineseQuery && this.translateSearchQueryToEnglish) {
@@ -279,7 +287,7 @@ export class ArxivService {
     );
     const expandedQueryTerms = buildExpandedQueryTerms(deterministicQuery, translatedQuery);
     const metadata: ArxivSearchMetadata & { searchQuery: string } = {
-      searchQuery: hasDeterministicQuery ? searchQuery : expandedQuery,
+      searchQuery: expandedQuery,
       originalSearchQuery: searchQuery,
       effectiveSearchQuery: expandedQuery,
       translatedQuery: translatedQuery || undefined,
@@ -696,123 +704,6 @@ function buildChineseSearchQueryNotice(originalQuery: string, expandedQueryTerms
     return undefined;
   }
   return `中文查询“${originalQuery}”已按 ${expandedQueryTerms.slice(0, 6).join(' / ')} 检索`;
-}
-
-function applyLocalArxivSort(result: ArxivParsedSearchResult, request: ArxivSearchRequest): ArxivParsedSearchResult {
-  if (request.sortBy !== 'comprehensive' || result.papers.length <= 1) {
-    return result;
-  }
-  const queryTerms = tokenizeLocalRankingQuery(
-    normalizeArxivSearchQuery(request.searchQuery, request.queryMode)
-  );
-  const requiredTermGroups = buildRequiredLocalTermGroups(request.searchQuery, request.queryMode);
-  const scored = result.papers
-    .map((paper) => ({ paper, score: scoreComprehensivePaper(paper, queryTerms, request.category) }))
-    .filter((entry) => entry.score.textHits > 0 && matchesRequiredTermGroups(entry.paper, requiredTermGroups));
-  const sorted =
-    scored.length > 0 || requiredTermGroups.length > 0
-      ? scored
-      : result.papers.map((paper) => ({ paper, score: scoreComprehensivePaper(paper, queryTerms, request.category) }));
-  sorted.sort((left, right) => {
-    return request.sortOrder === 'ascending' ? left.score.value - right.score.value : right.score.value - left.score.value;
-  });
-  return {
-    ...result,
-    papers: sorted.map((entry) => entry.paper),
-    totalResults: result.totalResults,
-    itemsPerPage: sorted.length
-  };
-}
-
-function buildRequiredLocalTermGroups(searchQuery: string, queryMode?: ArxivQueryMode): string[][] {
-  const normalized = normalizeArxivSearchQuery(searchQuery, queryMode).toLowerCase();
-  const normalizedTokens = tokenizeLocalRankingQuery(normalized);
-  const groups: string[][] = [];
-  const tactileFocusedTokens = new Set([
-    'tactile',
-    'haptic',
-    'haptics',
-    'visuotactile',
-    'touch',
-    'sensing',
-    'contact',
-    'perception',
-    'force',
-    'feedback'
-  ]);
-  const isEnglishTactileOnly =
-    normalizedTokens.length > 0 && normalizedTokens.every((token) => tactileFocusedTokens.has(token));
-  if (
-    /触觉感知|触觉传感|触觉|力觉|接触感知|接触丰富/u.test(searchQuery) ||
-    isEnglishTactileOnly
-  ) {
-    groups.push([
-      'tactile',
-      'haptic',
-      'haptics',
-      'visuotactile',
-      'touch sensing',
-      'contact sensing',
-      'tactile sensing',
-      'tactile perception'
-    ]);
-  }
-  if (/人形|仿人/u.test(searchQuery) || normalizedTokens.includes('humanoid')) {
-    groups.push(['humanoid', 'humanoid robot', 'humanoid robotics']);
-  }
-  return groups;
-}
-
-function matchesRequiredTermGroups(paper: ArxivPaper, groups: string[][]): boolean {
-  if (groups.length === 0) {
-    return true;
-  }
-  const text = `${paper.title} ${paper.summary}`.toLowerCase();
-  return groups.every((group) => group.some((term) => text.includes(term)));
-}
-
-function tokenizeLocalRankingQuery(value: string): string[] {
-  return Array.from(
-    new Set(
-      value
-        .toLowerCase()
-        .split(/[^a-z0-9.+-]+/iu)
-        .map((term) => term.trim())
-        .filter((term) => term.length >= 2)
-    )
-  );
-}
-
-function scoreComprehensivePaper(
-  paper: ArxivPaper,
-  queryTerms: string[],
-  category: string
-): { value: number; textHits: number } {
-  const title = paper.title.toLowerCase();
-  const summary = paper.summary.toLowerCase();
-  const categoryBonus = category && paper.categories.includes(category) ? 8 : 0;
-  const titleHits = queryTerms.filter((term) => title.includes(term)).length;
-  const abstractHits = queryTerms.filter((term) => summary.includes(term)).length;
-  const textHits = titleHits + abstractHits;
-  if (textHits === 0) {
-    return { value: 0, textHits };
-  }
-  const relevance = titleHits * 12 + abstractHits * 5;
-  const recency = scoreRecency(paper.updated || paper.publishedAt || paper.published);
-  const experimentalCue = /\b(experiment|benchmark|baseline|result|real-world|dataset|simulation)\b/iu.test(summary) ? 6 : 0;
-  const methodCue = /\b(method|model|framework|policy|controller|planner|architecture|algorithm)\b/iu.test(summary)
-    ? 5
-    : 0;
-  return { value: relevance + recency + categoryBonus + experimentalCue + methodCue, textHits };
-}
-
-function scoreRecency(value: string): number {
-  const time = Date.parse(value);
-  if (!Number.isFinite(time)) {
-    return 0;
-  }
-  const days = Math.max(0, (Date.now() - time) / 86_400_000);
-  return Math.max(0, 18 - Math.min(18, days / 30));
 }
 
 function formatRemainingCooldown(remainingMs: number): string {

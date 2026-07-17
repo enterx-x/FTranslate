@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildArxivApiUrl,
   buildArxivCacheKey,
+  buildArxivEffectiveSearchExpression,
   getUnmappedChineseArxivQuery,
   isMojibakeTranslationText,
+  normalizeArxivSortBy,
   normalizeArxivSearchQuery,
   type ArxivQueryMode,
   type ArxivSearchRequest
@@ -16,13 +18,57 @@ function getSearchExpression(searchQuery: string, queryMode?: ArxivQueryMode): s
     category: '',
     start: 0,
     maxResults: 50,
-    sortBy: 'comprehensive',
+    sortBy: 'relevance',
     sortOrder: 'descending'
   };
   return new URL(buildArxivApiUrl(request)).searchParams.get('search_query') ?? '';
 }
 
 describe('arXiv query builder', () => {
+  it('migrates the legacy page-local sort to official relevance', () => {
+    expect(normalizeArxivSortBy('comprehensive')).toBe('relevance');
+    expect(normalizeArxivSortBy('relevance')).toBe('relevance');
+    expect(normalizeArxivSortBy('submittedDate')).toBe('submittedDate');
+    expect(normalizeArxivSortBy('unknown')).toBe('relevance');
+  });
+
+  it('uses the v8 request identity for official relevance searches', () => {
+    const request: ArxivSearchRequest = {
+      searchQuery: 'robot navigation',
+      category: '',
+      start: 0,
+      maxResults: 50,
+      sortBy: 'relevance',
+      sortOrder: 'descending'
+    };
+
+    expect(new URL(buildArxivApiUrl(request)).searchParams.get('sortBy')).toBe('relevance');
+    expect(JSON.parse(buildArxivCacheKey(request))).toMatchObject({
+      query_version: 'title-abstract-v8',
+      query_builder_version: 'concept-groups-v1',
+      effective_expression: expect.stringContaining('robot navigation'),
+      sortBy: 'relevance'
+    });
+  });
+
+  it('exposes humanoid and tactile as required compact concepts', () => {
+    const expression = buildArxivEffectiveSearchExpression({
+      searchQuery: '人形触觉',
+      queryMode: 'balanced',
+      category: '',
+      start: 0,
+      maxResults: 50,
+      sortBy: 'relevance',
+      sortOrder: 'descending'
+    });
+
+    expect(expression).toContain('"humanoid robot"');
+    expect(expression).toContain('tactile');
+    expect(expression).toMatch(/\) AND \(/u);
+    expect(expression).not.toContain('textile');
+    expect(expression).not.toContain('ti:touch');
+  });
+
   it('uses balanced mode by default while strict and explore build distinct expressions', () => {
     const defaultExpression = getSearchExpression('robot navigation');
     const balancedExpression = getSearchExpression('robot navigation', 'balanced');
@@ -43,7 +89,7 @@ describe('arXiv query builder', () => {
       category: 'cs.RO',
       start: 0,
       maxResults: 50,
-      sortBy: 'comprehensive',
+      sortBy: 'relevance',
       sortOrder: 'descending'
     };
 
@@ -91,6 +137,35 @@ describe('arXiv query builder', () => {
     expect(expression).toContain('ti:tactile');
     expect(expression).toMatch(/\) AND \(/u);
     expect(expression).not.toContain('doll');
+  });
+
+  it('keeps dexterous hand as a required concept instead of an optional robot alias', () => {
+    const expression = getSearchExpression('灵巧手 触觉 机器人操作', 'balanced');
+
+    expect(expression).toContain('ti:"dexterous hand"');
+    expect(expression).toContain('ti:tactile');
+    expect(expression).toContain('ti:manipulation');
+    expect(expression).toMatch(/\) AND \(/u);
+    expect(expression).not.toContain('ti:humanoid OR abs:humanoid) OR ti:"dexterous hand"');
+  });
+
+  it('keeps learned dynamics required alongside MPC and robotics', () => {
+    const expression = getSearchExpression('动力学模型 模型预测控制 机器人', 'balanced');
+
+    expect(expression).toContain('ti:"dynamics model"');
+    expect(expression).toContain('ti:"model predictive control"');
+    expect(expression).toContain('ti:robot');
+    expect(expression).toMatch(/\) AND \(/u);
+  });
+
+  it('searches an exact method name with required supporting concepts in balanced mode', () => {
+    const expression = getSearchExpression('DreamerV3 world model reinforcement learning', 'balanced');
+
+    expect(expression).toContain('ti:dreamerv3');
+    expect(expression).toContain('ti:"world model"');
+    expect(expression).toContain('ti:"reinforcement learning"');
+    expect(expression).toMatch(/\) AND \(/u);
+    expect(expression).not.toContain('ti:"DreamerV3 world model reinforcement learning"');
   });
 
   it('expands Chinese tactile searches into English tactile and haptic terms', () => {

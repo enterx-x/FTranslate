@@ -93,21 +93,21 @@ describe('arxivClient', () => {
     expect(cacheKey).toContain('2026');
   });
 
-  it('maps comprehensive sorting to arXiv submittedDate while keeping its own cache key', () => {
+  it('migrates comprehensive sorting to arXiv relevance and the shared cache identity', () => {
     const request = {
       searchQuery: 'robot navigation tactile sensing',
       category: '',
       start: 0,
       maxResults: 50,
-      sortBy: 'comprehensive' as const,
+      sortBy: 'comprehensive',
       sortOrder: 'descending' as const
-    };
+    } as unknown as Parameters<typeof buildArxivApiUrl>[0];
     const url = buildArxivApiUrl(request);
     const parsed = new URL(url);
     const cacheKey = buildArxivCacheKey(request);
 
-    expect(parsed.searchParams.get('sortBy')).toBe('submittedDate');
-    expect(cacheKey).toContain('"sortBy":"comprehensive"');
+    expect(parsed.searchParams.get('sortBy')).toBe('relevance');
+    expect(cacheKey).toContain('"sortBy":"relevance"');
   });
 
   it('expands common Chinese research terms before building an arXiv query', () => {
@@ -153,7 +153,7 @@ describe('arxivClient', () => {
     expect(searchQuery).toContain('visuotactile');
     expect(searchQuery).toContain('robot');
     expect(JSON.parse(cacheKey)).toMatchObject({
-      query_version: 'title-abstract-v7',
+      query_version: 'title-abstract-v8',
       query_mode: 'balanced'
     });
   });

@@ -1,5 +1,6 @@
-export type ArxivSortBy = 'comprehensive' | 'relevance' | 'lastUpdatedDate' | 'submittedDate';
+export type ArxivSortBy = 'relevance' | 'lastUpdatedDate' | 'submittedDate';
 export type ArxivSortOrder = 'ascending' | 'descending';
+export type OfficialArxivSortBy = ArxivSortBy;
 export type ArxivQueryMode = 'strict' | 'balanced' | 'explore';
 
 export interface ArxivSearchRequest {
@@ -48,6 +49,7 @@ export interface ArxivSearchServiceResult {
   queryNotice?: string;
   queryMode?: ArxivQueryMode;
   normalizedSearchQuery?: string;
+  effectiveSearchExpression?: string;
 }
 
 export interface ArxivTitleAbstractTranslationRequest {
@@ -208,6 +210,7 @@ const CHINESE_QUERY_EXPANSIONS: Array<[RegExp, string]> = [
   [/物理信息|物理约束|物理先验/gu, 'physics-informed physical constraint physics prior'],
   [/神经网络/gu, 'neural network'],
   [/世界模型/gu, 'world model'],
+  [/动力学模型|动力学建模|学习动力学|动力学辨识|系统辨识/gu, 'dynamics model learned dynamics system identification'],
   [/移动操作|运动操作|locomanipulation|loco-manipulation/giu, 'loco-manipulation mobile manipulation'],
   [/优化算法|优化/gu, 'optimization algorithm optimization'],
   [/材料科学|材料/gu, 'materials science materials'],
@@ -448,9 +451,7 @@ function collectChineseQueryExpansions(
 }
 
 export function buildArxivApiUrl(request: ArxivSearchRequest): string {
-  const queryMode = resolveArxivQueryMode(request.queryMode);
-  const cleanQuery = normalizeArxivSearchQuery(request.searchQuery, queryMode);
-  const query = buildArxivSearchExpression(cleanQuery, request, request.searchQuery);
+  const query = buildArxivEffectiveSearchExpression(request);
   const url = new URL(ARXIV_ENDPOINT);
   url.searchParams.set('search_query', query);
   url.searchParams.set('start', String(request.start));
@@ -464,20 +465,40 @@ export function buildArxivCacheKey(request: ArxivSearchRequest): string {
   const queryMode = resolveArxivQueryMode(request.queryMode);
   const yearRange = normalizeArxivYearRange(request.yearFrom, request.yearTo);
   return JSON.stringify({
-    query_version: 'title-abstract-v7',
+    query_version: 'title-abstract-v8',
+    query_builder_version: 'concept-groups-v1',
     query_mode: queryMode,
     search_query: `${request.category || 'all'}:${normalizeArxivSearchQuery(request.searchQuery, queryMode).toLowerCase()}`,
+    effective_expression: buildArxivEffectiveSearchExpression(request),
     yearFrom: yearRange.from,
     yearTo: yearRange.to,
     start: request.start,
     max_results: request.maxResults,
-    sortBy: request.sortBy,
+    sortBy: normalizeArxivSortBy(request.sortBy),
     sortOrder: request.sortOrder
   });
 }
 
-export function toArxivApiSortBy(sortBy: ArxivSortBy): Exclude<ArxivSortBy, 'comprehensive'> {
-  return sortBy === 'comprehensive' ? 'submittedDate' : sortBy;
+export function normalizeArxivSortBy(value: unknown): OfficialArxivSortBy {
+  switch (value) {
+    case 'lastUpdatedDate':
+    case 'submittedDate':
+      return value;
+    case 'comprehensive':
+    case 'relevance':
+    default:
+      return 'relevance';
+  }
+}
+
+export function toArxivApiSortBy(sortBy: ArxivSortBy): OfficialArxivSortBy {
+  return normalizeArxivSortBy(sortBy);
+}
+
+export function buildArxivEffectiveSearchExpression(request: ArxivSearchRequest): string {
+  const queryMode = resolveArxivQueryMode(request.queryMode);
+  const cleanQuery = normalizeArxivSearchQuery(request.searchQuery, queryMode);
+  return buildArxivSearchExpression(cleanQuery, { ...request, queryMode }, request.searchQuery);
 }
 
 export function buildArxivSearchExpression(
@@ -632,6 +653,14 @@ function buildSemanticTitleAbstractGroups(normalized: string, compact = false): 
   addAliasGroup(
     ['vision language model', 'vision-language model', 'vlm'],
     ['vision language model', 'vision-language model', 'vlm']
+  );
+  addAliasGroup(
+    ['dexterous hand', 'robotic hand'],
+    ['dexterous hand', 'robotic hand', 'in-hand manipulation']
+  );
+  addAliasGroup(
+    ['dynamics model', 'learned dynamics', 'system identification'],
+    ['dynamics model', 'learned dynamics', 'system identification']
   );
 
   if (
@@ -797,7 +826,11 @@ function buildSemanticTitleAbstractGroups(normalized: string, compact = false): 
     addGroup(
       orClauses(
         compact
-          ? [buildFieldPairClause('humanoid', false)]
+          ? [
+              buildFieldPairClause('humanoid', false),
+              buildFieldPairClause('humanoid robot', true),
+              buildFieldPairClause('humanoid robotics', true)
+            ]
           : [
               buildFieldPairClause('humanoid', false),
               buildFieldPairClause('humanoid robot', true),
@@ -811,7 +844,7 @@ function buildSemanticTitleAbstractGroups(normalized: string, compact = false): 
   if (
     !containsAny(normalized, ['robot navigation', 'robotic navigation', 'mobile robot navigation']) &&
     !containsAny(normalized, ['humanoid']) &&
-    !consumedTokens.has('robot') &&
+    !['robot', 'robotic', 'robots', 'robotics', 'manipulator', 'humanoid'].some((token) => consumedTokens.has(token)) &&
     containsAny(normalized, ['robot', 'robotic', 'robots', 'robotics', 'manipulator', 'humanoid'])
   ) {
     addGroup(

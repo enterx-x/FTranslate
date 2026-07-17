@@ -12,14 +12,14 @@ const DEFAULT_REQUEST: ArxivSearchRequest = {
   category: '',
   start: 0,
   maxResults: 20,
-  sortBy: 'comprehensive',
+  sortBy: 'relevance',
   sortOrder: 'descending'
 };
 
 export function MobileArxivScreen({ savingPaperId, onSavePaper }: MobileArxivScreenProps) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('');
-  const [sortBy, setSortBy] = useState<ArxivSearchRequest['sortBy']>('comprehensive');
+  const [sortBy, setSortBy] = useState<ArxivSearchRequest['sortBy']>('relevance');
   const [papers, setPapers] = useState<ArxivPaper[]>([]);
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'empty' | 'error'>('idle');
   const [message, setMessage] = useState('支持中文研究词，会自动展开为英文 arXiv 检索表达式。');
@@ -77,10 +77,9 @@ export function MobileArxivScreen({ savingPaperId, onSavePaper }: MobileArxivScr
           <label>
             <span>排序</span>
             <select value={sortBy} onChange={(event) => setSortBy(event.target.value as ArxivSearchRequest['sortBy'])}>
-              <option value="comprehensive">综合</option>
+              <option value="relevance">相关性（arXiv）</option>
               <option value="submittedDate">最新提交</option>
               <option value="lastUpdatedDate">最近更新</option>
-              <option value="relevance">相关度</option>
             </select>
           </label>
           <label>

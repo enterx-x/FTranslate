@@ -3,6 +3,7 @@ import { prepareAcademicTranslation } from '../../shared/academicTranslationQual
 import type { ArxivPaper } from '../lib/arxivClient';
 import { buildArxivPaperInsight, type ArxivPaperMeta } from '../lib/arxivUi';
 import {
+  DEFAULT_ARXIV_SORT_BY,
   DEFAULT_ARXIV_SEARCH_QUERY,
   ARXIV_CARD_PRIMARY_ACTIONS,
   buildArxivPreviewTranslationBatches,
@@ -146,6 +147,10 @@ describe('ArxivSearchPage result display', () => {
     expect(DEFAULT_ARXIV_SEARCH_QUERY).toBe('');
   });
 
+  it('uses official arXiv relevance as the normal search default', () => {
+    expect(DEFAULT_ARXIV_SORT_BY).toBe('relevance');
+  });
+
   it('lets the detail panel stay closed when the current selection is cleared', () => {
     expect(resolveSelectedArxivPaper([paper], null)).toBeNull();
     expect(resolveSelectedArxivPaper([paper], 'missing-id')).toBe(paper);
@@ -205,7 +210,7 @@ describe('ArxivSearchPage result display', () => {
         category: '',
         start: 50,
         maxResults: 50,
-        sortBy: 'comprehensive',
+        sortBy: 'relevance',
         sortOrder: 'ascending',
         yearFrom: '',
         yearTo: '',

@@ -252,6 +252,9 @@ describe('ArxivService', () => {
       expect(requestedExpression).not.toContain('人形触觉');
       expect(requestedExpression).not.toContain('doll');
       expect(result.translatedQuery).toBeUndefined();
+      expect(result.effectiveSearchExpression).toBe(requestedExpression);
+      expect(result.effectiveSearchExpression).toContain('humanoid');
+      expect(result.effectiveSearchExpression).toContain(' AND ');
       expect(result.expandedQueryTerms).toEqual(expect.arrayContaining(['humanoid', 'tactile', 'haptic']));
       expect(result.queryNotice).toContain('人形触觉');
       expect(result.queryNotice).toContain('humanoid');
@@ -425,33 +428,38 @@ describe('ArxivService', () => {
     }
   });
 
-  it('re-ranks comprehensive searches by title and abstract relevance after fetching by date', async () => {
+  it('preserves official order and migrates legacy comprehensive requests to relevance', async () => {
+    const fetchedUrls: string[] = [];
     const service = new ArxivService({
       dbPath: path.join(tempDir, 'arxiv.sqlite'),
       minRequestGapMs: 0,
-      fetchImpl: async () => new Response(multiPaperFeed, { status: 200 })
+      fetchImpl: async (url) => {
+        fetchedUrls.push(String(url));
+        return new Response(multiPaperFeed, { status: 200 });
+      }
     });
 
     try {
       const result = await service.search(
-        {
+        ({
           searchQuery: 'tactile robot navigation',
           category: '',
           start: 0,
           maxResults: 2,
           sortBy: 'comprehensive',
           sortOrder: 'descending'
-        },
+        } as unknown as ArxivSearchRequest),
         'comprehensive-rank'
       );
 
-      expect(result.papers.map((paper) => paper.stableId)).toEqual(['2201.00002', '2606.00001']);
+      expect(new URL(fetchedUrls[0]).searchParams.get('sortBy')).toBe('relevance');
+      expect(result.papers.map((paper) => paper.stableId)).toEqual(['2606.00001', '2201.00002']);
     } finally {
       service.close();
     }
   });
 
-  it('does not let category and recency outrank papers that do not match the current query text', async () => {
+  it('does not locally filter or reorder an official Chinese-query response', async () => {
     const service = new ArxivService({
       dbPath: path.join(tempDir, 'arxiv.sqlite'),
       minRequestGapMs: 0,
@@ -465,19 +473,24 @@ describe('ArxivService', () => {
           category: 'cs.RO',
           start: 0,
           maxResults: 2,
-          sortBy: 'comprehensive',
+          sortBy: 'relevance',
           sortOrder: 'descending'
         },
         'tactile-rank'
       );
 
-      expect(result.papers.map((paper) => paper.stableId)).toEqual(['2301.00003']);
+      expect(result.papers.map((paper) => paper.stableId)).toEqual([
+        '2606.99999',
+        '2606.99998',
+        '2301.00003'
+      ]);
+      expect(result.itemsPerPage).toBe(3);
     } finally {
       service.close();
     }
   });
 
-  it('requires both humanoid and tactile concepts when locally filtering concise Chinese queries', async () => {
+  it('keeps the official humanoid-tactile page order without a second local ranker', async () => {
     const service = new ArxivService({
       dbPath: path.join(tempDir, 'arxiv.sqlite'),
       minRequestGapMs: 0,
@@ -491,27 +504,27 @@ describe('ArxivService', () => {
           category: '',
           start: 0,
           maxResults: 10,
-          sortBy: 'comprehensive',
+          sortBy: 'relevance',
           sortOrder: 'descending'
         },
         'humanoid-tactile-rank'
       );
 
-      expect(result.papers.map((paper) => paper.stableId)).toEqual(['2607.00002']);
-      expect(result.itemsPerPage).toBe(1);
+      expect(result.papers.map((paper) => paper.stableId)).toEqual(['2607.00001', '2607.00002']);
+      expect(result.itemsPerPage).toBe(2);
     } finally {
       service.close();
     }
   });
 
-  it('re-applies comprehensive tactile filtering to cached search results', async () => {
+  it('preserves the stored official order when reading cached search results', async () => {
     const dbPath = path.join(tempDir, 'arxiv.sqlite');
     const tactileRequest: ArxivSearchRequest = {
       searchQuery: '触觉',
       category: 'cs.RO',
       start: 0,
       maxResults: 3,
-      sortBy: 'comprehensive',
+      sortBy: 'relevance',
       sortOrder: 'descending'
     };
     const bootstrap = new ArxivService({
@@ -598,8 +611,12 @@ describe('ArxivService', () => {
 
       expect(fetchCount).toBe(0);
       expect(result.cacheHit).toBe(true);
-      expect(result.papers.map((paper) => paper.stableId)).toEqual(['2301.00003']);
-      expect(result.itemsPerPage).toBe(1);
+      expect(result.papers.map((paper) => paper.stableId)).toEqual([
+        '2606.99999',
+        '2606.99998',
+        '2301.00003'
+      ]);
+      expect(result.itemsPerPage).toBe(3);
     } finally {
       service.close();
     }

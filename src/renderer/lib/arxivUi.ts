@@ -58,10 +58,9 @@ export interface ArxivPaperMeta {
   insightQueryMode?: ArxivQueryMode;
 }
 
-export function getArxivRankingScopeLabel(sortBy: ArxivSortBy): string {
+export function getArxivRankingScopeLabel(sortBy: ArxivSortBy | 'comprehensive'): string {
   switch (sortBy) {
     case 'comprehensive':
-      return '本页相关排序';
     case 'relevance':
       return 'arXiv 全局相关性';
     case 'submittedDate':

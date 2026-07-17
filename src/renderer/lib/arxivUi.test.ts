@@ -32,8 +32,8 @@ const robotPaper: ArxivPaper = {
 };
 
 describe('arxivUi helpers', () => {
-  it('labels comprehensive ranking as page-local instead of implying global relevance', () => {
-    expect(getArxivRankingScopeLabel('comprehensive')).toBe('本页相关排序');
+  it('labels current and migrated relevance sorting as official global relevance', () => {
+    expect(getArxivRankingScopeLabel('comprehensive')).toBe('arXiv 全局相关性');
     expect(getArxivRankingScopeLabel('relevance')).toBe('arXiv 全局相关性');
   });
 

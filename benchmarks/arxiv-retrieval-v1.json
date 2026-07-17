@@ -1,0 +1,186 @@
+{
+  "version": "arxiv-retrieval-v1",
+  "description": "FTranslate 科研检索基准：覆盖强化学习、PINN、安全控制、规划、触觉、人形机器人与动力学。",
+  "queries": [
+    {
+      "id": "zh-safe-rl-cbf",
+      "query": "安全强化学习 控制屏障函数",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["safe reinforcement learning", "reinforcement learning"], ["control barrier function", "cbf"]],
+      "forbiddenTitleTerms": ["barrier option pricing"],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "en-safe-rl-constraints",
+      "query": "safe reinforcement learning constraint violation robotics",
+      "mode": "balanced",
+      "category": "cs.LG",
+      "requiredConcepts": [["safe reinforcement learning", "reinforcement learning"], ["constraint", "safety"], ["robot", "control"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "zh-pinn-navier-stokes",
+      "query": "物理信息神经网络 Navier-Stokes",
+      "mode": "balanced",
+      "category": "physics.comp-ph",
+      "requiredConcepts": [["physics-informed neural network", "pinn"], ["navier-stokes", "navier stokes"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "en-pinn-inverse-pde",
+      "query": "physics-informed neural network inverse PDE identification",
+      "mode": "balanced",
+      "category": "",
+      "requiredConcepts": [["physics-informed neural network", "pinn"], ["inverse", "identification"], ["pde", "partial differential equation"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "zh-cbf-mpc-navigation",
+      "query": "控制屏障函数 模型预测控制 机器人导航",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["control barrier function", "control barrier functions", "cbf", "safety constraint"], ["model predictive control", "mpc"], ["robot navigation", "robotic navigation", "mobile robot navigation"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "en-cbf-mpc-safe-control",
+      "query": "control barrier function model predictive control safe robot",
+      "mode": "balanced",
+      "category": "eess.SY",
+      "requiredConcepts": [["control barrier function", "cbf"], ["model predictive control", "mpc"], ["safe", "safety"], ["robot"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "zh-dynamic-obstacle-planning",
+      "query": "动态障碍 路径规划 机器人",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["dynamic obstacle", "obstacle avoidance", "collision avoidance"], ["path planning", "motion planning", "trajectory planning"], ["robot"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "en-multi-robot-motion-planning",
+      "query": "multi-robot motion planning collision avoidance",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["multi-robot", "multi robot"], ["motion planning", "path planning"], ["collision avoidance", "collision-free"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "zh-rl-robot-navigation",
+      "query": "强化学习 机器人导航",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["reinforcement learning", "rl"], ["robot navigation", "robotic navigation", "mobile robot navigation"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "en-sim2real-navigation",
+      "query": "sim-to-real reinforcement learning robot navigation",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["sim-to-real", "simulation to real", "sim2real"], ["reinforcement learning", "rl"], ["robot navigation", "robotic navigation"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "zh-humanoid-tactile",
+      "query": "人形触觉",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["humanoid", "humanoid robot"], ["tactile", "haptic", "visuotactile"]],
+      "forbiddenTitleTerms": ["textile", "knitting"],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "en-vision-tactile-sensing",
+      "query": "vision-based tactile sensing robot manipulation",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["vision-based", "vision based", "visual", "vision"], ["tactile", "visuotactile", "haptic"], ["robot manipulation", "robotic manipulation", "manipulation"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "zh-dexterous-tactile-manipulation",
+      "query": "灵巧手 触觉 机器人操作",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["dexterous hand", "robotic hand"], ["tactile", "haptic"], ["robot manipulation", "manipulation"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "en-contact-rich-manipulation",
+      "query": "contact-rich robot manipulation tactile feedback",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["contact-rich", "contact rich"], ["robot manipulation", "manipulation"], ["tactile", "haptic", "force feedback"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "zh-humanoid-locomomanipulation",
+      "query": "人形机器人 移动操作",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["humanoid", "humanoid robot"], ["loco-manipulation", "mobile manipulation", "locomanipulation"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "en-dreamerv3-world-model",
+      "query": "DreamerV3 world model reinforcement learning",
+      "mode": "balanced",
+      "category": "",
+      "requiredConcepts": [["dreamerv3"], ["world model"], ["reinforcement learning"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": ["2301.04104"]
+    },
+    {
+      "id": "zh-world-model-robotics",
+      "query": "世界模型 机器人 强化学习",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["world model"], ["robot"], ["reinforcement learning", "rl"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "en-neural-operator-pde",
+      "query": "physics-informed neural operator PDE",
+      "mode": "balanced",
+      "category": "cs.LG",
+      "requiredConcepts": [["physics-informed", "physics informed"], ["neural operator"], ["pde", "partial differential equation"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "zh-learned-dynamics-mpc",
+      "query": "动力学模型 模型预测控制 机器人",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["dynamics model", "learned dynamics", "system identification"], ["model predictive control", "mpc"], ["robot"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    },
+    {
+      "id": "zh-uav-obstacle-rl",
+      "query": "无人机 避障 强化学习",
+      "mode": "balanced",
+      "category": "cs.RO",
+      "requiredConcepts": [["uav", "drone", "aerial robot"], ["obstacle avoidance", "collision avoidance"], ["reinforcement learning", "rl"]],
+      "forbiddenTitleTerms": [],
+      "knownRelevantIds": []
+    }
+  ]
+}

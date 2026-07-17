@@ -108,6 +108,7 @@ const ARXIV_TRANSLATION_QUALITY_VERSION = 6;
 const DEFAULT_ARXIV_DETAIL_PANEL_RATIO = 0.28;
 const OFFLINE_TRANSLATION_NOTICE_TITLE = '离线翻译未配置';
 export const DEFAULT_ARXIV_SEARCH_QUERY = '';
+export const DEFAULT_ARXIV_SORT_BY: ArxivSortBy = 'relevance';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
 const OFFLINE_TRANSLATION_BATCH_SIZE = 4;
@@ -124,8 +125,7 @@ const CATEGORY_OPTIONS = [
 ];
 
 const SORT_OPTIONS: Array<{ value: ArxivSortBy; label: string }> = [
-  { value: 'comprehensive', label: '本页相关排序' },
-  { value: 'relevance', label: '相关性' },
+  { value: 'relevance', label: '相关性（arXiv）' },
   { value: 'submittedDate', label: '提交时间' },
   { value: 'lastUpdatedDate', label: '更新时间' }
 ];
@@ -547,7 +547,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const [query, setQuery] = useState(DEFAULT_ARXIV_SEARCH_QUERY);
   const [queryMode, setQueryMode] = useState<ArxivQueryMode>('balanced');
   const [category, setCategory] = useState('');
-  const [sortBy, setSortBy] = useState<ArxivSortBy>('comprehensive');
+  const [sortBy, setSortBy] = useState<ArxivSortBy>(DEFAULT_ARXIV_SORT_BY);
   const [sortOrder, setSortOrder] = useState<ArxivSortOrder>('descending');
   const [yearFrom, setYearFrom] = useState('');
   const [yearTo, setYearTo] = useState('');
@@ -602,6 +602,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     cacheStale: boolean;
     originalQuery: string;
     effectiveQuery: string;
+    effectiveExpression: string;
     queryMode: ArxivQueryMode;
     sortBy: ArxivSortBy;
     queueSize: number;
@@ -856,6 +857,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
         originalQuery: result.originalSearchQuery ?? searchQuery,
         effectiveQuery:
           result.effectiveSearchQuery ?? result.normalizedSearchQuery ?? nextRequest.searchQuery,
+        effectiveExpression: result.effectiveSearchExpression ?? '',
         queryMode: result.queryMode ?? nextRequest.queryMode ?? 'balanced',
         sortBy: nextRequest.sortBy,
         queueSize: result.queueSize,
@@ -887,9 +889,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             ? '提交时间降序'
             : nextRequest.sortBy === 'lastUpdatedDate'
               ? '更新时间'
-              : nextRequest.sortBy === 'relevance'
-              ? '相关性'
-                : '本页相关排序';
+              : 'arXiv 全局相关性';
         setMessage(`${queryNotice}共找到 ${formatInteger(result.totalResults ?? result.papers.length)} 篇，当前显示 ${rangeText}，已按${sortText}展示。`);
       }
     } catch (error) {
@@ -1438,8 +1438,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   const hasActiveSearchFilters = Boolean(
     category ||
       queryMode !== 'balanced' ||
-      sortBy !== 'comprehensive' ||
-      sortOrder !== 'descending' ||
+      sortBy !== DEFAULT_ARXIV_SORT_BY ||
+      (sortBy !== 'relevance' && sortOrder !== 'descending') ||
       yearFrom ||
       yearTo ||
       pageSize !== 50 ||
@@ -1517,7 +1517,16 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           </label>
           <label>
             <span>排序</span>
-            <select value={sortBy} onChange={(event) => setSortBy(event.target.value as ArxivSortBy)}>
+            <select
+              value={sortBy}
+              onChange={(event) => {
+                const nextSortBy = event.target.value as ArxivSortBy;
+                setSortBy(nextSortBy);
+                if (nextSortBy === 'relevance') {
+                  setSortOrder('descending');
+                }
+              }}
+            >
               {SORT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
@@ -1543,7 +1552,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                 setYearTo('');
                 setCategory('');
                 setQueryMode('balanced');
-                setSortBy('comprehensive');
+                setSortBy(DEFAULT_ARXIV_SORT_BY);
                 setSortOrder('descending');
                 setPageSize(50);
                 setYearFilter('all');
@@ -1570,16 +1579,18 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
               ))}
             </select>
           </label>
-          <label>
-            <span>顺序</span>
-            <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value as ArxivSortOrder)}>
-              {SORT_ORDER_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          {sortBy !== 'relevance' ? (
+            <label>
+              <span>顺序</span>
+              <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value as ArxivSortOrder)}>
+                {SORT_ORDER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <label>
             <span>起始年份</span>
             <input
@@ -1742,8 +1753,11 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
             >
               {getArxivWaitStateLabel(searchMetadata, isSearching)}
             </span>
-            <span className="badge arxiv-runtime-query" title={searchMetadata?.effectiveQuery || '尚无已执行查询'}>
-              规范化：{searchMetadata?.effectiveQuery || '—'}
+            <span
+              className="badge arxiv-runtime-query"
+              title={searchMetadata?.effectiveExpression || searchMetadata?.effectiveQuery || '尚无已执行查询'}
+            >
+              实际查询：{searchMetadata?.effectiveExpression || searchMetadata?.effectiveQuery || '—'}
             </span>
             {searchMetadata?.originalQuery && searchMetadata.originalQuery !== searchMetadata.effectiveQuery ? (
               <span className="badge arxiv-runtime-query" title={searchMetadata.originalQuery}>

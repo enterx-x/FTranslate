@@ -124,7 +124,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     category: string;
     start: number;
     maxResults: number;
-    sortBy: 'comprehensive' | 'relevance' | 'lastUpdatedDate' | 'submittedDate';
+    sortBy: 'relevance' | 'lastUpdatedDate' | 'submittedDate';
     sortOrder: 'ascending' | 'descending';
     yearFrom?: string;
     yearTo?: string;
