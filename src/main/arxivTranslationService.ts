@@ -15,6 +15,7 @@ import {
   hasSevereAcademicTranslationLengthLoss,
   prepareAcademicTranslation,
   repairAcademicTranslation,
+  splitAcademicTranslationSourceContext,
   type PreparedAcademicTranslation,
   type PreparedAcademicTranslationRestoreResult
 } from '../shared/academicTranslationQuality';
@@ -25,6 +26,7 @@ import {
 import {
   type LocalTranslateBatchResult,
   type LocalTranslateDirectionOptions,
+  type LocalTranslationItemContext,
   type LocalTranslationPreference,
   type LocalTranslationRuntimeEngine,
   resetNllbRuntime,
@@ -40,12 +42,18 @@ import {
   warmUpHyMt2Translator
 } from './hyMtTranslationService';
 
+type TranslationBatchOptions = Pick<LocalTranslateDirectionOptions, 'itemContexts'>;
+type TranslationBatchTranslator = (
+  texts: string[],
+  options?: TranslationBatchOptions
+) => Promise<LocalTranslateBatchResult>;
+
 interface ArxivTranslationServiceOptions {
   dbPath: string;
   translateText?: (text: string) => Promise<string>;
   translateTexts?: (texts: string[]) => Promise<string[]>;
-  translateTextsWithEngine?: (texts: string[]) => Promise<LocalTranslateBatchResult>;
-  fallbackTranslateTextsWithEngine?: (texts: string[]) => Promise<LocalTranslateBatchResult>;
+  translateTextsWithEngine?: TranslationBatchTranslator;
+  fallbackTranslateTextsWithEngine?: TranslationBatchTranslator;
   now?: () => number;
   timeoutMs?: number;
 }
@@ -65,6 +73,9 @@ interface CachedTranslationRow {
 }
 
 const DEFAULT_TRANSLATION_TIMEOUT_MS = 90_000;
+const ARXIV_TITLE_CONTEXT_LIMIT = 700;
+const ARXIV_ABSTRACT_CONTEXT_LIMIT = 900;
+const ARXIV_CONTEXT_PROMPT_VERSION = 'paper-context-v1';
 const TRANSLATION_PRIORITY_ORDER: readonly ArxivTranslationPriority[] = [
   'foreground',
   'preview',
@@ -82,6 +93,7 @@ interface QueuedTranslationJob {
 interface PreparedTranslationBatchItem {
   sourceTitle: string;
   sourceAbstract: string;
+  sourceAbstractSegments: string[];
   title: PreparedAcademicTranslation;
   abstract: PreparedAcademicTranslation;
 }
@@ -131,10 +143,11 @@ const FALLBACK_GLOSSARY_MARKER_PATTERN = /\b97531\d{3}809\b/gu;
 
 export async function translateTextsWithProtectedAcademicGlossary(
   texts: string[],
-  translator: (texts: string[]) => Promise<LocalTranslateBatchResult>
+  translator: TranslationBatchTranslator,
+  options?: TranslationBatchOptions
 ): Promise<LocalTranslateBatchResult> {
   const prepared = texts.map(prepareFallbackGlossaryText);
-  const result = await translator(prepared.map((item) => item.text));
+  const result = await translator(prepared.map((item) => item.text), options);
   if (result.texts.length !== prepared.length) {
     throw new Error('后备翻译引擎返回的文本数量与请求不一致。');
   }
@@ -186,8 +199,8 @@ function prepareFallbackGlossaryText(source: string): {
 
 export class ArxivTranslationService {
   private readonly db: DatabaseSync;
-  private readonly translateTextsWithEngine: (texts: string[]) => Promise<LocalTranslateBatchResult>;
-  private readonly fallbackTranslateTextsWithEngine?: (texts: string[]) => Promise<LocalTranslateBatchResult>;
+  private readonly translateTextsWithEngine: TranslationBatchTranslator;
+  private readonly fallbackTranslateTextsWithEngine?: TranslationBatchTranslator;
   private readonly now: () => number;
   private readonly timeoutMs: number;
   private readonly protectGlossaryTerms: boolean;
@@ -215,25 +228,31 @@ export class ArxivTranslationService {
     );
     const createTranslator = (
       engine: LocalTranslationRuntimeEngine
-    ): ((texts: string[]) => Promise<LocalTranslateBatchResult>) => {
-      const translator: (texts: string[]) => Promise<LocalTranslateBatchResult> = engine === 'hy-mt2'
-        ? ((texts) => translateTextsWithHyMt2(texts, this.timeoutMs))
+    ): TranslationBatchTranslator => {
+      const translator: TranslationBatchTranslator = engine === 'hy-mt2'
+        ? ((texts, batchOptions) => translateTextsWithHyMt2(texts, this.timeoutMs, {
+            itemContexts: batchOptions?.itemContexts
+          }))
         : engine === 'nllb-ct2'
         ? ((texts) => translateTextsWithNllbCTranslate2(texts, this.timeoutMs))
         : ((texts) => translateTextsWithArgosEngine(texts, this.timeoutMs));
       return engine !== 'hy-mt2' && !this.protectGlossaryTerms
-        ? ((texts) => translateTextsWithProtectedAcademicGlossary(texts, translator))
+        ? ((texts, batchOptions) =>
+            translateTextsWithProtectedAcademicGlossary(texts, translator, batchOptions))
         : translator;
     };
     const createTranslatorChain = (
       engines: LocalTranslationRuntimeEngine[],
       startIndex: number,
       onResolved?: (index: number) => void
-    ): ((texts: string[]) => Promise<LocalTranslateBatchResult>) => async (texts) => {
+    ): TranslationBatchTranslator => async (texts, batchOptions) => {
       let lastError: unknown = new Error('没有可用的本地翻译引擎。');
       for (let index = 0; index < engines.length; index += 1) {
         try {
-          const result = await createTranslator(engines[index] as LocalTranslationRuntimeEngine)(texts);
+          const result = await createTranslator(engines[index] as LocalTranslationRuntimeEngine)(
+            texts,
+            batchOptions
+          );
           onResolved?.(startIndex + index);
           return result;
         } catch (error) {
@@ -393,6 +412,7 @@ export class ArxivTranslationService {
         const preparedItems = remaining.map((item) => ({
           sourceTitle: item.title,
           sourceAbstract: item.summary,
+          sourceAbstractSegments: splitAcademicTranslationSourceContext(item.summary),
           title: isUsableTranslatedText(item.pretranslatedTitleZh, item.title)
             ? preparePretranslatedAcademicText(item.pretranslatedTitleZh)
             : prepareAcademicTranslation(item.title, undefined, {
@@ -402,9 +422,10 @@ export class ArxivTranslationService {
             protectGlossary: this.protectGlossaryTerms
           })
         }));
-        const texts = preparedItems.flatMap((item) => [...item.title.segments, ...item.abstract.segments]);
-        const uniqueBatch = buildUniqueTranslationBatch(texts);
-        let translationResult = await this.translateTextsWithFallback(uniqueBatch.texts);
+        const translationRequests = preparedItems.flatMap(buildPaperTranslationRequests);
+        const uniqueBatch = buildUniqueTranslationBatch(translationRequests);
+        const batchOptions = { itemContexts: uniqueBatch.itemContexts };
+        let translationResult = await this.translateTextsWithFallback(uniqueBatch.texts, batchOptions);
         let translatedTexts = uniqueBatch.indexes.map((index) => translationResult.texts[index] ?? '');
         let evaluatedTranslations = evaluatePreparedTranslations(preparedItems, translatedTexts);
         const primaryQualityProblems = countTranslationQualityProblems(evaluatedTranslations, translationResult.engine);
@@ -413,7 +434,10 @@ export class ArxivTranslationService {
         );
         if (shouldTryFallback && primaryQualityProblems > 0 && this.fallbackTranslateTextsWithEngine) {
           try {
-            const fallbackResult = await this.fallbackTranslateTextsWithEngine(uniqueBatch.texts);
+            const fallbackResult = await this.fallbackTranslateTextsWithEngine(
+              uniqueBatch.texts,
+              batchOptions
+            );
             const fallbackTranslatedTexts = uniqueBatch.indexes.map((index) => fallbackResult.texts[index] ?? '');
             const fallbackEvaluatedTranslations = evaluatePreparedTranslations(preparedItems, fallbackTranslatedTexts);
             const fallbackQualityProblems = countTranslationQualityProblems(
@@ -721,24 +745,86 @@ export class ArxivTranslationService {
       );
   }
 
-  private async translateTextsWithFallback(texts: string[]): Promise<LocalTranslateBatchResult> {
+  private async translateTextsWithFallback(
+    texts: string[],
+    options?: TranslationBatchOptions
+  ): Promise<LocalTranslateBatchResult> {
     try {
-      return await this.translateTextsWithEngine(texts);
+      return await this.translateTextsWithEngine(texts, options);
     } catch (error) {
       if (!this.fallbackTranslateTextsWithEngine) {
         throw error;
       }
-      return this.fallbackTranslateTextsWithEngine(texts);
+      return this.fallbackTranslateTextsWithEngine(texts, options);
     }
   }
 }
 
-function buildUniqueTranslationBatch(texts: string[]): { texts: string[]; indexes: number[] } {
+interface TranslationBatchRequest {
+  text: string;
+  itemContext: LocalTranslationItemContext;
+}
+
+function buildPaperTranslationRequests(item: PreparedTranslationBatchItem): TranslationBatchRequest[] {
+  const titleContext = truncateContextStart(
+    `Abstract context: ${item.sourceAbstract}`,
+    ARXIV_TITLE_CONTEXT_LIMIT
+  );
+  const titleRequests = item.title.segments.map((text) => ({
+    text,
+    itemContext: { context: titleContext, style: 'academic-paper' as const }
+  }));
+  const abstractRequests = item.abstract.segments.map((text, index) => ({
+    text,
+    itemContext: {
+      context: buildAbstractSegmentContext(
+        item.sourceTitle,
+        item.sourceAbstractSegments.slice(0, Math.min(index, item.sourceAbstractSegments.length))
+      ),
+      style: 'academic-paper' as const
+    }
+  }));
+  return [...titleRequests, ...abstractRequests];
+}
+
+function buildAbstractSegmentContext(title: string, previousSegments: string[]): string {
+  const titleLine = truncateContextStart(`Paper title: ${title}`, ARXIV_ABSTRACT_CONTEXT_LIMIT);
+  if (previousSegments.length === 0) {
+    return titleLine;
+  }
+  const prefix = `${titleLine}\nPrevious source: `;
+  const remaining = Math.max(0, ARXIV_ABSTRACT_CONTEXT_LIMIT - prefix.length);
+  return `${prefix}${truncateContextEnd(previousSegments.join(' '), remaining)}`.slice(
+    0,
+    ARXIV_ABSTRACT_CONTEXT_LIMIT
+  );
+}
+
+function truncateContextStart(value: string, limit: number): string {
+  const normalized = value.replace(/\s+/gu, ' ').trim();
+  return normalized.length <= limit ? normalized : normalized.slice(0, limit).trimEnd();
+}
+
+function truncateContextEnd(value: string, limit: number): string {
+  const normalized = value.replace(/\s+/gu, ' ').trim();
+  return normalized.length <= limit ? normalized : normalized.slice(normalized.length - limit).trimStart();
+}
+
+function buildUniqueTranslationBatch(requests: TranslationBatchRequest[]): {
+  texts: string[];
+  itemContexts: LocalTranslationItemContext[];
+  indexes: number[];
+} {
   const indexes: number[] = [];
   const uniqueTexts: string[] = [];
+  const itemContexts: LocalTranslationItemContext[] = [];
   const seen = new Map<string, number>();
-  texts.forEach((text) => {
-    const key = normalizeTranslatedText(text);
+  requests.forEach(({ text, itemContext }) => {
+    const key = JSON.stringify({
+      text: normalizeTranslatedText(text),
+      context: normalizeTranslatedText(itemContext.context ?? ''),
+      style: itemContext.style ?? ''
+    });
     const existingIndex = seen.get(key);
     if (existingIndex !== undefined) {
       indexes.push(existingIndex);
@@ -747,9 +833,10 @@ function buildUniqueTranslationBatch(texts: string[]): { texts: string[]; indexe
     const nextIndex = uniqueTexts.length;
     seen.set(key, nextIndex);
     uniqueTexts.push(text);
+    itemContexts.push(itemContext);
     indexes.push(nextIndex);
   });
-  return { texts: uniqueTexts, indexes };
+  return { texts: uniqueTexts, itemContexts, indexes };
 }
 
 function preparePretranslatedAcademicText(text: string): PreparedAcademicTranslation {
@@ -803,7 +890,8 @@ export function buildTranslationCacheKey(input: { stableId: string; title: strin
     .createHash('sha256')
     .update(
       JSON.stringify({
-        version: 9,
+        version: 10,
+        contextPrompt: ARXIV_CONTEXT_PROMPT_VERSION,
         glossary: ACADEMIC_TRANSLATION_GLOSSARY_VERSION,
         hyMt2Model: resolveHyMt2ModelCacheIdentity(),
         target: 'zh',

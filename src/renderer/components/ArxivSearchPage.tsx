@@ -2526,7 +2526,7 @@ function isHyMt2Preferred(status: LocalTranslationStatus): boolean {
 function describeHyMt2Tier(modelPath: string): string {
   const normalized = modelPath.toLowerCase();
   if (normalized.includes('7b')) {
-    return 'HY-MT2 7B 质量档';
+    return 'HY-MT2 7B 上下文质量档';
   }
   if (normalized.includes('1.8b')) {
     return 'HY-MT2 1.8B 快速档';

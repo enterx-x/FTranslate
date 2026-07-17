@@ -1,4 +1,4 @@
-export const ACADEMIC_TRANSLATION_GLOSSARY_VERSION = 'academic-en-zh-v2';
+export const ACADEMIC_TRANSLATION_GLOSSARY_VERSION = 'academic-en-zh-v3';
 
 interface AcademicGlossaryEntry {
   id: string;
@@ -137,6 +137,11 @@ const ACADEMIC_GLOSSARY: readonly AcademicGlossaryEntry[] = [
     id: 'fall-recovery',
     target: '跌倒恢复',
     sources: ['fall-recovery', 'fall recovery']
+  },
+  {
+    id: 'locomotion-tracking',
+    target: '运动跟踪',
+    sources: ['locomotion tracking']
   },
   {
     id: 'motion-tracking',

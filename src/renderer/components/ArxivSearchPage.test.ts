@@ -352,7 +352,7 @@ describe('ArxivSearchPage result display', () => {
         runtimeState: 'ready',
         runtimeDevice: 'cuda'
       }
-    })).toBe('HY-MT2 7B 质量档 · 可用 · CUDA');
+    })).toBe('HY-MT2 7B 上下文质量档 · 可用 · CUDA');
     expect(describeLocalTranslationStatus({
       ...baseStatus,
       preferredEngine: 'hy-mt-first',
@@ -361,7 +361,7 @@ describe('ArxivSearchPage result display', () => {
         configured: true,
         runtimeState: 'not_checked'
       }
-    })).toBe('HY-MT2 7B 质量档 · 已配置 · 待预热');
+    })).toBe('HY-MT2 7B 上下文质量档 · 已配置 · 待预热');
 
     const hyMtWaiting = {
       ...baseStatus,

@@ -39,6 +39,18 @@ describe('academicTranslationGlossary', () => {
     ]);
   });
 
+  it('maps robotics locomotion tracking to the established motion-tracking term', () => {
+    expect(
+      collectAcademicGlossaryMatches('Robust locomotion tracking and motion tracking.').map((match) => [
+        match.source,
+        match.target
+      ])
+    ).toEqual([
+      ['locomotion tracking', '运动跟踪'],
+      ['motion tracking', '运动跟踪']
+    ]);
+  });
+
   it('requires ASCII word boundaries instead of matching inside identifiers', () => {
     expect(collectAcademicGlossaryMatches('metapolicy policy policy2').map((match) => match.source)).toEqual([
       'policy'

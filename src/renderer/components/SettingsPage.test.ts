@@ -44,6 +44,6 @@ describe('SettingsPage defaults', () => {
   });
 
   it('does not label a configured HY-MT2 runtime as Argos fallback before warmup', () => {
-    expect(describeLocalTranslationBadge(makeLocalTranslationStatus())).toBe('HY-MT2 7B 质量档 · 待预热');
+    expect(describeLocalTranslationBadge(makeLocalTranslationStatus())).toBe('HY-MT2 7B 上下文质量档 · 待预热');
   });
 });

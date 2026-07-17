@@ -4770,7 +4770,7 @@ async function runSettingsScenario(client) {
     !localTranslation.hasHyMtRuntimePath ||
     localTranslation.pathRightOverflowCount > 0 ||
     localTranslation.clippedButtonCount > 0 ||
-    !/7B 质量档/.test(localTranslation.badgeText) ||
+    !/7B 上下文质量档/.test(localTranslation.badgeText) ||
     !localTranslation.buttonLabels.includes('预热翻译引擎')
   ) {
     throw new Error(`settings: local translation layout failed: ${JSON.stringify(localTranslation)}`);

@@ -58,7 +58,8 @@ describe('ArxivTranslationService', () => {
       .createHash('sha256')
       .update(
         JSON.stringify({
-          version: 9,
+          version: 10,
+          contextPrompt: 'paper-context-v1',
           glossary: ACADEMIC_TRANSLATION_GLOSSARY_VERSION,
           hyMt2Model: resolveHyMt2ModelCacheIdentity(),
           target: 'zh',
@@ -405,7 +406,7 @@ describe('ArxivTranslationService', () => {
     }
   });
 
-  it('deduplicates repeated texts before sending a batch to the local translator', async () => {
+  it('deduplicates repeated texts only when their paper contexts are identical', async () => {
     const batches: string[][] = [];
     const sharedSummary = 'This shared abstract studies safe robot navigation and obstacle avoidance.';
     const service = new ArxivTranslationService({
@@ -428,7 +429,7 @@ describe('ArxivTranslationService', () => {
         },
         {
           stableId: '2606.13680',
-          title: 'Obstacle Avoidance for Mobile Robots',
+          title: 'Safe Robot Navigation',
           summary: sharedSummary
         }
       ];
@@ -439,8 +440,7 @@ describe('ArxivTranslationService', () => {
       expect(batches).toEqual([
         [
           requests[0].title,
-          sharedSummary,
-          requests[1].title
+          sharedSummary
         ]
       ]);
       expect(results[0].abstractZh).toBe(results[1].abstractZh);
@@ -984,6 +984,124 @@ describe('ArxivTranslationService', () => {
       expect(batches[0][0]).toBe(request.title);
       expect(batches[0][1]).not.toBe(request.summary);
       expect(batches[0][1]).toMatch(/86753\d{2}901/u);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('passes bounded paper title and preceding source context to every HY-MT2 segment', async () => {
+    const captured: Array<{
+      texts: string[];
+      itemContexts: Array<{ context?: string; style?: 'academic-paper' }>;
+    }> = [];
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTextsWithEngine: async (
+        texts,
+        options?: { itemContexts?: Array<{ context?: string; style?: 'academic-paper' }> }
+      ) => {
+        captured.push({
+          texts: [...texts],
+          itemContexts: options?.itemContexts?.map((item) => ({ ...item })) ?? []
+        });
+        return {
+          texts: texts.map((text, index) =>
+            preserveProtectedAcademicMarkers(
+              text,
+              index === 0
+                ? '物理信息机器人动力学的上下文翻译'
+                : index === 1
+                  ? '本文提出一种由控制屏障函数约束的动力学模型，并在仿真环境中评估其稳定性和安全性。'
+                  : '随后，我们在真实机器人平台上验证该模型，并报告路径规划、轨迹跟踪和约束满足结果。'
+            )
+          ),
+          engine: 'hy-mt2-q4'
+        };
+      }
+    });
+    const title = 'Context-Aware Physics-Informed Robot Dynamics';
+    const firstSentence =
+      'We formulate a physics-informed dynamics model constrained by control barrier functions and evaluate stability, safety, trajectory tracking, path planning, and constraint satisfaction across simulated environments with varying disturbances and obstacle configurations.';
+    const secondSentence =
+      'We then deploy the same model on a real robotic platform, preserve the controller configuration, and report generalization results for unseen trajectories, contact conditions, payload changes, and sensor noise without changing the evaluation protocol.';
+    const summary = `${firstSentence} ${secondSentence}`;
+
+    try {
+      const result = await service.translatePaper({ stableId: 'context-paper', title, summary });
+
+      expect(result.status).toBe('completed');
+      expect(captured).toHaveLength(1);
+      expect(captured[0]?.texts).toHaveLength(3);
+      expect(captured[0]?.itemContexts).toHaveLength(3);
+      expect(captured[0]?.itemContexts[0]?.context).toContain(summary.slice(0, 120));
+      expect(captured[0]?.itemContexts[1]?.context).toContain(`Paper title: ${title}`);
+      expect(captured[0]?.itemContexts[2]?.context).toContain(firstSentence.slice(0, 100));
+      expect(
+        captured[0]?.itemContexts.every((item) => (item.context?.length ?? 0) <= 900)
+      ).toBe(true);
+      expect(captured[0]?.itemContexts.every((item) => item.style === 'academic-paper')).toBe(true);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('keeps identical abstract text separate when paper contexts differ', async () => {
+    const captured: Array<{
+      texts: string[];
+      itemContexts: Array<{ context?: string; style?: 'academic-paper' }>;
+    }> = [];
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'arxiv-translation.sqlite'),
+      translateTextsWithEngine: async (
+        texts,
+        options?: { itemContexts?: Array<{ context?: string; style?: 'academic-paper' }> }
+      ) => {
+        captured.push({
+          texts: [...texts],
+          itemContexts: options?.itemContexts?.map((item) => ({ ...item })) ?? []
+        });
+        return {
+          texts: texts.map((text) =>
+            preserveProtectedAcademicMarkers(
+              text,
+              '该论文在一致的实验协议下报告完整的方法、实验设置和主要结论。'
+            )
+          ),
+          engine: 'hy-mt2-q4'
+        };
+      }
+    });
+    const sharedSummary =
+      'We evaluate the method under a shared protocol and report its stability, safety, efficiency, generalization performance, and robustness across all experimental conditions.';
+
+    try {
+      const result = await service.translatePapers([
+        {
+          stableId: 'context-paper-a',
+          title: 'Safe Reinforcement Learning for Robot Navigation',
+          summary: sharedSummary
+        },
+        {
+          stableId: 'context-paper-b',
+          title: 'Physics-Informed Control for Humanoid Locomotion',
+          summary: sharedSummary
+        }
+      ]);
+
+      expect(result.every((item) => item.status === 'completed')).toBe(true);
+      expect(captured).toHaveLength(1);
+      expect(captured[0]?.texts).toHaveLength(4);
+      const repeatedSummaryContexts = captured[0]?.itemContexts
+        .filter((_, index) => captured[0]?.texts[index]?.includes('shared protocol'))
+        .map((item) => item.context ?? '');
+      expect(repeatedSummaryContexts).toHaveLength(2);
+      expect(repeatedSummaryContexts?.[0]).not.toBe(repeatedSummaryContexts?.[1]);
+      expect(repeatedSummaryContexts?.join('\n')).toContain(
+        'Paper title: Safe Reinforcement Learning for Robot Navigation'
+      );
+      expect(repeatedSummaryContexts?.join('\n')).toContain(
+        'Paper title: Physics-Informed Control for Humanoid Locomotion'
+      );
     } finally {
       service.close();
     }

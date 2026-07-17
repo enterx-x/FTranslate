@@ -17,6 +17,8 @@ const DEFAULT_HYMT_FAST_MODEL = path.join(DEFAULT_HYMT_ROOT, 'models', 'Hy-MT2-1
 const DEFAULT_HYMT_TIMEOUT_MS = 120_000;
 const DEFAULT_HYMT_STARTUP_TIMEOUT_MS = 60_000;
 const DEFAULT_HYMT_PARALLEL = 2;
+const MAX_HYMT_CONTEXT_CHARS = 900;
+const HYMT_PROTECTED_MARKER_PATTERN = /\b86753\d{2}901\b/gu;
 
 export interface HyMt2RuntimeSnapshot {
   configured: boolean;
@@ -215,10 +217,28 @@ export function resetHyMt2Runtime(): void {
   });
 }
 
-export function buildHyMt2Prompt(source: string, options: LocalTranslateDirectionOptions = {}): string {
+export function buildHyMt2Prompt(
+  source: string,
+  options: LocalTranslateDirectionOptions = {},
+  strict = false
+): string {
   const sourceLanguage = options.sourceLanguage ?? 'en';
   const targetLanguage = options.targetLanguage ?? 'zh';
   const targetLabel = targetLanguage === 'en' ? '英文' : '中文';
+  const context = normalizeHyMt2Context(options.itemContext?.context ?? '');
+  const academicStyle = options.itemContext?.style === 'academic-paper'
+    ? '翻译风格必须符合学术论文书面语，忠实、准确、自然、简洁，不得增加原文没有的信息。\n'
+    : '';
+  const protectedMarkers = Array.from(new Set(source.match(HYMT_PROTECTED_MARKER_PATTERN) ?? []));
+  const markerConstraint = protectedMarkers.length > 0
+    ? (
+        `原文中的数字占位符 ${protectedMarkers.join('、')} 必须在译文中原样保留且各出现恰好一次，` +
+        '不得遗漏、修改或翻译，并保持在对应语义位置。\n'
+      )
+    : '';
+  const strictConstraint = strict
+    ? '严格要求：背景信息只用于消歧，禁止复述或翻译背景；只翻译当前文本，并逐字保持所有数字占位符；译文必须语法通顺，避免重复助词和重叠谓语。\n'
+    : '';
   const glossaryLines = sourceLanguage === 'en' && targetLanguage === 'zh'
     ? collectAcademicGlossaryMatches(source)
         .slice(0, 20)
@@ -227,10 +247,24 @@ export function buildHyMt2Prompt(source: string, options: LocalTranslateDirectio
   const glossaryPrefix = glossaryLines.length > 0
     ? `参考下面的翻译：\n${glossaryLines.join('\n')}\n\n`
     : '';
+  const contextPrefix = context ? `〖背景信息〗\n${context}\n\n` : '';
+  const translationInstruction = context
+    ? `参考上面的信息，把下面的文本翻译成${targetLabel}。不要翻译上文，只输出当前文本的译文，不要额外解释：`
+    : `将以下文本翻译为${targetLabel}，注意只需要输出翻译后的结果，不要额外解释：`;
   return (
-    `${glossaryPrefix}将以下文本翻译为${targetLabel}，注意只需要输出翻译后的结果，不要额外解释：\n\n` +
-    source
+    `${glossaryPrefix}${contextPrefix}${academicStyle}${markerConstraint}${strictConstraint}` +
+    `${translationInstruction}\n\n${source}`
   );
+}
+
+function normalizeHyMt2Context(value: string): string {
+  const normalized = value.replace(/\r\n?/gu, '\n').replace(/[ \t]+/gu, ' ').trim();
+  if (normalized.length <= MAX_HYMT_CONTEXT_CHARS) {
+    return normalized;
+  }
+  const truncated = normalized.slice(normalized.length - MAX_HYMT_CONTEXT_CHARS);
+  const firstBoundary = truncated.search(/(?<=[.!?。！？])\s+/u);
+  return (firstBoundary >= 0 ? truncated.slice(firstBoundary + 1) : truncated).trim();
 }
 
 export function normalizeHyMt2Output(value: string): string {
@@ -254,6 +288,49 @@ export function inferHyMt2RuntimeDevice(log: string): 'cuda' | 'cpu' | 'unknown'
     return 'cpu';
   }
   return 'unknown';
+}
+
+export function validateHyMt2ProtectedMarkers(source: string, translated: string): boolean {
+  const expected = [...(source.match(HYMT_PROTECTED_MARKER_PATTERN) ?? [])].sort();
+  const actual = [...(translated.match(HYMT_PROTECTED_MARKER_PATTERN) ?? [])].sort();
+  return expected.length === actual.length && expected.every((marker, index) => marker === actual[index]);
+}
+
+export function hasHyMt2ContextLeakage(source: string, translated: string, context: string): boolean {
+  const normalizedContext = normalizeComparableLatinText(context);
+  if (!normalizedContext) {
+    return false;
+  }
+
+  const normalizedSource = normalizeComparableLatinText(source);
+  const normalizedTranslation = normalizeComparableLatinText(translated);
+  const contextTokens = normalizedContext.split(' ').filter(Boolean);
+  for (let index = 0; index + 6 <= contextTokens.length; index += 1) {
+    const phrase = contextTokens.slice(index, index + 6).join(' ');
+    if (!normalizedSource.includes(phrase) && normalizedTranslation.includes(phrase)) {
+      return true;
+    }
+  }
+
+  const sourceLength = countMeaningfulHyMt2Characters(source);
+  const translatedLength = countMeaningfulHyMt2Characters(translated);
+  return sourceLength >= 16 && translatedLength > Math.max(48, Math.ceil(sourceLength * 1.8));
+}
+
+export function hasHyMt2FluencyArtifact(value: string): boolean {
+  const compact = value.replace(/\s+/gu, '');
+  if (/了(?:进行|开展|实施|完成|实现|采用|提出|评估|验证|测试)了/u.test(compact)) {
+    return true;
+  }
+  return /([\u3400-\u9fff]{2,4})了\1了/u.test(compact);
+}
+
+function normalizeComparableLatinText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/gu, ' ').replace(/\s+/gu, ' ').trim();
+}
+
+function countMeaningfulHyMt2Characters(value: string): number {
+  return value.match(/[A-Za-z0-9\u3400-\u9fff]/gu)?.length ?? 0;
 }
 
 function getHyMt2Runtime(): HyMt2Runtime {
@@ -289,8 +366,11 @@ class HyMt2Runtime {
     await this.ensureReady(Math.min(timeoutMs, DEFAULT_HYMT_STARTUP_TIMEOUT_MS));
     this.pending += texts.length;
     try {
-      return await mapWithConcurrency(texts, DEFAULT_HYMT_PARALLEL, (text) =>
-        this.translateOne(text, timeoutMs, options)
+      return await mapWithConcurrency(texts, DEFAULT_HYMT_PARALLEL, (text, index) =>
+        this.translateOne(text, timeoutMs, {
+          ...options,
+          itemContext: options.itemContexts?.[index] ?? options.itemContext
+        })
       );
     } finally {
       this.pending = Math.max(0, this.pending - texts.length);
@@ -398,35 +478,53 @@ class HyMt2Runtime {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-          Authorization: `Bearer ${this.apiKey}`
-        },
-        body: JSON.stringify({
-          messages: [{ role: 'user', content: buildHyMt2Prompt(source, options) }],
-          max_tokens: estimateHyMt2MaxTokens(source),
-          temperature: 0.7,
-          top_k: 20,
-          top_p: 0.6,
-          repeat_penalty: 1.05,
-          stream: false
-        }),
-        signal: controller.signal
-      });
-      if (!response.ok) {
-        throw new Error(`HY-MT2 请求失败：HTTP ${response.status} ${await response.text()}`);
+      let lastValidationError = 'HY-MT2 未返回翻译文本。';
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            Authorization: `Bearer ${this.apiKey}`
+          },
+          body: JSON.stringify({
+            messages: [{ role: 'user', content: buildHyMt2Prompt(source, options, attempt === 1) }],
+            max_tokens: estimateHyMt2MaxTokens(source),
+            temperature: 0.7,
+            top_k: 20,
+            top_p: 0.6,
+            repeat_penalty: 1.05,
+            seed: attempt === 0 ? 42 : 3407,
+            stream: false
+          }),
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          throw new Error(`HY-MT2 请求失败：HTTP ${response.status} ${await response.text()}`);
+        }
+        const payload = await response.json() as {
+          choices?: Array<{ message?: { content?: unknown } }>;
+        };
+        const content = payload.choices?.[0]?.message?.content;
+        const normalized = normalizeHyMt2Output(typeof content === 'string' ? content : '');
+        if (!normalized) {
+          lastValidationError = 'HY-MT2 未返回翻译文本。';
+          continue;
+        }
+        if (!validateHyMt2ProtectedMarkers(source, normalized)) {
+          lastValidationError = 'HY-MT2 损坏了受保护的公式、代码或引用占位符。';
+          continue;
+        }
+        if (hasHyMt2ContextLeakage(source, normalized, options.itemContext?.context ?? '')) {
+          lastValidationError = 'HY-MT2 错误输出了只应作为背景的论文上下文。';
+          continue;
+        }
+        if (hasHyMt2FluencyArtifact(normalized)) {
+          lastValidationError = 'HY-MT2 译文包含重复助词或重叠谓语。';
+          continue;
+        }
+        return normalized;
       }
-      const payload = await response.json() as {
-        choices?: Array<{ message?: { content?: unknown } }>;
-      };
-      const content = payload.choices?.[0]?.message?.content;
-      const normalized = normalizeHyMt2Output(typeof content === 'string' ? content : '');
-      if (!normalized) {
-        throw new Error('HY-MT2 未返回翻译文本。');
-      }
-      return normalized;
+      throw new Error(`${lastValidationError} 严格重试后仍未通过质量检查。`);
     } finally {
       clearTimeout(timer);
     }

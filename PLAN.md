@@ -1,12 +1,21 @@
 # PLAN.md
 
-## 2026-07-17 论文级上下文学术翻译（0.1.37，设计确认）
+## 2026-07-17 论文级上下文学术翻译（0.1.37）
 
 ### 当前结论
 
 - 0.1.36 已解决模型质量上限与科研术语约束，但 arXiv 标题和摘要分段仍作为互不相关的独立请求发送。最大的剩余质量损失来自论文标题、前文指代与术语语境没有进入模型，而不是静态词表条目不足。
 - 官方 HY-MT2 已提供上下文翻译、术语干预、风格约束和分隔符保留指令。本轮采用论文级有界上下文：标题携带摘要开头，摘要分段携带标题与最近前文；当前段仍是唯一允许输出的内容。
 - 不采用双候选自动评审，也不恢复“机翻后 AI 润色”。受保护标记损坏时只对该段执行一次严格本地重试，仍失败才进入 NLLB/Argos 降级链。
+
+### 已完成操作
+
+1. 为本地批量翻译增加逐项 `context/style` 元数据；HY-MT2 使用论文背景、当前段术语和学术书面语提示，NLLB/Argos 保持兼容并忽略可选背景。
+2. 标题上下文取摘要开头最多 700 字符；摘要上下文由论文标题和最近原始英文段落组成，最多 900 字符。上下文从未替换的源文构建，禁止术语数字占位符污染下一段提示。
+3. 批量去重键升级为原文、上下文和风格三元组；新增两论文相同摘要但上下文不同不得合并、完全相同语境仍可去重的回归。
+4. HY-MT2 输出增加受保护标记多重集、上下文英文泄漏、异常扩写、重复助词和重叠谓语校验；失败时使用另一固定 seed 严格重译一次。没有增加整句补丁或云端 AI 润色。
+5. 术语表升级到 `academic-en-zh-v3`，增加 `locomotion tracking -> 运动跟踪`；缓存身份升级到 v10 并加入 `paper-context-v1`、术语表和实际 HY-MT2 模型身份。
+6. Settings 与 arXiv 只更新既有 badge 为“HY-MT2 7B 上下文质量档”，不新增常驻控件、卡片或配置负担。
 
 ### 设计边界
 
@@ -22,6 +31,23 @@
 - 真实回归：RL、PINN、机器人、触觉、CBF/MPC、动力学和混合方法名样本，检查必需术语、禁用误译、上下文泄漏与受保护字面量。
 - 发布验证：完整 build、源码/安装包 Settings 与 arXiv 必要视觉检查、NSIS、SHA-256、旧包清理和隔离热预览。
 - 详细规格：`docs/specs/2026-07-17-context-aware-academic-translation-design.md`。
+
+### 当前验证
+
+- 定向单元回归：5 个文件、92 项通过，覆盖官方 prompt 组合、上下文边界、原始前文、上下文感知去重、严格重译、缓存 v10、术语 v3 和 renderer 状态。
+- 真实 7B CUDA 集成：3 项通过。六类学术语料冷启动约 5.8-7.0 秒，常驻热态同批约 1.7-1.8 秒；实际译文通过必需术语、禁用误译、方法名、标记、上下文泄漏和流畅性门禁。
+- `npm run build`：104 个测试文件通过、1 个跳过，709 项测试通过、3 项跳过；两套 TypeScript、Vite renderer 和 Electron main 全部成功，仅保留既有大 chunk 警告。
+- 源码版 Settings/arXiv 专项视觉检查通过。人工复核 `.tmp-visual-check/settings-local-translation.png` 和 `.tmp-visual-check/arxiv-search-results-1366.png`：新 badge、模型路径、三列结果、详情栏和分页均无重叠、截断或横向溢出。
+- `npm run dist` 通过：再次完成 104 个测试文件、709 项测试、两套 TypeScript、renderer/main 构建、win-unpacked 与 NSIS；仅保留既有大 chunk、缺失 package author 和 Electron Builder 重复依赖警告。
+- 安装版 Settings/arXiv 专项视觉检查通过；人工复核 `.tmp-visual-check/settings-local-translation.png` 与 `.tmp-visual-check/arxiv-search-results-1366.png`，新 badge、模型路径、三列结果和详情栏均无重叠、截断或横向溢出。
+- 最终安装包为 `dist/PDF Translation Reader Setup 0.1.37.exe`（157,128,589 bytes，149.85 MiB，SHA-256 `75FA0B8734471BD7065E0027C7BBA9C891AA5D609E9A7F90F4BEC85EB41DE8B8`），blockmap 164,202 bytes。确认新包后只删除 0.1.36 安装器与 blockmap，目前仅保留 0.1.37。
+- 已从最新 `dist/win-unpacked` 启动可见隔离热预览（PID 37120、CDP 9457、profile `.tmp-visual-check/hot-preview-0.1.37-20260717`），调试端点返回 Chrome/142.0.7444.265。
+
+### 问题台账与剩余风险
+
+- 本地 7B 仍是统计模型，严格重译只能过滤可检测的结构错误；论文特有歧义仍需保留英文原文供用户核对。质量策略继续优先通用上下文与术语约束，不扩展为不可维护的整句替换库。
+- 同一批两个 llama.cpp slot 可能产生轻微同义措辞差异；固定首译/重译 seed 已消除高频病句的随机回归，但不把措辞逐字一致作为质量目标。
+- 当前分支不是用户指定的 13 号绘图分支。发布前只检查其他工作树，不合并绘图代理改动；两个受保护的 `.superpowers/brainstorm/` 未跟踪目录必须保持不变。
 
 ## 2026-07-17 HY-MT2 本地学术翻译引擎（0.1.36）
 

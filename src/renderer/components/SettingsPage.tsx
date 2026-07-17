@@ -679,7 +679,7 @@ export function SettingsPage(props: SettingsPageProps) {
             <SettingsCard
               title="本地离线翻译"
               badge={describeLocalTranslationBadge(localTranslationStatus)}
-              description="默认优先使用 HY-MT2 7B Q4 质量档；1.8B 仅作为低显存快速档，失败时再依次回退 NLLB 与 Argos。"
+              description="默认优先使用 HY-MT2 7B Q4 上下文质量档；1.8B 仅作为低显存快速档，失败时再依次回退 NLLB 与 Argos。"
             >
               <div className="settings-summary-list">
                 <p>
@@ -969,7 +969,7 @@ export function describeLocalTranslationBadge(status: LocalTranslationStatus | n
 function describeHyMt2Tier(modelPath: string): string {
   const normalized = modelPath.toLowerCase();
   if (normalized.includes('7b')) {
-    return 'HY-MT2 7B 质量档 · ';
+    return 'HY-MT2 7B 上下文质量档 · ';
   }
   if (normalized.includes('1.8b')) {
     return 'HY-MT2 1.8B 快速档 · ';

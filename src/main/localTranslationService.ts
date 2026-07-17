@@ -29,9 +29,16 @@ export interface LocalTranslateBatchResult {
   fallbackReason?: string;
 }
 
+export interface LocalTranslationItemContext {
+  context?: string;
+  style?: 'academic-paper';
+}
+
 export interface LocalTranslateDirectionOptions {
   sourceLanguage?: LocalTranslationLanguage;
   targetLanguage?: LocalTranslationLanguage;
+  itemContext?: LocalTranslationItemContext;
+  itemContexts?: LocalTranslationItemContext[];
 }
 
 export interface LocalTranslationStatus {

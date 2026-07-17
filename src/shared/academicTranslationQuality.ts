@@ -113,6 +113,16 @@ export function prepareAcademicTranslation(
   };
 }
 
+export function splitAcademicTranslationSourceContext(
+  source: string,
+  maxSegmentLength = DEFAULT_TRANSLATION_SEGMENT_LENGTH
+): string[] {
+  return splitAcademicTranslationSegments(
+    normalizeTranslatableAcademicMarkup(source),
+    maxSegmentLength
+  );
+}
+
 export function hasSevereAcademicTranslationLengthLoss(
   source: string,
   translated: string,
