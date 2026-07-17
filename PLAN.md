@@ -28,7 +28,8 @@
 
 - 翻译规格：`docs/specs/2026-07-17-comet-mbr-academic-translation-design.md`。
 - 检索规格：`docs/specs/2026-07-17-arxiv-official-relevance-search-design.md`。
-- 两份规格确认后分别编写实施计划，再按“先检索正确性与基准、后 COMET 运行时与质量基准”的顺序执行，避免同时改动搜索排序与翻译选择造成难以归因的回归。
+- 用户已确认两份规格。检索实施计划为 `docs/superpowers/plans/2026-07-17-arxiv-official-relevance-search.md`，翻译实施计划为 `docs/superpowers/plans/2026-07-17-comet-mbr-academic-translation.md`；根据用户限制采用当前会话内联执行，不启动额外子代理。
+- 实施顺序固定为“先检索正确性与基准、后 COMET 运行时与质量基准”，避免同时改动搜索排序与翻译选择造成难以归因的回归。所有生产代码遵守先失败测试、再最小实现、再回归。
 - 当前分支 `codex/scientific-plot-axis-controls` 不是用户指定的 13 号绘图分支，不合并绘图代理改动；两个受保护的 `.superpowers/brainstorm/` 未跟踪目录保持不变。
 
 ## 2026-07-17 论文级上下文学术翻译（0.1.37）
