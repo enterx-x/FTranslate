@@ -783,6 +783,29 @@ describe('PDF text structure extraction', () => {
     expect(outline.map((block) => block.type)).toEqual(['formula', 'paragraph']);
   });
 
+  it('keeps prose definitions with PDF superscript and subscript fragments in one reader paragraph', () => {
+    const outline = buildPdfReaderPageOutline(7, [
+      item('Objective. Let dataset D = { ( o t, A t, F t: t + τ, S t: t + τ ) }, where', 313, 374.1, 245, 8.97),
+      item('h', 531, 382.5, 4, 5.4),
+      item('o t is the multimodal observation at time t, A t = { a t + ℓ }', 313, 386.1, 215, 8.97),
+      item('ℓ =1', 527, 388.9, 16, 5.4),
+      item('τ', 536, 394.4, 4, 5.4),
+      item('is the action chunk of horizon h, F t: t + τ = { f t + ℓ }', 313, 398, 220, 8.97),
+      item('ℓ =1', 532, 400.9, 16, 5.4),
+      item('τ', 540, 406.4, 4, 5.4),
+      item('future hand joint force sequence and S t: t + τ = { s t + ℓ }', 313, 410, 224, 8.97),
+      item('ℓ =1', 536, 412.8, 16, 5.4),
+      item('is the future tactile signal sequence over a prediction horizon τ.', 313, 422, 230, 8.97)
+    ]);
+
+    expect(outline).toHaveLength(1);
+    expect(outline[0].type).toBe('paragraph');
+    expect(outline[0].original).toContain('Objective. Let dataset');
+    expect(outline[0].original).toContain('is the action chunk of horizon h');
+    expect(outline[0].original).toContain('is the future tactile signal sequence');
+    expect(outline.some((block) => /^\s*(?:ℓ\s*=\s*1|[hτ])\s*$/u.test(block.original))).toBe(false);
+  });
+
   it('keeps references in the faithful reader even though analysis extraction filters them', () => {
     const items = [
       item('REFERENCES', 220, 80, 160, 14),

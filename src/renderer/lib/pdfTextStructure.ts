@@ -638,7 +638,8 @@ function buildLines<TItem extends PositionedPdfTextItem>(items: TItem[]): Array<
   sortedItems.forEach((item) => {
     const line = lines.find((candidate) => {
       const reference = candidate[0];
-      return Math.abs(reference.y - item.y) <= Math.max(4, reference.height * 0.75);
+      const candidateHeight = Math.max(...candidate.map((candidateItem) => candidateItem.height));
+      return Math.abs(reference.y - item.y) <= Math.max(4, candidateHeight * 0.75);
     });
 
     if (line) {
@@ -853,7 +854,7 @@ function classifyReaderLine(
   if (page === 1 && looksLikeReaderAffiliation(normalized)) {
     return 'paragraph';
   }
-  if (isFormulaLike(normalized)) {
+  if (isFormulaLike(normalized) && !looksLikeProseWithInlineMath(normalized)) {
     return 'formula';
   }
   if (
@@ -1087,6 +1088,11 @@ function isFormulaLike(text: string): boolean {
     return true;
   }
   return mathSymbols >= 3 && mathSymbols >= letters * 0.35;
+}
+
+function looksLikeProseWithInlineMath(text: string): boolean {
+  const proseWords = text.match(/\b[A-Za-z]{2,}\b/gu) ?? [];
+  return proseWords.length >= 4 && /^["'“”‘’(]*[A-Za-z]{2,}\b/u.test(text.trim());
 }
 
 function joinParagraphLines(lines: string[]): string {
