@@ -5,9 +5,36 @@ import {
   buildPdfCaptionAnchors,
   createMobilePdfFigureRenderer,
   detectPdfFigureRegions,
+  resolveMobilePdfFigureOrder,
   type MobilePdfFigureRegion,
   type PdfPaintedImageBounds
 } from './mobilePdfFigures';
+
+describe('resolveMobilePdfFigureOrder', () => {
+  it('rebases a stale cached figure order directly before its current caption', () => {
+    expect(resolveMobilePdfFigureOrder({
+      kind: 'figure',
+      hasTextCaption: true,
+      captionHash: 'caption-1',
+      order: 7.75
+    }, new Map([['caption-1', 4]]))).toBe(3.75);
+  });
+
+  it('places a table after its caption and falls back when no caption block survives', () => {
+    expect(resolveMobilePdfFigureOrder({
+      kind: 'table',
+      hasTextCaption: true,
+      captionHash: 'table-i',
+      order: 2.25
+    }, new Map([['table-i', 9]]))).toBe(9.25);
+    expect(resolveMobilePdfFigureOrder({
+      kind: 'figure',
+      hasTextCaption: true,
+      captionHash: 'missing',
+      order: 5.75
+    }, new Map())).toBe(5.75);
+  });
+});
 
 const originalDocument = globalThis.document;
 

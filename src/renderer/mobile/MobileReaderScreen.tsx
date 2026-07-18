@@ -9,6 +9,7 @@ import {
   createMobilePdfFigureRenderer,
   extractPdfFigureRegions,
   MOBILE_PDF_FIGURE_VERSION,
+  resolveMobilePdfFigureOrder,
   type MobilePdfFigureRegion,
   type MobilePdfFigureRenderer
 } from './mobilePdfFigures';
@@ -179,10 +180,20 @@ export function MobileReaderScreen({
       page: block.page,
       order: translationByHash.get(block.sourceHash)?.order ?? (block.page - 1) * 1000 + index
     }));
+    const currentBlockOrders = new Map(readableBlocks.map((block, index) => [
+      block.sourceHash,
+      translationByHash.get(block.sourceHash)?.order ?? (block.page - 1) * 1000 + index
+    ]));
     const figureItems: MobileReaderFeedItem[] = figureEntries.flatMap((entry) => {
       const region = figureEntryToRegion(entry);
       return region
-        ? [{ kind: 'figure', entry, region, page: entry.page, order: entry.order ?? region.order }]
+        ? [{
+            kind: 'figure',
+            entry,
+            region,
+            page: entry.page,
+            order: resolveMobilePdfFigureOrder(region, currentBlockOrders)
+          }]
         : [];
     });
     return [...textItems, ...figureItems].sort((left, right) => left.order - right.order || left.page - right.page);

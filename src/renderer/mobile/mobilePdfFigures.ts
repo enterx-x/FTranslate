@@ -44,6 +44,17 @@ export interface MobilePdfFigureRegion {
   hiddenTextHashes: string[];
 }
 
+export function resolveMobilePdfFigureOrder(
+  region: Pick<MobilePdfFigureRegion, 'kind' | 'hasTextCaption' | 'captionHash' | 'order'>,
+  captionOrders: ReadonlyMap<string, number>
+): number {
+  const captionOrder = region.hasTextCaption ? captionOrders.get(region.captionHash) : undefined;
+  if (captionOrder === undefined || !Number.isFinite(captionOrder)) {
+    return region.order;
+  }
+  return captionOrder + (region.kind === 'table' ? 0.25 : -0.25);
+}
+
 export function createMobileFigureEntry(region: MobilePdfFigureRegion): MobileTranslationEntry {
   return {
     sourceHash: region.id,

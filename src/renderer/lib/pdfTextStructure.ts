@@ -168,9 +168,11 @@ export function buildPdfReaderPageOutline(page: number, items: PositionedPdfText
     if (inlineSection) {
       currentSection = inlineSection.section;
     }
-    if (containsReadableText(original)) {
-      blocks.push(createBlock(page, 'paragraph', section, original, getLinesBounds(currentParagraph)));
-    }
+    splitReaderParagraphText(original).forEach((paragraph) => {
+      if (containsReadableText(paragraph)) {
+        blocks.push(createBlock(page, 'paragraph', section, paragraph, getLinesBounds(currentParagraph)));
+      }
+    });
     currentParagraph = [];
   }
 
@@ -211,7 +213,7 @@ export function buildPdfReaderPageOutline(page: number, items: PositionedPdfText
         Math.abs(line.y - previousLine.y) > paragraphGapThreshold ||
         Math.abs(line.x - previousLine.x) > COLUMN_SPLIT_THRESHOLD / 2 ||
         hasSignificantReaderFontChange(previousLine, line) ||
-        startsIndentedParagraphAfterSentence(previousLine, line))
+        startsNewReaderParagraph(currentParagraph, line))
     ) {
       flushParagraph();
     }
@@ -272,8 +274,11 @@ function mergeReaderBlockContinuations(blocks: ExtractedPdfBlock[]): ExtractedPd
       !looksLikeReaderAffiliation(previous.original) &&
       !looksLikeReaderAffiliation(block.original) &&
       !endsWithSentenceBoundary(previous.original) &&
-      areReaderParagraphBlocksContiguous(previous, block);
-    if (previous && (mergeCaption || mergeParagraph)) {
+      (areReaderParagraphBlocksContiguous(previous, block) || isLikelyReaderProseContinuation(previous, block));
+    const mergeHeading = previous?.type === 'heading' && block.type === 'paragraph' &&
+      /[-\u00ad\u2010-\u2015]$/u.test(previous.original.trim()) &&
+      countWords(block.original) <= 16;
+    if (previous && (mergeCaption || mergeParagraph || mergeHeading)) {
       merged[merged.length - 1] = createBlock(
         previous.page,
         previous.type,
@@ -286,6 +291,14 @@ function mergeReaderBlockContinuations(blocks: ExtractedPdfBlock[]): ExtractedPd
     merged.push(block);
   }
   return merged;
+}
+
+function isLikelyReaderProseContinuation(previous: ExtractedPdfBlock, next: ExtractedPdfBlock): boolean {
+  const previousText = previous.original.trim();
+  return startsWithLowercaseContinuation(next.original) ||
+    /[-\u00ad\u2010-\u2015]$/u.test(previousText) ||
+    /\b(?:fig|eq|sec)\.$/iu.test(previousText) ||
+    /\b(?:a|an|and|as|at|between|by|for|from|in|of|on|or|the|to|with)\s*$/iu.test(previousText);
 }
 
 function areReaderBlocksVerticallyAdjacent(previous: ExtractedPdfBlock, next: ExtractedPdfBlock): boolean {
@@ -306,11 +319,12 @@ function areReaderParagraphBlocksContiguous(previous: ExtractedPdfBlock, next: E
   }
   const pageWidth = previous.bounds.pageWidth ?? next.bounds.pageWidth ?? 0;
   const pageHeight = previous.bounds.pageHeight ?? next.bounds.pageHeight ?? 0;
+  const previousBottom = previous.bounds.y + previous.bounds.height;
   return pageWidth > 0 && pageHeight > 0 &&
     previous.bounds.x + previous.bounds.width / 2 < pageWidth / 2 &&
     next.bounds.x + next.bounds.width / 2 > pageWidth / 2 &&
-    previous.bounds.y > pageHeight * 0.5 &&
-    next.bounds.y < pageHeight * 0.5;
+    previousBottom > pageHeight * 0.68 &&
+    next.bounds.y < previousBottom - Math.max(8, next.bounds.height * 0.5);
 }
 
 function isPositionedPageSidebarItem(item: PositionedPdfTextItem): boolean {
@@ -459,11 +473,89 @@ function addSectionGroupingMetadata(blocks: ExtractedPdfBlock[]): ExtractedPdfBl
 }
 
 function endsWithSentenceBoundary(text: string): boolean {
-  return /[.!?。！？][)"'\]]*$/u.test(text.trim());
+  const normalized = text.trim();
+  if (/\b(?:fig|eq|sec|dr|prof)\.[)"'\]]*$/iu.test(normalized)) {
+    return false;
+  }
+  return /[.!?。！？][)"'\]]*$/u.test(normalized);
 }
 
 function startsIndentedParagraphAfterSentence(previousLine: TextLine, nextLine: TextLine): boolean {
   return nextLine.x - previousLine.x > 6 && endsWithSentenceBoundary(previousLine.text);
+}
+
+function startsNewReaderParagraph(currentParagraph: TextLine[], nextLine: TextLine): boolean {
+  const previousLine = currentParagraph[currentParagraph.length - 1];
+  if (!previousLine) {
+    return false;
+  }
+  const nextText = nextLine.text.trim();
+  if (
+    endsWithSentenceBoundary(previousLine.text) &&
+    (/^\[\d{1,4}\]\s/u.test(nextText) || /^(?:[•●▪◦]|\(?[a-z]\)|\d+[.)])\s+/iu.test(nextText))
+  ) {
+    return true;
+  }
+  if (looksLikeRunInAcademicHeadingStart(nextText)) {
+    return true;
+  }
+  const paragraphLeft = Math.min(...currentParagraph.map((line) => line.x));
+  return nextLine.x - paragraphLeft > 6 && endsWithSentenceBoundary(previousLine.text);
+}
+
+function looksLikeRunInAcademicHeadingStart(text: string): boolean {
+  const match = text.match(/^([^.!?]{2,72}\.)\s+(.+)$/u);
+  if (!match || countWords(match[2]) < 5) {
+    return false;
+  }
+  const words = match[1].slice(0, -1).trim().split(/\s+/u);
+  if (words.length === 0 || words.length > 8) {
+    return false;
+  }
+  if (/^(?:fig|eq|sec|table|dr|prof)\.?$/iu.test(words[0])) {
+    return false;
+  }
+  const lowercaseConnectors = new Set(['a', 'an', 'and', 'as', 'at', 'for', 'from', 'in', 'of', 'on', 'or', 'the', 'to', 'with']);
+  const titleCasePhrase = words.every((word) => {
+    const cleaned = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}/-]+$/gu, '');
+    if (!cleaned) {
+      return true;
+    }
+    if (lowercaseConnectors.has(cleaned.toLowerCase())) {
+      return cleaned === cleaned.toLowerCase();
+    }
+    return cleaned.split(/[/-]/u).every((part) => !part || /^\p{Lu}/u.test(part) || /^[A-Z\d]+$/u.test(part));
+  });
+  if (titleCasePhrase && words.length >= 2) {
+    return true;
+  }
+  const normalizedWords = words.map((word) => word.replace(/[^\p{L}]/gu, '').toLowerCase()).filter(Boolean);
+  const headingNouns = new Set([
+    'analysis', 'architecture', 'baselines', 'decomposition', 'details', 'encoder', 'evaluation',
+    'experts', 'loss', 'metrics', 'objective', 'objectives', 'policy', 'protocol', 'results',
+    'setup', 'tokenizers', 'training', 'trunk'
+  ]);
+  const sentenceSignals = new Set(['are', 'build', 'develop', 'has', 'have', 'is', 'provide', 'provides', 'show', 'shows', 'this', 'these', 'use', 'uses', 'was', 'we', 'were']);
+  return normalizedWords.length <= 4 &&
+    normalizedWords.some((word) => headingNouns.has(word)) &&
+    !normalizedWords.some((word) => sentenceSignals.has(word));
+}
+
+function splitReaderParagraphText(text: string): string[] {
+  const boundaries = [...text.matchAll(/[.!?。！？][)"'\]]*\s+/gu)]
+    .map((match) => (match.index ?? 0) + match[0].length)
+    .filter((index) => index > 0 && looksLikeRunInAcademicHeadingStart(text.slice(index)));
+  if (boundaries.length === 0) {
+    return [text];
+  }
+  const paragraphs: string[] = [];
+  let start = 0;
+  for (const boundary of boundaries) {
+    paragraphs.push(text.slice(start, boundary).trim());
+    start = boundary;
+  }
+  paragraphs.push(text.slice(start).trim());
+  return paragraphs.filter(Boolean);
 }
 
 function startsWithLowercaseContinuation(text: string): boolean {

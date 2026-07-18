@@ -659,6 +659,17 @@ describe('PDF text structure extraction', () => {
     expect(outline[0].original).toContain('as shown in Fig. 2. This result');
   });
 
+  it('does not treat a trailing Fig. abbreviation as the end of a paragraph', () => {
+    const outline = buildPdfReaderPageOutline(9, [
+      item('Results and analysis. Fig.', 55, 100, 245, 9),
+      item('6 summarizes the main results across all five tasks.', 380, 320, 178, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'Results and analysis. Fig. 6 summarizes the main results across all five tasks.'
+    ]);
+  });
+
   it('joins a true wrapped figure caption after a connective word', () => {
     const outline = buildPdfReaderPageOutline(4, [
       item('Fig. 7: Graph of the Relationship Between Actual Weight and', 312, 250, 251, 9),
@@ -724,6 +735,17 @@ describe('PDF text structure extraction', () => {
     ]);
   });
 
+  it('repairs a hyphenated wrapped heading even after a layout break', () => {
+    const outline = buildPdfReaderPageOutline(9, [
+      item('B. How does HTD perform on real-', 55, 100, 245, 12),
+      item('world versatile humanoid manipulation?', 380, 320, 178, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'heading').map((block) => block.original)).toEqual([
+      'B. How does HTD perform on real-world versatile humanoid manipulation?'
+    ]);
+  });
+
   it('joins a wrapped all-caps major section heading without a connective word', () => {
     const outline = buildPdfReaderPageOutline(2, [
       item('III. VISUAL-TACTILE SOFT OBJECT MANIPULATION', 65, 80, 245, 12),
@@ -772,6 +794,116 @@ describe('PDF text structure extraction', () => {
     expect(buildPdfReaderPageOutline(18, items).map((block) => block.original)).toEqual([
       'REFERENCES',
       '[36] Huiwon Jang, Sihyun Yu, Heeseung Kwon, Hojin Jeon, Younggyo Seo, and Jinwoo Shin. ContextVLA: Vision-language-action model with amortized multi-frame context.'
+    ]);
+  });
+
+  it('uses the paragraph left edge to detect a new indented paragraph', () => {
+    const outline = buildPdfReaderPageOutline(2, [
+      item('The first paragraph begins at the normal column edge and continues', 55, 100, 245, 9),
+      item('on a slightly indented final line.', 63, 114, 237, 9),
+      item('A second paragraph starts at the same visual indentation.', 63, 128, 237, 9),
+      item('Its wrapped continuation returns to the normal column edge.', 55, 142, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'The first paragraph begins at the normal column edge and continues on a slightly indented final line.',
+      'A second paragraph starts at the same visual indentation. Its wrapped continuation returns to the normal column edge.'
+    ]);
+  });
+
+  it('keeps a run-in academic subheading at the start of a new paragraph', () => {
+    const outline = buildPdfReaderPageOutline(6, [
+      item('The architecture shares representations across all sensing modalities.', 55, 100, 245, 9),
+      item('Modality Tokenizers. Each tokenizer maps its input into a shared latent space', 55, 114, 245, 9),
+      item('before the transformer trunk processes the resulting sequence.', 55, 128, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'The architecture shares representations across all sensing modalities.',
+      'Modality Tokenizers. Each tokenizer maps its input into a shared latent space before the transformer trunk processes the resulting sequence.'
+    ]);
+  });
+
+  it('splits an embedded run-in subheading when PDF exposes two paragraphs as one line', () => {
+    const outline = buildPdfReaderPageOutline(6, [
+      item(
+        'The shared trunk fuses all modality tokens. Per-Finger/Region Tactile Encoder. For tactile inputs, each hand region is encoded independently before aggregation.',
+        55,
+        100,
+        245,
+        9
+      )
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'The shared trunk fuses all modality tokens.',
+      'Per-Finger/Region Tactile Encoder. For tactile inputs, each hand region is encoded independently before aggregation.'
+    ]);
+  });
+
+  it('does not split an ordinary multi-sentence paragraph at sentence boundaries', () => {
+    const outline = buildPdfReaderPageOutline(6, [
+      item('This model uses a stable encoder. It supports contact-aware control across tasks.', 55, 100, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'This model uses a stable encoder. It supports contact-aware control across tasks.'
+    ]);
+  });
+
+  it('rejoins one paragraph across columns below a full-width first-page figure', () => {
+    const pageItem = (...args: Parameters<typeof item>): PositionedPdfTextItem => ({
+      ...item(...args),
+      pageWidth: 612,
+      pageHeight: 792
+    });
+    const outline = buildPdfReaderPageOutline(1, [
+      pageItem('Humanoid Touch Dreaming', 180, 50, 250, 18),
+      pageItem('Abstract—Humanoid robots require contact-aware control and a stable whole-body', 55, 620, 245, 9),
+      pageItem('execution backbone for complex manipulation', 55, 634, 245, 9),
+      pageItem('that transfers across diverse real-world tasks and sensing conditions.', 313, 620, 245, 9),
+      pageItem('The next independent paragraph starts after the completed abstract.', 313, 650, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'Humanoid robots require contact-aware control and a stable whole-body execution backbone for complex manipulation that transfers across diverse real-world tasks and sensing conditions.',
+      'The next independent paragraph starts after the completed abstract.'
+    ]);
+  });
+
+  it('rejoins lowercase prose after an irregular PDF layout break', () => {
+    const outline = buildPdfReaderPageOutline(4, [
+      item('The tactile encoder produces a compact representation that is consumed by', 55, 100, 245, 9),
+      item('the shared transformer before action decoding.', 380, 320, 178, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'The tactile encoder produces a compact representation that is consumed by the shared transformer before action decoding.'
+    ]);
+  });
+
+  it('rejoins a capitalized continuation when the preceding fragment ends with a connector', () => {
+    const outline = buildPdfReaderPageOutline(2, [
+      item('• We introduce Humanoid Transformer with', 55, 100, 245, 9),
+      item('Touch Dreaming for contact-aware policy learning.', 380, 320, 178, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      '• We introduce Humanoid Transformer with Touch Dreaming for contact-aware policy learning.'
+    ]);
+  });
+
+  it('starts each numbered reference as a separate reader paragraph', () => {
+    const outline = buildPdfReaderPageOutline(12, [
+      item('[20] A. Author. First paper title.', 55, 100, 245, 9),
+      item('Journal of Robotics, 2025.', 55, 114, 245, 9),
+      item('[21] B. Author. Second paper title.', 55, 128, 245, 9),
+      item('International Conference on Robotics, 2026.', 55, 142, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      '[20] A. Author. First paper title. Journal of Robotics, 2025.',
+      '[21] B. Author. Second paper title. International Conference on Robotics, 2026.'
     ]);
   });
 
