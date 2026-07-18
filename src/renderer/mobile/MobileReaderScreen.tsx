@@ -6,7 +6,8 @@ import {
   MOBILE_AI_PAGE_REFLOW_VERSION,
   needsAcademicPageAiReview,
   reflowAndTranslateAcademicPage,
-  translateAcademicText
+  translateAcademicText,
+  type AcademicTranslationContext
 } from './mobileTranslation';
 import { buildCachedLocalOcrBlocks, buildLocalOcrBlocks } from './mobileLocalOcr';
 import {
@@ -20,6 +21,7 @@ import {
   type MobilePdfFigureRenderer
 } from './mobilePdfFigures';
 import type {
+  MobileAcademicTerm,
   MobilePaper,
   MobileTranslationEntry,
   MobileTranslationSession
@@ -59,6 +61,61 @@ interface SelectionPopoverState {
   translation?: string;
   loading?: boolean;
   error?: string;
+}
+
+function buildPageAcademicTranslationContext(
+  documentTitle: string,
+  entries: MobileTranslationEntry[],
+  page: number,
+  currentPageText: string
+): AcademicTranslationContext {
+  const previousEntries = entries
+    .filter((entry) => (
+      entry.page < page &&
+      entry.origin !== 'figure' &&
+      entry.original.trim() &&
+      entry.translation.trim()
+    ))
+    .sort((left, right) => (
+      left.page - right.page ||
+      (left.order ?? left.page * 1000) - (right.order ?? right.page * 1000)
+    ));
+  const introducedTerms: MobileAcademicTerm[] = [];
+  const seenTerms = new Set<string>();
+  for (const entry of previousEntries) {
+    for (const term of entry.introducedTerms ?? []) {
+      const key = term.english.trim().toLocaleLowerCase();
+      if (!key || seenTerms.has(key)) {
+        continue;
+      }
+      seenTerms.add(key);
+      introducedTerms.push(term);
+    }
+  }
+  const normalizedPageText = currentPageText.toLocaleLowerCase().replace(/\s+/gu, ' ');
+  const prioritizedTerms: MobileAcademicTerm[] = [];
+  const prioritizedKeys = new Set<string>();
+  const appendTerm = (term: MobileAcademicTerm): void => {
+    const key = term.english.trim().toLocaleLowerCase();
+    if (!key || prioritizedKeys.has(key) || prioritizedTerms.length >= 80) {
+      return;
+    }
+    prioritizedKeys.add(key);
+    prioritizedTerms.push(term);
+  };
+  introducedTerms
+    .filter((term) => normalizedPageText.includes(term.english.toLocaleLowerCase()))
+    .forEach(appendTerm);
+  introducedTerms.slice().reverse().forEach(appendTerm);
+  return {
+    documentTitle,
+    introducedTerms: prioritizedTerms,
+    previousBilingualParagraphs: previousEntries.slice(-4).map((entry) => ({
+      original: entry.original,
+      translation: entry.translation,
+      ...(entry.blockType ? { type: entry.blockType } : {})
+    }))
+  };
 }
 
 export function MobileReaderScreen({
@@ -319,19 +376,20 @@ export function MobileReaderScreen({
   async function translateBlock(
     block: ExtractedPdfBlock,
     session: MobileTranslationSession,
-    updateStatus = true
-  ): Promise<boolean> {
+    updateStatus = true,
+    context: AcademicTranslationContext = {}
+  ): Promise<MobileTranslationEntry | null> {
     if (!session.apiKey.trim()) {
-      return false;
+      return null;
     }
     setTranslatingHash(block.sourceHash);
     if (updateStatus) {
       setStatus(`正在翻译第 ${block.page} 页段落…`);
     }
     try {
-      const translation = await translateAcademicText(block.original, session);
+      const translation = await translateAcademicText(block.original, session, context);
       const cached = translationByHash.get(block.sourceHash);
-      await onSaveTranslation({
+      const entry: MobileTranslationEntry = {
         sourceHash: block.sourceHash,
         page: block.page,
         original: block.original,
@@ -344,17 +402,19 @@ export function MobileReaderScreen({
         ...(cached?.extractionWarning ? { extractionWarning: cached.extractionWarning } : {}),
         ...(Number.isFinite(cached?.order) ? { order: cached?.order } : {}),
         ...(cached?.blockType ? { blockType: cached.blockType } : {}),
-        ...(Number.isFinite(cached?.aiReflowVersion) ? { aiReflowVersion: cached?.aiReflowVersion } : {})
-      });
+        ...(Number.isFinite(cached?.aiReflowVersion) ? { aiReflowVersion: cached?.aiReflowVersion } : {}),
+        ...(cached?.introducedTerms?.length ? { introducedTerms: cached.introducedTerms } : {})
+      };
+      await onSaveTranslation(entry);
       if (updateStatus) {
         setStatus('译文已直接写在对应英文段落下方，并缓存在本机。');
       }
-      return true;
+      return entry;
     } catch (error) {
       if (updateStatus) {
         setStatus(`翻译失败：${formatError(error)}`);
       }
-      return false;
+      return null;
     } finally {
       setTranslatingHash(null);
     }
@@ -363,18 +423,21 @@ export function MobileReaderScreen({
   async function reflowAndTranslatePage(
     page: number,
     pageBlocks: ExtractedPdfBlock[],
-    session: MobileTranslationSession
-  ): Promise<number> {
+    session: MobileTranslationSession,
+    context: AcademicTranslationContext
+  ): Promise<MobileTranslationEntry[]> {
     setTranslatingHash(pageBlocks[0]?.sourceHash ?? `ocr-page-${page}`);
     try {
-      const bilingualParagraphs = await reflowAndTranslateAcademicPage(
+      const result = await reflowAndTranslateAcademicPage(
         pageBlocks.map((block, index) => ({
           index,
           type: block.type,
           text: block.original
         })),
-        session
+        session,
+        context
       );
+      const bilingualParagraphs = result.paragraphs;
       const rebuiltBlocks = buildLocalOcrBlocks(page, bilingualParagraphs.map((paragraph) => ({
         original: paragraph.original,
         type: paragraph.type
@@ -404,10 +467,13 @@ export function MobileReaderScreen({
         ...(extractionWarning ? { extractionWarning } : {}),
         order: item.order,
         blockType: item.block.type,
-        aiReflowVersion: MOBILE_AI_PAGE_REFLOW_VERSION
+        aiReflowVersion: MOBILE_AI_PAGE_REFLOW_VERSION,
+        ...(index === 0 && result.terminology.length
+          ? { introducedTerms: result.terminology }
+          : {})
       }));
       await onReplacePageEntries(page, entries);
-      return entries.length;
+      return entries;
     } finally {
       setTranslatingHash(null);
     }
@@ -443,6 +509,9 @@ export function MobileReaderScreen({
     let failedReason = '';
     let aiComparedPages = 0;
     let preservedLocalPages = 0;
+    let coherenceEntries = Array.from(translationByHash.values()).filter((entry) => (
+      entry.translation.trim() && isTranslationEntryCurrent(entry, session)
+    ));
     const groupedTargets = new Map<number, ExtractedPdfBlock[]>();
     for (const block of targets) {
       groupedTargets.set(block.page, [...(groupedTargets.get(block.page) ?? []), block]);
@@ -453,9 +522,20 @@ export function MobileReaderScreen({
         break;
       }
       const sourcePageBlocks = readableBlocks.filter((block) => block.page === page);
-      setStatus(`正在让 AI 对照逐段结果与连续全文，检查并翻译第 ${page} 页（${completedPages + 1} / ${pageTargets.length} 页）…`);
+      const academicContext = buildPageAcademicTranslationContext(
+        paper.title,
+        coherenceEntries,
+        page,
+        sourcePageBlocks.map((block) => block.original).join(' ')
+      );
+      setStatus(`正在让 AI 对照逐段结果、连续全文和前文术语，检查并翻译第 ${page} 页（${completedPages + 1} / ${pageTargets.length} 页）…`);
       try {
-        succeeded += await reflowAndTranslatePage(page, sourcePageBlocks, session);
+        const entries = await reflowAndTranslatePage(page, sourcePageBlocks, session, academicContext);
+        succeeded += entries.length;
+        coherenceEntries = [
+          ...coherenceEntries.filter((entry) => entry.page !== page),
+          ...entries
+        ];
         aiComparedPages += 1;
       } catch (error) {
         preservedLocalPages += 1;
@@ -465,8 +545,13 @@ export function MobileReaderScreen({
           if (stopTranslationRef.current) {
             break;
           }
-          if (await translateBlock(block, session, false)) {
+          const entry = await translateBlock(block, session, false, academicContext);
+          if (entry) {
             succeeded += 1;
+            coherenceEntries = [
+              ...coherenceEntries.filter((candidate) => candidate.sourceHash !== entry.sourceHash),
+              entry
+            ];
           } else {
             failed += 1;
             failedPage = page;
@@ -648,7 +733,7 @@ export function MobileReaderScreen({
             {!extracting && !needsLocalOcr && readableBlocks.length > 0 && translatedCount === 0 && staleTranslationCount === 0 ? (
               <div className="mobile-bilingual-intro">
                 <strong>全文原文已提取</strong>
-                <p>{extractionSource.detail} 结果已逐页保存在本机。点击“翻译全文”后，每页会把逐段结果和连续全文一起交给 AI 对照；只整理异常边界并生成中文。</p>
+                <p>{extractionSource.detail} 结果已逐页保存在本机。点击“翻译全文”后，每页会把逐段结果、连续全文、前文术语与相邻双语上下文一起交给 AI；只整理异常边界，并保持科研术语和论述衔接一致。</p>
                 <button type="button" onClick={() => void handleTranslateAll()}>开始全文翻译</button>
               </div>
             ) : null}

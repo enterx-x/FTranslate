@@ -1,5 +1,35 @@
 # PLAN.md
 
+## 2026-07-18：科研术语账本与全文连贯翻译
+
+### 当前结论
+
+- 仅增强“准确翻译”提示词不能保证全文连贯，因为移动端按页调用模型，后页看不到前页已经确定的术语译法、专名首次出现位置和指代上下文。
+- 本轮把翻译闭环改为可持续的跨页上下文：每页仍只请求一次，但同时携带论文标题、前 4 个双语段落和之前页面累积的专有名词账本；AI 返回当前页双语段落及新术语，客户端逐页缓存并传给下一页。
+
+### 已完成操作
+
+- 增强整页与逐段兜底提示词：普通科研术语必须使用领域通行译名并保持一致；方法、模型、数据集、系统、算法、模块、软件、自定义概念和缩写等专有英文名词，全文第一次使用 `English（中文释义）`，之后只保留完全相同的 `English`。
+- 新增 `documentContext.documentTitle / introducedTerms / previousBilingualParagraphs`。前文双语段落只用于术语、语气、逻辑关系和指代衔接，提示词明确禁止重复输出前文。
+- 每页严格 JSON 响应新增 `terminology`。只有英文名确实存在于当前页原文的术语才会进入账本；客户端后处理还会删除已介绍术语的重复中文括注，并补齐当前页首次术语的标准格式。
+- `MobileTranslationEntry.introducedTerms` 随译文持久化，刷新后可恢复跨页术语账本；`MOBILE_AI_PAGE_REFLOW_VERSION` 提升到 `2`，已有 v1 译文会进入一次重新对照，而不会删除 PDF、提取结果或 API 配置。
+
+### 验证记录
+
+- 术语提示词、上下文载荷、旧版本迁移、JSON 术语解析、首次/后续格式后处理和持久化解析的定向测试通过；全量 `npm run dist` 为 87 个测试文件、574 项测试通过，TypeScript、移动/桌面 renderer、Electron 构建和 NSIS 打包通过。
+- `npm run visual:check:mobile` 通过并验证真实跨页请求：第 1 页显示 `Vision Safety Policy（视觉安全策略）`，第 2、3 页只显示 `Vision Safety Policy`；后两页请求均收到前页术语账本和双语上下文，刷新后 6 个双语块、术语格式和 API Key 均恢复。
+- 人工复核 `.tmp-mobile-visual-check/08b-reader-scanned-bilingual-390x844.png`：390×844 下英文专名、中文括注、正文、顶部工具栏和底部状态栏无横向溢出或关键内容重叠。
+- `$env:VISUAL_CHECK_PORT='9343'; npm run visual:check` 仍只被既有 Presentation 质量门拦截：第 2/7/8 页缺少页码来源，第 3/4 页中文 bullet 数不足 2；与本轮手机翻译上下文无关。
+- `npm run dist` 通过；`dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,361,639 字节，SHA-256 为 `59C355AABBCF6D4EEB2B01D1C6B051F1FAFF92AF6012EAFCF6852DAAB06725DB`。`npm audit --omit=dev --json` 显示生产依赖 0 个漏洞。
+- Vercel 生产部署 `dpl_4wEhPziUNjw6EBNnR1nqyxWuLXDq` 已绑定 `https://ftranslate-mobile.vercel.app`；缓存穿透请求返回 HTTP 200，入口资源为 `assets/index-rEkEA5z0.js`。固定生产地址的应用链路视觉回归通过，覆盖 PDF 导入、原图定位、逐页翻译、跨页术语首次/后续格式、API Key/译文刷新恢复、改名标签和 IndexedDB 删除。验证期间实时 `/api/arxiv` 上游返回 HTTP 503，因此本轮线上回归明确跳过实时检索；本地完整回归已通过，但不把当前 arXiv 源站状态伪报为成功。
+- 生产视觉回归在清除临时 legacy 论文时暴露 localStorage 删除与应用规范化写回的竞态；测试脚本改为在同一个浏览器任务内写入空数组并立即 `location.reload()`，不给旧页面异步回写窗口。该修改只提高测试隔离稳定性，不改变用户论文清理逻辑。
+
+### 剩余风险
+
+- 上下文最多携带 80 个术语和前 4 个双语段落，以控制 DeepSeek 请求长度；超过上限时先保留当前页英文原文确实再次出现的旧术语，再按最近使用顺序补齐，避免关键译法因固定截断丢失。
+- 专名识别仍由语言模型结合论文语境判断，客户端只能验证英文名确实出现在原文并约束显示格式，不能在没有领域词典的情况下证明每个中文释义都是唯一标准译名。
+- 整页 AI 安全门失败后会退回逐段翻译；该页仍能参考前文上下文，但无法像成功的整页 JSON 响应一样可靠地产生新的结构化术语账本。
+
 ## 2026-07-18：逐段 + 连续全文双视图 AI 兜底
 
 ### 当前结论

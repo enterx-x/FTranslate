@@ -52,6 +52,11 @@ export interface MobileFigureBounds {
   pageHeight: number;
 }
 
+export interface MobileAcademicTerm {
+  english: string;
+  chinese: string;
+}
+
 export interface MobileTranslationEntry {
   sourceHash: string;
   page: number;
@@ -64,6 +69,7 @@ export interface MobileTranslationEntry {
   extractionMode?: 'structured' | 'compatibility' | 'ocr';
   extractionWarning?: string;
   aiReflowVersion?: number;
+  introducedTerms?: MobileAcademicTerm[];
   order?: number;
   blockType?: 'heading' | 'paragraph' | 'formula' | 'caption';
   figureVersion?: number;
@@ -473,7 +479,19 @@ function isTranslationEntry(value: unknown): value is MobileTranslationEntry {
       entry.extractionMode === 'ocr'
     ) &&
     (entry.extractionWarning === undefined || typeof entry.extractionWarning === 'string') &&
-    (entry.aiReflowVersion === undefined || typeof entry.aiReflowVersion === 'number')
+    (entry.aiReflowVersion === undefined || typeof entry.aiReflowVersion === 'number') &&
+    (
+      entry.introducedTerms === undefined ||
+      (
+        Array.isArray(entry.introducedTerms) &&
+        entry.introducedTerms.every((term) => (
+          Boolean(term) &&
+          typeof term === 'object' &&
+          typeof term.english === 'string' &&
+          typeof term.chinese === 'string'
+        ))
+      )
+    )
   );
 }
 

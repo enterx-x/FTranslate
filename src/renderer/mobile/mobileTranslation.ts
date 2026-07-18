@@ -1,13 +1,17 @@
 import { CapacitorHttp } from '@capacitor/core';
 import type { ExtractedBlockType } from '../lib/pdfTextStructure';
-import type { MobileTranslationEntry, MobileTranslationSession } from './mobileTypes';
+import type {
+  MobileAcademicTerm,
+  MobileTranslationEntry,
+  MobileTranslationSession
+} from './mobileTypes';
 
 interface ChatCompletionPayload {
   choices?: Array<{ message?: { content?: string } }>;
   error?: { message?: string };
 }
 
-export const MOBILE_AI_PAGE_REFLOW_VERSION = 1;
+export const MOBILE_AI_PAGE_REFLOW_VERSION = 2;
 
 export function needsAcademicPageAiReview(
   entry: Pick<MobileTranslationEntry, 'aiReflowVersion'> | undefined
@@ -27,25 +31,56 @@ export interface AcademicPageReflowParagraph {
   type: ExtractedBlockType;
 }
 
+export interface AcademicBilingualContextParagraph {
+  original: string;
+  translation: string;
+  type?: ExtractedBlockType;
+}
+
+export interface AcademicTranslationContext {
+  documentTitle?: string;
+  introducedTerms?: MobileAcademicTerm[];
+  previousBilingualParagraphs?: AcademicBilingualContextParagraph[];
+}
+
+export interface AcademicPageReflowResult {
+  paragraphs: AcademicPageReflowParagraph[];
+  terminology: MobileAcademicTerm[];
+}
+
 export function buildTranslationEndpoint(baseURL: string): string {
   const clean = baseURL.trim().replace(/\/+$/u, '');
   return clean.endsWith('/chat/completions') ? clean : `${clean}/chat/completions`;
 }
 
-export function buildAcademicTranslationPrompt(text: string): Array<{ role: 'system' | 'user'; content: string }> {
+export function buildAcademicTranslationPrompt(
+  text: string,
+  context: AcademicTranslationContext = {}
+): Array<{ role: 'system' | 'user'; content: string }> {
+  const documentContext = normalizeAcademicTranslationContext(context);
   return [
     {
       role: 'system',
-      content:
-        '你是科研论文翻译助手。将英文准确翻译为简体中文，保留公式、变量、引用编号、Figure/Table 编号、DOI 和专有名词。只输出译文，不添加解释。'
+      content: [
+        '你是严谨的科研论文翻译助手。将英文准确翻译为简体中文，采用该研究领域通行的学术术语，保持论证语气、逻辑关系和前后指代连贯。',
+        '保留公式、变量、引用编号、Figure/Table 编号、DOI、大小写和原有缩写，不得口语化、扩写或改变作者结论。',
+        '方法名、模型名、数据集名、系统名、算法名、模块名、软件名、作者自定义概念及缩写等专有英文名词，整篇第一次出现时写成 English（中文释义）；之后只使用完全相同的 English，不再重复括号中文。',
+        'documentContext.introducedTerms 中的词已经在前文介绍过，当前译文必须只保留其 English；普通科研概念则使用规范简体中文译名，并保持全文一致。',
+        'documentContext.previousBilingualParagraphs 仅用于衔接术语、语气和指代，禁止重复输出其中内容。只输出当前 text 的译文，不添加解释。'
+      ].join('')
     },
-    { role: 'user', content: text.trim() }
+    {
+      role: 'user',
+      content: JSON.stringify({ text: text.trim(), documentContext })
+    }
   ];
 }
 
 export function buildAcademicPageReflowPrompt(
-  blocks: AcademicPageReflowInput[]
+  blocks: AcademicPageReflowInput[],
+  context: AcademicTranslationContext = {}
 ): Array<{ role: 'system' | 'user'; content: string }> {
+  const documentContext = normalizeAcademicTranslationContext(context);
   return [
     {
       role: 'system',
@@ -56,8 +91,11 @@ export function buildAcademicPageReflowPrompt(
         '先恢复正确阅读顺序和自然段：合并同一段的误拆片段，拆开被错误粘连的不同自然段，修复明确的行末断词；只有输入确有 OCR 错误时才校正明显字符错误。',
         '只有存在明确异常时才调整边界或顺序；正确的段落边界不得随意改动。公式、Figure/Table 图注必须保持独立类型，不得与相邻正文合并；去掉孤立页码或图片内短标签。',
         '只允许依据输入文字做保守校对；不得补写输入中不存在的论文内容，不得改写作者论点，不确定处保留原样。',
-        '再把每个恢复后的英文自然段准确翻译为简体中文，保留公式、变量、引用编号、Figure/Table 编号、DOI 和专有名词。',
-        '只输出严格 JSON，不要 Markdown 或解释。格式为 {"paragraphs":[{"original":"校对后的完整英文段落","translation":"对应中文","type":"heading|paragraph|formula|caption"}]}。'
+        '再把每个恢复后的英文自然段准确翻译为简体中文：采用该研究领域通行的学术术语，保持论证语气、逻辑关系、前后指代和术语译法在整篇论文中连贯一致。',
+        '方法名、模型名、数据集名、系统名、算法名、模块名、软件名、作者自定义概念及缩写等专有英文名词，整篇第一次出现时必须写成 English（中文释义）；之后只使用完全相同的 English，不再重复括号中文。',
+        'documentContext.introducedTerms 是前文已经介绍过的专有英文名词及固定释义，当前页必须只保留其中的 English；当前页首次出现的新专有名词按 English（中文释义）写入译文，并同时加入 terminology。普通科研概念使用规范简体中文译名并保持一致。',
+        'documentContext.previousBilingualParagraphs 只用于保持术语、逻辑衔接、语气和指代一致，严禁把前文重复输出到当前页。保留公式、变量、引用编号、Figure/Table 编号、DOI、大小写和原有缩写。',
+        '只输出严格 JSON，不要 Markdown 或解释。格式为 {"paragraphs":[{"original":"校对后的完整英文段落","translation":"对应中文","type":"heading|paragraph|formula|caption"}],"terminology":[{"english":"当前页首次出现的专有英文名词","chinese":"固定中文释义"}]}；没有新专有名词时 terminology 返回空数组。'
       ].join('')
     },
     {
@@ -68,7 +106,8 @@ export function buildAcademicPageReflowPrompt(
           type: block.type,
           text: block.text.trim()
         })),
-        continuousText: blocks.map((block) => block.text.trim()).filter(Boolean).join(' ')
+        continuousText: blocks.map((block) => block.text.trim()).filter(Boolean).join(' '),
+        documentContext
       })
     }
   ];
@@ -76,7 +115,8 @@ export function buildAcademicPageReflowPrompt(
 
 export async function translateAcademicText(
   text: string,
-  session: MobileTranslationSession
+  session: MobileTranslationSession,
+  context: AcademicTranslationContext = {}
 ): Promise<string> {
   const cleanText = text.trim();
   if (!cleanText) {
@@ -85,28 +125,41 @@ export async function translateAcademicText(
   if (!session.apiKey.trim()) {
     throw new Error('请先填写本次会话使用的 API Key。');
   }
-  return requestChatCompletion(buildAcademicTranslationPrompt(cleanText), session, 0.2);
+  return requestChatCompletion(buildAcademicTranslationPrompt(cleanText, context), session, 0.2);
 }
 
 export async function reflowAndTranslateAcademicPage(
   blocks: AcademicPageReflowInput[],
-  session: MobileTranslationSession
-): Promise<AcademicPageReflowParagraph[]> {
+  session: MobileTranslationSession,
+  context: AcademicTranslationContext = {}
+): Promise<AcademicPageReflowResult> {
   const cleanBlocks = blocks
     .map((block) => ({ ...block, text: block.text.trim() }))
     .filter((block) => block.text);
   if (cleanBlocks.length === 0) {
     throw new Error('这一页没有可校对和翻译的文本。');
   }
-  const content = await requestChatCompletion(buildAcademicPageReflowPrompt(cleanBlocks), session, 0.1, 90_000);
-  const paragraphs = parseAcademicPageReflowResponse(content);
+  const content = await requestChatCompletion(buildAcademicPageReflowPrompt(cleanBlocks, context), session, 0.1, 90_000);
+  const parsed = parseAcademicPageReflowResult(content);
+  const pageText = cleanBlocks.map((block) => block.text).join(' ');
+  const introducedTerms = normalizeAcademicTerms(context.introducedTerms ?? []);
+  const introducedTermKeys = new Set(introducedTerms.map((term) => term.english.toLocaleLowerCase()));
+  const terminology = normalizeAcademicTerms(parsed.terminology).filter((term) => (
+    includesAcademicTerm(pageText, term.english) &&
+    !introducedTermKeys.has(term.english.toLocaleLowerCase())
+  ));
+  const paragraphs = applyAcademicTerminologyPolicy(
+    parsed.paragraphs,
+    introducedTerms,
+    terminology
+  );
   if (paragraphs.length === 0) {
     throw new Error('AI 没有返回可用的双语段落。');
   }
   if (!hasSufficientAcademicPageCoverage(cleanBlocks, paragraphs)) {
     throw new Error('AI 校对结果与本页原文覆盖不足，已拒绝覆盖本地原文；请重试当前页。');
   }
-  return paragraphs;
+  return { paragraphs, terminology };
 }
 
 export function hasSufficientAcademicPageCoverage(
@@ -137,7 +190,7 @@ export function hasSufficientAcademicPageCoverage(
   return tokenRecall >= 0.72 && lengthRatio >= 0.6 && lengthRatio <= 1.4;
 }
 
-export function parseAcademicPageReflowResponse(content: string): AcademicPageReflowParagraph[] {
+export function parseAcademicPageReflowResult(content: string): AcademicPageReflowResult {
   const unfenced = content.trim()
     .replace(/^```(?:json)?\s*/iu, '')
     .replace(/\s*```$/u, '')
@@ -153,11 +206,12 @@ export function parseAcademicPageReflowResponse(content: string): AcademicPageRe
   } catch {
     throw new Error('AI 校对结果不是有效 JSON，请重试当前页。');
   }
-  const paragraphs = (parsed as { paragraphs?: unknown })?.paragraphs;
+  const payload = parsed as { paragraphs?: unknown; terminology?: unknown };
+  const paragraphs = payload?.paragraphs;
   if (!Array.isArray(paragraphs)) {
     throw new Error('AI 校对结果缺少 paragraphs 数组，请重试当前页。');
   }
-  return paragraphs.flatMap((value): AcademicPageReflowParagraph[] => {
+  const normalizedParagraphs = paragraphs.flatMap((value): AcademicPageReflowParagraph[] => {
     if (!value || typeof value !== 'object') {
       return [];
     }
@@ -173,6 +227,121 @@ export function parseAcademicPageReflowResponse(content: string): AcademicPageRe
       type: isExtractedBlockType(record.type) ? record.type : 'paragraph'
     }];
   }).slice(0, 120);
+  const terminology = Array.isArray(payload.terminology)
+    ? normalizeAcademicTerms(payload.terminology.flatMap((value): MobileAcademicTerm[] => {
+        if (!value || typeof value !== 'object') {
+          return [];
+        }
+        const record = value as { english?: unknown; chinese?: unknown };
+        return typeof record.english === 'string' && typeof record.chinese === 'string'
+          ? [{ english: record.english, chinese: record.chinese }]
+          : [];
+      }))
+    : [];
+  return { paragraphs: normalizedParagraphs, terminology };
+}
+
+export function parseAcademicPageReflowResponse(content: string): AcademicPageReflowParagraph[] {
+  return parseAcademicPageReflowResult(content).paragraphs;
+}
+
+export function applyAcademicTerminologyPolicy(
+  paragraphs: AcademicPageReflowParagraph[],
+  introducedTerms: MobileAcademicTerm[],
+  newTerms: MobileAcademicTerm[]
+): AcademicPageReflowParagraph[] {
+  let result = paragraphs.map((paragraph) => ({ ...paragraph }));
+  const normalizedIntroducedTerms = normalizeAcademicTerms(introducedTerms);
+  const introducedTermKeys = new Set(
+    normalizedIntroducedTerms.map((term) => term.english.toLocaleLowerCase())
+  );
+  for (const term of normalizedIntroducedTerms) {
+    result = result.map((paragraph) => ({
+      ...paragraph,
+      translation: useEnglishOnlyForTerm(paragraph.translation, term)
+    }));
+  }
+  for (const term of normalizeAcademicTerms(newTerms).filter((candidate) => (
+    !introducedTermKeys.has(candidate.english.toLocaleLowerCase())
+  ))) {
+    let introduced = false;
+    result = result.map((paragraph) => {
+      if (!includesAcademicTerm(paragraph.original, term.english)) {
+        return paragraph;
+      }
+      if (introduced) {
+        return { ...paragraph, translation: useEnglishOnlyForTerm(paragraph.translation, term) };
+      }
+      const englishOnly = useEnglishOnlyForTerm(paragraph.translation, term);
+      const englishPattern = academicTermPattern(term.english);
+      const translation = (englishPattern.test(englishOnly)
+        ? englishOnly.replace(englishPattern, (match) => `${match}（${term.chinese}）`)
+        : englishOnly.includes(term.chinese)
+          ? englishOnly.replace(term.chinese, `${term.english}（${term.chinese}）`)
+          : englishOnly)
+        .replace(new RegExp(`（${escapeRegExp(term.chinese)}）\\s*(?=[\\p{Script=Han}])`, 'gu'), `（${term.chinese}）`);
+      introduced = true;
+      return { ...paragraph, translation };
+    });
+  }
+  return result;
+}
+
+function normalizeAcademicTranslationContext(
+  context: AcademicTranslationContext
+): Required<AcademicTranslationContext> {
+  return {
+    documentTitle: context.documentTitle?.trim().slice(0, 500) ?? '',
+    introducedTerms: normalizeAcademicTerms(context.introducedTerms ?? []).slice(0, 80),
+    previousBilingualParagraphs: (context.previousBilingualParagraphs ?? [])
+      .filter((paragraph) => paragraph.original.trim() && paragraph.translation.trim())
+      .slice(-4)
+      .map((paragraph) => ({
+        original: paragraph.original.trim().slice(0, 1200),
+        translation: paragraph.translation.trim().slice(0, 1200),
+        ...(paragraph.type ? { type: paragraph.type } : {})
+      }))
+  };
+}
+
+function normalizeAcademicTerms(terms: MobileAcademicTerm[]): MobileAcademicTerm[] {
+  const seen = new Set<string>();
+  return terms.flatMap((term): MobileAcademicTerm[] => {
+    const english = term.english.trim().replace(/\s+/gu, ' ').slice(0, 160);
+    const chinese = term.chinese.trim().replace(/\s+/gu, ' ').slice(0, 120);
+    const key = english.toLocaleLowerCase();
+    if (!english || !chinese || seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [{ english, chinese }];
+  });
+}
+
+function includesAcademicTerm(text: string, english: string): boolean {
+  return academicTermPattern(english).test(text);
+}
+
+function academicTermPattern(english: string): RegExp {
+  return new RegExp(academicTermPatternSource(english), 'iu');
+}
+
+function useEnglishOnlyForTerm(text: string, term: MobileAcademicTerm): string {
+  const escapedEnglish = academicTermPatternSource(term.english);
+  const escapedChinese = escapeRegExp(term.chinese);
+  return text
+    .replace(new RegExp(`${escapedEnglish}\\s*[（(]\\s*${escapedChinese}\\s*[）)]`, 'giu'), term.english)
+    .replace(new RegExp(escapedChinese, 'gu'), term.english)
+    .replace(new RegExp(`([\\p{Script=Han}])\\s*(${escapedEnglish})`, 'giu'), '$1 $2')
+    .replace(new RegExp(`(${escapedEnglish})\\s*(?=[\\p{Script=Han}])`, 'giu'), '$1 ');
+}
+
+function academicTermPatternSource(english: string): string {
+  return english.trim().split(/\s+/gu).map(escapeRegExp).join('\\s+');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
 async function requestChatCompletion(

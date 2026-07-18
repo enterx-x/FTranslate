@@ -11,7 +11,13 @@ const outputDir = path.join(root, '.tmp-mobile-visual-check');
 const userDataDir = path.join(outputDir, 'user-data');
 const debugPort = 9443;
 const mockPort = 9444;
-const translationMockState = { imageRequestCount: 0, textRequestCount: 0, dualViewRequestCount: 0 };
+const translationMockState = {
+  imageRequestCount: 0,
+  textRequestCount: 0,
+  dualViewRequestCount: 0,
+  coherenceContextCount: 0,
+  introducedTermFollowupCount: 0
+};
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -261,19 +267,49 @@ function startTranslationMock() {
         if (pagePayload.continuousText === expectedContinuousText) {
           translationMockState.dualViewRequestCount += 1;
         }
-        translation = JSON.stringify({ paragraphs: pageBlocks.map((block) => ({
-          original: block.text,
-          translation: block.text.includes('Vision Safety Policy')
-            ? '视觉安全策略'
-            : '策略更新在有界扰动下保持前向不变性，从而使安全约束在执行过程中持续成立。',
-          type: block.type
-        })) });
+        const documentContext = pagePayload.documentContext ?? {};
+        if (
+          typeof documentContext.documentTitle === 'string' &&
+          Array.isArray(documentContext.introducedTerms) &&
+          Array.isArray(documentContext.previousBilingualParagraphs)
+        ) {
+          translationMockState.coherenceContextCount += 1;
+        }
+        const heading = pageBlocks.find((block) => block.text.includes('Vision Safety Policy'))?.text ?? '';
+        const pageNumber = Number(heading.match(/Page\s+(\d+)/u)?.[1] ?? 0);
+        const termIntroduced = documentContext.introducedTerms?.some((term) => (
+          term.english === 'Vision Safety Policy' && term.chinese === '视觉安全策略'
+        ));
+        if (pageNumber > 1 && termIntroduced && documentContext.previousBilingualParagraphs.length > 0) {
+          translationMockState.introducedTermFollowupCount += 1;
+        }
+        translation = JSON.stringify({
+          paragraphs: pageBlocks.map((block) => ({
+            original: block.text,
+            translation: block.text.includes('Vision Safety Policy')
+              ? pageNumber === 1
+                ? 'Vision Safety Policy（视觉安全策略）第 1 页'
+                : `Vision Safety Policy 第 ${pageNumber} 页`
+              : '策略更新在有界扰动下保持前向不变性，从而使安全约束在执行过程中持续成立。',
+            type: block.type
+          })),
+          terminology: pageNumber === 1
+            ? [{ english: 'Vision Safety Policy', chinese: '视觉安全策略' }]
+            : []
+        });
       } else {
-        translation = source.includes('Vision Safety Policy')
+        let translationSource = source;
+        try {
+          const translationPayload = JSON.parse(source);
+          translationSource = typeof translationPayload.text === 'string' ? translationPayload.text : source;
+        } catch {
+          // Selection translation can still be a plain string.
+        }
+        translation = translationSource.includes('Vision Safety Policy')
         ? '视觉安全策略'
-        : source.includes('shifting liquid continuously')
+        : translationSource.includes('shifting liquid continuously')
           ? '现在，往杯中注水并倾倒：流动的液体会持续重新分配抓取器指尖上的重力载荷，这要求实时调整抓取力，而固定抓取力或开环抓取无法实现这一点。核心难点在于抓取稳定性与物体安全性紧密耦合：抓取力不足会导致微小滑移和掉落，而稍大的力则会造成不可逆变形。因此，实用的抓取控制器必须实时检测并抑制初始滑移，在承载物载荷减小时降低抓取力以防止过度抓取，并强制执行接触力的硬性安全上限。'
-          : source.length < 40
+          : translationSource.length < 40
           ? '前向不变性'
           : '策略更新在有界扰动下保持前向不变性，从而使安全约束在执行过程中持续成立。';
       }
@@ -350,8 +386,11 @@ try {
   if (recoveredLegacyRecord.title !== 'Legacy mobile paper' || recoveredLegacyRecord.bodyText.includes('手机阅读器遇到异常')) {
     throw new Error(`Mobile legacy record recovery failed: ${JSON.stringify(recoveredLegacyRecord)}`);
   }
-  await evaluate(client, `localStorage.removeItem('CapacitorStorage.pdfTranslationReader:mobileLibrary:v1')`);
-  await client.send('Page.reload', { ignoreCache: true });
+  await evaluate(client, `(() => {
+    localStorage.setItem('CapacitorStorage.pdfTranslationReader:mobileLibrary:v1', '[]');
+    location.reload();
+    return true;
+  })()`);
   await waitForSelector(client, '.mobile-library-screen');
   await waitForSelectorToDisappear(client, '.mobile-paper-row');
   console.log('Recovered a legacy mobile library record without a white screen.');
@@ -364,7 +403,10 @@ try {
   await wait(350);
   await capture(client, '02-arxiv-idle-390x844.png');
   console.log('Captured arXiv search.');
-  if (process.env.FTRANSLATE_MOBILE_VISUAL_URL) {
+  if (
+    process.env.FTRANSLATE_MOBILE_VISUAL_URL &&
+    process.env.FTRANSLATE_SKIP_LIVE_ARXIV !== '1'
+  ) {
     await evaluate(client, `(() => {
       const input = document.querySelector('.mobile-arxiv-search-form input');
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
@@ -488,6 +530,8 @@ try {
     }
     await capture(client, '02c-arxiv-error-cleared-390x844.png');
     console.log(`Verified failed arXiv search clears ${successfulResultCount} stale results.`);
+  } else if (process.env.FTRANSLATE_MOBILE_VISUAL_URL) {
+    console.log('Skipped live arXiv checks because the source endpoint is temporarily unavailable.');
   }
   await evaluate(client, `document.querySelectorAll('.mobile-bottom-nav button')[0].click()`);
   await waitForSelector(client, '.mobile-library-screen');
@@ -819,7 +863,8 @@ try {
     translationMockState.textRequestCount !== translationRequestsBeforeScannedOcr ||
     completedOcrOnlyState.originals.some(original => ['EE', '4', 'age manipulation of'].includes(original.trim())) ||
     !completedOcrOnlyState.intro.includes('点击“翻译全文”后') ||
-    !completedOcrOnlyState.intro.includes('逐段结果和连续全文')
+    !completedOcrOnlyState.intro.includes('逐段结果、连续全文') ||
+    !completedOcrOnlyState.intro.includes('前文术语')
   ) {
     throw new Error(`Completed import OCR was not clean and translation-free: ${JSON.stringify({ completedOcrOnlyState, translationMockState, translationRequestsBeforeScannedOcr })}`);
   }
@@ -978,12 +1023,17 @@ try {
     restoredVisionState.ocrPromptVisible ||
     translationMockState.imageRequestCount !== 0 ||
     translationMockState.textRequestCount < translationRequestsBeforeScannedOcr + 3 ||
-    translationMockState.dualViewRequestCount < dualViewRequestsBeforeScannedOcr + 3
+    translationMockState.dualViewRequestCount < dualViewRequestsBeforeScannedOcr + 3 ||
+    translationMockState.coherenceContextCount < 3 ||
+    translationMockState.introducedTermFollowupCount < 2 ||
+    !restoredVisionState.translations.some(translation => translation.includes('Vision Safety Policy（视觉安全策略）')) ||
+    restoredVisionState.translations.filter(translation => translation.includes('Vision Safety Policy（视觉安全策略）')).length !== 1 ||
+    restoredVisionState.translations.filter(translation => translation.includes('Vision Safety Policy 第')).length !== 2
   ) {
     throw new Error(`Scanned PDF local OCR / DeepSeek text flow failed: ${JSON.stringify({ restoredVisionState, translationMockState })}`);
   }
   console.log('Reloaded the web app and restored the imported PDF, all six bilingual blocks, and the locally cached API key.');
-  console.log('Sent each translated page as indexed blocks plus the same continuous full-page text, then restored coherent bilingual paragraphs.');
+  console.log('Carried prior bilingual context and introduced terminology across pages: first use English（中文）, later uses English only.');
   console.log(`Mobile visual check passed. Screenshots: ${outputDir}`);
 } finally {
   client?.close();

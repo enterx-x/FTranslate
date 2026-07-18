@@ -8,6 +8,7 @@ import {
   mergeHydratedMobileLibrary,
   MOBILE_LOCAL_OCR_VERSION,
   parseMobileLibrary,
+  parseTranslationEntries,
   replaceMobileFigurePageEntries,
   replaceMobileOcrPageEntries,
   normalizeMobilePaperTags,
@@ -191,6 +192,22 @@ describe('mobile paper model', () => {
 });
 
 describe('mobile translation cache', () => {
+  it('restores the cross-page terminology ledger from persisted translations', () => {
+    const [entry] = parseTranslationEntries(JSON.stringify([{
+      sourceHash: 'term-page-1',
+      page: 1,
+      original: 'Touch Dreaming',
+      translation: 'Touch Dreaming（触觉梦境）',
+      translatedAt: '1',
+      model: 'deepseek-chat',
+      aiReflowVersion: 2,
+      introducedTerms: [{ english: 'Touch Dreaming', chinese: '触觉梦境' }]
+    }]));
+    expect(entry.introducedTerms).toEqual([
+      { english: 'Touch Dreaming', chinese: '触觉梦境' }
+    ]);
+  });
+
   it('replaces one source hash without duplicating entries', () => {
     const first: MobileTranslationEntry = { sourceHash: 'a', page: 1, original: 'A', translation: '甲', translatedAt: '1', model: 'm' };
     const second: MobileTranslationEntry = { ...first, translation: '乙', translatedAt: '2' };

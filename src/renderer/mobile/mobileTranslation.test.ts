@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyAcademicTerminologyPolicy,
+  MOBILE_AI_PAGE_REFLOW_VERSION,
   buildAcademicPageReflowPrompt,
   buildAcademicTranslationPrompt,
   buildTranslationEndpoint,
   hasSufficientAcademicPageCoverage,
   needsAcademicPageAiReview,
+  parseAcademicPageReflowResult,
   parseAcademicPageReflowResponse
 } from './mobileTranslation';
 
@@ -15,22 +18,42 @@ describe('mobile translation request', () => {
   });
 
   it('uses a strict academic translation prompt', () => {
-    const messages = buildAcademicTranslationPrompt('Eq. (3) keeps h(x) >= 0.');
+    const messages = buildAcademicTranslationPrompt('Eq. (3) keeps h(x) >= 0.', {
+      documentTitle: 'Safe Reinforcement Learning',
+      introducedTerms: [{ english: 'Control Barrier Function', chinese: '控制障碍函数' }]
+    });
     expect(messages[0].content).toContain('保留公式');
-    expect(messages[1].content).toBe('Eq. (3) keeps h(x) >= 0.');
+    expect(messages[0].content).toContain('English（中文释义）');
+    expect(JSON.parse(messages[1].content)).toEqual({
+      text: 'Eq. (3) keeps h(x) >= 0.',
+      documentContext: {
+        documentTitle: 'Safe Reinforcement Learning',
+        introducedTerms: [{ english: 'Control Barrier Function', chinese: '控制障碍函数' }],
+        previousBilingualParagraphs: []
+      }
+    });
   });
 
   it('marks legacy translations for one-time dual-view AI review', () => {
     expect(needsAcademicPageAiReview(undefined)).toBe(true);
     expect(needsAcademicPageAiReview({})).toBe(true);
-    expect(needsAcademicPageAiReview({ aiReflowVersion: 1 })).toBe(false);
+    expect(needsAcademicPageAiReview({ aiReflowVersion: MOBILE_AI_PAGE_REFLOW_VERSION })).toBe(false);
+    expect(needsAcademicPageAiReview({ aiReflowVersion: MOBILE_AI_PAGE_REFLOW_VERSION - 1 })).toBe(true);
   });
 
   it('asks DeepSeek to conservatively reflow extracted text without inventing content', () => {
     const messages = buildAcademicPageReflowPrompt([
       { index: 0, type: 'paragraph', text: 'The inter-' },
       { index: 1, type: 'paragraph', text: 'action remains stable.' }
-    ]);
+    ], {
+      documentTitle: 'Learning with Touch Dreaming',
+      introducedTerms: [{ english: 'Touch Dreaming', chinese: '触觉梦境' }],
+      previousBilingualParagraphs: [{
+        original: 'We introduce Touch Dreaming for contact-rich manipulation.',
+        translation: '我们提出 Touch Dreaming（触觉梦境），用于接触丰富的操作。',
+        type: 'paragraph'
+      }]
+    });
     expect(messages[0].content).toContain('不得补写输入中不存在的论文内容');
     expect(messages[0].content).toContain('拆开被错误粘连的不同自然段');
     expect(messages[0].content).toContain('正确的段落边界不得随意改动');
@@ -38,12 +61,55 @@ describe('mobile translation request', () => {
     const payload = JSON.parse(messages[1].content) as {
       blocks: Array<{ index: number; type: string; text: string }>;
       continuousText: string;
+      documentContext: {
+        documentTitle: string;
+        introducedTerms: Array<{ english: string; chinese: string }>;
+        previousBilingualParagraphs: Array<{ original: string; translation: string; type: string }>;
+      };
     };
     expect(payload.blocks).toEqual([
       { index: 0, type: 'paragraph', text: 'The inter-' },
       { index: 1, type: 'paragraph', text: 'action remains stable.' }
     ]);
     expect(payload.continuousText).toBe('The inter- action remains stable.');
+    expect(payload.documentContext.documentTitle).toBe('Learning with Touch Dreaming');
+    expect(payload.documentContext.introducedTerms).toEqual([
+      { english: 'Touch Dreaming', chinese: '触觉梦境' }
+    ]);
+    expect(payload.documentContext.previousBilingualParagraphs[0]?.translation)
+      .toContain('Touch Dreaming（触觉梦境）');
+  });
+
+  it('parses newly introduced proper terms and enforces first-use formatting', () => {
+    const result = parseAcademicPageReflowResult(JSON.stringify({
+      paragraphs: [{
+        original: 'We use Touch Dreaming and Humanoid Transformer for manipulation.',
+        translation: '我们使用 Touch Dreaming（触觉梦境）和 Humanoid Transformer 进行操作。',
+        type: 'paragraph'
+      }],
+      terminology: [{ english: 'Humanoid Transformer', chinese: '人形机器人 Transformer' }]
+    }));
+    expect(result.terminology).toEqual([
+      { english: 'Humanoid Transformer', chinese: '人形机器人 Transformer' }
+    ]);
+    expect(applyAcademicTerminologyPolicy(
+      result.paragraphs,
+      [{ english: 'Touch Dreaming', chinese: '触觉梦境' }],
+      result.terminology
+    )[0]?.translation).toBe(
+      '我们使用 Touch Dreaming 和 Humanoid Transformer（人形机器人 Transformer）进行操作。'
+    );
+  });
+
+  it('never reintroduces a term that the model incorrectly reports as new again', () => {
+    const term = { english: 'Touch Dreaming', chinese: '触觉梦境' };
+    expect(applyAcademicTerminologyPolicy([{
+      original: 'Touch Dreaming improves contact-rich manipulation.',
+      translation: 'Touch Dreaming（触觉梦境）改善了接触丰富的操作。',
+      type: 'paragraph'
+    }], [term], [term])[0]?.translation).toBe(
+      'Touch Dreaming 改善了接触丰富的操作。'
+    );
   });
 
   it('parses fenced page reflow JSON and rejects empty pairs', () => {
