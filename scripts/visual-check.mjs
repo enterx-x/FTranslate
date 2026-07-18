@@ -15,9 +15,6 @@ const rendererIndex = path.join(root, 'dist-renderer', 'index.html');
 const usePackagedApp = process.env.VISUAL_CHECK_PACKAGED === '1';
 const visualArxivMockMode = process.env.PDF_TRANSLATION_READER_VISUAL_MOCK_ARXIV ?? '1';
 const requireNativeFigureExtraction = process.env.VISUAL_CHECK_REQUIRE_NATIVE_FIGURES === '1';
-const pdfPath =
-  process.env.VISUAL_CHECK_PDF ??
-  path.join('D:\\', 'GPT浏览器下载', '2604.15483v2.pdf');
 const outputDir = path.join(root, '.tmp-visual-check');
 const visualUserDataDir = path.join(outputDir, 'user-data');
 const port = Number(process.env.VISUAL_CHECK_PORT ?? 9333);
@@ -28,49 +25,44 @@ function wait(ms) {
 }
 
 function createFallbackPdfBuffer() {
-  return Buffer.from(
-    `%PDF-1.4
-1 0 obj
-<< /Type /Catalog /Pages 2 0 R >>
-endobj
-2 0 obj
-<< /Type /Pages /Count 1 /Kids [3 0 R] >>
-endobj
-3 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
-endobj
-4 0 obj
-<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
-endobj
-5 0 obj
-<< /Length 143 >>
-stream
+  const content = `0.86 0.90 0.97 rg
+72 430 451 180 re f
+0.20 0.29 0.43 RG
+2 w
+72 430 451 180 re S
 BT
 /F1 24 Tf
 72 760 Td
-(PDF Translation Reader visual check fallback PDF) Tj
+(PDF Translation Reader visual check) Tj
 0 -36 Td
 /F1 14 Tf
-(This file is auto-generated when VISUAL_CHECK_PDF is not set and the default sample PDF is unavailable.) Tj
+(This fallback keeps the visual test self-contained.) Tj
+0 -324 Td
+/F1 12 Tf
+(Fig. 1. Visual check figure panel fixture.) Tj
+0 -42 Td
+/F1 14 Tf
+(The paragraph below the figure verifies PDF text extraction and reading layout.) Tj
 ET
-endstream
-endobj
-xref
-0 6
-0000000000 65535 f 
-0000000009 00000 n 
-0000000058 00000 n 
-0000000115 00000 n 
-0000000241 00000 n 
-0000000311 00000 n 
-trailer
-<< /Size 6 /Root 1 0 R >>
-startxref
-559
-%%EOF
-`,
-    'ascii'
-  );
+`;
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Count 1 /Kids [3 0 R] >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${Buffer.byteLength(content, 'ascii')} >>\nstream\n${content}endstream`
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(pdf, 'ascii'));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = Buffer.byteLength(pdf, 'ascii');
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  pdf += offsets.slice(1).map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, 'ascii');
 }
 
 async function resolveVisualCheckPdfPath() {
@@ -891,11 +883,11 @@ async function dragReaderSidebarToRatio(client, ratio) {
   }`);
 }
 
-async function loadPaperRecord(client, translationPath, extraPaperFields = {}) {
+async function loadPaperRecord(client, sourcePdfPath, translationPath, extraPaperFields = {}) {
   const paper = {
     id: 'visual-check-paper',
-    pdfPath,
-    pdfName: path.basename(pdfPath),
+    pdfPath: sourcePdfPath,
+    pdfName: path.basename(sourcePdfPath),
     translationPath,
     translationName: path.basename(translationPath),
     chineseTitle: '视觉检查论文',
@@ -3217,7 +3209,7 @@ async function main() {
     const client = await createCdpClient(await waitForWebSocketUrl());
     await client.send('Runtime.enable');
     await client.send('Page.enable');
-    await loadPaperRecord(client, translationPath, {
+    await loadPaperRecord(client, pdfPath, translationPath, {
       translatedPdfPath,
       translatedPdfName: 'visual-check-dual.pdf',
       translatedPdfMode: 'dual',

@@ -32,7 +32,27 @@ export interface LocalOcrPageResult {
   pageCount: number;
   blocks: LocalOcrBlock[];
   source: 'text' | 'ocr';
+  extractionMode: MobileTextExtractionMode;
+  extractionWarning?: string;
   figures: MobilePdfFigureRegion[];
+}
+
+export type MobileTextExtractionMode = 'structured' | 'compatibility' | 'ocr';
+
+export interface MobilePdfTextSourceRun {
+  str: string;
+  hasEOL: boolean;
+}
+
+export interface MobilePdfTextViewport {
+  width: number;
+  height: number;
+  convertToViewportPoint(x: number, y: number): number[];
+}
+
+export interface MobilePdfTextCollection {
+  items: PositionedPdfTextItem[];
+  runs: MobilePdfTextSourceRun[];
 }
 
 export interface LocalOcrProgress {
@@ -249,12 +269,22 @@ export async function recognizePdfPagesLocally(
         const pageResult = await withMobileTaskTimeout((async (): Promise<{
           blocks: LocalOcrBlock[];
           source: 'text' | 'ocr';
+          extractionMode: MobileTextExtractionMode;
+          extractionWarning?: string;
           figures: MobilePdfFigureRegion[];
         }> => {
-          let embedded: EmbeddedPdfTextResult = { blocks: [], outlineBlocks: [], items: [] };
+          let embedded: EmbeddedPdfTextResult = {
+            blocks: [],
+            outlineBlocks: [],
+            items: [],
+            runs: [],
+            mode: 'empty'
+          };
+          let textLayerWarning = '';
           try {
             embedded = await extractEmbeddedPdfTextBlocks(page, pageNumber);
           } catch (textLayerError) {
+            textLayerWarning = `PDF 文字层读取失败：${formatMobileTextLayerError(textLayerError)}`;
             console.warn(`PDF page ${pageNumber} text-layer extraction failed; falling back to local OCR.`, textLayerError);
             options.onProgress?.({
               page: pageNumber,
@@ -275,18 +305,31 @@ export async function recognizePdfPagesLocally(
           if (embedded.items.length > 0 && figures.length > 0) {
             const proseItems = excludeFigureRegionTextItems(embedded.items, figures);
             if (proseItems.length < embedded.items.length) {
-              embedded = buildEmbeddedPdfTextResult(proseItems, pageNumber, true);
+              const proseResult = buildEmbeddedPdfTextResult(proseItems, pageNumber, true);
+              if (proseResult.blocks.length > 0) {
+                embedded = proseResult;
+              }
             }
           }
           if (embedded.blocks.length > 0) {
+            const compatibilityMode = embedded.mode === 'compatibility';
             options.onProgress?.({
               page: pageNumber,
               pageCount,
               progress: 1,
-              status: `第 ${pageNumber} / ${pageCount} 页已直接读取 PDF 文字层和图表。`
+              status: compatibilityMode
+                ? `第 ${pageNumber} / ${pageCount} 页已读取 PDF 文字层，并使用 Safari 兼容重排。`
+                : `第 ${pageNumber} / ${pageCount} 页已直接读取 PDF 文字层和图表。`
             });
-            return { blocks: embedded.blocks, source: 'text', figures };
+            return {
+              blocks: embedded.blocks,
+              source: 'text',
+              extractionMode: compatibilityMode ? 'compatibility' : 'structured',
+              ...(embedded.warning ? { extractionWarning: embedded.warning } : {}),
+              figures
+            };
           }
+          textLayerWarning = textLayerWarning || embedded.warning || 'PDF 文字层未返回足够的可用正文。';
           const recognizer = await ensureOcrRecognizer();
           let rendered = await renderPdfPageForLocalOcr(page, MOBILE_OCR_FAST_LONG_EDGE);
           let recognized = await recognizeRenderedLocalOcrPage(recognizer, rendered, pageNumber);
@@ -319,7 +362,13 @@ export async function recognizePdfPagesLocally(
             };
             selected = selectBestLocalOcrCandidate(selected, precise);
           }
-          return { blocks: buildLocalOcrBlocks(pageNumber, selected.paragraphs), source: 'ocr', figures };
+          return {
+            blocks: buildLocalOcrBlocks(pageNumber, selected.paragraphs),
+            source: 'ocr',
+            extractionMode: 'ocr',
+            extractionWarning: textLayerWarning,
+            figures
+          };
         })(), options.pageTimeoutMs ?? 120_000, `第 ${pageNumber} 页处理超过 120 秒，已保存前面页面；重新打开后会从本页继续。`);
         await withMobileTaskTimeout(
           Promise.resolve(options.onPageRecognized?.({ page: pageNumber, pageCount, ...pageResult })),
@@ -553,59 +602,268 @@ export function resolveLocalOcrResumeState(input: LocalOcrResumeStateInput): {
   };
 }
 
-interface EmbeddedPdfTextResult {
+export interface EmbeddedPdfTextResult {
   blocks: LocalOcrBlock[];
   outlineBlocks: ExtractedPdfBlock[];
   items: PositionedPdfTextItem[];
+  runs: MobilePdfTextSourceRun[];
+  mode: 'structured' | 'compatibility' | 'empty';
+  warning?: string;
 }
 
 async function extractEmbeddedPdfTextBlocks(page: PDFPageProxy, pageNumber: number): Promise<EmbeddedPdfTextResult> {
   const viewport = page.getViewport({ scale: 1 });
   const textContent = await page.getTextContent();
-  const items = textContent.items.flatMap((rawItem): PositionedPdfTextItem[] => {
-    const item = rawItem as {
-      str?: string;
-      transform?: number[];
-      width?: number;
-      height?: number;
-    };
-    if (!item.str?.trim() || !item.transform || item.transform.length < 6) {
-      return [];
-    }
-    const [x, y] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
-    return [{
-      str: item.str,
-      x,
-      y,
-      width: Math.max(1, item.width ?? 1),
-      height: Math.max(1, item.height ?? 1),
-      page: pageNumber,
-      pageWidth: viewport.width,
-      pageHeight: viewport.height
-    }];
-  });
-  return buildEmbeddedPdfTextResult(items, pageNumber);
+  const collection = collectMobilePdfTextItems(textContent.items, viewport, pageNumber);
+  return buildEmbeddedPdfTextResult(collection.items, pageNumber, false, collection.runs);
 }
 
-function buildEmbeddedPdfTextResult(
+export function collectMobilePdfTextItems(
+  rawItems: ArrayLike<unknown> | null | undefined,
+  viewport: MobilePdfTextViewport,
+  pageNumber: number
+): MobilePdfTextCollection {
+  const items: PositionedPdfTextItem[] = [];
+  const runs: MobilePdfTextSourceRun[] = [];
+  const length = safeArrayLikeLength(rawItems);
+  for (let index = 0; index < length; index += 1) {
+    const rawItem = safeArrayLikeValue(rawItems, index);
+    if (!rawItem || typeof rawItem !== 'object') {
+      continue;
+    }
+    const text = coercePdfTextString(safeObjectProperty(rawItem, 'str')).trim();
+    if (!text) {
+      continue;
+    }
+    runs.push({
+      str: text,
+      hasEOL: safeObjectProperty(rawItem, 'hasEOL') === true
+    });
+    const transform = safeObjectProperty(rawItem, 'transform');
+    const transformLength = safeArrayLikeLength(transform);
+    if (transformLength < 6) {
+      continue;
+    }
+    const transformX = Number(safeArrayLikeValue(transform, 4));
+    const transformY = Number(safeArrayLikeValue(transform, 5));
+    if (!Number.isFinite(transformX) || !Number.isFinite(transformY)) {
+      continue;
+    }
+    try {
+      const converted = viewport.convertToViewportPoint(transformX, transformY);
+      const x = Number(converted[0]);
+      const y = Number(converted[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        continue;
+      }
+      const width = Number(safeObjectProperty(rawItem, 'width'));
+      const height = Number(safeObjectProperty(rawItem, 'height'));
+      items.push({
+        str: text,
+        x,
+        y,
+        width: Math.max(1, Number.isFinite(width) ? width : 1),
+        height: Math.max(1, Number.isFinite(height) ? height : 1),
+        page: pageNumber,
+        pageWidth: viewport.width,
+        pageHeight: viewport.height
+      });
+    } catch (error) {
+      console.warn(`Ignoring malformed PDF text item ${index} on page ${pageNumber}.`, error);
+    }
+  }
+  return { items, runs };
+}
+
+export function buildEmbeddedPdfTextResult(
   items: PositionedPdfTextItem[],
   pageNumber: number,
-  allowShortText = false
+  allowShortText = false,
+  runs: MobilePdfTextSourceRun[] = items.map((item) => ({ str: item.str, hasEOL: true })),
+  outlineBuilder: (page: number, positionedItems: PositionedPdfTextItem[]) => ExtractedPdfBlock[] = buildPdfReaderPageOutline
 ): EmbeddedPdfTextResult {
-  const blocks = buildPdfReaderPageOutline(pageNumber, items);
-  const rawLetterCount = countOcrLetters(items.map((item) => item.str).join(' '));
+  let blocks: ExtractedPdfBlock[] = [];
+  let structuredFailure = '';
+  try {
+    blocks = outlineBuilder(pageNumber, items);
+  } catch (error) {
+    structuredFailure = `PDF 文字层结构重排异常：${formatMobileTextLayerError(error)}`;
+    console.warn(`PDF page ${pageNumber} structured text reflow failed; using compatibility reflow.`, error);
+  }
+  const rawText = runs.map((run) => run.str).join(' ');
+  const rawLetterCount = countOcrLetters(rawText);
   const extractedLetterCount = countOcrLetters(blocks.map((block) => block.original).join(' '));
-  if ((!allowShortText && (rawLetterCount < 60 || extractedLetterCount < 30)) || blocks.length === 0) {
-    return { blocks: [], outlineBlocks: blocks, items };
+  const minimumLetterCount = allowShortText ? 4 : 30;
+  if (blocks.length > 0 && rawLetterCount >= minimumLetterCount && extractedLetterCount >= minimumLetterCount) {
+    return {
+      blocks: blocks.map((block, index) => ({
+        block,
+        order: (pageNumber - 1) * 1000 + index
+      })),
+      outlineBlocks: blocks,
+      items,
+      runs,
+      mode: 'structured'
+    };
+  }
+  if (rawLetterCount >= minimumLetterCount) {
+    const compatibilityBlocks = buildCompatiblePdfTextBlocks(pageNumber, runs);
+    if (compatibilityBlocks.length > 0) {
+      return {
+        blocks: compatibilityBlocks,
+        outlineBlocks: blocks,
+        items,
+        runs,
+        mode: 'compatibility',
+        warning: structuredFailure
+          ? `${structuredFailure}；已使用兼容重排。`
+          : 'PDF 文字层可读取，但结构重排没有生成完整段落，已使用兼容重排。'
+      };
+    }
   }
   return {
-    blocks: blocks.map((block, index) => ({
-      block,
-      order: (pageNumber - 1) * 1000 + index
-    })),
+    blocks: [],
     outlineBlocks: blocks,
-    items
+    items,
+    runs,
+    mode: 'empty',
+    warning: structuredFailure || `PDF 文字层只返回 ${rawLetterCount} 个有效字母，正文不足。`
   };
+}
+
+export function buildCompatiblePdfTextBlocks(
+  pageNumber: number,
+  runs: MobilePdfTextSourceRun[]
+): LocalOcrBlock[] {
+  const paragraphs = buildCompatiblePdfTextParagraphs(runs);
+  return paragraphs.map((paragraph, index) => {
+    const section = `PDF Text Page ${pageNumber}`;
+    const sourceHash = hashText(`${pageNumber}|compatibility|${index}|${paragraph.type}|${paragraph.original}`);
+    return {
+      order: (pageNumber - 1) * 1000 + index,
+      block: {
+        id: `pdf-text-compat-${pageNumber}-${index}-${sourceHash}`,
+        section,
+        original: paragraph.original,
+        translation: '',
+        type: paragraph.type,
+        page: pageNumber,
+        sourceHash
+      }
+    };
+  });
+}
+
+function buildCompatiblePdfTextParagraphs(runs: MobilePdfTextSourceRun[]): LocalOcrParagraph[] {
+  const lines: string[] = [];
+  let currentLine = '';
+  for (const run of runs) {
+    const text = normalizeOcrParagraph(coercePdfTextString(run.str));
+    if (!text) {
+      continue;
+    }
+    currentLine = joinPdfTextFragments(currentLine, text);
+    if (run.hasEOL) {
+      lines.push(currentLine);
+      currentLine = '';
+    }
+  }
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  const candidates: string[] = [];
+  let paragraph = '';
+  const flushParagraph = () => {
+    const normalized = normalizeOcrParagraph(paragraph);
+    if (normalized) {
+      candidates.push(normalized);
+    }
+    paragraph = '';
+  };
+  for (const rawLine of lines) {
+    const line = normalizeOcrParagraph(rawLine);
+    if (!line) {
+      flushParagraph();
+      continue;
+    }
+    const lineType = classifyOcrParagraph(line);
+    if (lineType !== 'paragraph') {
+      flushParagraph();
+      candidates.push(line);
+      continue;
+    }
+    paragraph = joinPdfTextFragments(paragraph, line);
+    if ((paragraph.length >= 180 && /[.!?][\]})"']?$/u.test(paragraph)) || paragraph.length >= 1000) {
+      flushParagraph();
+    }
+  }
+  flushParagraph();
+
+  return repairOcrParagraphFragments(candidates.filter(isUsefulOcrCandidate), false)
+    .filter((value, index, values) => index === 0 || value !== values[index - 1])
+    .map((original) => ({ original, type: classifyOcrParagraph(original) }))
+    .slice(0, 160);
+}
+
+function joinPdfTextFragments(left: string, right: string): string {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  if (/[A-Za-z]-$/u.test(left) && /^[a-z]/u.test(right)) {
+    return `${left.slice(0, -1)}${right}`;
+  }
+  if (/^[,.;:!?%\])}]/u.test(right) || /[(\[{/]$/u.test(left)) {
+    return `${left}${right}`;
+  }
+  return `${left} ${right}`;
+}
+
+function safeArrayLikeLength(value: unknown): number {
+  try {
+    const length = Number((value as { length?: unknown } | null | undefined)?.length);
+    return Number.isFinite(length) && length > 0 ? Math.min(100_000, Math.trunc(length)) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function safeArrayLikeValue(value: unknown, index: number): unknown {
+  try {
+    return (value as Record<number, unknown> | null | undefined)?.[index];
+  } catch {
+    return undefined;
+  }
+}
+
+function safeObjectProperty(value: object, property: string): unknown {
+  try {
+    return (value as Record<string, unknown>)[property];
+  } catch {
+    return undefined;
+  }
+}
+
+function coercePdfTextString(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return '';
+  }
+  try {
+    return String(value);
+  } catch {
+    return '';
+  }
+}
+
+function formatMobileTextLayerError(error: unknown): string {
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : coercePdfTextString(error);
+  return (message.trim() || '未知错误').slice(0, 180);
 }
 
 async function renderPdfPageForLocalOcr(page: PDFPageProxy, maxLongEdge: number): Promise<RenderedLocalOcrPage> {

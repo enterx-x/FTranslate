@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCachedLocalOcrBlocks,
+  buildCompatiblePdfTextBlocks,
+  buildEmbeddedPdfTextResult,
   buildLocalOcrBlocks,
   calculateLocalOcrRenderScale,
+  collectMobilePdfTextItems,
   excludeFigureRegionTextItems,
   extractLocalOcrParagraphs,
   MOBILE_OCR_FAST_LONG_EDGE,
@@ -16,6 +19,77 @@ import {
 } from './mobileLocalOcr';
 
 describe('mobile scanned PDF local OCR', () => {
+  it('reads Safari-style array-like PDF text items without requiring flatMap or string.trim', () => {
+    const stringLike = { toString: () => 'Humanoid robots remain stable.' };
+    const arrayLikeItems = {
+      0: {
+        str: stringLike,
+        transform: { 0: 1, 1: 0, 2: 0, 3: 1, 4: 42, 5: 710, length: 6 },
+        width: '180',
+        height: 12,
+        hasEOL: true
+      },
+      1: {
+        str: 'This item keeps its text even when coordinates are malformed.',
+        transform: { length: 0 },
+        hasEOL: true
+      },
+      length: 2
+    };
+
+    const result = collectMobilePdfTextItems(arrayLikeItems, {
+      width: 612,
+      height: 792,
+      convertToViewportPoint: (x, y) => [x, 792 - y]
+    }, 1);
+
+    expect(result.runs.map((run) => run.str)).toEqual([
+      'Humanoid robots remain stable.',
+      'This item keeps its text even when coordinates are malformed.'
+    ]);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ str: 'Humanoid robots remain stable.', x: 42, y: 82 });
+  });
+
+  it('keeps readable PDF text through compatibility reflow when structured reflow throws', () => {
+    const runs = [
+      { str: 'ABSTRACT', hasEOL: true },
+      { str: 'Humanoid robots promise general-purpose assistance, yet real-world manipulation remains challenging.', hasEOL: true },
+      { str: 'We develop an RL-based lower-body controller that preserves stability during complex manipulation.', hasEOL: true }
+    ];
+    const items = runs.map((run, index) => ({
+      str: run.str,
+      x: 40,
+      y: 80 + index * 16,
+      width: 500,
+      height: 12,
+      page: 1,
+      pageWidth: 612,
+      pageHeight: 792
+    }));
+
+    const result = buildEmbeddedPdfTextResult(items, 1, false, runs, () => {
+      throw new TypeError('Safari text item is not iterable');
+    });
+
+    expect(result.mode).toBe('compatibility');
+    expect(result.blocks.map((item) => item.block.original).join(' ')).toContain('Humanoid robots promise');
+    expect(result.warning).toContain('兼容重排');
+  });
+
+  it('joins line-end hyphenation in compatibility text without fragmenting the paragraph', () => {
+    const blocks = buildCompatiblePdfTextBlocks(2, [
+      { str: 'The contact-aware inter-', hasEOL: true },
+      { str: 'action policy remains stable under bounded disturbances.', hasEOL: true },
+      { str: 'It preserves the original paragraph for continuous reading.', hasEOL: true }
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].block.original).toBe(
+      'The contact-aware interaction policy remains stable under bounded disturbances. It preserves the original paragraph for continuous reading.'
+    );
+  });
+
   it('removes text painted inside a detected figure or table before paragraph reflow', () => {
     const items = [
       { str: 'TABLE I: Results', x: 50, y: 90, width: 180, height: 10, page: 3 },

@@ -434,6 +434,9 @@ function MobileApp() {
           loadPaperTranslations(paper.id)
         ]);
         let cachedEntries = translationCacheByPaperRef.current.get(paper.id) ?? loadedEntries;
+        const reusableExtractionEntries = cachedEntries.filter((entry) => (
+          entry.origin === 'text' || entry.origin === 'ocr' || entry.origin === 'vision'
+        ));
         if (resetCache) {
           cachedEntries = cachedEntries.filter((entry) => (
             entry.origin !== 'text' &&
@@ -469,7 +472,15 @@ function MobileApp() {
         const result = await recognizePdfPagesLocally(sourceBytes, {
           startPage: resume.startPage,
           isCancelled: () => job.cancelled,
-          onPageRecognized: async ({ page, pageCount: totalPages, blocks: pageBlocks, source, figures }) => {
+          onPageRecognized: async ({
+            page,
+            pageCount: totalPages,
+            blocks: pageBlocks,
+            source,
+            extractionMode,
+            extractionWarning,
+            figures
+          }) => {
             const isCurrentJob = () => (
               !job.cancelled
               && ocrJobsRef.current.get(paper.id) === job
@@ -479,7 +490,10 @@ function MobileApp() {
               return;
             }
             const previousByHash = new Map(
-              (translationCacheByPaperRef.current.get(paper.id) ?? cachedEntries)
+              [
+                ...(resetCache ? reusableExtractionEntries : []),
+                ...(translationCacheByPaperRef.current.get(paper.id) ?? cachedEntries)
+              ]
                 .map((entry) => [entry.sourceHash, entry])
             );
             const entries = pageBlocks.map((item): MobileTranslationEntry => {
@@ -493,6 +507,8 @@ function MobileApp() {
                 model: previous?.model ?? '',
                 ...(previous?.baseURL ? { baseURL: previous.baseURL } : {}),
                 origin: source,
+                extractionMode,
+                ...(extractionWarning ? { extractionWarning } : {}),
                 order: item.order,
                 blockType: item.block.type
               };

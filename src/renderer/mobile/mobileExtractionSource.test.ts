@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { MobileTranslationEntry } from './mobileTypes';
 import { summarizeMobileExtractionSources } from './mobileExtractionSource';
 
-function entry(page: number, origin: MobileTranslationEntry['origin']): MobileTranslationEntry {
+function entry(
+  page: number,
+  origin: MobileTranslationEntry['origin'],
+  extractionMode?: MobileTranslationEntry['extractionMode'],
+  extractionWarning?: string
+): MobileTranslationEntry {
   return {
     sourceHash: `${origin}-${page}`,
     page,
@@ -10,7 +15,9 @@ function entry(page: number, origin: MobileTranslationEntry['origin']): MobileTr
     translation: '',
     translatedAt: '',
     model: '',
-    origin
+    origin,
+    extractionMode,
+    extractionWarning
   };
 }
 
@@ -36,5 +43,19 @@ describe('summarizeMobileExtractionSources', () => {
 
     expect(summary.label).toBe('文字层 1 页 · OCR 2 页');
     expect(summary.detail).toContain('另有 2 页');
+  });
+
+  it('distinguishes Safari compatibility reflow from local OCR and keeps the fallback reason', () => {
+    const textSummary = summarizeMobileExtractionSources([
+      entry(1, 'text', 'compatibility', 'PDF 文字层结构重排异常，已使用兼容重排。'),
+      entry(2, 'text', 'structured')
+    ], 2);
+    const ocrSummary = summarizeMobileExtractionSources([
+      entry(1, 'ocr', 'ocr', 'PDF 文字层读取失败：TypeError')
+    ], 1);
+
+    expect(textSummary.label).toBe('PDF 文字层 2 页 · 兼容重排 1 页');
+    expect(textSummary.detail).toContain('未启动本地 OCR');
+    expect(ocrSummary.detail).toContain('TypeError');
   });
 });

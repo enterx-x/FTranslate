@@ -3,7 +3,7 @@ import type { ArxivPaper } from '../../shared/arxiv';
 export type MobilePaperSource = 'import' | 'arxiv';
 export type MobilePdfKind = 'source' | 'translated';
 export type MobileLocalOcrStatus = 'pending' | 'running' | 'completed' | 'failed';
-export const MOBILE_LOCAL_OCR_VERSION = 6;
+export const MOBILE_LOCAL_OCR_VERSION = 7;
 
 export interface MobileStoredPdf {
   path: string;
@@ -61,6 +61,8 @@ export interface MobileTranslationEntry {
   model: string;
   baseURL?: string;
   origin?: 'text' | 'ocr' | 'vision' | 'figure';
+  extractionMode?: 'structured' | 'compatibility' | 'ocr';
+  extractionWarning?: string;
   order?: number;
   blockType?: 'heading' | 'paragraph' | 'formula' | 'caption';
   figureVersion?: number;
@@ -462,7 +464,14 @@ function isTranslationEntry(value: unknown): value is MobileTranslationEntry {
     typeof entry.translation === 'string' &&
     typeof entry.translatedAt === 'string' &&
     typeof entry.model === 'string' &&
-    (entry.baseURL === undefined || typeof entry.baseURL === 'string')
+    (entry.baseURL === undefined || typeof entry.baseURL === 'string') &&
+    (
+      entry.extractionMode === undefined ||
+      entry.extractionMode === 'structured' ||
+      entry.extractionMode === 'compatibility' ||
+      entry.extractionMode === 'ocr'
+    ) &&
+    (entry.extractionWarning === undefined || typeof entry.extractionWarning === 'string')
   );
 }
 
