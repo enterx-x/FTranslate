@@ -1,5 +1,29 @@
 # PLAN.md
 
+## 2026-07-18 README 产品化重构（0.1.38）
+
+### 当前结论
+
+- 原 README 共 1,040 行，前 20 个二级标题连续堆叠版本日志，产品定位、工作流、安装入口和真实能力从约第 305 行以后才出现，并与内部测试和故障复盘交错。它适合作为开发流水账，不适合作为仓库产品首页。
+- 新 README 采用“产品定位 → 真实界面 → 论文研究工作流 → 核心能力 → 当前状态 → 快速开始 → 运行环境 → 质量证据 → 隐私与限制 → 开发”的渐进结构，明确区分可用、实验性和规划中能力。
+- 产品统一定位为“面向科研人员的本地优先 AI 科研工作台”。保留 `PDF Translation Reader` 作为当前 Electron 安装包名称，但不再把产品缩减为单一 PDF 翻译器。
+
+### 已完成操作
+
+1. README 从 1,040 行收敛到 304 行；顶部不再出现日期型版本标题，前 80 行内可看到定位、主界面、工作流、核心入口和三张任务截图。
+2. 从最新视觉门禁输出中人工核验并复制四张测试数据截图到 `docs/images/`：项目空间、arXiv 检索、论文库和 PDF 左右双语阅读；未提交其他临时截图。
+3. 新建 `CHANGELOG.md`，保留 0.1.17–0.1.38 共 22 个版本节点的用户可感知变化；逐版本安装包哈希、PID 和内部测试细节不再占用产品首页。
+4. 将 Capacitor iOS、Ad Hoc、GitHub Actions、Sideloadly、免费 Apple ID、USB 首次配对、Developer Mode 和 7 天续签边界迁移到 `docs/ios-self-sideload.md`，主 README 只保留实验性移动端入口。
+5. 当前 GitHub 仓库没有 Release，README 不添加失效的“下载最新版”按钮，只提供源码运行与本地 NSIS 构建方式。
+6. README 只宣传当前真实入口；Paper-to-Code 完整 UI 和 Research Autopilot 明确标为规划中，COMET 自动指标明确不替代独立专家盲评。
+
+### 文档边界与验证
+
+- 规格：`docs/specs/2026-07-18-product-readme-redesign.md`。
+- 实施计划：`docs/plans/2026-07-18-product-readme-redesign.md`。
+- 本轮只修改 Markdown 与四张 PNG 产品截图，不改变应用代码、运行时、安装器或用户数据，因此不重复运行 `npm run build`、`npm run dist` 或生成新安装包。
+- 最终门禁已通过：README 为 304 行、无日期版本标题和占位符；四张图片均通过 PNG 签名检查，总计 1,173,946 bytes；README、CHANGELOG 与 iOS 指南的本地 Markdown/HTML 链接全部可解析；敏感信息扫描与 `git diff --check` 均通过。两个受保护 `.superpowers/brainstorm/` 目录继续保持未跟踪、未暂存。
+
 ## 2026-07-17 最高质量翻译与 arXiv 官方相关性检索（0.1.38 设计确认）
 
 ### 当前结论
