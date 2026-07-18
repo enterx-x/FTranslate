@@ -2,9 +2,15 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { PdfViewer } from '../components/PdfViewer';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import { MobileTranslationSettingsDialog } from './MobileTranslationSettingsDialog';
-import { reflowAndTranslateAcademicPage, translateAcademicText } from './mobileTranslation';
+import {
+  MOBILE_AI_PAGE_REFLOW_VERSION,
+  needsAcademicPageAiReview,
+  reflowAndTranslateAcademicPage,
+  translateAcademicText
+} from './mobileTranslation';
 import { buildCachedLocalOcrBlocks, buildLocalOcrBlocks } from './mobileLocalOcr';
 import {
+  buildMobilePdfCaptionLookupKeys,
   createMobileFigureEntry,
   createMobilePdfFigureRenderer,
   extractPdfFigureRegions,
@@ -184,6 +190,13 @@ export function MobileReaderScreen({
       block.sourceHash,
       translationByHash.get(block.sourceHash)?.order ?? (block.page - 1) * 1000 + index
     ]));
+    const currentCaptionTextOrders = new Map(readableBlocks.flatMap((block, index) => {
+      if (block.type !== 'caption') {
+        return [];
+      }
+      const order = translationByHash.get(block.sourceHash)?.order ?? (block.page - 1) * 1000 + index;
+      return buildMobilePdfCaptionLookupKeys(block.original).map((key) => [key, order] as const);
+    }));
     const figureItems: MobileReaderFeedItem[] = figureEntries.flatMap((entry) => {
       const region = figureEntryToRegion(entry);
       return region
@@ -192,7 +205,12 @@ export function MobileReaderScreen({
             entry,
             region,
             page: entry.page,
-            order: resolveMobilePdfFigureOrder(region, currentBlockOrders)
+            order: resolveMobilePdfFigureOrder(
+              region,
+              currentBlockOrders,
+              currentCaptionTextOrders,
+              region.caption
+            )
           }]
         : [];
     });
@@ -287,6 +305,14 @@ export function MobileReaderScreen({
     const cached = translationByHash.get(block.sourceHash);
     return Boolean(cached && !cached.translation.trim());
   }).length;
+  const aiReviewPendingCount = readableBlocks.filter((block) => {
+    const cached = translationByHash.get(block.sourceHash);
+    return Boolean(
+      cached?.translation.trim() &&
+      isTranslationEntryCurrent(cached, translationSession) &&
+      needsAcademicPageAiReview(cached)
+    );
+  }).length;
   const ocrBusy = paper.localOcrStatus === 'pending' || paper.localOcrStatus === 'running';
   const needsLocalOcr = paper.localOcrStatus !== 'completed';
 
@@ -314,8 +340,11 @@ export function MobileReaderScreen({
         model: session.model,
         baseURL: session.baseURL.trim().replace(/\/+$/u, ''),
         ...(cached?.origin ? { origin: cached.origin } : {}),
+        ...(cached?.extractionMode ? { extractionMode: cached.extractionMode } : {}),
+        ...(cached?.extractionWarning ? { extractionWarning: cached.extractionWarning } : {}),
         ...(Number.isFinite(cached?.order) ? { order: cached?.order } : {}),
-        ...(cached?.blockType ? { blockType: cached.blockType } : {})
+        ...(cached?.blockType ? { blockType: cached.blockType } : {}),
+        ...(Number.isFinite(cached?.aiReflowVersion) ? { aiReflowVersion: cached?.aiReflowVersion } : {})
       });
       if (updateStatus) {
         setStatus('译文已直接写在对应英文段落下方，并缓存在本机。');
@@ -331,7 +360,7 @@ export function MobileReaderScreen({
     }
   }
 
-  async function reflowAndTranslateOcrPage(
+  async function reflowAndTranslatePage(
     page: number,
     pageBlocks: ExtractedPdfBlock[],
     session: MobileTranslationSession
@@ -350,6 +379,16 @@ export function MobileReaderScreen({
         original: paragraph.original,
         type: paragraph.type
       })));
+      const sourceEntries = pageBlocks
+        .map((block) => translationByHash.get(block.sourceHash))
+        .filter((entry): entry is MobileTranslationEntry => Boolean(entry));
+      const pageOrigin: MobileTranslationEntry['origin'] = sourceEntries.some((entry) => (
+        entry.origin === 'ocr' || entry.origin === 'vision'
+      )) ? 'ocr' : 'text';
+      const extractionMode: MobileTranslationEntry['extractionMode'] = pageOrigin === 'ocr'
+        ? 'ocr'
+        : sourceEntries.find((entry) => entry.extractionMode)?.extractionMode ?? 'structured';
+      const extractionWarning = sourceEntries.find((entry) => entry.extractionWarning)?.extractionWarning;
       const translatedAt = new Date().toISOString();
       const baseURL = session.baseURL.trim().replace(/\/+$/u, '');
       const entries = rebuiltBlocks.map((item, index): MobileTranslationEntry => ({
@@ -360,9 +399,12 @@ export function MobileReaderScreen({
         translatedAt,
         model: session.model,
         baseURL,
-        origin: 'ocr',
+        origin: pageOrigin,
+        extractionMode,
+        ...(extractionWarning ? { extractionWarning } : {}),
         order: item.order,
-        blockType: item.block.type
+        blockType: item.block.type,
+        aiReflowVersion: MOBILE_AI_PAGE_REFLOW_VERSION
       }));
       await onReplacePageEntries(page, entries);
       return entries.length;
@@ -383,7 +425,9 @@ export function MobileReaderScreen({
     }
     const targets = readableBlocks.filter((block) => {
       const cached = translationByHash.get(block.sourceHash);
-      return !cached || !isTranslationEntryCurrent(cached, session);
+      return !cached ||
+        !isTranslationEntryCurrent(cached, session) ||
+        needsAcademicPageAiReview(cached);
     });
     if (targets.length === 0) {
       setStatus('全文译文均由当前翻译配置生成，无需更新。');
@@ -397,6 +441,8 @@ export function MobileReaderScreen({
     let completedPages = 0;
     let failedPage = 0;
     let failedReason = '';
+    let aiComparedPages = 0;
+    let preservedLocalPages = 0;
     const groupedTargets = new Map<number, ExtractedPdfBlock[]>();
     for (const block of targets) {
       groupedTargets.set(block.page, [...(groupedTargets.get(block.page) ?? []), block]);
@@ -407,21 +453,14 @@ export function MobileReaderScreen({
         break;
       }
       const sourcePageBlocks = readableBlocks.filter((block) => block.page === page);
-      const requiresAiReflow = sourcePageBlocks.some((block) => {
-        const cached = translationByHash.get(block.sourceHash);
-        return cached?.origin === 'ocr' || cached?.origin === 'vision';
-      });
-      if (requiresAiReflow) {
-        setStatus(`正在用 AI 保守校对、重排并翻译第 ${page} 页（${completedPages + 1} / ${pageTargets.length} 页）…`);
-        try {
-          succeeded += await reflowAndTranslateOcrPage(page, sourcePageBlocks, session);
-        } catch (error) {
-          failed += 1;
-          failedPage = page;
-          failedReason = formatError(error);
-        }
-      } else {
-        setStatus(`正在翻译第 ${page} 页（${completedPages + 1} / ${pageTargets.length} 页）…`);
+      setStatus(`正在让 AI 对照逐段结果与连续全文，检查并翻译第 ${page} 页（${completedPages + 1} / ${pageTargets.length} 页）…`);
+      try {
+        succeeded += await reflowAndTranslatePage(page, sourcePageBlocks, session);
+        aiComparedPages += 1;
+      } catch (error) {
+        preservedLocalPages += 1;
+        const reflowError = formatError(error);
+        setStatus(`第 ${page} 页 AI 整页结果未通过安全校验：${reflowError}；已保留本地段落并继续逐段翻译。`);
         for (const block of pageBlocks) {
           if (stopTranslationRef.current) {
             break;
@@ -431,6 +470,7 @@ export function MobileReaderScreen({
           } else {
             failed += 1;
             failedPage = page;
+            failedReason = reflowError;
             break;
           }
         }
@@ -443,12 +483,15 @@ export function MobileReaderScreen({
     setTranslatingAll(false);
     const stopped = stopTranslationRef.current;
     stopTranslationRef.current = false;
+    const reflowSummary = aiComparedPages > 0 || preservedLocalPages > 0
+      ? `；AI 已对照逐段与连续全文 ${aiComparedPages} 页${preservedLocalPages ? `，另有 ${preservedLocalPages} 页整页结果未通过安全校验并保留本地结构` : ''}`
+      : '';
     if (failed > 0) {
-      setStatus(`全文处理在第 ${failedPage} 页停止${failedReason ? `：${failedReason}` : ''}。已完成 ${completedPages} 页、${succeeded} 段；成功译文仍保存在本机。`);
+      setStatus(`全文处理在第 ${failedPage} 页停止${failedReason ? `：${failedReason}` : ''}。已完成 ${completedPages} 页、${succeeded} 段${reflowSummary}；成功译文仍保存在本机。`);
     } else if (stopped) {
-      setStatus(`已停止全文翻译；本次完成 ${completedPages} 页、${succeeded} 段，已完成译文仍保存在本机。`);
+      setStatus(`已停止全文翻译；本次完成 ${completedPages} 页、${succeeded} 段${reflowSummary}，已完成译文仍保存在本机。`);
     } else {
-      setStatus(`全文翻译完成：${completedPages} 页、${succeeded} 个段落的中文已逐页缓存。`);
+      setStatus(`全文翻译完成：${completedPages} 页、${succeeded} 个段落的中文已逐页缓存${reflowSummary}。`);
     }
   }
 
@@ -556,7 +599,7 @@ export function MobileReaderScreen({
               ? paper.localOcrStatus === 'failed'
                 ? '全文原文提取失败'
                 : `导入后全文提取 · ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页${extractionSource.textPages || extractionSource.ocrPages ? ` · ${extractionSource.label}` : ''}`
-              : `${translatedCount} / ${readableBlocks.length} 段已译 · ${extractionSource.label}${figureEntries.length ? ` · ${figureEntries.length} 个图表` : ''}${pendingTranslationCount ? ` · ${pendingTranslationCount} 段待翻译` : staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}`}</span>
+              : `${translatedCount} / ${readableBlocks.length} 段已译 · ${extractionSource.label}${figureEntries.length ? ` · ${figureEntries.length} 个图表` : ''}${pendingTranslationCount ? ` · ${pendingTranslationCount} 段待翻译` : ''}${staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}${aiReviewPendingCount ? ` · ${aiReviewPendingCount} 段待 AI 对照` : ''}`}</span>
             <button
               type="button"
               disabled={ocrBusy || (!translatingAll && (extracting || (!needsLocalOcr && readableBlocks.length === 0) || Boolean(translatingHash)))}
@@ -572,7 +615,7 @@ export function MobileReaderScreen({
                 }
               }}
             >
-              {ocrBusy ? '正在提取' : paper.localOcrStatus === 'failed' ? '重新提取' : translatingAll ? '停止' : translatedCount || staleTranslationCount ? '翻译剩余' : '翻译全文'}
+              {ocrBusy ? '正在提取' : paper.localOcrStatus === 'failed' ? '重新提取' : translatingAll ? '停止' : aiReviewPendingCount ? 'AI 对照并翻译' : translatedCount || staleTranslationCount ? '翻译剩余' : '翻译全文'}
             </button>
           </div>
           {extractionSource.warning ? (
@@ -605,7 +648,7 @@ export function MobileReaderScreen({
             {!extracting && !needsLocalOcr && readableBlocks.length > 0 && translatedCount === 0 && staleTranslationCount === 0 ? (
               <div className="mobile-bilingual-intro">
                 <strong>全文原文已提取</strong>
-                <p>{extractionSource.detail} 结果已逐页保存在本机。点击“翻译全文”后才生成中文；扫描页会同时由 AI 保守校对并重排。</p>
+                <p>{extractionSource.detail} 结果已逐页保存在本机。点击“翻译全文”后，每页会把逐段结果和连续全文一起交给 AI 对照；只整理异常边界并生成中文。</p>
                 <button type="button" onClick={() => void handleTranslateAll()}>开始全文翻译</button>
               </div>
             ) : null}

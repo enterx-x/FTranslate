@@ -1,10 +1,18 @@
 import { CapacitorHttp } from '@capacitor/core';
 import type { ExtractedBlockType } from '../lib/pdfTextStructure';
-import type { MobileTranslationSession } from './mobileTypes';
+import type { MobileTranslationEntry, MobileTranslationSession } from './mobileTypes';
 
 interface ChatCompletionPayload {
   choices?: Array<{ message?: { content?: string } }>;
   error?: { message?: string };
+}
+
+export const MOBILE_AI_PAGE_REFLOW_VERSION = 1;
+
+export function needsAcademicPageAiReview(
+  entry: Pick<MobileTranslationEntry, 'aiReflowVersion'> | undefined
+): boolean {
+  return entry?.aiReflowVersion !== MOBILE_AI_PAGE_REFLOW_VERSION;
 }
 
 export interface AcademicPageReflowInput {
@@ -42,8 +50,11 @@ export function buildAcademicPageReflowPrompt(
     {
       role: 'system',
       content: [
-        '你是科研论文 OCR 校对、版面重排和翻译助手。输入是一页按本地版面分析得到的英文片段。',
-        '先恢复正确阅读顺序和自然段：合并同一段的断行、修复明确的行末断词与明显 OCR 字符错误，并去掉孤立页码或图片标签。',
+        '你是科研论文提取校对、版面重排和翻译助手。输入是一页由 PDF 文字层或本地 OCR 提取并经本地版面分析后的英文片段。',
+        '输入同时提供两个完全重合的视图：blocks 是带 index/type 的逐段结果，continuousText 是把同一页全部片段按当前顺序连续拼接的原文；不得把两份内容当成两份论文重复输出。',
+        '逐段结果用于保留已经正确的标题、公式、图注和自然段；连续原文用于发现被错误拆开的同一段、被错误粘连的不同段以及明显顺序异常。',
+        '先恢复正确阅读顺序和自然段：合并同一段的误拆片段，拆开被错误粘连的不同自然段，修复明确的行末断词；只有输入确有 OCR 错误时才校正明显字符错误。',
+        '只有存在明确异常时才调整边界或顺序；正确的段落边界不得随意改动。公式、Figure/Table 图注必须保持独立类型，不得与相邻正文合并；去掉孤立页码或图片内短标签。',
         '只允许依据输入文字做保守校对；不得补写输入中不存在的论文内容，不得改写作者论点，不确定处保留原样。',
         '再把每个恢复后的英文自然段准确翻译为简体中文，保留公式、变量、引用编号、Figure/Table 编号、DOI 和专有名词。',
         '只输出严格 JSON，不要 Markdown 或解释。格式为 {"paragraphs":[{"original":"校对后的完整英文段落","translation":"对应中文","type":"heading|paragraph|formula|caption"}]}。'
@@ -51,11 +62,14 @@ export function buildAcademicPageReflowPrompt(
     },
     {
       role: 'user',
-      content: JSON.stringify({ blocks: blocks.map((block) => ({
-        index: block.index,
-        type: block.type,
-        text: block.text.trim()
-      })) })
+      content: JSON.stringify({
+        blocks: blocks.map((block) => ({
+          index: block.index,
+          type: block.type,
+          text: block.text.trim()
+        })),
+        continuousText: blocks.map((block) => block.text.trim()).filter(Boolean).join(' ')
+      })
     }
   ];
 }
@@ -101,17 +115,26 @@ export function hasSufficientAcademicPageCoverage(
 ): boolean {
   const inputText = input.map((block) => block.text).join(' ');
   const outputText = output.map((paragraph) => paragraph.original).join(' ');
-  const inputTokens = new Set(tokenizeEnglishText(inputText));
-  const outputTokens = new Set(tokenizeEnglishText(outputText));
-  if (inputTokens.size === 0 || outputTokens.size === 0) {
+  const inputTokens = tokenizeEnglishText(inputText);
+  const outputTokens = tokenizeEnglishText(outputText);
+  if (inputTokens.length === 0 || outputTokens.length === 0) {
     return false;
   }
-  const sharedTokens = Array.from(inputTokens).filter((token) => outputTokens.has(token)).length;
-  const tokenRecall = sharedTokens / inputTokens.size;
+  const outputTokenCounts = new Map<string, number>();
+  outputTokens.forEach((token) => outputTokenCounts.set(token, (outputTokenCounts.get(token) ?? 0) + 1));
+  let sharedTokens = 0;
+  inputTokens.forEach((token) => {
+    const remaining = outputTokenCounts.get(token) ?? 0;
+    if (remaining > 0) {
+      sharedTokens += 1;
+      outputTokenCounts.set(token, remaining - 1);
+    }
+  });
+  const tokenRecall = sharedTokens / inputTokens.length;
   const inputLength = canonicalEnglishText(inputText).length;
   const outputLength = canonicalEnglishText(outputText).length;
   const lengthRatio = outputLength / Math.max(1, inputLength);
-  return tokenRecall >= 0.5 && lengthRatio >= 0.35 && lengthRatio <= 1.6;
+  return tokenRecall >= 0.72 && lengthRatio >= 0.6 && lengthRatio <= 1.4;
 }
 
 export function parseAcademicPageReflowResponse(content: string): AcademicPageReflowParagraph[] {

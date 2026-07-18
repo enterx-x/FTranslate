@@ -63,6 +63,7 @@ export interface MobileTranslationEntry {
   origin?: 'text' | 'ocr' | 'vision' | 'figure';
   extractionMode?: 'structured' | 'compatibility' | 'ocr';
   extractionWarning?: string;
+  aiReflowVersion?: number;
   order?: number;
   blockType?: 'heading' | 'paragraph' | 'formula' | 'caption';
   figureVersion?: number;
@@ -471,7 +472,8 @@ function isTranslationEntry(value: unknown): value is MobileTranslationEntry {
       entry.extractionMode === 'compatibility' ||
       entry.extractionMode === 'ocr'
     ) &&
-    (entry.extractionWarning === undefined || typeof entry.extractionWarning === 'string')
+    (entry.extractionWarning === undefined || typeof entry.extractionWarning === 'string') &&
+    (entry.aiReflowVersion === undefined || typeof entry.aiReflowVersion === 'number')
   );
 }
 

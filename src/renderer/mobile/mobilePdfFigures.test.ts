@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { ExtractedPdfBlock, PositionedPdfTextItem } from '../lib/pdfTextStructure';
 import {
+  buildMobilePdfCaptionLookupKeys,
   buildPdfCaptionAnchors,
   createMobilePdfFigureRenderer,
   detectPdfFigureRegions,
@@ -33,6 +34,19 @@ describe('resolveMobilePdfFigureOrder', () => {
       captionHash: 'missing',
       order: 5.75
     }, new Map())).toBe(5.75);
+  });
+
+  it('keeps a figure beside its caption after AI reflow changes the caption hash', () => {
+    const captionTextOrders = new Map(
+      buildMobilePdfCaptionLookupKeys('Fig. 2. Quantitative contact results after AI correction.')
+        .map((key) => [key, 2010] as const)
+    );
+    expect(resolveMobilePdfFigureOrder({
+      kind: 'figure',
+      hasTextCaption: true,
+      captionHash: 'old-caption-hash',
+      order: 2001
+    }, new Map(), captionTextOrders, 'Fig. 2: Contact results.')).toBe(2009.75);
   });
 });
 

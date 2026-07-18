@@ -11,7 +11,7 @@ const outputDir = path.join(root, '.tmp-mobile-visual-check');
 const userDataDir = path.join(outputDir, 'user-data');
 const debugPort = 9443;
 const mockPort = 9444;
-const translationMockState = { imageRequestCount: 0, textRequestCount: 0 };
+const translationMockState = { imageRequestCount: 0, textRequestCount: 0, dualViewRequestCount: 0 };
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -254,8 +254,13 @@ function startTranslationMock() {
       translationMockState.textRequestCount += 1;
       const system = parsed.messages?.[0]?.content ?? '';
       let translation;
-      if (typeof system === 'string' && system.includes('OCR 校对、版面重排和翻译助手')) {
-        const pageBlocks = JSON.parse(source).blocks ?? [];
+      if (typeof system === 'string' && system.includes('两个完全重合的视图')) {
+        const pagePayload = JSON.parse(source);
+        const pageBlocks = pagePayload.blocks ?? [];
+        const expectedContinuousText = pageBlocks.map((block) => block.text.trim()).filter(Boolean).join(' ');
+        if (pagePayload.continuousText === expectedContinuousText) {
+          translationMockState.dualViewRequestCount += 1;
+        }
         translation = JSON.stringify({ paragraphs: pageBlocks.map((block) => ({
           original: block.text,
           translation: block.text.includes('Vision Safety Policy')
@@ -768,6 +773,7 @@ try {
   console.log('Deleted the paper without an IndexedDB cursor transaction failure.');
 
   const translationRequestsBeforeScannedOcr = translationMockState.textRequestCount;
+  const dualViewRequestsBeforeScannedOcr = translationMockState.dualViewRequestCount;
   const scannedPdfBase64 = createScannedFallbackPdfBuffer().toString('base64');
   await evaluate(client, `(() => {
     const binary = atob(${JSON.stringify(scannedPdfBase64)});
@@ -812,7 +818,8 @@ try {
     completedOcrOnlyState.translationCount !== 0 ||
     translationMockState.textRequestCount !== translationRequestsBeforeScannedOcr ||
     completedOcrOnlyState.originals.some(original => ['EE', '4', 'age manipulation of'].includes(original.trim())) ||
-    !completedOcrOnlyState.intro.includes('点击“翻译全文”后才生成中文')
+    !completedOcrOnlyState.intro.includes('点击“翻译全文”后') ||
+    !completedOcrOnlyState.intro.includes('逐段结果和连续全文')
   ) {
     throw new Error(`Completed import OCR was not clean and translation-free: ${JSON.stringify({ completedOcrOnlyState, translationMockState, translationRequestsBeforeScannedOcr })}`);
   }
@@ -820,7 +827,10 @@ try {
   await evaluate(client, `document.querySelector('.mobile-bilingual-toolbar button').click()`);
   await waitForExpression(client, `document.querySelectorAll('.mobile-block-translation').length === 6 ? 'all-pages-translated' : ''`, 20000);
   await waitForExpression(client, `document.querySelector('.mobile-reader-status')?.textContent.includes('全文翻译完成') ? 'translation-finished' : ''`, 20000);
-  if (translationMockState.textRequestCount - translationRequestsBeforeScannedOcr < 3) {
+  if (
+    translationMockState.textRequestCount - translationRequestsBeforeScannedOcr < 3 ||
+    translationMockState.dualViewRequestCount - dualViewRequestsBeforeScannedOcr < 3
+  ) {
     throw new Error(`Full translation did not start after the explicit user click: ${JSON.stringify({ translationMockState, translationRequestsBeforeScannedOcr })}`);
   }
   await capture(client, '08b-reader-scanned-bilingual-390x844.png');
@@ -967,12 +977,13 @@ try {
     restoredVisionState.originals.some(original => ['EE', '4', 'age manipulation of'].includes(original.trim())) ||
     restoredVisionState.ocrPromptVisible ||
     translationMockState.imageRequestCount !== 0 ||
-    translationMockState.textRequestCount < translationRequestsBeforeScannedOcr + 3
+    translationMockState.textRequestCount < translationRequestsBeforeScannedOcr + 3 ||
+    translationMockState.dualViewRequestCount < dualViewRequestsBeforeScannedOcr + 3
   ) {
     throw new Error(`Scanned PDF local OCR / DeepSeek text flow failed: ${JSON.stringify({ restoredVisionState, translationMockState })}`);
   }
   console.log('Reloaded the web app and restored the imported PDF, all six bilingual blocks, and the locally cached API key.');
-  console.log('Rejected one-word OCR layout fragments, page numbers, and cropped lowercase fragments while restoring two coherent paragraphs per page.');
+  console.log('Sent each translated page as indexed blocks plus the same continuous full-page text, then restored coherent bilingual paragraphs.');
   console.log(`Mobile visual check passed. Screenshots: ${outputDir}`);
 } finally {
   client?.close();

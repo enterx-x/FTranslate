@@ -1,5 +1,33 @@
 # PLAN.md
 
+## 2026-07-18：逐段 + 连续全文双视图 AI 兜底
+
+### 当前结论
+
+- 之前虽然已有整页 AI 重排函数，但只对 `origin=ocr/vision` 页面触发；PDF 文字层页面无论段落质量如何都只逐段翻译，确实没有完整兑现“AI 重排作为兜底”。
+- 本轮不再依赖本地阈值先猜测异常页。因为用户点击全文翻译后本来就需要调用 AI，所以每页用一次双视图请求同时完成结构核对与翻译：逐段结构负责保真，连续全文负责暴露错误边界，AI 只整合确有异常的位置。
+
+### 已完成操作
+
+- `buildAcademicPageReflowPrompt()` 同时发送 `blocks` 和 `continuousText`；系统提示明确两者是同一页的重合视图，禁止重复输出、补写内容或随意改变正确段落。
+- 全文翻译由“每段一个请求”调整为“每页一个双视图请求”。AI 整页结果通过 token 多重计数覆盖率和长度比例安全门后才替换本页；校验失败则保留本地结构并逐段翻译。
+- 新增 `MOBILE_AI_PAGE_REFLOW_VERSION=1`。旧译文也会进入一次“待 AI 对照”，成功页面逐页缓存版本；失败页面不标记完成，允许下次重试。
+- 图注定位增加规范化全文与 `Fig./Figure/Table + 编号` 两级语义键，AI 校正图注文字或改变段落哈希后，原图仍跟随图注。
+
+### 验证记录
+
+- 双视图 prompt、旧译文版本迁移、漏文拒绝、图注语义锚点等定向测试通过；全量 `npm test` 为 87 个测试文件、571 项通过，`npm run typecheck`、`npm run build:mobile` 和 `npm run build` 通过。
+- 本地与固定生产地址的 `npm run visual:check:mobile` 均通过；浏览器 mock 明确验证每个翻译页面同时收到 indexed `blocks` 与完全相同的 `continuousText`，导入/OCR 阶段请求数保持不变，只有点击全文翻译后才逐页调用。人工复核 390×844 与 430×932 截图，未发现横向溢出、关键控件遮挡或图表脱离图注。
+- `npm run dist` 通过；`dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,361,639 字节，SHA-256 为 `23F1741D0BCB23C1D342D8B1D26C000F8746A3D0E0D5319AA8F549FCCA897B68`。`npm audit --omit=dev --json` 显示生产依赖 0 个漏洞。
+- Vercel 生产部署 `dpl_7yctRQVDZSDBRM4dWSrdopkX6Xbr` 已绑定固定地址 `https://ftranslate-mobile.vercel.app`；带缓存穿透参数验证返回 HTTP 200，入口资源为 `assets/index-LtSo75eJ.js`，随后对该线上地址完成整套手机视觉回归。
+- `$env:VISUAL_CHECK_PORT='9342'; npm run visual:check` 仍只被既有 Presentation 质量门拦截：第 2/7/8 页缺少页码来源，第 3/4 页中文 bullet 数不足 2；该失败与本轮手机阅读器改动无关，未被掩盖或改写为通过。
+
+### 剩余风险
+
+- 双视图会让单次请求中的英文输入接近两倍；普通论文单页可控，但极端密集附录页仍可能触发用户所选模型的上下文限制。安全门失败时不会覆盖原文，并退回逐段翻译。
+- AI 能修复输入文本中的段落和阅读顺序，不能从纯文字恢复未被本地提取到的图片像素、公式几何或彻底缺失的文字；这些仍以原 PDF 视图核对。
+- 桌面 Presentation 视觉质量门的 5 项既有问题仍待单独修复；本轮不扩大范围修改无关 PPT 内容。
+
 ## 2026-07-18：段落双向纠错与图注锚点重排
 
 ### 当前结论

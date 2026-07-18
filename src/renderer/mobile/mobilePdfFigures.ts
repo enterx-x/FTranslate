@@ -46,13 +46,37 @@ export interface MobilePdfFigureRegion {
 
 export function resolveMobilePdfFigureOrder(
   region: Pick<MobilePdfFigureRegion, 'kind' | 'hasTextCaption' | 'captionHash' | 'order'>,
-  captionOrders: ReadonlyMap<string, number>
+  captionOrders: ReadonlyMap<string, number>,
+  captionTextOrders?: ReadonlyMap<string, number>,
+  captionText?: string
 ): number {
-  const captionOrder = region.hasTextCaption ? captionOrders.get(region.captionHash) : undefined;
+  const captionTextOrder = buildMobilePdfCaptionLookupKeys(captionText ?? '')
+    .map((key) => captionTextOrders?.get(key))
+    .find((order) => order !== undefined);
+  const captionOrder = region.hasTextCaption
+    ? captionOrders.get(region.captionHash) ?? captionTextOrder
+    : undefined;
   if (captionOrder === undefined || !Number.isFinite(captionOrder)) {
     return region.order;
   }
   return captionOrder + (region.kind === 'table' ? 0.25 : -0.25);
+}
+
+export function normalizeMobilePdfCaptionText(value: string): string {
+  return value.trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+}
+
+export function buildMobilePdfCaptionLookupKeys(value: string): string[] {
+  const normalized = normalizeMobilePdfCaptionText(value);
+  if (!normalized) {
+    return [];
+  }
+  const keys = [`text:${normalized}`];
+  const label = normalized.match(/^(fig(?:ure)?|table)\.?\s*([ivxlcdm]+|\d+[a-z]?)/iu);
+  if (label) {
+    keys.push(`label:${label[1].startsWith('fig') ? 'fig' : 'table'}:${label[2]}`);
+  }
+  return keys;
 }
 
 export function createMobileFigureEntry(region: MobilePdfFigureRegion): MobileTranslationEntry {
