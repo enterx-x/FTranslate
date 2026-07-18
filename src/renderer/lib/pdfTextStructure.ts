@@ -139,7 +139,9 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
  * to live inside a figure/table is removed later by the geometric mobile pass.
  */
 export function buildPdfReaderPageOutline(page: number, items: PositionedPdfTextItem[]): ExtractedPdfBlock[] {
-  const rawLines = buildLines(items.filter((item) => !isPositionedPageSidebarItem(item)));
+  const rawLines = restoreReaderDropCaps(
+    buildLines(items.filter((item) => !isPositionedPageSidebarItem(item)))
+  );
   const metrics = buildPageTextMetrics(rawLines);
   const contentLines = rawLines.filter((line) => shouldKeepLayoutLine(line, metrics));
   const medianLineHeight = median(contentLines.map((line) => line.height)) ?? PARAGRAPH_GAP_THRESHOLD / 2;
@@ -198,12 +200,15 @@ export function buildPdfReaderPageOutline(page: number, items: PositionedPdfText
     }
 
     const previousLine = currentParagraph[currentParagraph.length - 1];
+    const lineIsAffiliation = page === 1 && looksLikeReaderAffiliation(line.text);
+    const previousIsAffiliation = page === 1 && Boolean(previousLine) && looksLikeReaderAffiliation(previousLine.text);
     const paragraphGapThreshold = previousLine
       ? Math.max(medianLineHeight * 2.4, previousLine.height * 1.75, line.height * 1.75)
       : PARAGRAPH_GAP_THRESHOLD;
     if (
       previousLine &&
-      (Math.abs(line.y - previousLine.y) > paragraphGapThreshold ||
+      (lineIsAffiliation !== previousIsAffiliation ||
+        Math.abs(line.y - previousLine.y) > paragraphGapThreshold ||
         Math.abs(line.x - previousLine.x) > COLUMN_SPLIT_THRESHOLD / 2 ||
         hasSignificantReaderFontChange(previousLine, line) ||
         startsIndentedParagraphAfterSentence(previousLine, line))
@@ -264,6 +269,8 @@ function mergeReaderBlockContinuations(blocks: ExtractedPdfBlock[]): ExtractedPd
       );
     const mergeParagraph = previous?.type === 'paragraph' && block.type === 'paragraph' &&
       previous.section === block.section &&
+      !looksLikeReaderAffiliation(previous.original) &&
+      !looksLikeReaderAffiliation(block.original) &&
       !endsWithSentenceBoundary(previous.original) &&
       areReaderParagraphBlocksContiguous(previous, block);
     if (previous && (mergeCaption || mergeParagraph)) {
@@ -309,6 +316,53 @@ function areReaderParagraphBlocksContiguous(previous: ExtractedPdfBlock, next: E
 function isPositionedPageSidebarItem(item: PositionedPdfTextItem): boolean {
   const pageWidth = item.pageWidth ?? 0;
   return /^arxiv:/iu.test(item.str.trim()) && pageWidth > 0 && item.x <= pageWidth * 0.1;
+}
+
+function restoreReaderDropCaps<TItem extends PositionedPdfTextItem>(
+  lines: Array<TextLine<TItem>>
+): Array<TextLine<TItem>> {
+  const medianItemHeight = median(lines.flatMap((line) => line.items.map((item) => item.height))) ?? 0;
+  if (medianItemHeight <= 0) {
+    return lines;
+  }
+  const restored = lines.map((line) => ({ ...line, items: [...line.items] }));
+  for (let index = 0; index < restored.length; index += 1) {
+    const line = restored[index];
+    const cap = line.items.find((candidate) => (
+      /^\p{Lu}$/u.test(candidate.str.trim()) &&
+      candidate.height >= medianItemHeight * 1.55
+    ));
+    if (!cap) {
+      continue;
+    }
+    const remainingItems = line.items.filter((item) => item !== cap);
+    if (remainingItems.length === 0 || cap.x >= Math.min(...remainingItems.map((item) => item.x)) - 2) {
+      continue;
+    }
+    const remainingX = Math.min(...remainingItems.map((item) => item.x));
+    const previous = restored
+      .filter((candidate, candidateIndex) => (
+        candidateIndex !== index &&
+        candidate.y < line.y &&
+        line.y - candidate.y <= Math.max(cap.height * 1.25, medianItemHeight * 3) &&
+        Math.abs(remainingX - candidate.x) <= 36 &&
+        /^\p{Lu}{1,16}\b/u.test(candidate.text.trim())
+      ))
+      .sort((left, right) => Math.abs(line.y - left.y) - Math.abs(line.y - right.y))[0];
+    if (!previous) {
+      continue;
+    }
+    previous.text = `${cap.str.trim()}${previous.text.trimStart()}`;
+    previous.x = Math.min(previous.x, cap.x);
+    previous.items = [cap, ...previous.items];
+    line.items = remainingItems;
+    line.text = normalizeExtractedText(
+      [...remainingItems].sort((left, right) => left.x - right.x).map((item) => item.str).join(' ')
+    );
+    line.x = Math.min(...remainingItems.map((item) => item.x));
+    line.height = Math.max(...remainingItems.map((item) => item.height));
+  }
+  return restored.filter((line) => containsReadableText(line.text));
 }
 
 export function buildPdfDocumentOutline(pages: Array<{ page: number; items: PositionedPdfTextItem[] }>): ExtractedPdfBlock[] {
@@ -681,9 +735,12 @@ function looksLikeInlineFigureReferenceContinuation(previous: TextLine | undefin
 
 function looksLikeReaderAffiliation(text: string): boolean {
   const normalized = text.trim();
+  const numberedPrefix = /^\d+(?:\s*[,;*†‡]\s*\d+)*\s+/u.test(normalized);
+  const affiliationVocabulary = /\b(?:department|university|institute|istituto|institut|school|college|laborator(?:y|ies)|lab|cent(?:er|re)|faculty|technology|robotics|perception|embodied ai)\b/iu;
   if (
-    /^\d+\s+/u.test(normalized) && (
-      /\b(?:department|university|institute|school|college|laborator(?:y|ies)|lab|cent(?:er|re)|faculty)\b/iu.test(normalized) ||
+    numberedPrefix && (
+      affiliationVocabulary.test(normalized) ||
+      (countWords(normalized) >= 7 && (normalized.match(/,/gu) ?? []).length >= 1) ||
       (((normalized.match(/,/gu) ?? []).length >= 2) && /\b(?:are|is)$/iu.test(normalized))
     )
   ) {
@@ -913,6 +970,7 @@ function shouldPreserveCompoundHyphen(prefix: string): boolean {
 
 function normalizeExtractedText(text: string): string {
   return text
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/gu, '')
     .replace(/\s+/gu, ' ')
     .replace(/\s+([,;:!?]|\.(?!\.))/gu, '$1')
     .replace(/([πΠ])\s+(\d)\s*\.\s*(\d)/gu, '$1$2.$3')

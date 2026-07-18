@@ -17,6 +17,7 @@ import type {
   MobileTranslationEntry,
   MobileTranslationSession
 } from './mobileTypes';
+import { summarizeMobileExtractionSources } from './mobileExtractionSource';
 import { isTranslationEntryCurrent } from './mobileTypes';
 
 type MobileReaderMode = 'bilingual' | 'pdf';
@@ -160,6 +161,10 @@ export function MobileReaderScreen({
     entry.figureVersion === MOBILE_PDF_FIGURE_VERSION &&
     Boolean(entry.figureBounds)
   )), [translations]);
+  const extractionSource = useMemo(
+    () => summarizeMobileExtractionSources(translations, paper.pageCount),
+    [paper.pageCount, translations]
+  );
   const hiddenFigureTextHashes = useMemo(() => new Set(
     figureEntries.flatMap((entry) => entry.figureTextHashes ?? [])
   ), [figureEntries]);
@@ -539,8 +544,8 @@ export function MobileReaderScreen({
             <span>{needsLocalOcr
               ? paper.localOcrStatus === 'failed'
                 ? '全文原文提取失败'
-                : `导入后全文提取 · ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页`
-              : `${translatedCount} / ${readableBlocks.length} 段已译${figureEntries.length ? ` · ${figureEntries.length} 个图表` : ''}${pendingTranslationCount ? ` · ${pendingTranslationCount} 段待翻译` : staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}`}</span>
+                : `导入后全文提取 · ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页${extractionSource.textPages || extractionSource.ocrPages ? ` · ${extractionSource.label}` : ''}`
+              : `${translatedCount} / ${readableBlocks.length} 段已译 · ${extractionSource.label}${figureEntries.length ? ` · ${figureEntries.length} 个图表` : ''}${pendingTranslationCount ? ` · ${pendingTranslationCount} 段待翻译` : staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}`}</span>
             <button
               type="button"
               disabled={ocrBusy || (!translatingAll && (extracting || (!needsLocalOcr && readableBlocks.length === 0) || Boolean(translatingHash)))}
@@ -566,7 +571,7 @@ export function MobileReaderScreen({
             onPointerUp={captureSelection}
             onTouchEnd={captureSelection}
           >
-            {extracting ? <div className="mobile-reader-loading">正在读取本机 OCR 缓存…</div> : null}
+            {extracting ? <div className="mobile-reader-loading">正在读取本机原文缓存…</div> : null}
             {!extracting && readableBlocks.length === 0 && needsLocalOcr ? (
               <div className="mobile-reader-loading mobile-ocr-empty">
                 <strong>{paper.localOcrStatus === 'failed' ? '全文原文提取遇到问题' : '正在导入后提取全文'}</strong>
@@ -583,7 +588,7 @@ export function MobileReaderScreen({
             {!extracting && !needsLocalOcr && readableBlocks.length > 0 && translatedCount === 0 && staleTranslationCount === 0 ? (
               <div className="mobile-bilingual-intro">
                 <strong>全文原文已提取</strong>
-                <p>文字层原文或本地 OCR 结果已逐页保存在本机。点击“翻译全文”后才生成中文；扫描页会同时由 AI 保守校对并重排。</p>
+                <p>{extractionSource.detail} 结果已逐页保存在本机。点击“翻译全文”后才生成中文；扫描页会同时由 AI 保守校对并重排。</p>
                 <button type="button" onClick={() => void handleTranslateAll()}>开始全文翻译</button>
               </div>
             ) : null}

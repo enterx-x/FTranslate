@@ -774,4 +774,54 @@ describe('PDF text structure extraction', () => {
       '[36] Huiwon Jang, Sihyun Yu, Heeseung Kwon, Hojin Jeon, Younggyo Seo, and Jinwoo Shin. ContextVLA: Vision-language-action model with amortized multi-frame context.'
     ]);
   });
+
+  it('removes hidden PDF font control characters from reader text', () => {
+    const outline = buildPdfReaderPageOutline(2, [
+      item('The resultant wrench is expressed as \u0014 lambda = rho \u0002 T \u0003.', 55, 90, 245, 9),
+      item('The controller then applies the desired force.', 55, 104, 245, 9)
+    ]);
+
+    expect(outline.map((block) => block.original).join(' ')).toBe(
+      'The resultant wrench is expressed as lambda = rho T. The controller then applies the desired force.'
+    );
+    expect(outline.some((block) => /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(block.original))).toBe(false);
+  });
+
+  it('restores an IEEE drop cap that PDF layout places on the following visual line', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('I. INTRODUCTION', 210, 60, 160, 13),
+      item('N ORDER for humanoid robots to perform a wide range of', 70, 100, 245, 9),
+      item('An unrelated line in the right column.', 340, 106, 210, 9),
+      item('I', 52, 113, 12, 24),
+      item('tasks in daily life and industrial environments, robust control is essential.', 70, 113, 245, 9),
+      item('The robot must respond safely to disturbances.', 70, 127, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph')[0].original).toBe(
+      'IN ORDER for humanoid robots to perform a wide range of tasks in daily life and industrial environments, robust control is essential. The robot must respond safely to disturbances.'
+    );
+  });
+
+  it('keeps page-one affiliation footnotes separate from unfinished body prose', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('Humanoid Co-Manipulation with Haptic Feedback', 90, 45, 400, 18),
+      item('Current policies enable humanoid robots to perform highly agile', 55, 120, 245, 9),
+      item('1 Embodied AI and Robotics Lab, New York University Abu Dhabi, UAE.', 55, 134, 245, 9),
+      item('and dynamic actions across diverse terrains.', 330, 120, 245, 9)
+    ]);
+
+    const originals = outline.map((block) => block.original);
+    expect(originals.some((original) => original.includes('agile 1 Embodied AI'))).toBe(false);
+    expect(originals).toContain('1 Embodied AI and Robotics Lab, New York University Abu Dhabi, UAE.');
+  });
+
+  it('treats numbered non-English institute affiliations as prose', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('Multifingered Force-Aware Control for Humanoid Robots', 90, 45, 400, 18),
+      item('1 Humanoid Sensing and Perception, Istituto Italiano di Tecnologia, Genoa, Italy', 70, 100, 430, 9),
+      item('I. INTRODUCTION', 210, 160, 160, 13)
+    ]);
+
+    expect(outline.find((block) => block.original.includes('Istituto'))?.type).toBe('paragraph');
+  });
 });

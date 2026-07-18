@@ -1,12 +1,12 @@
 # PLAN.md
 
-## 2026-07-18：连续双语忠实提取与三篇真实论文回归
+## 2026-07-18：连续双语忠实提取与十三篇真实论文回归
 
 ### 当前结论
 
 - “提取质量差”的主因不全是 OCR：带文字层论文此前复用了面向 AI 分析的过滤器，并在双栏排序、跨行表题、作者单位、公式和正文内 `Fig.` 引用上发生语义误判。
 - 手机阅读已切换为独立的忠实提取器；只有图表区域内的单元格/图内标签按几何位置排除，作者、单位、短科研片段、图注和参考文献不再因分析规则被丢弃。
-- 本地提取缓存升级到版本 `5`，图表缓存升级到版本 `2`。旧缓存会自动失效并从原 PDF 重新提取，不要求用户删除论文或清除 Safari 网站数据。
+- 本地提取缓存升级到版本 `6`，图表缓存保持版本 `2`。旧缓存会自动失效并从原 PDF 重新提取，不要求用户删除论文或清除 Safari 网站数据。
 
 ### 已完成操作
 
@@ -14,24 +14,28 @@
 - 支持 `TABLE I` 无标点的 IEEE 表题、两行表题和带单位续行的表题；表格裁切按真实正文边界结束，单元格文字不会混入小说式正文。
 - 图表区域在正文重排前按几何坐标排除原始文字；完整图注保留。正文内部换行后的 `Fig.` 引用会结合上一行上下文判断，不再误建图表裁切区。
 - 第一页数字作者单位、机构脚注按普通正文处理；跨行大章节标题和图注会恢复成一个块，参考文献继续保留。
+- 清除 PDF 内嵌字体产生的 C0 控制字符，并恢复 IEEE 正文首字母下沉被 PDF.js 错放到下一行的问题；双栏中间插入另一栏文本时也会按同栏坐标寻找首行。
+- 阅读器按实际缓存逐页统计来源，明确显示“PDF 文字层 N 页”“本地 OCR N 页”或两者的混合页数；通用原文缓存不再显示成“OCR 缓存”。
 
 ### 真实 PDF 验证
 
 - `T-BAL_CoP-ESP32_2025.12.24.pdf`：7/7 页文字层完成；两行 `TABLE I` 表题完整，表格保留为原图，3 条伺服公式独立于说明正文，图 7 两行图注完整。
 - `T-DATA_HumanoidVTA_2025.10.28.pdf`：4/4 页文字层完成；跨栏 `TABLE I` 与表名合并，表格单元格不进入正文，`III... DATASET` 合并为一个章节标题，正文内 `Fig. 2. This result...` 保持正文而非伪图注。
 - `T-HRI_SGR_2025.3.5.pdf`：8/8 页文字层完成；作者机构脚注不再成为大标题，图注、章节和参考文献保留。
-- 三篇共 19 页全部结束且未触发 Tesseract OCR；真实文件探针包含表格、公式、伪图注和单位字号断言，验证后已从仓库删除，未提交用户 PDF 或临时截图。
+- 扩展为用户提供的 13 篇真实论文，共 122/122 页全部结束且来源均为 `text`，OCR 页数为 0；总计提取 1,570 个阅读块和 136 个原图区域，无空页、替换字符或隐藏控制字符。
+- `T TouchDreaming 2026.4.14.pdf`：14/14 页文字层完成、155 个阅读块、13 个原图区域、OCR 0 页；与此前测试副本的文件大小和 SHA-256 完全一致，排除“手机上传改变 PDF”的假设。
+- 真实文件探针覆盖 1.55–61.58 MB、4–15 页论文，验证后从仓库删除，不提交用户 PDF、用户绝对路径或临时探针。
 
 ### 验证记录
 
-- `npx vitest run src/renderer/lib/pdfTextStructure.test.ts src/renderer/mobile/mobileLocalOcr.test.ts src/renderer/mobile/mobilePdfFigures.test.ts`：5 个测试文件、139 项测试通过。
-- 三篇真实 PDF 全页探针：1 项集成回归通过，19/19 页来源均为 `text`，无控制字符块、无 OCR fallback。
-- `npm test` / `npm run build` / `npm run dist`：全量 86 个测试文件、545 项测试全部通过；TypeScript、桌面 renderer、Electron 主进程与 NSIS 打包均成功。
+- 13 篇真实 PDF 全页生产链路探针：122/122 页来源均为 `text`、OCR 0 页；无空页、替换字符、隐藏控制字符或失败文件。Touch Dreaming 单篇为 14/14 文字层页、155 个阅读块、13 个原图区域。
+- `npx vitest run --dir src renderer/lib/pdfTextStructure.test.ts renderer/mobile/mobileExtractionSource.test.ts renderer/mobile/mobileTypes.test.ts`：3 个测试文件、70 项测试通过；另用真实 TACT 页面验证首字母下沉恢复为 `IN order ... tasks`。
+- `npm test` / `npm run build` / `npm run dist`：全量 87 个测试文件、551 项测试全部通过；TypeScript、桌面 renderer、Electron 主进程与 NSIS 打包均成功。
 - `npm run build:mobile` 与 `npm run ios:sync`：通过；最新网页资源已同步到 Capacitor iOS 工程，3 个原生插件声明保持完整。
-- `npm run visual:check:mobile`：通过；自动覆盖图表插入、导入即全文提取、退出/切换后的缓存恢复、明确点击后才翻译、小说式双语排版、API Key 与论文恢复。人工复核 `.tmp-mobile-visual-check/03b-reader-inline-figure-390x844.png`、`08b-reader-scanned-bilingual-390x844.png` 和 `08d-reader-scanned-novel-430x932.png`，未发现图表丢失、段落卡片化、文字遮挡或横向溢出。
-- `npm run visual:check`：桌面全页面视觉回归通过；人工复核 `.tmp-visual-check/whole-pdf-reader.png`、`whole-pdf-figures.png` 和 `home.png`，共享 PDF 结构改动未破坏桌面阅读器和项目空间。
-- Windows 安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 114,098,914 字节，SHA-256 为 `846BE7874C7E5D5924032A90817BBC0856C714EBC2FDC3BC4E64E6B89AB5A763`。
-- `npx vercel --prod`：部署 `dpl_BvZDCQm7uXJBP1Z46XSsE46oxk6f` 已完成并绑定 `https://ftranslate-mobile.vercel.app`；固定地址和本轮 `assets/index-TxAqlLl7.js` 均实测 HTTP 200。
+- `npm run visual:check:mobile`：通过；人工复核 `.tmp-mobile-visual-check/03b-reader-inline-figure-390x844.png` 与 `08b-reader-scanned-ocr-only-390x844.png`，分别明确显示“PDF 文字层 1 页；未启动本地 OCR”和“本地 OCR 3 页”，390px 下无文字遮挡、按钮冲突或横向溢出。
+- `npm run visual:check`：桌面全页面视觉回归通过；人工复核 `.tmp-visual-check/whole-pdf-reader.png`，共享 PDF 结构改动未破坏桌面阅读器。
+- Windows 安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,362,066 字节，SHA-256 为 `82DAA3A9CD80DDFC5662B508BCF8DAC6C5470009BF0B664DD0F4C00C7A1CA85D`。
+- `npx vercel --prod`：部署 `dpl_5L4GfoyTspC26hgqzpck1q71zHBK` 已完成并绑定 `https://ftranslate-mobile.vercel.app`；固定地址和本轮 `assets/index-DFMeFBSh.js` 均实测 HTTP 200。
 - `npm audit --omit=dev --json`：生产依赖 0 个已知漏洞；Vercel 完整开发依赖安装仍报告 5 个审计告警，不进入移动网页生产运行依赖。
 
 ### 剩余风险
@@ -826,6 +830,7 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 
 | 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
 | --- | --- | --- | --- | --- |
+| 2026-07-18 | Touch Dreaming 在手机上看似只有它需要 OCR | 文件实际与已验证副本逐字节相同；旧界面把通用原文缓存写成“OCR 缓存”，旧版本解析结果也可能继续恢复 | 已确认 14/14 页全部来自 PDF 文字层、OCR 0 页；缓存升到 v6，界面按页显示真实来源并部署生产 | iPhone Safari 正常刷新一次后重开该论文；看到“PDF 文字层 14 页”即可确认未启动 OCR |
 | 2026-07-18 | 精扫可能覆盖更完整首扫，长文写入越积越慢，配置读取失败可能让论文库看似消失 | OCR 候选无质量择优和截断保护；每个中间论文库快照都排队写入；论文库与设置通过同一个 `Promise.all` 恢复 | 已加入候选评分/截断保护、Canvas 直传与即时释放、待写快照合并、论文库/设置独立 settled 恢复；527 项测试及本地/线上刷新恢复回归通过 | 用原 14 页扫描件真机记录总耗时、峰值发热、精扫页数；切后台后重开应从首个缺页续跑 |
 | 2026-07-17 | 扫描 OCR 偏慢，退出后论文似乎未保存 | 所有扫描页固定使用 2600px 高精度识别；启动异步读取的旧空论文库可能晚返回并覆盖导入结果，论文库进度写入也没有全局顺序 | 已改为 2100px 快速首扫、低质量页 2600px 精扫；网页索引同步落盘、写入串行、启动水合合并；523 项测试及导入后整页刷新恢复回归通过 | 用原 14 页扫描论文真机记录普通页/精扫页耗时；不要清除 Safari 网站数据，若系统冻结 OCR，重开后应从首个缺页续跑 |
 | 2026-07-17 | OCR 超时后状态可能复活、删除运行中论文等待过久、图表瞬时失败无法重试 | 超时只结束外层 Promise，底层写入与 PDF.js 页面任务没有 job 生命周期守卫；删除同步等待 OCR；失败 Promise 留在页缓存 | 已加入 job 前后守卫、后台删除排空与二次清理、失败页淘汰、loading task 销毁和销毁后禁止迟到绘制；520 项测试及本地/线上移动回归通过 | 真机对正在处理最后一页的 14 页论文执行一次删除或等待超时，确认状态不会回跳且同文件稍后可重新导入 |
