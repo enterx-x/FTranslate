@@ -38,6 +38,7 @@ interface CorpusPageReport {
   mode: LocalOcrPageResult['extractionMode'];
   blockCount: number;
   figureCount: number;
+  structuredTableCount: number;
   captionedFigureCount: number;
   unmatchedCaptionFigureCount: number;
   maxBlockLength: number;
@@ -51,6 +52,7 @@ interface CorpusPageReport {
   longestBlockSample: string;
   longestBlockText: string;
   blocks: Array<{ type: string; text: string }>;
+  structuredTables: Array<{ caption: string; headers: string[]; rows: string[][] }>;
 }
 
 interface CorpusPaperReport {
@@ -63,6 +65,7 @@ interface CorpusPaperReport {
   ocrPages: number;
   compatibilityPages: number;
   totalFigures: number;
+  structuredTables: number;
   captionedFigures: number;
   unmatchedCaptionFigures: number;
   maxBlockLength: number;
@@ -110,6 +113,7 @@ function summarizePage(result: LocalOcrPageResult): CorpusPageReport {
     mode: result.extractionMode,
     blockCount: result.blocks.length,
     figureCount: result.figures.length,
+    structuredTableCount: result.figures.filter((region) => Boolean(region.table)).length,
     captionedFigureCount: result.figures.filter((region) => region.hasTextCaption).length,
     unmatchedCaptionFigureCount: unmatchedCaptionFigures.length,
     maxBlockLength: Math.max(0, ...result.blocks.map(({ block }) => block.original.length)),
@@ -130,7 +134,10 @@ function summarizePage(result: LocalOcrPageResult): CorpusPageReport {
       .map(({ block }) => block.original.slice(0, 220)),
     longestBlockSample: longestBlock.slice(0, 300),
     longestBlockText: longestBlock,
-    blocks: result.blocks.map(({ block }) => ({ type: block.type, text: block.original }))
+    blocks: result.blocks.map(({ block }) => ({ type: block.type, text: block.original })),
+    structuredTables: result.figures.flatMap((region) => region.table
+      ? [{ caption: region.caption, headers: region.table.headers, rows: region.table.rows }]
+      : [])
   };
 }
 
@@ -162,6 +169,7 @@ corpusDescribe('mobile real-PDF corpus regression', () => {
         ocrPages: pages.filter((page) => page.source === 'ocr').length,
         compatibilityPages: pages.filter((page) => page.mode === 'compatibility').length,
         totalFigures: pages.reduce((sum, page) => sum + page.figureCount, 0),
+        structuredTables: pages.reduce((sum, page) => sum + page.structuredTableCount, 0),
         captionedFigures: pages.reduce((sum, page) => sum + page.captionedFigureCount, 0),
         unmatchedCaptionFigures: pages.reduce((sum, page) => sum + page.unmatchedCaptionFigureCount, 0),
         maxBlockLength: Math.max(0, ...pages.map((page) => page.maxBlockLength)),
@@ -175,6 +183,7 @@ corpusDescribe('mobile real-PDF corpus regression', () => {
       console.info(
         `[mobile-pdf-corpus] ${report.fileName}: ${report.pageCount} pages, ` +
         `${report.totalBlocks} blocks, ${report.ocrPages} OCR, ` +
+        `${report.structuredTables} rebuilt tables, ` +
         `${report.unmatchedCaptionFigures} unmatched figures, ` +
         `${report.repairableDanglingHyphens} repairable hyphens, max block ${report.maxBlockLength}`
       );

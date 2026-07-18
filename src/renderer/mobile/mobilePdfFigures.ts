@@ -8,11 +8,11 @@ import {
   type PdfBlockBounds,
   type PositionedPdfTextItem
 } from '../lib/pdfTextStructure';
-import type { MobileTranslationEntry } from './mobileTypes';
+import type { MobileStructuredTable, MobileTranslationEntry } from './mobileTypes';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
-export const MOBILE_PDF_FIGURE_VERSION = 2;
+export const MOBILE_PDF_FIGURE_VERSION = 3;
 
 export interface PdfPaintedImageBounds {
   x: number;
@@ -42,6 +42,7 @@ export interface MobilePdfFigureRegion {
   bounds: Required<Pick<PdfBlockBounds, 'x' | 'y' | 'width' | 'height' | 'pageWidth' | 'pageHeight'>>;
   captionBounds?: PdfBlockBounds;
   hiddenTextHashes: string[];
+  table?: MobileStructuredTable;
 }
 
 export function resolveMobilePdfFigureOrder(
@@ -94,7 +95,8 @@ export function createMobileFigureEntry(region: MobilePdfFigureRegion): MobileTr
     figureBounds: region.bounds,
     figureCaptionHash: region.captionHash,
     figureHasTextCaption: region.hasTextCaption,
-    figureTextHashes: region.hiddenTextHashes
+    figureTextHashes: region.hiddenTextHashes,
+    ...(region.table ? { figureTable: region.table } : {})
   };
 }
 
@@ -105,6 +107,7 @@ interface DetectPdfFigureRegionsInput {
   blocks: ExtractedPdfBlock[];
   anchors: PdfCaptionAnchor[];
   imageBounds: PdfPaintedImageBounds[];
+  textItems?: PositionedPdfTextItem[];
 }
 
 export async function extractPdfFigureRegionsFromPage(
@@ -126,7 +129,8 @@ export async function extractPdfFigureRegionsFromPage(
     pageHeight: viewport.height,
     blocks,
     anchors,
-    imageBounds
+    imageBounds,
+    textItems: items
   });
 }
 
@@ -311,6 +315,10 @@ export function detectPdfFigureRegions(input: DetectPdfFigureRegionsInput): Mobi
       return [];
     }
 
+    const structuredTable = anchor.kind === 'table' && input.textItems
+      ? reconstructPdfTableFromTextItems(input.textItems, anchor, scope, roughBounds)
+      : null;
+
     const paintedImages = input.imageBounds.filter((bounds) => (
       horizontalOverlapRatio(bounds, roughBounds) > 0.18 && verticalOverlapRatio(bounds, roughBounds) > 0.18
     ));
@@ -320,7 +328,7 @@ export function detectPdfFigureRegions(input: DetectPdfFigureRegionsInput): Mobi
       paintedUnion.width * paintedUnion.height >= input.pageWidth * input.pageHeight * 0.012 &&
       paintedUnion.height >= minimumHeight * 0.75
     );
-    const unresolvedCrop = usePaintedUnion ? expandBounds(paintedUnion!, 4, roughBounds) : roughBounds;
+    const unresolvedCrop = structuredTable?.bounds ?? (usePaintedUnion ? expandBounds(paintedUnion!, 4, roughBounds) : roughBounds);
     const heightLimitedCrop = !usePaintedUnion && unresolvedCrop.height > input.pageHeight * 0.5
       ? {
           ...unresolvedCrop,
@@ -333,7 +341,7 @@ export function detectPdfFigureRegions(input: DetectPdfFigureRegionsInput): Mobi
       input.pageWidth,
       input.pageHeight
     );
-    if (crop.width < 40 || crop.height < minimumHeight) {
+    if (crop.width < 40 || (!structuredTable && crop.height < minimumHeight)) {
       return [];
     }
 
@@ -354,7 +362,8 @@ export function detectPdfFigureRegions(input: DetectPdfFigureRegionsInput): Mobi
       crop.x.toFixed(2),
       crop.y.toFixed(2),
       crop.width.toFixed(2),
-      crop.height.toFixed(2)
+      crop.height.toFixed(2),
+      structuredTable ? JSON.stringify(structuredTable.table) : ''
     ].join('|'));
     return [{
       id: `pdf-figure-${input.page}-${sourceHash}`,
@@ -370,9 +379,299 @@ export function detectPdfFigureRegions(input: DetectPdfFigureRegionsInput): Mobi
         pageHeight: input.pageHeight
       },
       captionBounds: anchor.bounds,
-      hiddenTextHashes
+      hiddenTextHashes,
+      ...(structuredTable ? { table: structuredTable.table } : {})
     }];
   });
+}
+
+interface PdfTableTextSegment extends PdfPaintedImageBounds {
+  text: string;
+}
+
+interface PdfTableTextLine {
+  y: number;
+  height: number;
+  segments: PdfTableTextSegment[];
+}
+
+interface ReconstructedPdfTable {
+  table: MobileStructuredTable;
+  bounds: PdfPaintedImageBounds;
+}
+
+export function reconstructPdfTableFromTextItems(
+  items: PositionedPdfTextItem[],
+  anchor: PdfCaptionAnchor,
+  scope: PdfBlockBounds,
+  roughBounds: PdfPaintedImageBounds
+): ReconstructedPdfTable | null {
+  const lines = buildPdfTableTextLines(items, scope, roughBounds);
+  const multiCellLines = lines.filter((line) => line.segments.length >= 2 && line.segments.length <= 12);
+  if (multiCellLines.length < 3) {
+    return null;
+  }
+
+  const countFrequency = new Map<number, number>();
+  multiCellLines.forEach((line) => {
+    countFrequency.set(line.segments.length, (countFrequency.get(line.segments.length) ?? 0) + 1);
+  });
+  const [columnCount, frequency = 0] = [...countFrequency.entries()]
+    .sort((left, right) => right[1] - left[1] || right[0] - left[0])[0] ?? [];
+  if (!columnCount || columnCount < 2 || columnCount > 12 || frequency < (columnCount === 2 ? 3 : 2)) {
+    return null;
+  }
+
+  const dominantLines = lines.filter((line) => line.segments.length === columnCount);
+  if (dominantLines.length < 2) {
+    return null;
+  }
+  const columnCenters = Array.from({ length: columnCount }, (_, columnIndex) => medianNumber(
+    dominantLines.map((line) => {
+      const segment = line.segments[columnIndex];
+      return segment.x + segment.width / 2;
+    })
+  ));
+  if (columnCenters.some((center, index) => (
+    !Number.isFinite(center) || (index > 0 && center - columnCenters[index - 1] < 10)
+  ))) {
+    return null;
+  }
+
+  const firstMultiCellIndex = lines.findIndex((line) => line.segments.length >= 2);
+  const firstDominantIndex = lines.findIndex((line) => line.segments.length === columnCount);
+  if (firstMultiCellIndex < 0 || firstDominantIndex < firstMultiCellIndex || firstDominantIndex - firstMultiCellIndex > 5) {
+    return null;
+  }
+  const hasWrappedHeader = firstDominantIndex > firstMultiCellIndex;
+  const headerStartIndex = firstMultiCellIndex;
+  const bodyStartIndex = hasWrappedHeader ? firstDominantIndex : firstDominantIndex + 1;
+  const minimumPopulatedCells = Math.max(2, Math.ceil(columnCount * 0.6));
+  const assignedLines = lines.map((line) => assignPdfTableLine(line, columnCenters));
+  const strongBodyIndices = assignedLines
+    .map((cells, index) => ({ cells, index }))
+    .filter(({ cells, index }) => index >= bodyStartIndex && countPopulatedTableCells(cells) >= minimumPopulatedCells)
+    .map(({ index }) => index);
+  if (strongBodyIndices.length < 2) {
+    return null;
+  }
+  const lastBodyIndex = strongBodyIndices[strongBodyIndices.length - 1];
+  const selectedLines = lines.slice(headerStartIndex, lastBodyIndex + 1);
+  const selectedAssignedLines = assignedLines.slice(headerStartIndex, lastBodyIndex + 1);
+
+  const headerLineCount = Math.max(1, bodyStartIndex - headerStartIndex);
+  const headers = Array.from({ length: columnCount }, () => '');
+  selectedAssignedLines.slice(0, headerLineCount).forEach((cells) => appendPdfTableCells(headers, cells));
+  if (headers.filter(Boolean).length < Math.ceil(columnCount * 0.7)) {
+    return null;
+  }
+
+  const bodyLines = selectedLines.slice(headerLineCount);
+  const bodyCells = selectedAssignedLines.slice(headerLineCount);
+  const strongBodyY = bodyLines
+    .map((line, index) => ({ line, cells: bodyCells[index] }))
+    .filter(({ cells }) => countPopulatedTableCells(cells) >= minimumPopulatedCells)
+    .map(({ line }) => line.y);
+  const rowStep = medianNumber(strongBodyY.slice(1).map((y, index) => y - strongBodyY[index])) || 8;
+  const rows: string[][] = [];
+  bodyLines.forEach((line, index) => {
+    const cells = bodyCells[index];
+    const previousLine = bodyLines[index - 1];
+    const populatedCells = countPopulatedTableCells(cells);
+    const continuesPrevious = rows.length > 0 && Boolean(previousLine) && (
+      line.y - previousLine.y < Math.max(2.8, rowStep * 0.62) ||
+      populatedCells < minimumPopulatedCells
+    );
+    if (continuesPrevious) {
+      appendPdfTableCells(rows[rows.length - 1], cells);
+    } else if (populatedCells >= minimumPopulatedCells) {
+      rows.push(cells.map((cell) => normalizePdfTableCell(cell)));
+    }
+  });
+
+  const normalizedHeaders = headers.map((header) => normalizePdfTableCell(header));
+  const normalizedRows = rows
+    .map((row) => row.map((cell) => normalizePdfTableCell(cell)))
+    .filter((row) => countPopulatedTableCells(row) >= minimumPopulatedCells);
+  const populatedRatio = normalizedRows.reduce(
+    (total, row) => total + countPopulatedTableCells(row),
+    0
+  ) / Math.max(1, normalizedRows.length * columnCount);
+  const averageCellLength = normalizedRows.flat().reduce((total, cell) => total + cell.length, 0) /
+    Math.max(1, normalizedRows.length * columnCount);
+  const averageHeaderLength = normalizedHeaders.reduce((total, header) => total + header.length, 0) /
+    Math.max(1, normalizedHeaders.length);
+  const formulaHeavyCellRatio = normalizedRows.flat().filter(isFormulaHeavyTableCell).length /
+    Math.max(1, normalizedRows.length * columnCount);
+  const repeatedHeaderToken = hasRepeatedPdfTableHeaderToken(normalizedHeaders);
+  const numericHeaderRatio = calculatePdfTableNumericHeaderRatio(normalizedHeaders);
+  if (
+    normalizedRows.length < 2 ||
+    populatedRatio < 0.68 ||
+    averageCellLength > (columnCount === 2 ? 72 : 110) ||
+    (formulaHeavyCellRatio >= 0.55 && averageHeaderLength > 28) ||
+    (columnCount === 2 && repeatedHeaderToken) ||
+    numericHeaderRatio >= 0.55
+  ) {
+    return null;
+  }
+
+  const tableSegments = selectedLines.flatMap((line) => line.segments);
+  const minX = Math.min(...tableSegments.map((segment) => segment.x));
+  const minY = Math.min(...tableSegments.map((segment) => segment.y));
+  const maxX = Math.max(...tableSegments.map((segment) => segment.x + segment.width));
+  const maxY = Math.max(...tableSegments.map((segment) => segment.y + segment.height));
+  const bounds = clampBounds({
+    x: Math.max(scope.x, minX - 5),
+    y: Math.max(roughBounds.y, minY - 4),
+    width: Math.min(scope.x + scope.width, maxX + 5) - Math.max(scope.x, minX - 5),
+    height: Math.min(roughBounds.y + roughBounds.height, maxY + 4) - Math.max(roughBounds.y, minY - 4)
+  }, anchor.bounds.pageWidth ?? scope.x + scope.width, anchor.bounds.pageHeight ?? roughBounds.y + roughBounds.height);
+
+  return {
+    table: { headers: normalizedHeaders, rows: normalizedRows },
+    bounds
+  };
+}
+
+function buildPdfTableTextLines(
+  items: PositionedPdfTextItem[],
+  scope: PdfBlockBounds,
+  roughBounds: PdfPaintedImageBounds
+): PdfTableTextLine[] {
+  const candidates = items.filter((item) => {
+    const centerX = item.x + item.width / 2;
+    const centerY = item.y + item.height / 2;
+    return (
+      centerX >= scope.x && centerX <= scope.x + scope.width &&
+      centerY >= roughBounds.y && centerY <= roughBounds.y + roughBounds.height
+    );
+  }).sort((left, right) => left.y - right.y || left.x - right.x);
+  const groups: PositionedPdfTextItem[][] = [];
+  for (const item of candidates) {
+    const group = groups.find((candidate) => (
+      Math.abs(medianNumber(candidate.map((entry) => entry.y)) - item.y) <= Math.max(1.8, Math.min(2.6, item.height * 0.42))
+    ));
+    if (group) {
+      group.push(item);
+    } else {
+      groups.push([item]);
+    }
+  }
+  return groups.flatMap((group): PdfTableTextLine[] => {
+    const sorted = [...group].sort((left, right) => left.x - right.x);
+    const medianHeight = medianNumber(sorted.map((item) => item.height)) || 6;
+    // Academic tables often leave only a narrow printable gutter between a
+    // range cell and the next label. A prose-sized gap merges those columns.
+    const segmentGap = Math.max(5.5, medianHeight * 0.8);
+    const segmentGroups: PositionedPdfTextItem[][] = [];
+    for (const item of sorted) {
+      const segment = segmentGroups[segmentGroups.length - 1];
+      const previous = segment?.[segment.length - 1];
+      if (!segment || (previous && item.x - (previous.x + previous.width) > segmentGap)) {
+        segmentGroups.push([item]);
+      } else {
+        segment.push(item);
+      }
+    }
+    const segments = segmentGroups.flatMap((segmentItems): PdfTableTextSegment[] => {
+      const text = normalizePdfLine(segmentItems.map((item) => item.str).join(' '));
+      if (!text) {
+        return [];
+      }
+      const minX = Math.min(...segmentItems.map((item) => item.x));
+      const minY = Math.min(...segmentItems.map((item) => item.y));
+      const maxX = Math.max(...segmentItems.map((item) => item.x + item.width));
+      const maxY = Math.max(...segmentItems.map((item) => item.y + item.height));
+      return [{ text, x: minX, y: minY, width: maxX - minX, height: maxY - minY }];
+    });
+    return segments.length > 0
+      ? [{
+          y: medianNumber(sorted.map((item) => item.y)),
+          height: medianHeight,
+          segments
+        }]
+      : [];
+  }).sort((left, right) => left.y - right.y);
+}
+
+function assignPdfTableLine(line: PdfTableTextLine, columnCenters: number[]): string[] {
+  const cells = Array.from({ length: columnCenters.length }, () => '');
+  for (const segment of line.segments) {
+    const center = segment.x + segment.width / 2;
+    const columnIndex = columnCenters.reduce((bestIndex, candidate, index) => (
+      Math.abs(candidate - center) < Math.abs(columnCenters[bestIndex] - center) ? index : bestIndex
+    ), 0);
+    cells[columnIndex] = joinPdfTableCellText(cells[columnIndex], segment.text);
+  }
+  return cells;
+}
+
+function appendPdfTableCells(target: string[], incoming: string[]): void {
+  incoming.forEach((cell, index) => {
+    target[index] = joinPdfTableCellText(target[index] ?? '', cell);
+  });
+}
+
+function joinPdfTableCellText(left: string, right: string): string {
+  const previous = left.trim();
+  const next = right.trim();
+  if (!previous) {
+    return next;
+  }
+  if (!next) {
+    return previous;
+  }
+  return /[-\u00ad\u2010-\u2015]$/u.test(previous)
+    ? `${previous}${next}`
+    : `${previous} ${next}`;
+}
+
+function normalizePdfTableCell(value: string): string {
+  return normalizePdfLine(value).replace(/\s*\u0000\s*/gu, ' ').trim();
+}
+
+function countPopulatedTableCells(cells: string[]): number {
+  return cells.filter((cell) => cell.trim()).length;
+}
+
+function isFormulaHeavyTableCell(value: string): boolean {
+  const text = value.trim();
+  if (!text) {
+    return false;
+  }
+  const formulaTokens = text.match(/:=|\|\||[_^]|[=+*/<>]|[∑∏√στωφθψ]/gu) ?? [];
+  return formulaTokens.length >= 2 || (formulaTokens.length >= 1 && /\d/u.test(text));
+}
+
+function hasRepeatedPdfTableHeaderToken(headers: string[]): boolean {
+  const tokens = headers
+    .join(' ')
+    .toLowerCase()
+    .match(/[\p{L}\p{N}]+/gu) ?? [];
+  const structuralTokens = new Set(['term', 'weight', 'method', 'range', 'parameter', 'metric', 'value']);
+  const frequency = new Map<string, number>();
+  tokens.forEach((token) => {
+    if (structuralTokens.has(token)) {
+      frequency.set(token, (frequency.get(token) ?? 0) + 1);
+    }
+  });
+  return [...frequency.values()].some((count) => count >= 2);
+}
+
+function calculatePdfTableNumericHeaderRatio(headers: string[]): number {
+  const tokens = headers.join(' ').match(/[\p{L}\p{N}]+/gu) ?? [];
+  const numericTokens = tokens.filter((token) => /^\d+$/u.test(token)).length;
+  return numericTokens / Math.max(1, tokens.length);
+}
+
+function medianNumber(values: number[]): number {
+  const sorted = values.filter(Number.isFinite).sort((left, right) => left - right);
+  if (sorted.length === 0) {
+    return 0;
+  }
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 }
 
 export interface MobilePdfFigureRenderer {

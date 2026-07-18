@@ -52,6 +52,11 @@ export interface MobileFigureBounds {
   pageHeight: number;
 }
 
+export interface MobileStructuredTable {
+  headers: string[];
+  rows: string[][];
+}
+
 export interface MobileAcademicTerm {
   english: string;
   chinese: string;
@@ -78,6 +83,7 @@ export interface MobileTranslationEntry {
   figureCaptionHash?: string;
   figureHasTextCaption?: boolean;
   figureTextHashes?: string[];
+  figureTable?: MobileStructuredTable;
 }
 
 export interface MobileTranslationPreferences {
@@ -489,6 +495,21 @@ function isTranslationEntry(value: unknown): value is MobileTranslationEntry {
           typeof term === 'object' &&
           typeof term.english === 'string' &&
           typeof term.chinese === 'string'
+        ))
+      )
+    ) &&
+    (
+      entry.figureTable === undefined ||
+      (
+        Array.isArray(entry.figureTable.headers) &&
+        entry.figureTable.headers.length >= 2 &&
+        entry.figureTable.headers.length <= 12 &&
+        entry.figureTable.headers.every((cell) => typeof cell === 'string') &&
+        Array.isArray(entry.figureTable.rows) &&
+        entry.figureTable.rows.every((row) => (
+          Array.isArray(row) &&
+          row.length === entry.figureTable!.headers.length &&
+          row.every((cell) => typeof cell === 'string')
         ))
       )
     )

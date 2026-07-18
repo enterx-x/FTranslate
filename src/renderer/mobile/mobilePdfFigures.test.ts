@@ -4,6 +4,7 @@ import type { ExtractedPdfBlock, PositionedPdfTextItem } from '../lib/pdfTextStr
 import {
   buildMobilePdfCaptionLookupKeys,
   buildPdfCaptionAnchors,
+  createMobileFigureEntry,
   createMobilePdfFigureRenderer,
   detectPdfFigureRegions,
   resolveMobilePdfFigureOrder,
@@ -218,6 +219,157 @@ describe('mobile PDF figure recovery', () => {
         hasTextCaption: true
       })
     ]);
+  });
+
+  it('reconstructs a multi-line academic table into readable rows instead of a page crop', () => {
+    const blocks = [
+      block('table-i', 'TABLE I: Comparisons to previous humanoid manipulation learning systems', 'caption', 54, 78, 245, 12),
+      block('section-a', 'A. Humanoid Whole-Body Control and Teleoperation for Manipulation', 'heading', 54, 225, 245, 22)
+    ];
+    const textItems = [
+      item('End-Effector', 147, 105, 34, 6),
+      item('Whole-', 205, 105, 20, 6),
+      item('Touch', 237, 105, 16, 6),
+      item('Touch', 270, 105, 16, 6),
+      item('Method', 82, 108.6, 21, 6),
+      item('Dexterity', 152, 112.3, 25, 6),
+      item('Body', 208, 112.3, 14, 6),
+      item('Sensing', 235, 112.3, 21, 6),
+      item('Modeling', 266, 112.3, 26, 6),
+      item('OmniH2O [1]', 74, 121.8, 38, 6),
+      item('Dex-Hand Full', 145, 121.8, 40, 6),
+      item('✓', 212, 121.8, 5, 6),
+      item('✗', 243, 121.8, 5, 6),
+      item('✗', 277, 121.8, 5, 6),
+      item('ViTacFormer [12]', 69, 130.7, 48, 6),
+      item('Dex-Hand Full', 145, 130.7, 40, 6),
+      item('✗', 212, 130.7, 5, 6),
+      item('✓', 243, 130.7, 5, 6),
+      item('✓', 277, 130.7, 5, 6),
+      item('Ours', 86, 139.6, 14, 6),
+      item('Dex-Hand Full', 145, 139.6, 40, 6),
+      item('✓', 212, 139.6, 5, 6),
+      item('✓', 243, 139.6, 5, 6),
+      item('✓', 277, 139.6, 5, 6)
+    ];
+    const regions = detectPdfFigureRegions({
+      page: 3,
+      pageWidth: 612,
+      pageHeight: 792,
+      blocks,
+      anchors: buildPdfCaptionAnchors([], blocks),
+      imageBounds: [],
+      textItems
+    });
+
+    expect(regions).toHaveLength(1);
+    expect(regions[0].table).toEqual({
+      headers: ['Method', 'End-Effector Dexterity', 'Whole-Body', 'Touch Sensing', 'Touch Modeling'],
+      rows: [
+        ['OmniH2O [1]', 'Dex-Hand Full', '✓', '✗', '✗'],
+        ['ViTacFormer [12]', 'Dex-Hand Full', '✗', '✓', '✓'],
+        ['Ours', 'Dex-Hand Full', '✓', '✓', '✓']
+      ]
+    });
+    expect(regions[0].bounds.y + regions[0].bounds.height).toBeLessThan(170);
+    expect(createMobileFigureEntry(regions[0]).figureTable).toEqual(regions[0].table);
+  });
+
+  it('keeps adjacent table columns separate when the printable gap is narrow', () => {
+    const blocks = [
+      block('table-iv', 'TABLE IV: Domain randomizations', 'caption', 54, 292, 245, 12)
+    ];
+    const textItems = [
+      item('Parameter', 66.3, 310.3, 36.2, 8.4),
+      item('Range', 136.6, 310.3, 21.7, 8.4),
+      item('Parameter', 173.2, 310.3, 36.2, 8.4),
+      item('Range', 250.7, 310.3, 21.7, 8.4),
+      item('Angular velocity', 66.3, 323.9, 54.5, 8.4),
+      item('± 0.2 rad/s', 129.6, 323.9, 35.7, 8.4),
+      item('Static friction', 173.2, 323.9, 44.4, 8.4),
+      item('[0.6, 1.0]', 245.4, 323.9, 32.4, 8.4),
+      item('Joint velocity', 66.3, 332.3, 43.9, 8.4),
+      item('± 1.5 rad/s', 129.6, 332.3, 35.7, 8.4),
+      item('Base mass', 173.2, 332.3, 34.2, 8.4),
+      item('[-5.0, 5.0] kg', 236.7, 332.3, 49.8, 8.4)
+    ];
+    const regions = detectPdfFigureRegions({
+      page: 13,
+      pageWidth: 612,
+      pageHeight: 792,
+      blocks,
+      anchors: buildPdfCaptionAnchors([], blocks),
+      imageBounds: [],
+      textItems
+    });
+
+    expect(regions[0].table).toEqual({
+      headers: ['Parameter', 'Range', 'Parameter', 'Range'],
+      rows: [
+        ['Angular velocity', '± 0.2 rad/s', 'Static friction', '[0.6, 1.0]'],
+        ['Joint velocity', '± 1.5 rad/s', 'Base mass', '[-5.0, 5.0] kg']
+      ]
+    });
+  });
+
+  it('falls back to the PDF crop for formula-heavy regions that only resemble a two-column table', () => {
+    const blocks = [
+      block('table-vi', 'TABLE VI: Reward terms', 'caption', 54, 70, 245, 12)
+    ];
+    const textItems = [
+      item('Term Weight Term Tracking Rewards Linear velocity', 60, 92, 128, 8),
+      item('Weight 1.0 Torso roll Regularization', 205, 92, 90, 8),
+      item('r_vel := exp(-||v_xy-v*_xy||^2 / sigma_v^2)', 60, 104, 128, 8),
+      item('r_roll := exp(-(phi-phi*)^2 / sigma_r^2)', 205, 104, 90, 8),
+      item('Energy r_E := -sum |tau dot q|^2', 60, 116, 128, 8),
+      item('Action rate r_a := -||a_t-a_t-1||^2', 205, 116, 90, 8),
+      item('Undesired contacts indicator force threshold', 60, 128, 128, 8),
+      item('Feet slide contact velocity penalty', 205, 128, 90, 8)
+    ];
+    const regions = detectPdfFigureRegions({
+      page: 14,
+      pageWidth: 612,
+      pageHeight: 792,
+      blocks,
+      anchors: buildPdfCaptionAnchors([], blocks),
+      imageBounds: [],
+      textItems
+    });
+
+    expect(regions).toHaveLength(1);
+    expect(regions[0].table).toBeUndefined();
+  });
+
+  it('falls back when a numeric data row was mistaken for the table header', () => {
+    const blocks = [
+      block('table-1', 'Table 1: 3D reconstruction results in simulation.', 'caption', 54, 70, 245, 12)
+    ];
+    const textItems = [
+      item('B 1 0.126 0.704', 60, 92, 70, 8),
+      item('0.178', 150, 92, 30, 8),
+      item('0.386', 200, 92, 30, 8),
+      item('0.287', 250, 92, 30, 8),
+      item('B 2 0.150 0.674', 60, 104, 70, 8),
+      item('0.188', 150, 104, 30, 8),
+      item('0.331', 200, 104, 30, 8),
+      item('0.291', 250, 104, 30, 8),
+      item('All 0.188 0.669', 60, 116, 70, 8),
+      item('0.162', 150, 116, 30, 8),
+      item('0.339', 200, 116, 30, 8),
+      item('0.314', 250, 116, 30, 8)
+    ];
+    const regions = detectPdfFigureRegions({
+      page: 11,
+      pageWidth: 612,
+      pageHeight: 792,
+      blocks,
+      anchors: buildPdfCaptionAnchors([], blocks),
+      imageBounds: [],
+      textItems
+    });
+
+    expect(regions).toHaveLength(1);
+    expect(regions[0].table).toBeUndefined();
   });
 
   it('does not create a figure crop from a wrapped inline Fig. reference', () => {

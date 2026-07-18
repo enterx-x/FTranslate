@@ -24,6 +24,7 @@ import {
 import type {
   MobileAcademicTerm,
   MobilePaper,
+  MobileStructuredTable,
   MobileTranslationEntry,
   MobileTranslationSession
 } from './mobileTypes';
@@ -251,6 +252,9 @@ export function MobileReaderScreen({
     entry.figureVersion === MOBILE_PDF_FIGURE_VERSION &&
     Boolean(entry.figureBounds)
   )), [translations]);
+  const requiresFigureRenderer = useMemo(() => figureEntries.some((entry) => (
+    entry.figureKind !== 'table' || !entry.figureTable
+  )), [figureEntries]);
   const extractionSource = useMemo(
     () => summarizeMobileExtractionSources(translations, paper.pageCount),
     [paper.pageCount, translations]
@@ -301,8 +305,7 @@ export function MobileReaderScreen({
   }, [figureEntries, readableBlocks, translationByHash]);
 
   useEffect(() => {
-    const hasFigures = figureEntries.length > 0;
-    if (!hasFigures) {
+    if (!requiresFigureRenderer) {
       setFigureRenderer(null);
       return;
     }
@@ -326,7 +329,7 @@ export function MobileReaderScreen({
         void activeRenderer.destroy();
       }
     };
-  }, [figureEntries.length > 0, paper.id, pdfData]);
+  }, [paper.id, pdfData, requiresFigureRenderer]);
 
   useEffect(() => {
     if (
@@ -894,7 +897,9 @@ export function MobileReaderScreen({
                   <Fragment key={item.entry.sourceHash}>
                     {startsPage ? <div className="mobile-bilingual-page-break">第 {item.page} 页</div> : null}
                     <figure data-pdf-page={item.page} className={`mobile-pdf-figure is-${item.region.kind}`}>
-                      <MobilePdfFigureCanvas renderer={figureRenderer} region={item.region} />
+                      {item.region.kind === 'table' && item.region.table
+                        ? <MobilePdfStructuredTable table={item.region.table} caption={item.region.caption} />
+                        : <MobilePdfFigureCanvas renderer={figureRenderer} region={item.region} />}
                       {!item.region.hasTextCaption ? <figcaption>{item.region.caption}</figcaption> : null}
                     </figure>
                   </Fragment>
@@ -1049,8 +1054,42 @@ function figureEntryToRegion(entry: MobileTranslationEntry): MobilePdfFigureRegi
     hasTextCaption: entry.figureHasTextCaption !== false,
     order: Number.isFinite(entry.order) ? Number(entry.order) : (entry.page - 1) * 1000,
     bounds,
-    hiddenTextHashes: entry.figureTextHashes ?? []
+    hiddenTextHashes: entry.figureTextHashes ?? [],
+    ...(entry.figureTable ? { table: entry.figureTable } : {})
   };
+}
+
+function MobilePdfStructuredTable({
+  table,
+  caption
+}: {
+  table: MobileStructuredTable;
+  caption: string;
+}) {
+  const minimumWidth = Math.max(520, table.headers.length * 128);
+  return (
+    <div className="mobile-pdf-table-shell">
+      <div className="mobile-pdf-table-scroll" role="region" aria-label={`可横向滚动的表格：${caption}`} tabIndex={0}>
+        <table style={{ minWidth: `${minimumWidth}px` }}>
+          <thead>
+            <tr>
+              {table.headers.map((header, index) => <th key={`${index}:${header}`} scope="col">{header}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {table.rows.map((row, rowIndex) => (
+              <tr key={`${rowIndex}:${row.join('|')}`}>
+                {row.map((cell, columnIndex) => columnIndex === 0
+                  ? <th key={`${columnIndex}:${cell}`} scope="row">{cell}</th>
+                  : <td key={`${columnIndex}:${cell}`}>{cell}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <span className="mobile-pdf-table-hint">左右滑动查看完整表格</span>
+    </div>
+  );
 }
 
 function MobilePdfFigureCanvas({

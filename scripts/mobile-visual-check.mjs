@@ -64,6 +64,47 @@ BT
 0 -42 Td
 /F1 14 Tf
 (The proposed controller reduces violations while preserving task performance.) Tj
+ET
+BT
+/F1 12 Tf
+1 0 0 1 72 320 Tm
+(TABLE I: Safety policy comparison) Tj
+/F1 10 Tf
+1 0 0 1 72 294 Tm
+(Method) Tj
+1 0 0 1 150 294 Tm
+(Success) Tj
+1 0 0 1 205 294 Tm
+(Collision) Tj
+1 0 0 1 260 294 Tm
+(Runtime) Tj
+1 0 0 1 72 274 Tm
+(Baseline RL) Tj
+1 0 0 1 150 274 Tm
+(71%) Tj
+1 0 0 1 205 274 Tm
+(18%) Tj
+1 0 0 1 260 274 Tm
+(12 ms) Tj
+1 0 0 1 72 254 Tm
+(CBF policy) Tj
+1 0 0 1 150 254 Tm
+(86%) Tj
+1 0 0 1 205 254 Tm
+(4%) Tj
+1 0 0 1 260 254 Tm
+(18 ms) Tj
+1 0 0 1 72 234 Tm
+(Ours) Tj
+1 0 0 1 150 234 Tm
+(94%) Tj
+1 0 0 1 205 234 Tm
+(1%) Tj
+1 0 0 1 260 234 Tm
+(16 ms) Tj
+/F1 12 Tf
+1 0 0 1 72 180 Tm
+(The structured comparison remains selectable and readable on a narrow mobile screen.) Tj
 ET`;
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -642,14 +683,51 @@ try {
     inlineFigureLayout.canvasWidth <= 100 ||
     inlineFigureLayout.canvasHeight <= 50 ||
     !inlineFigureLayout.caption.includes('Fig. 1') ||
-    !inlineFigureLayout.toolbar.includes('1 个图表')
+    !inlineFigureLayout.toolbar.includes('2 个图表')
   ) {
     throw new Error(`Inline PDF figure layout is invalid: ${JSON.stringify(inlineFigureLayout)}`);
   }
   await capture(client, '03b-reader-inline-figure-390x844.png');
   console.log('Captured an original PDF figure inserted before its caption.');
 
+  await waitForSelector(client, '.mobile-pdf-table-scroll', 20000);
+  await evaluate(client, `document.querySelector('.mobile-pdf-table-scroll').scrollIntoView({ block: 'center' })`);
+  await wait(250);
+  const structuredTableLayout = await evaluate(client, `(() => {
+    const region = document.querySelector('.mobile-pdf-table-scroll');
+    const table = region?.querySelector('table');
+    const page = document.querySelector('.mobile-bilingual-page');
+    return {
+      regionWidth: region?.getBoundingClientRect().width ?? 0,
+      pageWidth: page?.getBoundingClientRect().width ?? 0,
+      scrollWidth: region?.scrollWidth ?? 0,
+      columnHeaders: Array.from(table?.querySelectorAll('thead th') ?? []).map(cell => cell.textContent?.trim()),
+      rowCount: table?.querySelectorAll('tbody tr').length ?? 0,
+      firstRow: Array.from(table?.querySelectorAll('tbody tr:first-child > *') ?? []).map(cell => cell.textContent?.trim()),
+      hasCanvas: Boolean(region?.querySelector('canvas')),
+      bodyOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+    };
+  })()`);
+  if (
+    structuredTableLayout.regionWidth <= 100 ||
+    structuredTableLayout.regionWidth > structuredTableLayout.pageWidth + 1 ||
+    structuredTableLayout.scrollWidth <= structuredTableLayout.regionWidth ||
+    structuredTableLayout.columnHeaders.join('|') !== 'Method|Success|Collision|Runtime' ||
+    structuredTableLayout.rowCount !== 3 ||
+    structuredTableLayout.firstRow.join('|') !== 'Baseline RL|71%|18%|12 ms' ||
+    structuredTableLayout.hasCanvas ||
+    structuredTableLayout.bodyOverflow > 1
+  ) {
+    throw new Error(`Structured PDF table layout is invalid: ${JSON.stringify(structuredTableLayout)}`);
+  }
+  await evaluate(client, `document.querySelector('.mobile-global-notice button')?.click()`);
+  await wait(120);
+  await capture(client, '03c-reader-structured-table-390x844.png');
+  console.log('Captured a selectable PDF table rebuilt for narrow mobile reading.');
+
   await waitForSelector(client, '.mobile-bilingual-intro button', 20000);
+  await evaluate(client, `document.querySelector('.mobile-bilingual-intro').scrollIntoView({ block: 'start' })`);
+  await wait(120);
   await evaluate(client, `document.querySelector('.mobile-bilingual-intro button').click()`);
   const translationStartState = await waitForExpression(
     client,
