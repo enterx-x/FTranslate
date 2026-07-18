@@ -1,7 +1,8 @@
 export type RuntimeCapabilityStatus = 'ready' | 'degraded' | 'unavailable' | 'unknown';
+export type RuntimeCapabilityId = 'hy-mt2' | 'comet-mbr' | 'nllb' | 'argos' | 'pdf2zh' | 'ai-provider';
 
 export interface RuntimeCenterCapability {
-  id: string;
+  id: RuntimeCapabilityId;
   label: string;
   status: RuntimeCapabilityStatus;
   message: string;

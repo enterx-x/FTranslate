@@ -14,6 +14,7 @@ import {
   type ArxivTitleAbstractTranslationResult,
   type ArxivTranslationBatchRequest,
   type ArxivTranslationPriority,
+  type ArxivTranslationProgress,
   hasDeterministicChineseArxivQuery,
   isMojibakeTranslationText
 } from '../lib/arxivClient';
@@ -37,7 +38,7 @@ import translateIcon from '../assets/icons/duotone/translate.svg';
 import analysisIcon from '../assets/icons/duotone/analysis.svg';
 import saveIcon from '../assets/icons/duotone/save.svg';
 import type { LocalTranslationStatus, PdfFilePayload } from '../types/electron';
-import { prepareAcademicTranslation, repairAcademicTranslation } from '../../shared/academicTranslationQuality';
+import { repairAcademicTranslation } from '../../shared/academicTranslationQuality';
 import { clampPanelRatio, getRightPanelRatioFromPointer } from '../lib/responsiveLayout';
 import { createArxivSearchSessionController, tryBeginArxivSearchSession } from '../lib/arxivSearchSession';
 import { MathText } from './MathText';
@@ -50,7 +51,16 @@ interface ArxivSearchPageProps {
 type SearchStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 export type ResultColumnMode = 'one' | 'two' | 'three';
 export type AbstractMode = 'en' | 'zh';
-export type ArxivForegroundTranslationPhase = 'warming' | 'title' | 'abstract' | 'done' | 'error';
+export type ArxivForegroundTranslationPhase =
+  | 'warming'
+  | 'title'
+  | 'abstract'
+  | 'candidate-generating'
+  | 'candidate-validating'
+  | 'quality-evaluating'
+  | 'degraded'
+  | 'done'
+  | 'error';
 
 export interface ArxivForegroundTranslationFeedback {
   paperId: string;
@@ -59,6 +69,8 @@ export interface ArxivForegroundTranslationFeedback {
   titleElapsedMs?: number;
   completedElapsedMs?: number;
   detail?: string;
+  candidateIndex?: number;
+  candidateTotal?: number;
 }
 
 export interface ArxivResultDisplay {
@@ -398,25 +410,44 @@ export function getArxivTranslationFeedbackText(
         label: feedback.titleElapsedMs ? '标题已显示，正在翻译摘要' : '正在翻译标题与摘要',
         elapsedLabel
       };
+    case 'candidate-generating':
+      return {
+        label: `正在生成候选 ${feedback.candidateIndex ?? 1}/${feedback.candidateTotal ?? 3}`,
+        elapsedLabel
+      };
+    case 'candidate-validating':
+      return { label: '正在校验候选译文', elapsedLabel };
+    case 'quality-evaluating':
+      return { label: '正在独立评估翻译质量', elapsedLabel };
+    case 'degraded':
+      return { label: '质量评估降级', elapsedLabel };
     case 'done':
-      return { label: '标题与摘要已更新', elapsedLabel };
+      return { label: feedback.detail || '标题与摘要已更新', elapsedLabel };
     case 'error':
       return { label: feedback.detail || '翻译失败，已保留英文', elapsedLabel };
   }
 }
 
-export function restoreArxivFastTitleTranslation(source: string, translatedSegments: string[]): string {
-  const restored = prepareAcademicTranslation(source).restore(translatedSegments);
-  if (!restored.ok) {
-    return '';
+export function formatArxivTranslationSelectionFeedback(
+  result: ArxivTitleAbstractTranslationResult
+): string {
+  switch (result.selectionMode) {
+    case 'comet-mbr':
+      return `${result.eligibleCandidateCount}/${result.candidateCount} 份候选 · COMET 已整篇选优`;
+    case 'two-candidate':
+      return '2 份候选 · COMET 已整篇选优';
+    case 'single-unique-candidate':
+      return '候选译文一致 · 已通过校验';
+    case 'single-candidate':
+      return '单候选 · 已通过校验';
+    case 'evaluator-failed':
+      return '质量评估降级 · 已确定性选优';
+    case 'fallback-engine':
+      return 'HY 候选未通过 · 已采用后备引擎';
+    case 'no-eligible-candidate':
+    default:
+      return '候选质量校验未通过';
   }
-  const titleZh = repairAcademicTranslation(source, restored.text, { mode: 'title' });
-  const normalizedSource = source.replace(/\s+/gu, ' ').trim().toLowerCase();
-  const normalizedTranslation = titleZh.replace(/\s+/gu, ' ').trim().toLowerCase();
-  const cjkCount = titleZh.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
-  return titleZh && cjkCount >= 2 && normalizedTranslation !== normalizedSource && !isMojibakeTranslationText(titleZh)
-    ? titleZh
-    : '';
 }
 
 export interface ArxivExecutedQuerySnapshotSource {
@@ -633,6 +664,33 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
     const timerId = window.setTimeout(() => setForegroundTranslationFeedback(null), 6_000);
     return () => window.clearTimeout(timerId);
   }, [foregroundTranslationFeedback]);
+
+  useEffect(() => {
+    return window.electronAPI.onArxivTranslationProgress((progress: ArxivTranslationProgress) => {
+      if (
+        progress.priority !== 'foreground' ||
+        typeof progress.sessionId !== 'number' ||
+        !searchSessionController.isCurrent(progress.sessionId)
+      ) {
+        return;
+      }
+      const paper = papers.find((item) => item.stableId === progress.stableId);
+      if (!paper || translatingId !== paper.id) {
+        return;
+      }
+      setForegroundTranslationFeedback((previous) => ({
+        paperId: paper.id,
+        phase: progress.phase,
+        startedAt:
+          previous?.paperId === paper.id && !['done', 'error'].includes(previous.phase)
+            ? previous.startedAt
+            : Date.now(),
+        ...(progress.candidateIndex !== undefined ? { candidateIndex: progress.candidateIndex } : {}),
+        ...(progress.candidateTotal !== undefined ? { candidateTotal: progress.candidateTotal } : {}),
+        ...(progress.detail ? { detail: progress.detail } : {})
+      }));
+    });
+  }, [papers, searchSessionController, translatingId]);
 
   useEffect(() => {
     if (!isReadingQueueOpen) {
@@ -1022,66 +1080,17 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
       triggerElement.dataset.immediateLabel = '翻译中';
     }
     const startedAt = Date.now();
-    const isModelWarming = Boolean(
-      localTranslationStatus && shouldWarmLocalTranslation(localTranslationStatus)
-    );
-    const isHyMt2Warming = Boolean(
-      localTranslationStatus && isHyMt2Preferred(localTranslationStatus) && localTranslationStatus.hymt.configured
-    );
     try {
       setTranslatingId(paper.id);
       setForegroundTranslationFeedback({
         paperId: paper.id,
-        phase: isModelWarming ? 'warming' : 'title',
-        startedAt
-      });
-      setMessage(
-        isModelWarming
-          ? isHyMt2Warming
-            ? '正在首次加载 HY-MT2 7B 质量模型；卡片内会持续显示阶段与耗时，模型常驻后将直接使用高质量本地翻译。'
-            : '正在首次加载本地 NLLB 模型；卡片内会持续显示阶段与耗时。'
-          : '正在优先生成中文标题；标题显示后会继续完成摘要，不会调用 AI API。'
-      );
-
-      let fastTitleZh = currentMeta.titleZh ?? '';
-      if (!fastTitleZh) {
-        try {
-          const preparedTitle = prepareAcademicTranslation(paper.title);
-          const titleResult = await window.electronAPI.translateLocalBatch({
-            texts: preparedTitle.segments,
-            sourceLanguage: 'en',
-            targetLanguage: 'zh',
-            timeoutMs: 45_000
-          });
-          if (!searchSessionController.isCurrent(translationSessionId)) {
-            return;
-          }
-          fastTitleZh = restoreArxivFastTitleTranslation(paper.title, titleResult.texts);
-          if (fastTitleZh) {
-            patchMeta(paper, { titleZh: fastTitleZh });
-          }
-          void window.electronAPI.getLocalTranslationStatus().then(setLocalTranslationStatus).catch(() => undefined);
-        } catch {
-          // The full metadata request below keeps its own fallback and quality gate.
-        }
-      }
-
-      if (!searchSessionController.isCurrent(translationSessionId)) {
-        return;
-      }
-      const titleElapsedMs = fastTitleZh ? Date.now() - startedAt : undefined;
-      setForegroundTranslationFeedback({
-        paperId: paper.id,
-        phase: 'abstract',
+        phase: 'candidate-generating',
         startedAt,
-        ...(titleElapsedMs ? { titleElapsedMs } : {})
+        candidateIndex: 1,
+        candidateTotal: 3
       });
-      setMessage(
-        fastTitleZh
-          ? `中文标题已在 ${(titleElapsedMs! / 1_000).toFixed(1)} 秒显示，正在继续翻译摘要。`
-          : '标题快速预览未通过质量校验，正在使用完整质量链路翻译标题与摘要。'
-      );
-      const result = await translatePaperMetadata(paper, false, translationSessionId, fastTitleZh);
+      setMessage('正在生成 3 份完整标题与摘要候选；随后会进行结构校验和独立质量评估。');
+      const result = await translatePaperMetadata(paper, false, translationSessionId);
       if (!searchSessionController.isCurrent(translationSessionId)) {
         return;
       }
@@ -1092,8 +1101,8 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
           paperId: paper.id,
           phase: 'done',
           startedAt,
-          ...(titleElapsedMs ? { titleElapsedMs } : {}),
-          completedElapsedMs: Date.now() - startedAt
+          completedElapsedMs: Date.now() - startedAt,
+          detail: formatArxivTranslationSelectionFeedback(result)
         });
       } else if (result?.status === 'unavailable') {
         setStatus('error');
@@ -1275,15 +1284,13 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
   async function translatePaperMetadata(
     paper: ArxivPaper,
     silent: boolean,
-    translationSessionId: number,
-    pretranslatedTitleZh = ''
+    translationSessionId: number
   ) {
     const [result] = await window.electronAPI.translateArxivTitleAbstractBatch(
       buildArxivTranslationBatchRequest(
         [paper],
         'foreground',
-        translationSessionId,
-        pretranslatedTitleZh ? { [paper.stableId]: pretranslatedTitleZh } : {}
+        translationSessionId
       )
     );
     if (!result) {
@@ -1920,7 +1927,15 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                 ? getArxivTranslationFeedbackText(paperTranslationFeedback, translationClockMs)
                 : null;
               const isTranslationFeedbackActive = Boolean(
-                paperTranslationFeedback && ['warming', 'title', 'abstract'].includes(paperTranslationFeedback.phase)
+                paperTranslationFeedback &&
+                  [
+                    'warming',
+                    'title',
+                    'abstract',
+                    'candidate-generating',
+                    'candidate-validating',
+                    'quality-evaluating'
+                  ].includes(paperTranslationFeedback.phase)
               );
               const tagItems = buildVisibleArxivCardTags(matchReasons, insight.tags);
               return (
@@ -1969,7 +1984,7 @@ export function ArxivSearchPage(props: ArxivSearchPageProps) {
                       <span className="arxiv-translation-feedback-indicator" aria-hidden="true">
                         {paperTranslationFeedback.phase === 'done'
                           ? '✓'
-                          : paperTranslationFeedback.phase === 'error'
+                          : paperTranslationFeedback.phase === 'error' || paperTranslationFeedback.phase === 'degraded'
                             ? '!'
                             : ''}
                       </span>

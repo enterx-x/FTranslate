@@ -1,7 +1,8 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
   ArxivTitleAbstractTranslationRequest,
-  ArxivTranslationBatchRequest
+  ArxivTranslationBatchRequest,
+  ArxivTranslationProgress
 } from '../shared/arxiv';
 import type { PlotDataTable, ScientificPlotSpec } from '../shared/scientificPlot';
 import type { FigureAssetsExportRequest } from '../shared/figureAssets';
@@ -139,6 +140,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   translateArxivTitleAbstractBatch: (
     request: ArxivTranslationBatchRequest | ArxivTitleAbstractTranslationRequest[]
   ) => ipcRenderer.invoke('arxiv:translate-title-abstract-batch', request),
+  onArxivTranslationProgress: (callback: (progress: ArxivTranslationProgress) => void) => {
+    const listener = (_event: IpcRendererEvent, progress: ArxivTranslationProgress) => callback(progress);
+    ipcRenderer.on('arxiv:translation-progress', listener);
+    return () => ipcRenderer.removeListener('arxiv:translation-progress', listener);
+  },
   downloadArxivPdf: (request: { pdfUrl: string; defaultFileName: string }) =>
     ipcRenderer.invoke('arxiv:download-pdf', request),
   selectCodeRepository: () => ipcRenderer.invoke('code-repository:select'),

@@ -62,6 +62,22 @@ export interface ArxivTitleAbstractTranslationRequest {
 
 export type ArxivTranslationPriority = 'foreground' | 'preview' | 'background';
 
+export type ArxivTranslationProgressPhase =
+  | 'candidate-generating'
+  | 'candidate-validating'
+  | 'quality-evaluating'
+  | 'degraded';
+
+export interface ArxivTranslationProgress {
+  stableId: string;
+  phase: ArxivTranslationProgressPhase;
+  priority: ArxivTranslationPriority;
+  sessionId?: number;
+  candidateIndex?: number;
+  candidateTotal?: number;
+  detail?: string;
+}
+
 export interface ArxivTranslationBatchRequest {
   papers: ArxivTitleAbstractTranslationRequest[];
   priority?: ArxivTranslationPriority;
@@ -77,7 +93,25 @@ export type ArxivTitleAbstractTranslationEngine =
 export type ArxivTitleAbstractTranslationStatus = 'completed' | 'cached' | 'unavailable' | 'failed';
 export type ArxivTranslationQualityStatus = 'passed' | 'failed' | 'not-checked';
 
-export interface ArxivTitleAbstractTranslationResult {
+export type ArxivTranslationSelectionMode =
+  | 'comet-mbr'
+  | 'two-candidate'
+  | 'single-candidate'
+  | 'single-unique-candidate'
+  | 'no-eligible-candidate'
+  | 'fallback-engine'
+  | 'evaluator-failed';
+
+export interface ArxivTranslationSelectionMetadata {
+  selectionMode: ArxivTranslationSelectionMode;
+  candidateCount: number;
+  eligibleCandidateCount: number;
+  selectedSeed?: number;
+  evaluator?: string;
+  degradationReason?: string;
+}
+
+export interface ArxivTitleAbstractTranslationResult extends ArxivTranslationSelectionMetadata {
   stableId: string;
   titleZh: string;
   abstractZh: string;

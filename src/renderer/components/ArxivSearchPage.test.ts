@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { prepareAcademicTranslation } from '../../shared/academicTranslationQuality';
 import type { ArxivPaper } from '../lib/arxivClient';
 import { buildArxivPaperInsight, type ArxivPaperMeta } from '../lib/arxivUi';
 import {
@@ -30,7 +29,6 @@ import {
   resolveSelectedArxivPaper,
   resolveArxivExecutedQuerySnapshot,
   resolveArxivPaperInsightForExecutedQuery,
-  restoreArxivFastTitleTranslation,
   runArxivTranslationBatches,
   shouldQueueArxivMetadataTranslation,
   shouldWarmLocalTranslation,
@@ -107,7 +105,8 @@ describe('ArxivSearchPage result display', () => {
 
     expect(display.title).toContain('TaCauchy');
     expect(display.title).toContain('FEM');
-    expect(display.title).toContain('Vision-Based');
+    expect(display.title).toContain('基于视觉');
+    expect(display.title).not.toContain('Vision-Based');
     expect(display.abstractText).toContain('TaCauchy');
     expect(display.abstractMode).toBe('zh');
   });
@@ -531,12 +530,24 @@ describe('ArxivSearchPage result display', () => {
     ).toEqual({ label: '标题已显示，正在翻译摘要', elapsedLabel: '1.3s' });
   });
 
-  it('accepts a fast title preview only when it restores to a real Chinese translation', () => {
-    const marker = prepareAcademicTranslation(paper.title).segments[0].match(/\b86753\d{2}901\b/u)?.[0] ?? '';
-    expect(restoreArxivFastTitleTranslation(paper.title, [`用于机器人导航的安全${marker}`])).toBe(
-      '用于机器人导航的安全强化学习'
-    );
-    expect(restoreArxivFastTitleTranslation(paper.title, [paper.title])).toBe('');
+  it.each([
+    ['candidate-generating', '正在生成候选 2/3'],
+    ['candidate-validating', '正在校验候选译文'],
+    ['quality-evaluating', '正在独立评估翻译质量'],
+    ['degraded', '质量评估降级']
+  ] as const)('renders %s truthfully', (phase, label) => {
+    expect(
+      getArxivTranslationFeedbackText(
+        {
+          paperId: paper.id,
+          phase,
+          startedAt: 0,
+          candidateIndex: 2,
+          candidateTotal: 3
+        },
+        1_000
+      ).label
+    ).toContain(label);
   });
 
   it('builds explicit preview, page, and foreground IPC request shapes', () => {
@@ -564,7 +575,10 @@ describe('ArxivSearchPage result display', () => {
       qualityStatus: 'passed' as const,
       elapsedMs: 125,
       message: '完成',
-      translatedAt: '2026-07-10T00:00:00.000Z'
+      translatedAt: '2026-07-10T00:00:00.000Z',
+      selectionMode: 'single-candidate' as const,
+      candidateCount: 1,
+      eligibleCandidateCount: 1
     };
 
     expect(buildArxivTranslationMetaPatch(completed, 6, 7)).toBeNull();
@@ -608,7 +622,10 @@ describe('ArxivSearchPage result display', () => {
       cacheHit: false,
       qualityStatus: 'failed' as const,
       elapsedMs: 80,
-      message: '质量门禁未通过'
+      message: '质量门禁未通过',
+      selectionMode: 'no-eligible-candidate' as const,
+      candidateCount: 0,
+      eligibleCandidateCount: 0
     };
 
     expect(buildArxivTranslationUiApplication(failed, 8, 9)).toBeNull();
@@ -624,7 +641,10 @@ describe('ArxivSearchPage result display', () => {
       cacheHit: false,
       qualityStatus: 'failed' as const,
       elapsedMs: 80,
-      message: '摘要质量门禁未通过'
+      message: '摘要质量门禁未通过',
+      selectionMode: 'no-eligible-candidate' as const,
+      candidateCount: 1,
+      eligibleCandidateCount: 0
     };
 
     expect(buildArxivTranslationUiApplication(failed, 9, 9)).toMatchObject({

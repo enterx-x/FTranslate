@@ -168,6 +168,10 @@ function collectProtectedAcademicSpans(source: string, protectGlossary: boolean)
   addMatches(/\b(?:doi:\s*)?10\.\d{4,9}\/[\w.()/:;-]+/giu);
   addMatches(/\barXiv:\s*\d{4}\.\d{4,5}(?:v\d+)?\b/giu);
   addMatches(/\barXiv:\s*[a-z-]+(?:\.[a-z-]+)?\/\d{7}(?:v\d+)?\b/giu);
+  // Numeric measurements are data, not prose. Keeping the source unit form
+  // avoids silent conversions such as "12 ms" -> "12 毫秒" and makes copied
+  // experimental values directly comparable with tables and plots.
+  addMatches(/\b\d+(?:\.\d+)?\s*(?:ns|μs|us|ms|s|min|h|Hz|kHz|MHz|GHz|nm|μm|um|mm|cm|km|mV|V|mA|A|mW|W|Pa|kPa|MPa|°C)\b/giu, 90);
 
   if (protectGlossary) {
     collectAcademicGlossaryMatches(source).forEach((match) => {
@@ -606,6 +610,16 @@ function maybeFallbackLowQualityTitle(
     return translated;
   }
 
+  // A fluent Chinese title may legitimately translate common acronyms such as
+  // RL, MPC, or PINN instead of repeating their Latin spellings. Replacing that
+  // title with the complete English source creates an untranslated echo which
+  // the service then correctly rejects. Only use the source as a last-resort
+  // display value when the model produced virtually no Chinese translation.
+  const cjkCount = translated.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
+  if (cjkCount >= 4) {
+    return translated;
+  }
+
   const missingTerms = extractProtectedAcademicTerms(source)
     .filter((term) => shouldAlwaysShowInTitle(term))
     .filter((term) => !containsProtectedTerm(translated, term))
@@ -715,7 +729,11 @@ function applySourceAwareAcademicGlossary(source: string, translated: string): s
   replaceWhenPresent('sample efficiency', /样本效率差/gu, '样本效率低');
   replaceWhenPresent('policy', /政策/gu, '策略');
   replaceWhenPresent('actor', /演员/gu, 'Actor');
-  replaceWhenPresent('critic', /(?:评论家|批评者)/gu, 'Critic');
+  replaceWhenPresent(
+    'critic',
+    /(?:评论家|批评者|批评器|评价器|评判模型|批评网络)(?:网络)?/gu,
+    'Critic 网络'
+  );
   replaceWhenPresent('agent', /(?:代理人|代理)(?!模型|服务|变量)/gu, '智能体');
   replaceWhenPresent('group symmetries', /(?:集团|组)对称性?/gu, '群对称性');
   replaceWhenPresent('equivariant', /高度等价(?:的)?/gu, '高度等变的');
@@ -725,6 +743,74 @@ function applySourceAwareAcademicGlossary(source: string, translated: string): s
   replaceWhenPresent('residual reinforcement learning', /残余(?:强化学习|RL)/gu, '残差强化学习');
   replaceWhenPresent('system identification', /系统识别/gu, '系统辨识');
   replaceWhenPresent('sim-to-real', /SIM到真实/giu, '仿真到现实');
+  replaceWhenPresent(
+    'contact-rich',
+    /(?:高接触度|复杂接触|接触丰富型?|富含接触的?)/gu,
+    '富接触'
+  );
+  replaceWhenPresent('in-hand manipulation', /(?:手持|手中|掌中)(?:的)?(?:操作|操控|操纵)(?:技术)?/gu, '手内操作');
+  replaceWhenPresent('incipient slip', /初期滑移/gu, '初始滑移');
+  replaceWhenPresent('taxel', /(?:触觉信号|触觉像素)(?:单元)?激活/gu, '触觉单元激活');
+  replaceWhenPresent('cycle-consistent objective', /循环一致(?:的|性)?目标函数?/gu, '循环一致性目标');
+  replaceWhenPresent('actor gradient', /(?:动作器|演员(?:网络)?)(?:的)?梯度/gu, 'Actor 梯度');
+  replaceWhenPresent('tube mpc', /管状\s*MPC(?:控制)?/giu, '管束模型预测控制');
+  replaceWhenPresent('normalized innovation', /标准化创新(?:值)?/gu, '归一化新息');
+  replaceWhenPresent('chance-constrained', /随机约束/gu, '机会约束');
+  replaceWhenPresent('cholesky factor', /乔列斯基因子/gu, 'Cholesky 因子');
+  replaceWhenPresent('surrogate objective', /(?:替代|代理)目标函数?/gu, '代理目标');
+  replaceWhenPresent('learned closure', /(?:通过)?学习得到的闭合(?:算法|模型|项)/gu, '学习闭合项');
+  replaceWhenPresent('unresolved scales', /未解决尺度/gu, '未解析尺度');
+  replaceWhenPresent('navier–stokes', /纳维[-—–]?斯托克斯/gu, 'Navier–Stokes');
+  replaceWhenPresent('return objective', /回归目标/gu, '回报目标');
+  replaceWhenPresent('cumulative cost', /累积成本/gu, '累积代价');
+  replaceWhenPresent('imagined trajectories', /设想轨迹/gu, '想象轨迹');
+  replaceWhenPresent('loss of support', /支撑力丧失/gu, '支撑丧失');
+  replaceWhenPresent('privileged state', /特殊状态/gu, '特权状态');
+  replaceWhenPresent('episodic memory', /情节记忆/gu, '情景记忆');
+  replaceWhenPresent('intervention', /(?<!教师)干预频率/gu, '教师干预频率');
+  replaceWhenPresent('wave propagation', /波浪传播/gu, '波传播');
+  replaceWhenPresent('collocation points', /(?:配对|配置|搭配)点/gu, '配点');
+  replaceWhenPresent('time slabs', /时间段/gu, '时间片');
+  replaceWhenPresent(
+    'privileged height map',
+    /(?:高精度高度图|(?:高程|高度)图(?:信息)?)/gu,
+    '特权高度图'
+  );
+  replaceWhenPresent('compliant terrain', /合规地形/gu, '柔顺地形');
+  replaceWhenPresent('backward reachable tube', /向后可达管/gu, '反向可达管');
+  replaceWhenPresent('shield', /(?<!安全)屏蔽机制/gu, '安全屏蔽器');
+  replaceWhenPresent('operator learning', /(?:操作员|运算符)学习/gu, '算子学习');
+  replaceWhenPresent('latent dynamics', /潜在动态(?!力学)/gu, '潜在动力学');
+  replaceWhenPresent('visuotactile', /视觉[-—–]?触觉/gu, '视觉—触觉');
+  replaceWhenPresent('contact dynamics', /接触动态(?:变化)?/gu, '接触动力学');
+  replaceWhenPresent('temporal contact dynamics', /(?<!时序)接触动力学/gu, '时序接触动力学');
+  replaceWhenPresent('legged locomotion', /(?:下肢|腿式|腿部)运动/gu, '足式运动');
+  replaceWhenPresent('socially compliant navigation', /社会合规导航/gu, '社会规范导航');
+  replaceWhenPresent('dynamics identification', /(?:动态|动力学)识别/gu, '动力学辨识');
+  replaceWhenPresent('long-range dependencies', /长距离依赖(?:关系)?/gu, '长程依赖');
+  replaceWhenPresent('object-goal navigation', /(?<!物体)目标导航/gu, '目标物体导航');
+  replaceWhenPresent('ensemble member', /(?:所有)?集成员/gu, '所有集成成员');
+  replaceWhenPresent('bootstrap samples', /自助样本/gu, '自助采样样本');
+  replaceWhenPresent('terminal set', /(?:终端状态|终止集(?:合)?)/gu, '终端集合');
+  replaceWhenPresent('recoverable', /可被恢复/gu, '可恢复');
+  replaceWhenPresent('nominal rigid-body model', /名义刚体模型/gu, '标称刚体模型');
+  replaceWhenPresent('failure context', /(?:故障|失败)情境/gu, '失败上下文');
+  replaceWhenPresent('correction', /修正内容/gu, '纠错信息');
+  replaceWhenPresent('relabel', /重新标记/gu, '重新标注');
+  replaceWhenPresent(
+    'targets do not drift',
+    /(?:避免|防止)?其?目标(?:值)?(?:不)?(?:发生|出现)(?:漂移|偏移)|目标值?(?:出现)?偏移/gu,
+    '防止目标漂移'
+  );
+  if (sourceLower.includes('critic') && sourceLower.includes('targets do not drift')) {
+    text = text.replace(/防止目标漂移/gu, '防止 Critic 目标漂移');
+  }
+  const relativeDegree = source.match(/\brelative-degree-([A-Za-z0-9]+)\b/iu);
+  if (relativeDegree?.[1]) {
+    text = text.replace(/相对(?:度数|程度)(?:为)?(?:约束)?/gu, `相对阶为 ${relativeDegree[1]} 的约束`);
+  } else {
+    replaceWhenPresent('relative degree', /相对(?:度数|程度)/gu, '相对阶');
+  }
   replaceWhenPresent(
     'reinforcement learning holds great promise for improving robot policies beyond the limits of imitation learning',
     /强化学习[^。.!]{0,120}(?:很大的承诺|巨大的希望|很大的前途)[^。.!]*[。.]?/gu,

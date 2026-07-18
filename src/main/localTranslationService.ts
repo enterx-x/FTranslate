@@ -34,11 +34,17 @@ export interface LocalTranslationItemContext {
   style?: 'academic-paper';
 }
 
+export interface LocalTranslationGenerationOptions {
+  seed?: number;
+  strict?: boolean;
+}
+
 export interface LocalTranslateDirectionOptions {
   sourceLanguage?: LocalTranslationLanguage;
   targetLanguage?: LocalTranslationLanguage;
   itemContext?: LocalTranslationItemContext;
   itemContexts?: LocalTranslationItemContext[];
+  generation?: LocalTranslationGenerationOptions;
 }
 
 export interface LocalTranslationStatus {

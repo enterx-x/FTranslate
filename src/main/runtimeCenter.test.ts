@@ -1,6 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { buildRuntimeCenterSnapshot } from './runtimeCenter';
 import type { LocalTranslationStatus } from './localTranslationService';
+import type { CometMbrRuntimeSnapshot } from './cometMbrRuntime';
+
+function makeCometMbrSnapshot(
+  patch: Partial<CometMbrRuntimeSnapshot> = {}
+): CometMbrRuntimeSnapshot {
+  return {
+    configured: true,
+    available: true,
+    pythonPath: 'E:\\FTranslateTools\\comet-mbr\\.venv\\Scripts\\python.exe',
+    workerPath: 'D:\\FTranslate\\assets\\runtime\\comet-mbr\\comet_mbr_worker.py',
+    modelPath: 'E:\\FTranslateTools\\comet-mbr\\models\\wmt22-comet-da\\checkpoints\\model.ckpt',
+    modelId: 'Unbabel/wmt22-comet-da',
+    modelRevision: '2760a223ac957f30acfb18c8aa649b01cf1d75f2',
+    device: 'cpu',
+    state: 'ready',
+    lastError: '',
+    pending: 0,
+    ...patch
+  };
+}
 
 function makeLocalTranslationStatus(
   patch: Partial<LocalTranslationStatus['nllb']> = {},
@@ -47,6 +67,7 @@ describe('buildRuntimeCenterSnapshot', () => {
     const snapshot = buildRuntimeCenterSnapshot({
       now: '2026-07-01T00:00:00.000Z',
       localTranslationStatus: makeLocalTranslationStatus(),
+      cometMbr: makeCometMbrSnapshot(),
       pdfTranslationEngine: {
         status: 'available',
         command: 'pdf2zh',
@@ -68,6 +89,7 @@ describe('buildRuntimeCenterSnapshot', () => {
     expect(snapshot.overallStatus).toBe('ready');
     expect(snapshot.capabilities.map((item) => item.id)).toEqual([
       'hy-mt2',
+      'comet-mbr',
       'nllb',
       'argos',
       'pdf2zh',
@@ -75,6 +97,11 @@ describe('buildRuntimeCenterSnapshot', () => {
     ]);
     expect(JSON.stringify(snapshot)).not.toContain('sk-');
     expect(snapshot.queue.pendingCount).toBe(0);
+    expect(snapshot.capabilities.find((item) => item.id === 'comet-mbr')).toMatchObject({
+      label: 'COMET-MBR',
+      status: 'ready',
+      details: { runtimeDevice: 'cpu' }
+    });
   });
 
   it('marks runtime degraded when NLLB falls back to CPU', () => {
@@ -89,6 +116,7 @@ describe('buildRuntimeCenterSnapshot', () => {
         },
         { pending: 2 }
       ),
+      cometMbr: makeCometMbrSnapshot(),
       pdfTranslationEngine: {
         status: 'available',
         command: 'pdf2zh',
@@ -114,6 +142,7 @@ describe('buildRuntimeCenterSnapshot', () => {
     const snapshot = buildRuntimeCenterSnapshot({
       now: '2026-07-01T00:00:00.000Z',
       localTranslationStatus: makeLocalTranslationStatus(),
+      cometMbr: makeCometMbrSnapshot(),
       pdfTranslationEngine: {
         status: 'available',
         command: 'pdf2zh',
@@ -146,6 +175,7 @@ describe('buildRuntimeCenterSnapshot', () => {
     const snapshot = buildRuntimeCenterSnapshot({
       now: '2026-07-01T00:00:00.000Z',
       localTranslationStatus,
+      cometMbr: makeCometMbrSnapshot(),
       pdfTranslationEngine: {
         status: 'available',
         message: 'Ready',

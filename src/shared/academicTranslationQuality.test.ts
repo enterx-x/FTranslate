@@ -31,6 +31,97 @@ describe('academic translation quality repair', () => {
     expect(terms).not.toContain('safety-layer');
   });
 
+  it('keeps a fluent Chinese title when a common acronym is translated semantically', () => {
+    const repaired = repairAcademicTranslation(
+      'Risk-Sensitive Offline RL under Distribution Shift',
+      '分布偏移条件下的风险敏感型离线强化学习',
+      { mode: 'title' }
+    );
+
+    expect(repaired).toBe('分布偏移条件下的风险敏感型离线强化学习');
+  });
+
+  it('normalizes general scientific terminology exposed by cross-domain papers', () => {
+    expect(repairAcademicTranslation(
+      'Slip-Aware In-Hand Manipulation',
+      '防滑手持操作技术',
+      { mode: 'title' }
+    )).toContain('手内操作');
+    expect(repairAcademicTranslation(
+      'Visuotactile World Models for Contact-Rich Tool Use',
+      '用于复杂接触工具使用的视觉—触觉世界模型',
+      { mode: 'title' }
+    )).toContain('用于富接触工具使用');
+    expect(repairAcademicTranslation(
+      'The normalized innovation drives tube MPC and the actor gradient.',
+      '标准化创新值驱动管状MPC控制和动作器梯度。',
+      { mode: 'abstract' }
+    )).toContain('归一化新息驱动管束模型预测控制和Actor 梯度');
+    expect(repairAcademicTranslation(
+      'A learned closure models unresolved scales for Navier–Stokes equations.',
+      '通过学习得到的闭合算法对纳维-斯托克斯方程中的未解决尺度进行建模。',
+      { mode: 'abstract' }
+    )).toContain('学习闭合项对Navier–Stokes方程中的未解析尺度');
+    expect(repairAcademicTranslation(
+      'For a relative-degree-r constraint h(x)≥0.',
+      '对于相对度数约束h(x)≥0。',
+      { mode: 'abstract' }
+    )).toContain('相对阶为 r 的约束');
+    expect(repairAcademicTranslation(
+      'Operator learning models latent dynamics for long-range dependencies and legged locomotion.',
+      '操作员学习对潜在动态、长距离依赖关系和下肢运动进行建模。',
+      { mode: 'abstract' }
+    )).toContain('算子学习对潜在动力学、长程依赖和足式运动');
+    expect(repairAcademicTranslation(
+      'Residual dynamics adaptation improves sim-to-real legged locomotion.',
+      '残差动力学自适应改进了Sim-to-Real腿部运动。',
+      { mode: 'abstract' }
+    )).toContain('足式运动');
+    expect(repairAcademicTranslation(
+      'The teacher observes a privileged height map during distillation.',
+      '教师在蒸馏期间观察高程图信息。',
+      { mode: 'abstract' }
+    )).toContain('特权高度图');
+    expect(repairAcademicTranslation(
+      'The model captures temporal contact dynamics that vision misses.',
+      '该模型能够捕捉视觉遗漏的接触动力学。',
+      { mode: 'abstract' }
+    )).toContain('时序接触动力学');
+    expect(repairAcademicTranslation(
+      'The memory is frozen so that its targets do not drift.',
+      '该记忆被冻结，以避免其目标不发生漂移。',
+      { mode: 'abstract' }
+    )).toContain('防止目标漂移');
+    expect(repairAcademicTranslation(
+      'We train a critic with episodic memory so that its targets do not drift.',
+      '我们训练了一种具备情节记忆的评价器，以避免其目标值出现偏移。',
+      { mode: 'abstract' }
+    )).toContain('具备情景记忆的Critic 网络，以防止 Critic 目标漂移');
+    expect(repairAcademicTranslation(
+      'Every ensemble member fitted to bootstrap samples predicts that the terminal set is recoverable.',
+      '所有集成员根据自助样本预测终端状态可被恢复。',
+      { mode: 'abstract' }
+    )).toContain('所有集成成员根据自助采样样本预测终端集合可恢复');
+    expect(repairAcademicTranslation(
+      'Every ensemble member predicts that the terminal set is recoverable.',
+      '所有集成成员均预测终止集可恢复。',
+      { mode: 'abstract' }
+    )).toContain('终端集合可恢复');
+  });
+
+  it('protects compact experimental measurements without translating their units', () => {
+    const prepared = prepareAcademicTranslation('The controller reacts within 12 ms at 250 Hz.', undefined, {
+      protectGlossary: false
+    });
+    const markers = prepared.segments.join(' ').match(/\b86753\d{2}901\b/gu) ?? [];
+
+    expect(markers).toHaveLength(2);
+    const restored = prepared.restore([
+      `控制器在${markers[0]}内以${markers[1]}作出响应。`
+    ]);
+    expect(restored).toEqual({ ok: true, text: '控制器在12 ms内以250 Hz作出响应。' });
+  });
+
   it('extracts title-case academic phrases that local translators should not translate', () => {
     const terms = extractProtectedAcademicTerms(
       'HT-Bench: Benchmarking and Learning Dexterous Full-Hand Tactile Representations with Egocentric Vision'
@@ -199,7 +290,7 @@ describe('academic translation quality repair', () => {
     expect(result.model).toBe('deepseek-chat');
   });
 
-  it('repairs arXiv title translations that damage method names and key English terms', () => {
+  it('repairs method names and acronyms while allowing descriptive title phrases to translate', () => {
     const repaired = repairAcademicTranslation(
       'TaCauchy: An Extensible FEM Framework for Vision-Based Tactile Simulation',
       '塔科奇: 基于视觉的触觉模拟的可扩展FEM框架',
@@ -208,7 +299,8 @@ describe('academic translation quality repair', () => {
 
     expect(repaired).toContain('TaCauchy');
     expect(repaired).toContain('FEM');
-    expect(repaired).toContain('Vision-Based');
+    expect(repaired).toContain('基于视觉');
+    expect(repaired).not.toContain('Vision-Based');
     expect(repaired).not.toContain('塔科奇');
     expect(repaired).not.toContain('术语');
   });

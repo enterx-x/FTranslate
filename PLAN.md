@@ -6,7 +6,7 @@
 
 - 用户明确要求追求可实现的最大质量提升，而不是最快上线或最低延迟。翻译选择采用三候选 HY-MT2 + 独立 COMET-MBR 评估，不采用同模型自评，也不恢复“机翻后聊天 AI 润色”。
 - 当前 arXiv 默认“综合排序”实际先按 `submittedDate` 获取当前页，再只对该页做本地排序，无法代表全库相关性。下一版默认直接使用官方 API `sortBy=relevance`，分页保持官方全局顺序。
-- 设计已获用户确认并进入实现。先完成 arXiv 官方相关性闭环，再实现 COMET-MBR；COMET 模型仍保持外置，不进入应用安装包。
+- 设计已获用户确认并完成核心实现。arXiv 官方相关性与 COMET-MBR 自动门禁均已通过；COMET 模型保持外置，不进入应用安装包。独立人工盲评仍未完成，不能把自动指标表述为最终人工验收通过。
 
 ### 当前实现进度
 
@@ -14,7 +14,28 @@
 2. 当前请求类型、桌面端和移动端已移除“本页相关排序”；日期排序才显示顺序控件，运行状态显示真实结构化英文表达式。缓存为 `title-abstract-v8`，包含 `concept-groups-v1` 与 `effective_expression`。
 3. 补充 `灵巧手`和`动力学模型/系统辨识`独立概念组，避免前者退化为普通机器人别名、后者在本地查询翻译不可用时被静默丢弃。
 4. 20 条真实官方 API 基准已完成：规则初评 P@10 0.990、nDCG@10 0.923、Top-10 跑题率 0.010、平均 API 延迟约 859 ms。当前评分是确定性概念规则，不等同人工盲评；原始 Atom、逐条 Top-10 与报告位于 `.tmp-arxiv-benchmark/`。
-5. arXiv 共享/服务/renderer 定向回归与 TypeScript 已通过。COMET-MBR、30 条翻译基准、完整 build、视觉检查、安装包和热预览仍待完成。
+5. 新增锁定版本的 COMET worker、隔离安装脚本、运行时探针/评分/卸载/关闭协议和 Runtime Center 能力。模型为 `Unbabel/wmt22-comet-da@2760a223...`，外置于 `E:\FTranslateTools\comet-mbr`，安装包只携带 4.8 KB worker 与安装脚本。
+6. HY-MT2 使用 `42/3407/7919` 三个固定 seed 生成标题+完整摘要候选；硬门禁先过滤结构损坏，再由 COMET 进行整篇 MBR。候选不足、评估器失败、三候选全拒绝均有确定性选择或 NLLB/Argos 后备路径，不跨候选拼句。
+7. 批量生成、单候选和后备引擎均实现逐论文故障隔离；共享批次失败后按论文重试，坏样本不再使同批全部失败。缓存升级到 `v11/mbr-v1` 并保存选择元数据。
+8. 卡片 UI 显示候选生成、结构校验、独立质量评估、降级与完成阶段，完成文案显示实际候选/评估方式；状态条移除侧边色条，以完整边框和图标表达状态。视觉脚本已覆盖新阶段文案与 reduced-motion。
+9. 30 条、10 领域最终自动基准：两侧硬门禁/受保护内容/禁用误译均为 100%；单候选术语召回 `95.83%`，MBR 为 `99.17%`；参考 COMET `0.84889 -> 0.85593`，差值 `+0.00704`，7/10 领域上升。报告为 `.tmp-academic-translation-release-v6/20260718T092031Z/academic-translation-report.json`。
+10. 基准暴露的最后一个标准术语 `terminal set -> 终止集` 已窄化修复为“终端集合”并加入单元与单样本真实回归；全量报告保留修复前的 `99.17%` 原始指标，不伪造为 100%。基准参考译文状态仍是 `expert-draft-requires-independent-human-signoff`，盲评表尚无人审签。
+11. COMET 运行时实测：探针 `8.689 s`，冷态 6 对评分 `12.584 s`，暖态 `2.622–2.786 s`，峰值工作集约 `5.24 GB`，卸载/退出 `446/126 ms`，无孤儿 worker。顺序调度避免 HY-MT2 与 COMET 同时常驻。
+
+### 最终发布验证
+
+- 定向最终回归：11 个测试文件、172 项测试通过；`npm run typecheck` 通过。
+- `npm run build` 与 `npm run dist` 均通过：107 个测试文件通过、1 个跳过，746 项测试通过、3 项跳过；两套 TypeScript、Vite renderer、Electron main、win-unpacked 与 NSIS 全部完成。
+- 源码版与安装包内均以 `VISUAL_CHECK_SCENARIO=arxiv` 通过视觉门禁。自动检查确认官方相关性作用域、翻译阶段反馈、三种卡片布局、右侧详情与高级筛选均无横向溢出；人工复核 `.tmp-visual-check/arxiv-translation-progress.png`、`arxiv-search-results-1366.png` 和 `arxiv-search-advanced.png`，未发现重叠、遮挡、截断或布局抖动。
+- 安装包：`dist/PDF Translation Reader Setup 0.1.38.exe`，157,152,943 bytes，SHA-256 `5E9D3B71436504465ECE462BCB1134F39EB997DA4BF1ECB2A4829A3384FA1646`；blockmap 164,089 bytes。`win-unpacked/resources/runtime/comet-mbr/comet_mbr_worker.py` 与 `runtime-installers/install-comet-mbr.ps1` 均已核验存在。
+- 已从最新打包目录启动可见、独立用户目录的热预览，自动切换到 arXiv 检索页：PID 29976、CDP 9458、profile `.tmp-visual-check/hot-preview-0.1.38-20260718-174439`。该预览不会覆盖正式安装版数据。
+- 打包前检查全部工作树；当前分支不是 13 号分支，未合并绘图代理工作树。两个受保护的 `.superpowers/brainstorm/` 未跟踪目录保持未修改、未暂存。
+
+### 问题台账与剩余风险
+
+- 独立人工盲评仍未审签；自动 COMET、硬门禁与术语召回只能证明可重复的自动质量增益，不能替代领域专家对忠实度、术语和流畅性的最终验收。
+- COMET 首次探针和冷态评分仍需要约 8.7 秒与 12.6 秒，并占用约 5.24 GB 工作集；顺序卸载已避免与 HY-MT2 同时常驻，但低内存机器会明确降级到通过结构门禁的单候选或 NLLB/Argos。
+- 构建仍保留既有的 Vite 大 chunk、缺少 package author、Electron Builder 重复依赖引用和 Node `DEP0190` 警告；本轮没有把与翻译/检索正确性无关的分包和元数据重构混入发布。
 
 ### 已确认设计
 

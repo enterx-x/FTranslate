@@ -4090,7 +4090,7 @@ async function runArxivSearchScenario(client) {
       emptyCardAccentValues,
       emptyCardAccentMaxChannelDelta: emptyCardAccentValues.reduce((max, value) => Math.max(max, channelDelta(value)), 0),
       queueUsesLegacyPills: document.querySelectorAll('.arxiv-reading-queue-items .pill-button').length > 0,
-      hasRankingScopeLabel: /本页相关排序/.test(text),
+      hasOfficialRelevanceScope: /arXiv 全局相关性|相关性（arXiv）/.test(text),
       queryModeLabels: queryModeSelect ? [...queryModeSelect.options].map((option) => option.textContent?.trim() ?? '') : [],
       advancedCollapsed:
         advancedToggle?.getAttribute('aria-expanded') === 'false' &&
@@ -4128,7 +4128,7 @@ async function runArxivSearchScenario(client) {
     snapshot.emptyCardAccentMaxChannelDelta < 35 ||
     snapshot.queueFirstRowCount !== 0 ||
     snapshot.queueUsesLegacyPills ||
-    !snapshot.hasRankingScopeLabel ||
+    !snapshot.hasOfficialRelevanceScope ||
     !['严格', '均衡', '探索'].every((label) => snapshot.queryModeLabels.includes(label)) ||
     !snapshot.advancedCollapsed ||
     !snapshot.advancedControlsLinked ||
@@ -4328,7 +4328,7 @@ async function runArxivSearchScenario(client) {
               advancedFilters.querySelectorAll('input[type="checkbox"]').length >= 4;
           })(),
           hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
-          hasRankingScopeLabel: /本页相关排序/.test(pageText),
+          hasOfficialRelevanceScope: /arXiv 全局相关性|相关性（arXiv）/.test(pageText),
           hasTranslatePage: /翻译本页/.test(document.querySelector('.arxiv-translate-page-button')?.textContent ?? ''),
           hasSinglePaperTranslate: cardActionTexts.some((text) => /翻译/.test(text)),
           cardActionCounts: cardActionGroups.map((group) => group.querySelectorAll('button').length),
@@ -4369,7 +4369,9 @@ async function runArxivSearchScenario(client) {
           const rect = feedback?.getBoundingClientRect();
           return {
             found: Boolean(feedback),
-            active: Boolean(feedback?.matches('.is-warming, .is-title, .is-abstract')),
+            active: Boolean(feedback?.matches(
+              '.is-warming, .is-title, .is-abstract, .is-candidate-generating, .is-candidate-validating, .is-quality-evaluating'
+            )),
             label: feedback?.querySelector('.arxiv-translation-feedback-label')?.textContent?.trim() ?? '',
             width: rect ? Math.round(rect.width) : 0,
             height: rect ? Math.round(rect.height) : 0,
@@ -4404,7 +4406,7 @@ async function runArxivSearchScenario(client) {
       translationTriggerSnapshot.immediateLabel !== '翻译中' ||
       !translationProgressSnapshot?.found ||
       !translationProgressSnapshot.active ||
-      !/标题|加载/.test(translationProgressSnapshot.label) ||
+      !/标题|加载|候选|校验|评估/.test(translationProgressSnapshot.label) ||
       translationProgressSnapshot.width < 120 ||
       translationProgressSnapshot.height < 20 ||
       translationProgressSnapshot.hasHorizontalOverflow ||
@@ -4412,7 +4414,7 @@ async function runArxivSearchScenario(client) {
       !resultsSnapshot.hasTopPageFilters ||
       compressedCard ||
       resultsSnapshot.hasHorizontalOverflow ||
-      !resultsSnapshot.hasRankingScopeLabel ||
+      !resultsSnapshot.hasOfficialRelevanceScope ||
       !resultsSnapshot.hasTranslatePage ||
       !resultsSnapshot.hasSinglePaperTranslate ||
       resultsSnapshot.cardActionCounts.some((count) => count !== 3) ||

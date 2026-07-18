@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  buildHyMt2GenerationConfig,
   buildHyMt2Prompt,
   hasHyMt2ContextLeakage,
   hasHyMt2FluencyArtifact,
@@ -28,6 +29,21 @@ afterEach(() => {
 });
 
 describe('HY-MT2 local translation runtime', () => {
+  it('uses the requested candidate seed without changing academic decoding', () => {
+    expect(buildHyMt2GenerationConfig({ seed: 7919 })).toMatchObject({
+      seed: 7919,
+      temperature: 0.7,
+      top_k: 20,
+      top_p: 0.6
+    });
+  });
+
+  it('derives a deterministic strict retry seed while preserving legacy defaults', () => {
+    expect(buildHyMt2GenerationConfig({ seed: 42, strict: true }).seed).toBe(104771);
+    expect(buildHyMt2GenerationConfig().seed).toBe(42);
+    expect(buildHyMt2GenerationConfig({ strict: true }).seed).toBe(3407);
+  });
+
   it('uses explicit runtime paths before the stable local installation directory', () => {
     process.env.FTRANSLATE_HYMT_SERVER = 'D:\\translation\\llama-server.exe';
     process.env.FTRANSLATE_HYMT_MODEL = 'D:\\translation\\Hy-MT2.gguf';

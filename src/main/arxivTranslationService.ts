@@ -6,7 +6,9 @@ import { TextDecoder } from 'node:util';
 import type {
   ArxivTitleAbstractTranslationRequest,
   ArxivTitleAbstractTranslationResult,
-  ArxivTranslationPriority
+  ArxivTranslationPriority,
+  ArxivTranslationProgress,
+  ArxivTranslationSelectionMetadata
 } from '../shared/arxiv';
 import { isMojibakeTranslationText } from '../shared/arxiv';
 export type { ArxivTranslationPriority } from '../shared/arxiv';
@@ -41,18 +43,44 @@ import {
   translateTextsWithHyMt2,
   warmUpHyMt2Translator
 } from './hyMtTranslationService';
+import {
+  buildCometPairRequests,
+  selectCometMbrBundle,
+  type CometPairRequest,
+  type CometPairScore,
+  type CometMbrSelectionResult,
+  type TranslationCandidateBundle
+} from './cometMbrSelection';
+import {
+  COMET_MBR_MODEL_ID,
+  COMET_MBR_MODEL_REVISION,
+  CometMbrRuntime,
+  type CometMbrRuntimeSnapshot
+} from './cometMbrRuntime';
 
-type TranslationBatchOptions = Pick<LocalTranslateDirectionOptions, 'itemContexts'>;
+type TranslationBatchOptions = Pick<LocalTranslateDirectionOptions, 'itemContexts' | 'generation'>;
 type TranslationBatchTranslator = (
   texts: string[],
   options?: TranslationBatchOptions
 ) => Promise<LocalTranslateBatchResult>;
+type CandidateTranslationBatchTranslator = (
+  texts: string[],
+  seed: number,
+  options?: TranslationBatchOptions
+) => Promise<LocalTranslateBatchResult>;
+type CometEvaluator = (pairs: CometPairRequest[]) => Promise<number[]>;
 
 interface ArxivTranslationServiceOptions {
   dbPath: string;
   translateText?: (text: string) => Promise<string>;
   translateTexts?: (texts: string[]) => Promise<string[]>;
   translateTextsWithEngine?: TranslationBatchTranslator;
+  candidateTranslateTextsWithEngine?: CandidateTranslationBatchTranslator;
+  cometEvaluator?: CometEvaluator;
+  resetCandidateRuntime?: () => void;
+  unloadCometEvaluator?: () => Promise<void>;
+  onProgress?: (progress: ArxivTranslationProgress) => void;
+  protectGlossaryTerms?: boolean;
   fallbackTranslateTextsWithEngine?: TranslationBatchTranslator;
   now?: () => number;
   timeoutMs?: number;
@@ -70,12 +98,17 @@ interface CachedTranslationRow {
   abstract_zh: string;
   translated_at: string;
   engine: string;
+  selection_json: string | null;
 }
 
 const DEFAULT_TRANSLATION_TIMEOUT_MS = 90_000;
 const ARXIV_TITLE_CONTEXT_LIMIT = 700;
 const ARXIV_ABSTRACT_CONTEXT_LIMIT = 900;
 const ARXIV_CONTEXT_PROMPT_VERSION = 'paper-context-v1';
+const ARXIV_MBR_SELECTION_VERSION = 'mbr-v1';
+const ARXIV_MBR_HARD_GATE_VERSION = 'academic-hard-gates-v1';
+const ARXIV_MBR_SEEDS = [42, 3407, 7919] as const;
+const ARXIV_MBR_EVALUATOR = COMET_MBR_MODEL_ID;
 const TRANSLATION_PRIORITY_ORDER: readonly ArxivTranslationPriority[] = [
   'foreground',
   'preview',
@@ -106,6 +139,18 @@ interface EvaluatedTranslationBatchItem {
   titleUsable: boolean;
   abstractUsable: boolean;
   hasSevereAbstractLengthLoss: boolean;
+}
+
+interface MbrTranslationOutcome {
+  selection: CometMbrSelectionResult;
+  metadata: ArxivTranslationSelectionMetadata;
+  engine?: LocalTranslateBatchResult['engine'];
+}
+
+interface SingleCandidateTranslationOutcome {
+  evaluated?: EvaluatedTranslationBatchItem;
+  engine?: LocalTranslateBatchResult['engine'];
+  error?: unknown;
 }
 
 function normalizeTranslationPriority(priority?: ArxivTranslationPriority): ArxivTranslationPriority {
@@ -201,6 +246,12 @@ export class ArxivTranslationService {
   private readonly db: DatabaseSync;
   private readonly translateTextsWithEngine: TranslationBatchTranslator;
   private readonly fallbackTranslateTextsWithEngine?: TranslationBatchTranslator;
+  private readonly candidateTranslateTextsWithEngine?: CandidateTranslationBatchTranslator;
+  private readonly cometEvaluator?: CometEvaluator;
+  private readonly resetCandidateRuntime: () => void;
+  private readonly unloadCometEvaluator: () => Promise<void>;
+  private readonly cometRuntime?: CometMbrRuntime;
+  private readonly onProgress?: (progress: ArxivTranslationProgress) => void;
   private readonly now: () => number;
   private readonly timeoutMs: number;
   private readonly protectGlossaryTerms: boolean;
@@ -216,12 +267,15 @@ export class ArxivTranslationService {
     this.db = new DatabaseSync(options.dbPath);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TRANSLATION_TIMEOUT_MS;
     const usesInjectedTranslator = Boolean(
-      options.translateText || options.translateTexts || options.translateTextsWithEngine
+      options.translateText ||
+      options.translateTexts ||
+      options.translateTextsWithEngine ||
+      options.candidateTranslateTextsWithEngine
     );
     const defaultEngineOrder = usesInjectedTranslator
       ? []
       : resolveArxivTranslationEngineOrder(resolveLocalTranslationPreference());
-    this.protectGlossaryTerms = !(
+    this.protectGlossaryTerms = options.protectGlossaryTerms ?? !(
       !usesInjectedTranslator &&
       defaultEngineOrder[0] === 'hy-mt2' &&
       hasConfiguredHyMt2()
@@ -231,7 +285,8 @@ export class ArxivTranslationService {
     ): TranslationBatchTranslator => {
       const translator: TranslationBatchTranslator = engine === 'hy-mt2'
         ? ((texts, batchOptions) => translateTextsWithHyMt2(texts, this.timeoutMs, {
-            itemContexts: batchOptions?.itemContexts
+            itemContexts: batchOptions?.itemContexts,
+            generation: batchOptions?.generation
           }))
         : engine === 'nllb-ct2'
         ? ((texts) => translateTextsWithNllbCTranslate2(texts, this.timeoutMs))
@@ -294,6 +349,35 @@ export class ArxivTranslationService {
         return createTranslatorChain(fallbackEngines, resolvedPrimaryIndex + 1)(texts);
       });
     }
+    let candidateTranslator = options.candidateTranslateTextsWithEngine;
+    let cometEvaluator = options.cometEvaluator;
+    let unloadCometEvaluator = options.unloadCometEvaluator;
+    let cometRuntime: CometMbrRuntime | undefined;
+    const canOwnHyMt2Process = !process.env.FTRANSLATE_HYMT_BASE_URL?.trim();
+    if (
+      !usesInjectedTranslator &&
+      defaultEngineOrder[0] === 'hy-mt2' &&
+      hasConfiguredHyMt2() &&
+      canOwnHyMt2Process
+    ) {
+      const runtime = new CometMbrRuntime();
+      if (runtime.snapshot().configured) {
+        cometRuntime = runtime;
+        candidateTranslator = (texts, seed, batchOptions) =>
+          translateTextsWithHyMt2(texts, this.timeoutMs, {
+            itemContexts: batchOptions?.itemContexts,
+            generation: { seed, strict: true }
+          });
+        cometEvaluator = (pairs) => runtime.score(pairs);
+        unloadCometEvaluator = () => runtime.unload();
+      }
+    }
+    this.candidateTranslateTextsWithEngine = candidateTranslator;
+    this.cometEvaluator = cometEvaluator;
+    this.resetCandidateRuntime = options.resetCandidateRuntime ?? resetHyMt2Runtime;
+    this.unloadCometEvaluator = unloadCometEvaluator ?? (async () => undefined);
+    this.cometRuntime = cometRuntime;
+    this.onProgress = options.onProgress;
     this.now = options.now ?? Date.now;
     this.initDatabase();
     if (!usesInjectedTranslator) {
@@ -315,6 +399,11 @@ export class ArxivTranslationService {
     }
     resetNllbRuntime();
     resetHyMt2Runtime();
+    this.cometRuntime?.close();
+  }
+
+  getCometMbrRuntimeSnapshot(): CometMbrRuntimeSnapshot {
+    return (this.cometRuntime ?? new CometMbrRuntime()).snapshot();
   }
 
   async translatePaper(
@@ -413,7 +502,8 @@ export class ArxivTranslationService {
           sourceTitle: item.title,
           sourceAbstract: item.summary,
           sourceAbstractSegments: splitAcademicTranslationSourceContext(item.summary),
-          title: isUsableTranslatedText(item.pretranslatedTitleZh, item.title)
+          title: !(this.candidateTranslateTextsWithEngine && this.cometEvaluator) &&
+            isUsableTranslatedText(item.pretranslatedTitleZh, item.title)
             ? preparePretranslatedAcademicText(item.pretranslatedTitleZh)
             : prepareAcademicTranslation(item.title, undefined, {
                 protectGlossary: this.protectGlossaryTerms
@@ -425,83 +515,134 @@ export class ArxivTranslationService {
         const translationRequests = preparedItems.flatMap(buildPaperTranslationRequests);
         const uniqueBatch = buildUniqueTranslationBatch(translationRequests);
         const batchOptions = { itemContexts: uniqueBatch.itemContexts };
-        let translationResult = await this.translateTextsWithFallback(uniqueBatch.texts, batchOptions);
-        let translatedTexts = uniqueBatch.indexes.map((index) => translationResult.texts[index] ?? '');
-        let evaluatedTranslations = evaluatePreparedTranslations(preparedItems, translatedTexts);
-        const primaryQualityProblems = countTranslationQualityProblems(evaluatedTranslations, translationResult.engine);
-        const shouldTryFallback = evaluatedTranslations.some(
-          (item) => item.hasSevereAbstractLengthLoss || hasSuspiciousRepeatedTranslationTail(item.abstract.text)
-        );
-        if (shouldTryFallback && primaryQualityProblems > 0 && this.fallbackTranslateTextsWithEngine) {
-          try {
-            const fallbackResult = await this.fallbackTranslateTextsWithEngine(
-              uniqueBatch.texts,
-              batchOptions
-            );
-            const fallbackTranslatedTexts = uniqueBatch.indexes.map((index) => fallbackResult.texts[index] ?? '');
-            const fallbackEvaluatedTranslations = evaluatePreparedTranslations(preparedItems, fallbackTranslatedTexts);
-            const fallbackQualityProblems = countTranslationQualityProblems(
-              fallbackEvaluatedTranslations,
-              fallbackResult.engine
-            );
-            if (fallbackQualityProblems < primaryQualityProblems) {
-              translationResult = fallbackResult;
-              translatedTexts = fallbackTranslatedTexts;
-              evaluatedTranslations = fallbackEvaluatedTranslations;
-            }
-          } catch {
-            // Keep the primary result; the repair layer below still prevents repeated tails from being cached.
-          }
-        }
         const translatedAt = new Date(this.now()).toISOString();
 
-        remaining.forEach((item, itemIndex) => {
-          const evaluated = evaluatedTranslations[itemIndex];
-          if (!evaluated.title.ok || !evaluated.abstract.ok || evaluated.hasSevereAbstractLengthLoss) {
-            results[item.index] = buildFailedTranslationResult(
-              item.stableId,
-              '本地翻译损坏了学术公式、代码、引用或术语占位符，或严重截断摘要，已丢弃结果且未写入缓存。',
-              'failed'
-            );
-            return;
-          }
+        if (this.candidateTranslateTextsWithEngine && this.cometEvaluator) {
+          const outcomes = await this.translatePreparedItemsWithMbr(
+            preparedItems,
+            uniqueBatch,
+            batchOptions,
+            remaining.map((item) => item.stableId),
+            normalizeTranslationPriority(options?.priority),
+            options?.sessionId
+          );
+          await this.applyFallbackToNoEligibleOutcomes(preparedItems, outcomes);
+          remaining.forEach((item, itemIndex) => {
+            const outcome = outcomes[itemIndex];
+            const selected = outcome?.selection.bundle;
+            if (!selected || !outcome.engine) {
+              results[item.index] = {
+                ...buildFailedTranslationResult(
+                  item.stableId,
+                  outcome?.selection.degradationReason ??
+                    '三份本地候选均未通过学术结构与完整性检查，已丢弃且未写入缓存。',
+                  'failed'
+                ),
+                ...(outcome?.metadata ?? buildNoEligibleSelectionMetadata(ARXIV_MBR_SEEDS.length))
+              };
+              return;
+            }
 
-          const titleZh = evaluated.titleUsable ? evaluated.titleZh : '';
-          const abstractZh = evaluated.abstractUsable ? evaluated.abstractZh : '';
-          if (!abstractZh) {
+            this.writeCache(item.cacheKey, {
+              stableId: item.stableId,
+              title: item.title,
+              summary: item.summary,
+              titleZh: selected.titleZh,
+              abstractZh: selected.abstractZh,
+              translatedAt,
+              engine: outcome.engine,
+              selection: outcome.metadata
+            });
             results[item.index] = {
-              ...buildFailedTranslationResult(
-                item.stableId,
-                '本地翻译未生成可用的中文摘要，已保留快速标题但未写入缓存，可重新翻译。',
-                'failed'
-              ),
-              titleZh
+              stableId: item.stableId,
+              titleZh: selected.titleZh,
+              abstractZh: selected.abstractZh,
+              engine: outcome.engine,
+              status: 'completed',
+              cacheHit: false,
+              qualityStatus: 'passed',
+              elapsedMs: 0,
+              message: buildMbrCompletedTranslationMessage(outcome.metadata),
+              translatedAt,
+              ...outcome.metadata
             };
-            return;
-          }
-
-          this.writeCache(item.cacheKey, {
-            stableId: item.stableId,
-            title: item.title,
-            summary: item.summary,
-            titleZh,
-            abstractZh,
-            translatedAt,
-            engine: translationResult.engine
           });
-          results[item.index] = {
-            stableId: item.stableId,
-            titleZh,
-            abstractZh,
-            engine: translationResult.engine,
-            status: 'completed',
-            cacheHit: false,
-            qualityStatus: 'passed',
-            elapsedMs: 0,
-            message: buildCompletedTranslationMessage(translationResult.engine),
-            translatedAt
-          };
-        });
+        } else {
+          const singleOutcomes = await this.translatePreparedItemsWithoutMbr(
+            preparedItems,
+            uniqueBatch,
+            batchOptions
+          );
+
+          remaining.forEach((item, itemIndex) => {
+            const outcome = singleOutcomes[itemIndex];
+            if (!outcome || outcome.error || !outcome.evaluated || !outcome.engine) {
+              const error = outcome?.error ?? new Error('本地翻译未返回当前论文的结果。');
+              const isUnavailable = isArgosUnavailableError(error);
+              results[item.index] = {
+                stableId: item.stableId,
+                titleZh: '',
+                abstractZh: '',
+                engine: 'unavailable',
+                status: isUnavailable ? 'unavailable' : 'failed',
+                cacheHit: false,
+                qualityStatus: 'not-checked',
+                elapsedMs: 0,
+                message: formatTranslationError(error),
+                ...buildNoEligibleSelectionMetadata(0)
+              };
+              return;
+            }
+            const evaluated = outcome.evaluated;
+            if (!evaluated.title.ok || !evaluated.abstract.ok || evaluated.hasSevereAbstractLengthLoss) {
+              results[item.index] = buildFailedTranslationResult(
+                item.stableId,
+                '本地翻译损坏了学术公式、代码、引用或术语占位符，或严重截断摘要，已丢弃结果且未写入缓存。',
+                'failed'
+              );
+              return;
+            }
+
+            const titleZh = evaluated.titleUsable ? evaluated.titleZh : '';
+            const abstractZh = evaluated.abstractUsable ? evaluated.abstractZh : '';
+            if (!abstractZh) {
+              results[item.index] = {
+                ...buildFailedTranslationResult(
+                  item.stableId,
+                  '本地翻译未生成可用的中文摘要，已保留快速标题但未写入缓存，可重新翻译。',
+                  'failed'
+                ),
+                titleZh
+              };
+              return;
+            }
+
+            const selection = buildSingleCandidateSelectionMetadata();
+            this.writeCache(item.cacheKey, {
+              stableId: item.stableId,
+              title: item.title,
+              summary: item.summary,
+              titleZh,
+              abstractZh,
+              translatedAt,
+              engine: outcome.engine,
+              selection
+            });
+            results[item.index] = {
+              stableId: item.stableId,
+              titleZh,
+              abstractZh,
+              engine: outcome.engine,
+              status: 'completed',
+              cacheHit: false,
+              qualityStatus: 'passed',
+              elapsedMs: 0,
+              message: buildCompletedTranslationMessage(outcome.engine),
+              translatedAt,
+              ...selection
+            };
+          });
+        }
       } catch (error) {
         const isUnavailable = isArgosUnavailableError(error);
         const message = formatTranslationError(error);
@@ -515,13 +656,357 @@ export class ArxivTranslationService {
             cacheHit: false,
             qualityStatus: 'not-checked',
             elapsedMs: 0,
-            message
+            message,
+            ...buildNoEligibleSelectionMetadata(0)
           };
         });
       }
       return results;
     }, options?.priority, options?.sessionId, buildSupersededResults);
     return finalizeTranslationResults(queuedResults, startedAt, this.now());
+  }
+
+  private async translatePreparedItemsWithMbr(
+    preparedItems: PreparedTranslationBatchItem[],
+    uniqueBatch: ReturnType<typeof buildUniqueTranslationBatch>,
+    batchOptions: TranslationBatchOptions,
+    stableIds: string[],
+    priority: ArxivTranslationPriority,
+    sessionId?: number
+  ): Promise<MbrTranslationOutcome[]> {
+    const candidateTranslator = this.candidateTranslateTextsWithEngine as CandidateTranslationBatchTranslator;
+    const evaluator = this.cometEvaluator as CometEvaluator;
+    const bundlesByItem = preparedItems.map(() => [] as TranslationCandidateBundle[]);
+    const engineBySeed = new Map<number, LocalTranslateBatchResult['engine']>();
+
+    for (const seed of ARXIV_MBR_SEEDS) {
+      this.emitTranslationProgress(stableIds, priority, sessionId, 'candidate-generating', {
+        candidateIndex: ARXIV_MBR_SEEDS.indexOf(seed) + 1,
+        candidateTotal: ARXIV_MBR_SEEDS.length
+      });
+      try {
+        const generated = await candidateTranslator(uniqueBatch.texts, seed, {
+          ...batchOptions,
+          generation: { seed, strict: true }
+        });
+        if (generated.texts.length !== uniqueBatch.texts.length) {
+          throw new Error(
+            `候选 ${seed} 返回 ${generated.texts.length} 段，预期 ${uniqueBatch.texts.length} 段。`
+          );
+        }
+        engineBySeed.set(seed, generated.engine);
+        const translatedTexts = uniqueBatch.indexes.map((index) => generated.texts[index] ?? '');
+        const evaluated = evaluatePreparedTranslations(preparedItems, translatedTexts);
+        preparedItems.forEach((prepared, itemIndex) => {
+          bundlesByItem[itemIndex]?.push(
+            buildTranslationCandidateBundle(seed, prepared, evaluated[itemIndex])
+          );
+        });
+      } catch (error) {
+        for (let itemIndex = 0; itemIndex < preparedItems.length; itemIndex += 1) {
+          const prepared = preparedItems[itemIndex] as PreparedTranslationBatchItem;
+          const itemRequests = buildPaperTranslationRequests(prepared);
+          const itemBatch = buildUniqueTranslationBatch(itemRequests);
+          try {
+            const generated = await candidateTranslator(itemBatch.texts, seed, {
+              ...batchOptions,
+              itemContexts: itemBatch.itemContexts,
+              generation: { seed, strict: true }
+            });
+            if (generated.texts.length !== itemBatch.texts.length) {
+              throw new Error('candidate-segment-count-mismatch');
+            }
+            engineBySeed.set(seed, generated.engine);
+            const translatedTexts = itemBatch.indexes.map((index) => generated.texts[index] ?? '');
+            const [evaluated] = evaluatePreparedTranslations([prepared], translatedTexts);
+            bundlesByItem[itemIndex]?.push(
+              buildTranslationCandidateBundle(seed, prepared, evaluated)
+            );
+          } catch {
+            bundlesByItem[itemIndex]?.push(
+              buildUnavailableCandidateBundle(seed, 'candidate-generation-failed')
+            );
+          }
+        }
+      }
+    }
+
+    this.emitTranslationProgress(stableIds, priority, sessionId, 'candidate-validating', {
+      candidateTotal: ARXIV_MBR_SEEDS.length
+    });
+
+    let evaluatorFailed = false;
+    try {
+      this.resetCandidateRuntime();
+    } catch {
+      evaluatorFailed = true;
+    }
+
+    const pairRequestsByItem = bundlesByItem.map((bundles) => buildCometPairRequests(bundles));
+    const allPairRequests = pairRequestsByItem.flat();
+    let allScores: number[] = [];
+    if (allPairRequests.length > 0 && !evaluatorFailed) {
+      this.emitTranslationProgress(stableIds, priority, sessionId, 'quality-evaluating', {
+        candidateTotal: ARXIV_MBR_SEEDS.length
+      });
+      try {
+        allScores = await evaluator(allPairRequests);
+        if (
+          allScores.length !== allPairRequests.length ||
+          allScores.some((score) => !Number.isFinite(score))
+        ) {
+          throw new Error(
+            `COMET 返回 ${allScores.length} 个分数，预期 ${allPairRequests.length} 个有限分数。`
+          );
+        }
+      } catch {
+        evaluatorFailed = true;
+        allScores = [];
+      } finally {
+        try {
+          await this.unloadCometEvaluator();
+        } catch {
+          // Scoring already finished. Runtime cleanup is retried when the service closes.
+        }
+      }
+    }
+
+    let scoreCursor = 0;
+    return bundlesByItem.map((bundles, itemIndex) => {
+      const pairRequests = pairRequestsByItem[itemIndex] ?? [];
+      const pairScores: CometPairScore[] = evaluatorFailed
+        ? []
+        : pairRequests.map((pair, pairIndex) => ({
+            ...pair,
+            score: allScores[scoreCursor + pairIndex] as number
+          }));
+      scoreCursor += pairRequests.length;
+      let selection = selectCometMbrBundle(bundles, pairScores, {
+        evaluatorFailed: evaluatorFailed && pairRequests.length > 0
+      });
+      if (selection.mode === 'no-eligible-candidate') {
+        const failureTypes = summarizeCandidateFailureTypes(bundles);
+        if (failureTypes) {
+          selection = {
+            ...selection,
+            degradationReason: `${selection.degradationReason ?? '候选未通过硬门禁'} 失败类型：${failureTypes}。`
+          };
+        }
+      }
+      const selectedSeed = selection.bundle?.seed;
+      const metadata: ArxivTranslationSelectionMetadata = {
+        selectionMode: selection.mode,
+        candidateCount: ARXIV_MBR_SEEDS.length,
+        eligibleCandidateCount: selection.eligibleCandidateCount,
+        ...(selectedSeed !== undefined ? { selectedSeed } : {}),
+        ...(selection.mode === 'comet-mbr' || selection.mode === 'two-candidate'
+          ? { evaluator: ARXIV_MBR_EVALUATOR }
+          : {}),
+        ...(selection.degradationReason ? { degradationReason: selection.degradationReason } : {})
+      };
+      if (selection.degradationReason) {
+        this.emitTranslationProgress(
+          [stableIds[itemIndex] ?? ''],
+          priority,
+          sessionId,
+          'degraded',
+          { detail: selection.degradationReason, candidateTotal: ARXIV_MBR_SEEDS.length }
+        );
+      }
+      return {
+        selection,
+        metadata,
+        ...(selectedSeed !== undefined && engineBySeed.has(selectedSeed)
+          ? { engine: engineBySeed.get(selectedSeed) as LocalTranslateBatchResult['engine'] }
+          : {})
+      };
+    });
+  }
+
+  private async translatePreparedItemsWithoutMbr(
+    preparedItems: PreparedTranslationBatchItem[],
+    uniqueBatch: ReturnType<typeof buildUniqueTranslationBatch>,
+    batchOptions: TranslationBatchOptions
+  ): Promise<SingleCandidateTranslationOutcome[]> {
+    const evaluateBatch = async (
+      items: PreparedTranslationBatchItem[],
+      batch: ReturnType<typeof buildUniqueTranslationBatch>,
+      options: TranslationBatchOptions,
+      initialResult: LocalTranslateBatchResult
+    ): Promise<SingleCandidateTranslationOutcome[]> => {
+      if (initialResult.texts.length !== batch.texts.length) {
+        throw new Error(
+          `本地翻译返回 ${initialResult.texts.length} 段，预期 ${batch.texts.length} 段。`
+        );
+      }
+      let translationResult = initialResult;
+      let translatedTexts = batch.indexes.map((index) => translationResult.texts[index] ?? '');
+      let evaluatedTranslations = evaluatePreparedTranslations(items, translatedTexts);
+      const primaryQualityProblems = countTranslationQualityProblems(
+        evaluatedTranslations,
+        translationResult.engine
+      );
+      const shouldTryFallback = evaluatedTranslations.some(
+        (item) => item.hasSevereAbstractLengthLoss || hasSuspiciousRepeatedTranslationTail(item.abstract.text)
+      );
+      if (shouldTryFallback && primaryQualityProblems > 0 && this.fallbackTranslateTextsWithEngine) {
+        try {
+          const fallbackResult = await this.fallbackTranslateTextsWithEngine(batch.texts, options);
+          if (fallbackResult.texts.length === batch.texts.length) {
+            const fallbackTranslatedTexts = batch.indexes.map(
+              (index) => fallbackResult.texts[index] ?? ''
+            );
+            const fallbackEvaluatedTranslations = evaluatePreparedTranslations(
+              items,
+              fallbackTranslatedTexts
+            );
+            const fallbackQualityProblems = countTranslationQualityProblems(
+              fallbackEvaluatedTranslations,
+              fallbackResult.engine
+            );
+            if (fallbackQualityProblems < primaryQualityProblems) {
+              translationResult = fallbackResult;
+              translatedTexts = fallbackTranslatedTexts;
+              evaluatedTranslations = fallbackEvaluatedTranslations;
+            }
+          }
+        } catch {
+          // Keep the primary result; the hard gate below still rejects damaged output.
+        }
+      }
+      return evaluatedTranslations.map((evaluated) => ({
+        evaluated,
+        engine: translationResult.engine
+      }));
+    };
+
+    try {
+      // Prefer one fast batch. If any segment aborts that request, retry each
+      // paper independently so one malformed document cannot fail its peers.
+      const primaryResult = await this.translateTextsWithEngine(uniqueBatch.texts, batchOptions);
+      return await evaluateBatch(preparedItems, uniqueBatch, batchOptions, primaryResult);
+    } catch {
+      const outcomes: SingleCandidateTranslationOutcome[] = [];
+      for (const prepared of preparedItems) {
+        const requests = buildPaperTranslationRequests(prepared);
+        const batch = buildUniqueTranslationBatch(requests);
+        const options = { itemContexts: batch.itemContexts };
+        try {
+          const result = await this.translateTextsWithFallback(batch.texts, options);
+          const [outcome] = await evaluateBatch([prepared], batch, options, result);
+          outcomes.push(outcome ?? { error: new Error('本地翻译未返回当前论文的结果。') });
+        } catch (error) {
+          outcomes.push({ error });
+        }
+      }
+      return outcomes;
+    }
+  }
+
+  private emitTranslationProgress(
+    stableIds: string[],
+    priority: ArxivTranslationPriority,
+    sessionId: number | undefined,
+    phase: ArxivTranslationProgress['phase'],
+    detail: Pick<ArxivTranslationProgress, 'candidateIndex' | 'candidateTotal' | 'detail'> = {}
+  ): void {
+    if (!this.onProgress) {
+      return;
+    }
+    stableIds.filter(Boolean).forEach((stableId) => {
+      try {
+        this.onProgress?.({
+          stableId,
+          phase,
+          priority,
+          ...(sessionId !== undefined ? { sessionId } : {}),
+          ...(detail.candidateIndex !== undefined ? { candidateIndex: detail.candidateIndex } : {}),
+          ...(detail.candidateTotal !== undefined ? { candidateTotal: detail.candidateTotal } : {}),
+          ...(detail.detail ? { detail: detail.detail } : {})
+        });
+      } catch {
+        // Progress observers must never interrupt translation or cache writes.
+      }
+    });
+  }
+
+  private async applyFallbackToNoEligibleOutcomes(
+    preparedItems: PreparedTranslationBatchItem[],
+    outcomes: MbrTranslationOutcome[]
+  ): Promise<void> {
+    if (!this.fallbackTranslateTextsWithEngine) {
+      return;
+    }
+    const failedIndexes = outcomes.flatMap((outcome, index) =>
+      outcome.selection.bundle ? [] : [index]
+    );
+    if (failedIndexes.length === 0) {
+      return;
+    }
+    const failedPreparedItems = failedIndexes.map((index) => preparedItems[index] as PreparedTranslationBatchItem);
+    const fallbackRequests = failedPreparedItems.flatMap(buildPaperTranslationRequests);
+    const fallbackBatch = buildUniqueTranslationBatch(fallbackRequests);
+    const applyFallbackResult = (
+      originalIndexes: number[],
+      items: PreparedTranslationBatchItem[],
+      batch: ReturnType<typeof buildUniqueTranslationBatch>,
+      fallbackResult: LocalTranslateBatchResult
+    ): void => {
+      if (fallbackResult.texts.length !== batch.texts.length) {
+        throw new Error('后备翻译引擎返回的文本数量与请求不一致。');
+      }
+      const translatedTexts = batch.indexes.map((index) => fallbackResult.texts[index] ?? '');
+      const evaluatedItems = evaluatePreparedTranslations(items, translatedTexts);
+      originalIndexes.forEach((originalIndex, fallbackIndex) => {
+        const prepared = items[fallbackIndex];
+        const evaluated = evaluatedItems[fallbackIndex];
+        const bundle = buildTranslationCandidateBundle(0, prepared, evaluated);
+        if (!bundle.eligible) {
+          return;
+        }
+        const outcome = outcomes[originalIndex];
+        if (!outcome) {
+          return;
+        }
+        const degradationReason =
+          '三份 HY-MT2 候选均未通过硬门禁，已使用经过同一结构校验的 NLLB/Argos 后备译文。';
+        outcome.selection = {
+          ...outcome.selection,
+          bundle,
+          degradationReason
+        };
+        outcome.metadata = {
+          selectionMode: 'fallback-engine',
+          candidateCount: ARXIV_MBR_SEEDS.length,
+          eligibleCandidateCount: 0,
+          degradationReason
+        };
+        outcome.engine = fallbackResult.engine;
+      });
+    };
+    try {
+      const fallbackResult = await this.fallbackTranslateTextsWithEngine(
+        fallbackBatch.texts,
+        { itemContexts: fallbackBatch.itemContexts }
+      );
+      applyFallbackResult(failedIndexes, failedPreparedItems, fallbackBatch, fallbackResult);
+    } catch {
+      for (let fallbackIndex = 0; fallbackIndex < failedPreparedItems.length; fallbackIndex += 1) {
+        const prepared = failedPreparedItems[fallbackIndex] as PreparedTranslationBatchItem;
+        const originalIndex = failedIndexes[fallbackIndex] as number;
+        const requests = buildPaperTranslationRequests(prepared);
+        const batch = buildUniqueTranslationBatch(requests);
+        try {
+          const fallbackResult = await this.fallbackTranslateTextsWithEngine(
+            batch.texts,
+            { itemContexts: batch.itemContexts }
+          );
+          applyFallbackResult([originalIndex], [prepared], batch, fallbackResult);
+        } catch {
+          // Keep this paper's explicit no-eligible result when its own fallback is unavailable.
+        }
+      }
+    }
   }
 
   private initDatabase(): void {
@@ -534,9 +1019,16 @@ export class ArxivTranslationService {
         title_zh TEXT NOT NULL,
         abstract_zh TEXT NOT NULL,
         translated_at TEXT NOT NULL,
-        engine TEXT NOT NULL
+        engine TEXT NOT NULL,
+        selection_json TEXT
       );
     `);
+    const columns = this.db
+      .prepare(`PRAGMA table_info(arxiv_translation_cache)`)
+      .all() as Array<{ name?: string }>;
+    if (!columns.some((column) => column.name === 'selection_json')) {
+      this.db.exec(`ALTER TABLE arxiv_translation_cache ADD COLUMN selection_json TEXT`);
+    }
   }
 
   private enqueue<T>(
@@ -630,7 +1122,7 @@ export class ArxivTranslationService {
   private readCache(cacheKey: string): CachedTranslationRow | null {
     const row = this.db
       .prepare(
-        `SELECT source_title, source_summary, title_zh, abstract_zh, translated_at, engine
+        `SELECT source_title, source_summary, title_zh, abstract_zh, translated_at, engine, selection_json
          FROM arxiv_translation_cache
          WHERE cache_key = ?`
       )
@@ -693,7 +1185,8 @@ export class ArxivTranslationService {
       titleZh,
       abstractZh: cached.abstract_zh,
       translatedAt,
-      engine: cached.engine
+      engine: cached.engine,
+      selection: parseCachedSelectionMetadata(cached.selection_json)
     });
     return {
       ...cached,
@@ -712,6 +1205,7 @@ export class ArxivTranslationService {
       abstractZh: string;
       translatedAt: string;
       engine: string;
+      selection?: ArxivTranslationSelectionMetadata;
     }
   ): void {
     this.db
@@ -724,14 +1218,16 @@ export class ArxivTranslationService {
           title_zh,
           abstract_zh,
           translated_at,
-          engine
+          engine,
+          selection_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(cache_key) DO UPDATE SET
           title_zh = excluded.title_zh,
           abstract_zh = excluded.abstract_zh,
           translated_at = excluded.translated_at,
-          engine = excluded.engine`
+          engine = excluded.engine,
+          selection_json = excluded.selection_json`
       )
       .run(
         cacheKey,
@@ -741,7 +1237,8 @@ export class ArxivTranslationService {
         value.titleZh,
         value.abstractZh,
         value.translatedAt,
-        value.engine
+        value.engine,
+        JSON.stringify(value.selection ?? buildSingleCandidateSelectionMetadata())
       );
   }
 
@@ -885,12 +1382,96 @@ function evaluatePreparedTranslations(
   });
 }
 
+function buildTranslationCandidateBundle(
+  seed: number,
+  prepared: PreparedTranslationBatchItem,
+  evaluated: EvaluatedTranslationBatchItem | undefined
+): TranslationCandidateBundle {
+  if (!evaluated) {
+    return buildUnavailableCandidateBundle(seed, 'candidate-evaluation-missing');
+  }
+  const hardFailures: string[] = [];
+  if (!evaluated.title.ok) {
+    hardFailures.push(`title-structure:${evaluated.title.reason ?? 'invalid'}`);
+  }
+  if (!evaluated.abstract.ok) {
+    hardFailures.push(`abstract-structure:${evaluated.abstract.reason ?? 'invalid'}`);
+  }
+  if (!evaluated.titleUsable) {
+    hardFailures.push('title-unusable');
+  }
+  if (!evaluated.abstractUsable) {
+    hardFailures.push('abstract-unusable');
+  }
+  if (evaluated.hasSevereAbstractLengthLoss) {
+    hardFailures.push('abstract-severely-truncated');
+  }
+  const softWarnings = [
+    ...(hasSuspiciousRepeatedTranslationTail(evaluated.titleZh) ? ['title-repeated-tail'] : []),
+    ...(hasSuspiciousRepeatedTranslationTail(evaluated.abstractZh) ? ['abstract-repeated-tail'] : [])
+  ];
+  return {
+    seed,
+    titleZh: evaluated.titleUsable ? evaluated.titleZh : '',
+    abstractZh: evaluated.abstractUsable ? evaluated.abstractZh : '',
+    segments: [
+      {
+        source: prepared.sourceTitle,
+        translation: evaluated.titleZh,
+        sourceTokenWeight: estimateSourceTokenWeight(prepared.sourceTitle),
+        kind: 'title'
+      },
+      {
+        source: prepared.sourceAbstract,
+        translation: evaluated.abstractZh,
+        sourceTokenWeight: estimateSourceTokenWeight(prepared.sourceAbstract),
+        kind: 'abstract'
+      }
+    ],
+    eligible: hardFailures.length === 0,
+    hardFailures,
+    softWarnings
+  };
+}
+
+function buildUnavailableCandidateBundle(seed: number, reason: string): TranslationCandidateBundle {
+  return {
+    seed,
+    titleZh: '',
+    abstractZh: '',
+    segments: [],
+    eligible: false,
+    hardFailures: [reason],
+    softWarnings: []
+  };
+}
+
+function summarizeCandidateFailureTypes(bundles: TranslationCandidateBundle[]): string {
+  return [...new Set(
+    bundles.flatMap((bundle) => bundle.hardFailures.map((failure) => failure.split(':')[0] ?? failure))
+  )].sort().join('、');
+}
+
+function estimateSourceTokenWeight(source: string): number {
+  return Math.max(
+    1,
+    source.match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu)?.length ?? 0
+  );
+}
+
 export function buildTranslationCacheKey(input: { stableId: string; title: string; summary: string }): string {
   return crypto
     .createHash('sha256')
     .update(
       JSON.stringify({
-        version: 10,
+        version: 11,
+        selection: ARXIV_MBR_SELECTION_VERSION,
+        seeds: ARXIV_MBR_SEEDS,
+        hardGate: ARXIV_MBR_HARD_GATE_VERSION,
+        evaluator: {
+          model: COMET_MBR_MODEL_ID,
+          revision: COMET_MBR_MODEL_REVISION
+        },
         contextPrompt: ARXIV_CONTEXT_PROMPT_VERSION,
         glossary: ACADEMIC_TRANSLATION_GLOSSARY_VERSION,
         hyMt2Model: resolveHyMt2ModelCacheIdentity(),
@@ -1022,6 +1603,86 @@ function buildCompletedTranslationMessage(engine: LocalTranslateBatchResult['eng
   return '已使用本地 Argos 批量翻译并写入 SQLite 缓存。';
 }
 
+function buildMbrCompletedTranslationMessage(metadata: ArxivTranslationSelectionMetadata): string {
+  switch (metadata.selectionMode) {
+    case 'comet-mbr':
+      return '已生成 3 份完整 HY-MT2 候选，并由本地 COMET 独立互评后整篇选优并写入缓存。';
+    case 'two-candidate':
+      return '两份完整候选通过硬门禁，已由本地 COMET 互评后整篇选优并写入缓存。';
+    case 'single-unique-candidate':
+      return '候选归一化后只有一份独立完整译文，已通过硬门禁并写入缓存。';
+    case 'single-candidate':
+      return '只有一份完整候选通过硬门禁，已确定性选用并写入缓存。';
+    case 'evaluator-failed':
+      return '本地 COMET 评估不可用，已按硬门禁、质量警告与固定顺序降级选择完整译文并写入缓存。';
+    case 'fallback-engine':
+      return '三份 HY-MT2 候选均未通过硬门禁，已使用通过结构校验的 NLLB/Argos 后备译文并写入缓存。';
+    case 'no-eligible-candidate':
+    default:
+      return '没有候选通过完整性检查，未写入缓存。';
+  }
+}
+
+const ARXIV_TRANSLATION_SELECTION_MODES = new Set<ArxivTranslationSelectionMetadata['selectionMode']>([
+  'comet-mbr',
+  'two-candidate',
+  'single-candidate',
+  'single-unique-candidate',
+  'no-eligible-candidate',
+  'fallback-engine',
+  'evaluator-failed'
+]);
+
+function buildSingleCandidateSelectionMetadata(): ArxivTranslationSelectionMetadata {
+  return {
+    selectionMode: 'single-candidate',
+    candidateCount: 1,
+    eligibleCandidateCount: 1
+  };
+}
+
+function buildNoEligibleSelectionMetadata(candidateCount: number): ArxivTranslationSelectionMetadata {
+  return {
+    selectionMode: 'no-eligible-candidate',
+    candidateCount: Math.max(0, Math.trunc(candidateCount)),
+    eligibleCandidateCount: 0
+  };
+}
+
+function parseCachedSelectionMetadata(value: string | null): ArxivTranslationSelectionMetadata {
+  if (!value) {
+    return buildSingleCandidateSelectionMetadata();
+  }
+  try {
+    const parsed = JSON.parse(value) as Partial<ArxivTranslationSelectionMetadata>;
+    if (
+      !ARXIV_TRANSLATION_SELECTION_MODES.has(
+        parsed.selectionMode as ArxivTranslationSelectionMetadata['selectionMode']
+      ) ||
+      !Number.isSafeInteger(parsed.candidateCount) ||
+      (parsed.candidateCount as number) < 0 ||
+      !Number.isSafeInteger(parsed.eligibleCandidateCount) ||
+      (parsed.eligibleCandidateCount as number) < 0
+    ) {
+      return buildSingleCandidateSelectionMetadata();
+    }
+    return {
+      selectionMode: parsed.selectionMode as ArxivTranslationSelectionMetadata['selectionMode'],
+      candidateCount: parsed.candidateCount as number,
+      eligibleCandidateCount: parsed.eligibleCandidateCount as number,
+      ...(Number.isSafeInteger(parsed.selectedSeed) ? { selectedSeed: parsed.selectedSeed as number } : {}),
+      ...(typeof parsed.evaluator === 'string' && parsed.evaluator.trim()
+        ? { evaluator: parsed.evaluator }
+        : {}),
+      ...(typeof parsed.degradationReason === 'string' && parsed.degradationReason.trim()
+        ? { degradationReason: parsed.degradationReason }
+        : {})
+    };
+  } catch {
+    return buildSingleCandidateSelectionMetadata();
+  }
+}
+
 function buildCachedTranslationResult(
   stableId: string,
   cached: CachedTranslationRow
@@ -1036,7 +1697,8 @@ function buildCachedTranslationResult(
     qualityStatus: 'passed',
     elapsedMs: 0,
     message: '已命中本地 SQLite 翻译缓存。',
-    translatedAt: cached.translated_at
+    translatedAt: cached.translated_at,
+    ...parseCachedSelectionMetadata(cached.selection_json)
   };
 }
 
@@ -1054,7 +1716,8 @@ function buildFailedTranslationResult(
     cacheHit: false,
     qualityStatus,
     elapsedMs: 0,
-    message
+    message,
+    ...buildNoEligibleSelectionMetadata(0)
   };
 }
 

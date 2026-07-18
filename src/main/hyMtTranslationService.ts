@@ -19,6 +19,7 @@ const DEFAULT_HYMT_STARTUP_TIMEOUT_MS = 60_000;
 const DEFAULT_HYMT_PARALLEL = 2;
 const MAX_HYMT_CONTEXT_CHARS = 900;
 const HYMT_PROTECTED_MARKER_PATTERN = /\b86753\d{2}901\b/gu;
+const HYMT_STRICT_RETRY_SEED_OFFSET = 104_729;
 
 export interface HyMt2RuntimeSnapshot {
   configured: boolean;
@@ -33,6 +34,33 @@ export interface HyMt2RuntimeSnapshot {
   message: string;
   workerRunning: boolean;
   pending: number;
+}
+
+export interface HyMt2GenerationConfig {
+  temperature: number;
+  top_k: number;
+  top_p: number;
+  repeat_penalty: number;
+  seed: number;
+}
+
+export function buildHyMt2GenerationConfig(
+  options: { seed?: number; strict?: boolean } = {}
+): HyMt2GenerationConfig {
+  const explicitSeed = options.seed !== undefined;
+  const baseSeed = normalizeHyMt2Seed(options.seed, 42);
+  const seed = options.strict
+    ? explicitSeed
+      ? normalizeHyMt2Seed(baseSeed + HYMT_STRICT_RETRY_SEED_OFFSET, 3407)
+      : 3407
+    : baseSeed;
+  return {
+    temperature: 0.7,
+    top_k: 20,
+    top_p: 0.6,
+    repeat_penalty: 1.05,
+    seed
+  };
 }
 
 let hyMt2Runtime: HyMt2Runtime | null = null;
@@ -480,6 +508,11 @@ class HyMt2Runtime {
     try {
       let lastValidationError = 'HY-MT2 未返回翻译文本。';
       for (let attempt = 0; attempt < 2; attempt += 1) {
+        const strictAttempt = attempt === 1;
+        const generation = buildHyMt2GenerationConfig({
+          seed: options.generation?.seed,
+          strict: strictAttempt
+        });
         const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
           method: 'POST',
           headers: {
@@ -487,13 +520,12 @@ class HyMt2Runtime {
             Authorization: `Bearer ${this.apiKey}`
           },
           body: JSON.stringify({
-            messages: [{ role: 'user', content: buildHyMt2Prompt(source, options, attempt === 1) }],
+            messages: [{
+              role: 'user',
+              content: buildHyMt2Prompt(source, options, Boolean(options.generation?.strict) || strictAttempt)
+            }],
             max_tokens: estimateHyMt2MaxTokens(source),
-            temperature: 0.7,
-            top_k: 20,
-            top_p: 0.6,
-            repeat_penalty: 1.05,
-            seed: attempt === 0 ? 42 : 3407,
+            ...generation,
             stream: false
           }),
           signal: controller.signal
@@ -529,6 +561,14 @@ class HyMt2Runtime {
       clearTimeout(timer);
     }
   }
+}
+
+function normalizeHyMt2Seed(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  const normalized = Math.abs(Math.trunc(value as number)) % 2_147_483_647;
+  return normalized || fallback;
 }
 
 async function mapWithConcurrency<T, R>(

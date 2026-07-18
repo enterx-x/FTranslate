@@ -7,6 +7,7 @@ describe('runtimeCenter renderer helpers', () => {
       generatedAt: '2026-07-01T00:00:00.000Z',
       overallStatus: 'degraded',
       capabilities: [
+        { id: 'comet-mbr', label: 'COMET-MBR', status: 'ready', message: 'CPU ready', details: {} },
         { id: 'nllb', label: 'NLLB', status: 'degraded', message: 'CPU fallback', details: {} },
         { id: 'argos', label: 'Argos', status: 'ready', message: 'fallback', details: {} },
         { id: 'pdf2zh', label: 'pdf2zh', status: 'ready', message: 'ok', details: {} },
@@ -16,7 +17,7 @@ describe('runtimeCenter renderer helpers', () => {
       actions: ['Configure an AI API key before using cloud-backed analysis.', 'Check CUDA DLL paths.']
     });
 
-    expect(summary.readyCount).toBe(2);
+    expect(summary.readyCount).toBe(3);
     expect(summary.degradedCount).toBe(1);
     expect(summary.unavailableCount).toBe(1);
     expect(selectRuntimeActionLabel(summary)).toBe('Configure an AI API key before using cloud-backed analysis.');

@@ -1,4 +1,4 @@
-export const ACADEMIC_TRANSLATION_GLOSSARY_VERSION = 'academic-en-zh-v3';
+export const ACADEMIC_TRANSLATION_GLOSSARY_VERSION = 'academic-en-zh-v6';
 
 interface AcademicGlossaryEntry {
   id: string;
@@ -18,6 +18,106 @@ export interface AcademicGlossaryMatch {
 // Longer phrases are selected before their component words so the glossary can
 // constrain domain meaning without trying to rewrite the model's grammar.
 const ACADEMIC_GLOSSARY: readonly AcademicGlossaryEntry[] = [
+  {
+    id: 'contact-rich',
+    target: '富接触',
+    sources: ['contact-rich', 'contact rich']
+  },
+  {
+    id: 'episodic-memory',
+    target: '情景记忆',
+    sources: ['episodic memories', 'episodic memory']
+  },
+  {
+    id: 'event-based-tactile-sensing',
+    target: '事件触觉感知',
+    sources: ['event-based tactile sensing', 'event based tactile sensing']
+  },
+  {
+    id: 'in-hand-manipulation',
+    target: '手内操作',
+    sources: ['in-hand manipulation', 'in hand manipulation']
+  },
+  {
+    id: 'incipient-slip',
+    target: '初始滑移',
+    sources: ['incipient slip']
+  },
+  {
+    id: 'taxel-activation',
+    target: '触觉单元激活',
+    sources: ['taxel activations', 'taxel activation']
+  },
+  {
+    id: 'cycle-consistent-objective',
+    target: '循环一致性目标',
+    sources: ['cycle-consistent objective', 'cycle consistent objective']
+  },
+  {
+    id: 'actor-gradient',
+    target: 'Actor 梯度',
+    sources: ['actor gradients', 'actor gradient']
+  },
+  {
+    id: 'tube-mpc',
+    target: '管束模型预测控制',
+    sources: ['tube model predictive control', 'tube MPC']
+  },
+  {
+    id: 'normalized-innovation',
+    target: '归一化新息',
+    sources: ['normalized innovations', 'normalized innovation']
+  },
+  {
+    id: 'ancillary-controller',
+    target: '辅助控制器',
+    sources: ['ancillary controllers', 'ancillary controller']
+  },
+  {
+    id: 'chance-constrained',
+    target: '机会约束',
+    sources: ['chance-constrained', 'chance constrained']
+  },
+  {
+    id: 'occlusion-aware',
+    target: '遮挡感知',
+    sources: ['occlusion-aware', 'occlusion aware']
+  },
+  {
+    id: 'reachable-occupancy-distribution',
+    target: '可达占用分布',
+    sources: ['reachable occupancy distributions', 'reachable occupancy distribution']
+  },
+  {
+    id: 'surrogate-objective',
+    target: '代理目标',
+    sources: ['surrogate objectives', 'surrogate objective']
+  },
+  {
+    id: 'learned-closure',
+    target: '学习闭合项',
+    sources: ['learned closures', 'learned closure']
+  },
+  {
+    id: 'unresolved-scale',
+    target: '未解析尺度',
+    sources: ['unresolved scales', 'unresolved scale']
+  },
+  {
+    id: 'relative-degree',
+    target: '相对阶',
+    sources: ['relative degree', 'relative-degree']
+  },
+  {
+    id: 'cholesky-factor',
+    target: 'Cholesky 因子',
+    sources: ['Cholesky factors', 'Cholesky factor']
+  },
+  {
+    id: 'navier-stokes-equation',
+    target: 'Navier–Stokes 方程',
+    sources: ['Navier–Stokes equations', 'Navier-Stokes equations', 'Navier–Stokes equation', 'Navier-Stokes equation']
+  },
   {
     id: 'proprioceptive-visual-correspondence',
     target: '本体感知-视觉对应关系',

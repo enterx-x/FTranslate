@@ -1,9 +1,10 @@
 import type { LocalTranslationStatus } from './localTranslationService';
+import type { CometMbrRuntimeSnapshot } from './cometMbrRuntime';
 
 export type RuntimeCapabilityStatus = 'ready' | 'degraded' | 'unavailable' | 'unknown';
 
 export interface RuntimeCapability {
-  id: 'hy-mt2' | 'nllb' | 'argos' | 'pdf2zh' | 'ai-provider';
+  id: 'hy-mt2' | 'comet-mbr' | 'nllb' | 'argos' | 'pdf2zh' | 'ai-provider';
   label: string;
   status: RuntimeCapabilityStatus;
   message: string;
@@ -33,6 +34,7 @@ export interface RuntimeCenterSnapshot {
 export interface BuildRuntimeCenterSnapshotInput {
   now?: string;
   localTranslationStatus: LocalTranslationStatus;
+  cometMbr: CometMbrRuntimeSnapshot;
   pdfTranslationEngine: {
     available?: boolean;
     status?: string;
@@ -54,12 +56,16 @@ export function buildRuntimeCenterSnapshot(input: BuildRuntimeCenterSnapshotInpu
   const queueItems = input.queue ?? [];
   const capabilities = [
     buildHyMt2Capability(input.localTranslationStatus),
+    buildCometMbrCapability(input.cometMbr),
     buildNllbCapability(input.localTranslationStatus),
     buildArgosCapability(input.localTranslationStatus),
     buildPdfCapability(input.pdfTranslationEngine),
     buildAiProviderCapability(input.aiProvider)
   ];
-  const queue = summarizeQueue(queueItems, input.localTranslationStatus.worker.pending);
+  const queue = summarizeQueue(
+    queueItems,
+    input.localTranslationStatus.worker.pending + input.cometMbr.pending
+  );
   const actions = buildRuntimeActions(capabilities, input.localTranslationStatus, input.aiProvider);
 
   return {
@@ -68,6 +74,40 @@ export function buildRuntimeCenterSnapshot(input: BuildRuntimeCenterSnapshotInpu
     capabilities,
     queue,
     actions
+  };
+}
+
+function buildCometMbrCapability(snapshot: CometMbrRuntimeSnapshot): RuntimeCapability {
+  const status: RuntimeCapabilityStatus = !snapshot.configured
+    ? 'unavailable'
+    : snapshot.available || snapshot.state === 'ready'
+      ? 'ready'
+      : snapshot.state === 'failed'
+        ? 'degraded'
+        : 'unknown';
+  const message = snapshot.lastError || (
+    status === 'ready'
+      ? `${snapshot.modelId} 已就绪`
+      : status === 'unavailable'
+        ? 'COMET-MBR 独立质量评估环境尚未安装。'
+        : snapshot.state === 'loading'
+          ? '正在加载 COMET-MBR 质量评估模型。'
+          : 'COMET-MBR 已安装，等待首次质量评估或手动检测。'
+  );
+  return {
+    id: 'comet-mbr',
+    label: 'COMET-MBR',
+    status,
+    message,
+    details: {
+      runtimeDevice: snapshot.device,
+      runtimeState: snapshot.state,
+      modelId: snapshot.modelId,
+      modelRevision: snapshot.modelRevision,
+      modelPath: snapshot.modelPath,
+      pythonPath: snapshot.pythonPath,
+      pendingCount: snapshot.pending
+    }
   };
 }
 
@@ -200,6 +240,11 @@ function buildRuntimeActions(
   }
   if (capabilities.find((capability) => capability.id === 'hy-mt2')?.status !== 'ready') {
     actions.push('Install HY-MT2 for the highest-quality local academic translation.');
+  }
+  if (capabilities.find((capability) => capability.id === 'comet-mbr')?.status === 'unavailable') {
+    actions.push(
+      'Run the bundled resources/runtime-installers/install-comet-mbr.ps1 (source: scripts/install-comet-mbr.ps1) to install independent translation quality evaluation.'
+    );
   }
   if (capabilities.find((capability) => capability.id === 'nllb')?.status === 'degraded') {
     const reason = localTranslationStatus.nllb.lastFallbackReason || localTranslationStatus.nllb.lastRuntimeError;

@@ -58,7 +58,14 @@ describe('ArxivTranslationService', () => {
       .createHash('sha256')
       .update(
         JSON.stringify({
-          version: 10,
+          version: 11,
+          selection: 'mbr-v1',
+          seeds: [42, 3407, 7919],
+          hardGate: 'academic-hard-gates-v1',
+          evaluator: {
+            model: 'Unbabel/wmt22-comet-da',
+            revision: '2760a223ac957f30acfb18c8aa649b01cf1d75f2'
+          },
           contextPrompt: 'paper-context-v1',
           glossary: ACADEMIC_TRANSLATION_GLOSSARY_VERSION,
           hyMt2Model: resolveHyMt2ModelCacheIdentity(),
@@ -221,6 +228,50 @@ describe('ArxivTranslationService', () => {
       expect(batches[0].some((text) => text.includes('We use 86753'))).toBe(true);
       expect(batches[0].some((text) => text.includes('The 86753'))).toBe(true);
       expect(batches[0].some((text) => text.includes('CBF'))).toBe(true);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('retries single-candidate papers independently after a shared batch fails', async () => {
+    const calls: string[][] = [];
+    const service = new ArxivTranslationService({
+      dbPath: path.join(tempDir, 'isolated-single-candidate.sqlite'),
+      translateTexts: async (texts) => {
+        calls.push(texts);
+        const corpus = texts.join('\n');
+        if (corpus.includes('GOOD') && corpus.includes('BROKEN')) {
+          throw new Error('one paper failed the shared batch');
+        }
+        if (corpus.includes('BROKEN')) {
+          throw new Error('broken paper still fails independently');
+        }
+        return texts.map((text) =>
+          preserveProtectedAcademicMarkers(
+            text,
+            '这是完整且可用的中文译文，涵盖研究方法、实验设置与主要结论。'
+          )
+        );
+      }
+    });
+
+    try {
+      const results = await service.translatePapers([
+        {
+          stableId: 'good-isolated-paper',
+          title: 'GOOD Safe Robot Navigation',
+          summary: 'GOOD experiments report complete methods and reproducible results.'
+        },
+        {
+          stableId: 'broken-isolated-paper',
+          title: 'BROKEN translation input',
+          summary: 'BROKEN content remains unavailable.'
+        }
+      ]);
+
+      expect(results[0].status).toBe('completed');
+      expect(results[1].status).toBe('failed');
+      expect(calls).toHaveLength(3);
     } finally {
       service.close();
     }

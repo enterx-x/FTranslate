@@ -51,7 +51,8 @@ import {
   type ArxivSearchServiceResult,
   type ArxivTitleAbstractTranslationRequest,
   type ArxivTitleAbstractTranslationResult,
-  type ArxivTranslationBatchRequest
+  type ArxivTranslationBatchRequest,
+  type ArxivTranslationProgress
 } from '../shared/arxiv';
 import { ArxivService } from './arxivService';
 import {
@@ -1452,7 +1453,12 @@ function getArxivService(): ArxivService {
 function getArxivTranslationService(): ArxivTranslationService {
   if (!arxivTranslationService) {
     arxivTranslationService = new ArxivTranslationService({
-      dbPath: path.join(app.getPath('userData'), 'arxiv-translation-cache.sqlite')
+      dbPath: path.join(app.getPath('userData'), 'arxiv-translation-cache.sqlite'),
+      onProgress: (progress: ArxivTranslationProgress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('arxiv:translation-progress', progress);
+        }
+      }
     });
   }
   return arxivTranslationService;
@@ -1610,7 +1616,12 @@ function buildVisualArxivTranslationResult(
     qualityStatus: 'passed',
     elapsedMs: 8,
     message: 'visual mock cached',
-    translatedAt: '2026-06-18T00:00:00.000Z'
+    translatedAt: '2026-06-18T00:00:00.000Z',
+    selectionMode: 'comet-mbr',
+    candidateCount: 3,
+    eligibleCandidateCount: 3,
+    selectedSeed: 3407,
+    evaluator: 'Unbabel/wmt22-comet-da'
   };
 }
 
@@ -3219,6 +3230,7 @@ async function getRuntimeCenterSnapshotForIpc() {
   return buildRuntimeCenterSnapshot({
     now: new Date().toISOString(),
     localTranslationStatus: getLocalTranslationStatus(),
+    cometMbr: getArxivTranslationService().getCometMbrRuntimeSnapshot(),
     pdfTranslationEngine: toRuntimePdfTranslationEngineView(checkPdfTranslationEngine()),
     aiProvider: await buildSafeAiProviderRuntimeSummary(),
     queue: []
@@ -3230,6 +3242,7 @@ async function checkRuntimeCenterForIpc() {
   return buildRuntimeCenterSnapshot({
     now: new Date().toISOString(),
     localTranslationStatus,
+    cometMbr: getArxivTranslationService().getCometMbrRuntimeSnapshot(),
     pdfTranslationEngine: toRuntimePdfTranslationEngineView(checkPdfTranslationEngine()),
     aiProvider: await buildSafeAiProviderRuntimeSummary(),
     queue: []

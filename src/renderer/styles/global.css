@@ -23120,8 +23120,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   align-items: center;
   min-height: 30px;
   padding: 5px 8px;
-  border: 1px solid #d7e0ea;
-  border-left: 3px solid #526d8f;
+  border: 1px solid #cbd7e4;
   border-radius: 7px;
   background: #f4f7fa;
   color: #334155;
@@ -23156,7 +23155,14 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   font-weight: 900;
 }
 
-.arxiv-translation-feedback:is(.is-warming, .is-title, .is-abstract) .arxiv-translation-feedback-indicator {
+.arxiv-translation-feedback:is(
+  .is-warming,
+  .is-title,
+  .is-abstract,
+  .is-candidate-generating,
+  .is-candidate-validating,
+  .is-quality-evaluating
+) .arxiv-translation-feedback-indicator {
   animation: arxiv-translation-spin 720ms linear infinite;
 }
 
@@ -23171,7 +23177,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 
 .arxiv-translation-feedback.is-done {
   border-color: #c9dfd2;
-  border-left-color: #3f7b59;
   background: #f2f8f4;
   color: #28523a;
 }
@@ -23183,7 +23188,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 
 .arxiv-translation-feedback.is-error {
   border-color: #ead3d0;
-  border-left-color: #a85a52;
   background: #fbf5f4;
   color: #7f3f38;
 }
@@ -23191,6 +23195,17 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .arxiv-translation-feedback.is-error .arxiv-translation-feedback-indicator {
   border-color: #c48780;
   color: #8e463f;
+}
+
+.arxiv-translation-feedback.is-degraded {
+  border-color: #e7d8b7;
+  background: #fbf8ef;
+  color: #75531b;
+}
+
+.arxiv-translation-feedback.is-degraded .arxiv-translation-feedback-indicator {
+  border-color: #c7a45f;
+  color: #8b641f;
 }
 
 @keyframes arxiv-translation-spin {
@@ -23203,7 +23218,14 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .arxiv-translation-feedback:is(.is-warming, .is-title, .is-abstract) .arxiv-translation-feedback-indicator,
+  .arxiv-translation-feedback:is(
+    .is-warming,
+    .is-title,
+    .is-abstract,
+    .is-candidate-generating,
+    .is-candidate-validating,
+    .is-quality-evaluating
+  ) .arxiv-translation-feedback-indicator,
   .arxiv-translation-feedback-pulse,
   .arxiv-translation-trigger.is-translation-starting {
     animation: none;

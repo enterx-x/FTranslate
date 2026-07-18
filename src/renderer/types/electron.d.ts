@@ -3,7 +3,8 @@ import type {
   ArxivSearchServiceResult,
   ArxivTitleAbstractTranslationRequest,
   ArxivTitleAbstractTranslationResult,
-  ArxivTranslationBatchRequest
+  ArxivTranslationBatchRequest,
+  ArxivTranslationProgress
 } from '../../shared/arxiv';
 import type {
   PlotDataTable,
@@ -383,6 +384,9 @@ export interface ElectronApi {
   translateArxivTitleAbstractBatch: (
     request: ArxivTranslationBatchRequest | ArxivTitleAbstractTranslationRequest[]
   ) => Promise<ArxivTitleAbstractTranslationResult[]>;
+  onArxivTranslationProgress: (
+    callback: (progress: ArxivTranslationProgress) => void
+  ) => () => void;
   downloadArxivPdf: (request: {
     pdfUrl: string;
     defaultFileName: string;
