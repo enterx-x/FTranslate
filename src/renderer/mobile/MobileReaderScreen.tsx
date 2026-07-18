@@ -6,6 +6,7 @@ import {
   MOBILE_AI_PAGE_REFLOW_VERSION,
   needsAcademicPageAiReview,
   reflowAndTranslateAcademicPage,
+  translateAcademicSelection,
   translateAcademicText,
   type AcademicTranslationContext
 } from './mobileTranslation';
@@ -28,6 +29,11 @@ import type {
 } from './mobileTypes';
 import { summarizeMobileExtractionSources } from './mobileExtractionSource';
 import { isTranslationEntryCurrent } from './mobileTypes';
+import {
+  calculateMobileSelectionPopoverPosition,
+  isEnglishAcademicSelection,
+  normalizeMobileSelectionText
+} from './mobileSelection';
 
 type MobileReaderMode = 'bilingual' | 'pdf';
 type PendingTranslation =
@@ -55,9 +61,12 @@ type MobileReaderFeedItem =
 
 interface SelectionPopoverState {
   text: string;
+  width: number;
   left: number;
   top: number;
   maxHeight: number;
+  surroundingOriginal: string;
+  surroundingTranslation: string;
   translation?: string;
   loading?: boolean;
   error?: string;
@@ -137,7 +146,11 @@ export function MobileReaderScreen({
   const readerScrollTopRef = useRef(0);
   const restoredFeedRef = useRef(false);
   const stopTranslationRef = useRef(false);
+  const translationRunRef = useRef(false);
   const pendingTranslationRef = useRef<PendingTranslation | null>(null);
+  const selectionCaptureTimerRef = useRef<number | null>(null);
+  const selectionRequestIdRef = useRef(0);
+  const selectionTranslationCacheRef = useRef(new Map<string, string>());
   const figureMigrationRef = useRef('');
   const replaceFigureEntriesRef = useRef(onReplaceFigureEntries);
   const figureExtractionCompleteRef = useRef(onFigureExtractionComplete);
@@ -211,10 +224,23 @@ export function MobileReaderScreen({
 
   useEffect(() => () => {
     stopTranslationRef.current = true;
+    selectionRequestIdRef.current += 1;
+    if (selectionCaptureTimerRef.current !== null) {
+      window.clearTimeout(selectionCaptureTimerRef.current);
+    }
     if (scrollFrameRef.current !== null) {
       window.cancelAnimationFrame(scrollFrameRef.current);
     }
   }, []);
+
+  useEffect(() => {
+    if (mode !== 'bilingual') {
+      return;
+    }
+    const handleSelectionChange = (): void => scheduleSelectionCapture(false);
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
+  }, [mode, paper.id, translationSession.baseURL, translationSession.model]);
 
   const translationByHash = useMemo(
     () => new Map(translations.map((entry) => [entry.sourceHash, entry])),
@@ -413,8 +439,9 @@ export function MobileReaderScreen({
     } catch (error) {
       if (updateStatus) {
         setStatus(`翻译失败：${formatError(error)}`);
+        return null;
       }
-      return null;
+      throw error;
     } finally {
       setTranslatingHash(null);
     }
@@ -480,6 +507,10 @@ export function MobileReaderScreen({
   }
 
   async function handleTranslateAll(session = translationSession): Promise<void> {
+    if (translationRunRef.current) {
+      setStatus('全文翻译已经在进行，请等待当前页完成或点击停止。');
+      return;
+    }
     if (paper.localOcrStatus !== 'completed') {
       setStatus('全文原文尚未提取完成；导入任务会先逐页缓存全部原文，完成后再点击全文翻译。');
       return;
@@ -500,6 +531,8 @@ export function MobileReaderScreen({
       return;
     }
 
+    closeSelectionPopover();
+    translationRunRef.current = true;
     stopTranslationRef.current = false;
     setTranslatingAll(true);
     let succeeded = 0;
@@ -509,6 +542,7 @@ export function MobileReaderScreen({
     let failedReason = '';
     let aiComparedPages = 0;
     let preservedLocalPages = 0;
+    try {
     let coherenceEntries = Array.from(translationByHash.values()).filter((entry) => (
       entry.translation.trim() && isTranslationEntryCurrent(entry, session)
     ));
@@ -545,17 +579,20 @@ export function MobileReaderScreen({
           if (stopTranslationRef.current) {
             break;
           }
-          const entry = await translateBlock(block, session, false, academicContext);
-          if (entry) {
+          try {
+            const entry = await translateBlock(block, session, false, academicContext);
+            if (!entry) {
+              throw new Error('翻译接口没有返回可保存的段落。');
+            }
             succeeded += 1;
             coherenceEntries = [
               ...coherenceEntries.filter((candidate) => candidate.sourceHash !== entry.sourceHash),
               entry
             ];
-          } else {
+          } catch (blockError) {
             failed += 1;
             failedPage = page;
-            failedReason = reflowError;
+            failedReason = `整页校验：${reflowError}；逐段请求：${formatError(blockError)}`;
             break;
           }
         }
@@ -565,7 +602,6 @@ export function MobileReaderScreen({
         setStatus(`第 ${page} 页译文已全部缓存，准备处理下一页…`);
       }
     }
-    setTranslatingAll(false);
     const stopped = stopTranslationRef.current;
     stopTranslationRef.current = false;
     const reflowSummary = aiComparedPages > 0 || preservedLocalPages > 0
@@ -578,6 +614,13 @@ export function MobileReaderScreen({
     } else {
       setStatus(`全文翻译完成：${completedPages} 页、${succeeded} 个段落的中文已逐页缓存${reflowSummary}。`);
     }
+    } catch (error) {
+      setStatus(`全文翻译意外停止：${formatError(error)}。已经成功写入的页面仍保存在本机，可再次点击继续。`);
+    } finally {
+      setTranslatingAll(false);
+      translationRunRef.current = false;
+      stopTranslationRef.current = false;
+    }
   }
 
   function handleBilingualModeClick(): void {
@@ -586,6 +629,9 @@ export function MobileReaderScreen({
   }
 
   function handleFeedScroll(): void {
+    if (selectionPopover) {
+      closeSelectionPopover(false);
+    }
     const scrollContainer = bilingualPageRef.current;
     if (scrollContainer) {
       const nextScrollTop = scrollContainer.scrollTop;
@@ -618,30 +664,77 @@ export function MobileReaderScreen({
     });
   }
 
-  function captureSelection(): void {
-    window.setTimeout(() => {
-      const selection = window.getSelection();
-      const text = selection?.toString().replace(/\s+/gu, ' ').trim() ?? '';
-      if (!selection || !text || text.length > 800 || !bilingualPageRef.current) {
-        return;
+  function scheduleSelectionCapture(closeWhenEmpty: boolean): void {
+    if (selectionCaptureTimerRef.current !== null) {
+      window.clearTimeout(selectionCaptureTimerRef.current);
+    }
+    selectionCaptureTimerRef.current = window.setTimeout(() => {
+      selectionCaptureTimerRef.current = null;
+      captureSelection(closeWhenEmpty);
+    }, 90);
+  }
+
+  function captureSelection(closeWhenEmpty: boolean): void {
+    const selection = window.getSelection();
+    const text = normalizeMobileSelectionText(selection?.toString() ?? '');
+    const page = bilingualPageRef.current;
+    if (!selection || selection.isCollapsed || !text || !page || selection.rangeCount === 0) {
+      if (closeWhenEmpty) {
+        closeSelectionPopover(false);
       }
-      const anchorNode = selection.anchorNode;
-      if (!anchorNode || !bilingualPageRef.current.contains(anchorNode)) {
-        return;
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    const startElement = selectionNodeElement(range.startContainer);
+    const endElement = selectionNodeElement(range.endContainer);
+    const startOriginal = startElement?.closest('.mobile-block-original');
+    const endOriginal = endElement?.closest('.mobile-block-original');
+    if (
+      !startOriginal ||
+      startOriginal !== endOriginal ||
+      !page.contains(startOriginal) ||
+      !isEnglishAcademicSelection(text)
+    ) {
+      if (closeWhenEmpty) {
+        closeSelectionPopover(false);
       }
-      const rect = selection.rangeCount > 0 ? selection.getRangeAt(0).getBoundingClientRect() : null;
-      const top = Math.max(74, Math.min(window.innerHeight - 180, (rect?.bottom ?? 80) + 8));
-      setSelectionPopover({
-        text,
-        left: Math.max(12, Math.min(window.innerWidth - 292, rect?.left ?? 12)),
-        top,
-        maxHeight: Math.max(140, window.innerHeight - top - 12)
-      });
-    }, 30);
+      return;
+    }
+    const rect = range.getBoundingClientRect();
+    if (!Number.isFinite(rect.left) || !Number.isFinite(rect.top)) {
+      return;
+    }
+    const visualViewport = window.visualViewport;
+    const position = calculateMobileSelectionPopoverPosition(rect, {
+      width: visualViewport?.width ?? window.innerWidth,
+      height: visualViewport?.height ?? window.innerHeight,
+      offsetLeft: visualViewport?.offsetLeft ?? 0,
+      offsetTop: visualViewport?.offsetTop ?? 0
+    });
+    const article = startOriginal.closest('.mobile-bilingual-block');
+    const surroundingOriginal = startOriginal.textContent?.replace(/\s+/gu, ' ').trim() ?? '';
+    const surroundingTranslation = article?.querySelector('.mobile-block-translation')
+      ?.textContent?.replace(/\s+/gu, ' ').trim() ?? '';
+    const cacheKey = buildSelectionTranslationCacheKey(
+      translationSession,
+      text,
+      surroundingOriginal
+    );
+    selectionRequestIdRef.current += 1;
+    setSelectionPopover({
+      text,
+      ...position,
+      surroundingOriginal,
+      surroundingTranslation,
+      ...(selectionTranslationCacheRef.current.get(cacheKey)
+        ? { translation: selectionTranslationCacheRef.current.get(cacheKey) }
+        : {})
+    });
   }
 
   async function translateSelection(session = translationSession): Promise<void> {
-    if (!selectionPopover) {
+    const selected = selectionPopover;
+    if (!selected || selected.loading) {
       return;
     }
     if (!session.apiKey.trim()) {
@@ -649,19 +742,72 @@ export function MobileReaderScreen({
       setSettingsOpen(true);
       return;
     }
-    setSelectionPopover({ ...selectionPopover, loading: true, error: undefined });
+    const cacheKey = buildSelectionTranslationCacheKey(
+      session,
+      selected.text,
+      selected.surroundingOriginal
+    );
+    const cachedTranslation = selectionTranslationCacheRef.current.get(cacheKey);
+    if (cachedTranslation) {
+      setSelectionPopover((current) => current?.text === selected.text
+        ? { ...current, translation: cachedTranslation, loading: false, error: undefined }
+        : current);
+      return;
+    }
+    const requestId = selectionRequestIdRef.current + 1;
+    selectionRequestIdRef.current = requestId;
+    setSelectionPopover((current) => current?.text === selected.text
+      ? { ...current, loading: true, error: undefined }
+      : current);
     try {
-      const translation = await translateAcademicText(selectionPopover.text, session);
-      setSelectionPopover({ ...selectionPopover, translation, loading: false });
+      const translation = await translateAcademicSelection(selected.text, session, {
+        documentTitle: paper.title,
+        surroundingOriginal: selected.surroundingOriginal,
+        surroundingTranslation: selected.surroundingTranslation
+      });
+      if (selectionRequestIdRef.current !== requestId) {
+        return;
+      }
+      rememberSelectionTranslation(cacheKey, translation);
+      setSelectionPopover((current) => current?.text === selected.text
+        ? { ...current, translation, loading: false, error: undefined }
+        : current);
     } catch (error) {
-      setSelectionPopover({ ...selectionPopover, loading: false, error: formatError(error) });
+      if (selectionRequestIdRef.current !== requestId) {
+        return;
+      }
+      setSelectionPopover((current) => current?.text === selected.text
+        ? { ...current, loading: false, error: formatError(error) }
+        : current);
+    }
+  }
+
+  function rememberSelectionTranslation(key: string, translation: string): void {
+    const cache = selectionTranslationCacheRef.current;
+    if (cache.size >= 100) {
+      const oldestKey = cache.keys().next().value;
+      if (typeof oldestKey === 'string') {
+        cache.delete(oldestKey);
+      }
+    }
+    cache.set(key, translation);
+  }
+
+  function closeSelectionPopover(clearNativeSelection = true): void {
+    selectionRequestIdRef.current += 1;
+    setSelectionPopover(null);
+    if (clearNativeSelection) {
+      window.getSelection()?.removeAllRanges();
     }
   }
 
   return (
     <section className={`mobile-screen mobile-reader-screen${mode === 'bilingual' && readingImmersive ? ' is-reading-immersive' : ''}`} aria-label="PDF 阅读与翻译">
       <header className="mobile-reader-header">
-        <button type="button" className="mobile-reader-back" onClick={onBack} aria-label="返回论文库">‹</button>
+        <button type="button" className="mobile-reader-back" onClick={() => {
+          closeSelectionPopover();
+          onBack();
+        }} aria-label="返回论文库">‹</button>
         <div>
           <strong>{paper.customTitle || paper.titleZh || paper.title}</strong>
           <span>第 {currentPage}{pageCount ? ` / ${pageCount}` : ''} 页</span>
@@ -672,6 +818,7 @@ export function MobileReaderScreen({
       <div className="mobile-reader-mode-bar" role="group" aria-label="阅读模式">
         <button type="button" className={mode === 'bilingual' ? 'active' : ''} onClick={handleBilingualModeClick}>连续双语</button>
         <button type="button" className={mode === 'pdf' ? 'active' : ''} onClick={() => {
+          closeSelectionPopover();
           setReadingImmersive(false);
           setMode('pdf');
         }}>原始 PDF</button>
@@ -680,11 +827,14 @@ export function MobileReaderScreen({
       {mode === 'bilingual' ? (
         <div className="mobile-bilingual-reader">
           <div className="mobile-bilingual-toolbar">
-            <span>{needsLocalOcr
-              ? paper.localOcrStatus === 'failed'
-                ? '全文原文提取失败'
-                : `导入后全文提取 · ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页${extractionSource.textPages || extractionSource.ocrPages ? ` · ${extractionSource.label}` : ''}`
-              : `${translatedCount} / ${readableBlocks.length} 段已译 · ${extractionSource.label}${figureEntries.length ? ` · ${figureEntries.length} 个图表` : ''}${pendingTranslationCount ? ` · ${pendingTranslationCount} 段待翻译` : ''}${staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}${aiReviewPendingCount ? ` · ${aiReviewPendingCount} 段待 AI 对照` : ''}`}</span>
+            <span className="mobile-bilingual-summary">
+              <span>{needsLocalOcr
+                ? paper.localOcrStatus === 'failed'
+                  ? '全文原文提取失败'
+                  : `导入后全文提取 · ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页${extractionSource.textPages || extractionSource.ocrPages ? ` · ${extractionSource.label}` : ''}`
+                : `${translatedCount} / ${readableBlocks.length} 段已译 · ${extractionSource.label}${figureEntries.length ? ` · ${figureEntries.length} 个图表` : ''}${pendingTranslationCount ? ` · ${pendingTranslationCount} 段待翻译` : ''}${staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}${aiReviewPendingCount ? ` · ${aiReviewPendingCount} 段待 AI 对照` : ''}`}</span>
+              <small>长按或双击英文词语可选词翻译</small>
+            </span>
             <button
               type="button"
               disabled={ocrBusy || (!translatingAll && (extracting || (!needsLocalOcr && readableBlocks.length === 0) || Boolean(translatingHash)))}
@@ -713,8 +863,8 @@ export function MobileReaderScreen({
             ref={bilingualPageRef}
             className="mobile-bilingual-page"
             onScroll={handleFeedScroll}
-            onPointerUp={captureSelection}
-            onTouchEnd={captureSelection}
+            onPointerUp={() => scheduleSelectionCapture(true)}
+            onTouchEnd={() => scheduleSelectionCapture(true)}
           >
             {extracting ? <div className="mobile-reader-loading">正在读取本机原文缓存…</div> : null}
             {!extracting && readableBlocks.length === 0 && needsLocalOcr ? (
@@ -733,7 +883,7 @@ export function MobileReaderScreen({
             {!extracting && !needsLocalOcr && readableBlocks.length > 0 && translatedCount === 0 && staleTranslationCount === 0 ? (
               <div className="mobile-bilingual-intro">
                 <strong>全文原文已提取</strong>
-                <p>{extractionSource.detail} 结果已逐页保存在本机。点击“翻译全文”后，每页会把逐段结果、连续全文、前文术语与相邻双语上下文一起交给 AI；只整理异常边界，并保持科研术语和论述衔接一致。</p>
+                <p>{extractionSource.detail} 结果已逐页保存在本机。点击“翻译全文”后，每页会把逐段结果、连续全文、前文术语与相邻双语上下文一起交给 AI；只整理异常边界，并保持科研术语和论述衔接一致。阅读时长按或双击英文词语即可打开选词翻译。</p>
                 <button type="button" onClick={() => void handleTranslateAll()}>开始全文翻译</button>
               </div>
             ) : null}
@@ -797,20 +947,40 @@ export function MobileReaderScreen({
       <footer className="mobile-reader-status"><span>{status}</span></footer>
 
       {selectionPopover ? (
-        <aside className="mobile-selection-popover" style={{ left: selectionPopover.left, top: selectionPopover.top, maxHeight: selectionPopover.maxHeight }}>
-          <button type="button" className="mobile-selection-close" onClick={() => setSelectionPopover(null)}>×</button>
+        <aside
+          className="mobile-selection-popover"
+          role="dialog"
+          aria-label="选词翻译"
+          style={{
+            left: selectionPopover.left,
+            top: selectionPopover.top,
+            width: selectionPopover.width,
+            maxHeight: selectionPopover.maxHeight
+          }}
+        >
+          <button type="button" className="mobile-selection-close" aria-label="关闭选词翻译" onClick={() => closeSelectionPopover()}>×</button>
+          <span className="mobile-selection-label">选词翻译</span>
           <strong>{selectionPopover.text}</strong>
-          {selectionPopover.translation ? <p>{selectionPopover.translation}</p> : null}
-          {selectionPopover.error ? <p className="is-error">{selectionPopover.error}</p> : null}
-          {!selectionPopover.translation ? <button type="button" disabled={selectionPopover.loading} onClick={() => void translateSelection()}>{selectionPopover.loading ? '翻译中…' : '翻译选中文本'}</button> : null}
+          {selectionPopover.translation ? <p role="status">{selectionPopover.translation}</p> : null}
+          {selectionPopover.error ? <p className="is-error" role="alert">{selectionPopover.error}</p> : null}
+          {!selectionPopover.translation ? (
+            <button
+              type="button"
+              disabled={selectionPopover.loading || translatingAll}
+              onClick={() => void translateSelection()}
+            >
+              {selectionPopover.loading ? '翻译中…' : translatingAll ? '全文翻译进行中' : selectionPopover.error ? '重试翻译' : '翻译选中内容'}
+            </button>
+          ) : null}
         </aside>
       ) : null}
 
       {settingsOpen ? (
         <MobileTranslationSettingsDialog
           session={translationSession}
-          title="全文段落翻译设置"
+          title="全文与选词翻译设置"
           submitLabel={pendingTranslationRef.current ? '保存并开始翻译' : '保存设置'}
+          requireApiKey={Boolean(pendingTranslationRef.current)}
           onClose={() => {
             pendingTranslationRef.current = null;
             setSettingsOpen(false);
@@ -831,6 +1001,25 @@ export function MobileReaderScreen({
       ) : null}
     </section>
   );
+}
+
+function selectionNodeElement(node: Node): Element | null {
+  return node.nodeType === Node.ELEMENT_NODE
+    ? node as Element
+    : node.parentElement;
+}
+
+function buildSelectionTranslationCacheKey(
+  session: MobileTranslationSession,
+  text: string,
+  surroundingOriginal: string
+): string {
+  return [
+    session.baseURL.trim().replace(/\/+$/u, '').toLocaleLowerCase(),
+    session.model.trim().toLocaleLowerCase(),
+    text.toLocaleLowerCase(),
+    surroundingOriginal.slice(0, 320).toLocaleLowerCase()
+  ].join('\u0000');
 }
 
 function figureEntryToRegion(entry: MobileTranslationEntry): MobilePdfFigureRegion | null {

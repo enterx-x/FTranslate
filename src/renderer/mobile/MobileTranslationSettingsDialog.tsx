@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import type { MobileTranslationSession } from './mobileTypes';
+import { validateMobileTranslationSession } from './mobileTranslation';
 
 interface MobileTranslationSettingsDialogProps {
   session: MobileTranslationSession;
   title?: string;
   submitLabel?: string;
+  requireApiKey?: boolean;
   onClose: () => void;
   onSave: (session: MobileTranslationSession) => Promise<void>;
 }
@@ -13,6 +15,7 @@ export function MobileTranslationSettingsDialog({
   session,
   title = '翻译设置',
   submitLabel = '保存设置',
+  requireApiKey = false,
   onClose,
   onSave
 }: MobileTranslationSettingsDialogProps) {
@@ -24,7 +27,16 @@ export function MobileTranslationSettingsDialog({
     setSaving(true);
     setError('');
     try {
-      await onSave(form);
+      const normalizedForm = {
+        baseURL: form.baseURL.trim().replace(/\/+$/u, ''),
+        model: form.model.trim(),
+        apiKey: form.apiKey.trim()
+      };
+      const validationError = validateMobileTranslationSession(normalizedForm, requireApiKey);
+      if (validationError) {
+        throw new Error(validationError);
+      }
+      await onSave(normalizedForm);
     } catch (saveError) {
       setError(`保存失败：${formatError(saveError)}`);
     } finally {

@@ -3,12 +3,14 @@ import {
   applyAcademicTerminologyPolicy,
   MOBILE_AI_PAGE_REFLOW_VERSION,
   buildAcademicPageReflowPrompt,
+  buildAcademicSelectionPrompt,
   buildAcademicTranslationPrompt,
   buildTranslationEndpoint,
   hasSufficientAcademicPageCoverage,
   needsAcademicPageAiReview,
   parseAcademicPageReflowResult,
-  parseAcademicPageReflowResponse
+  parseAcademicPageReflowResponse,
+  validateMobileTranslationSession
 } from './mobileTranslation';
 
 describe('mobile translation request', () => {
@@ -32,6 +34,41 @@ describe('mobile translation request', () => {
         previousBilingualParagraphs: []
       }
     });
+  });
+
+  it('uses surrounding paper context for concise selection translation', () => {
+    const messages = buildAcademicSelectionPrompt('barrier certificate', {
+      documentTitle: 'Safe Reinforcement Learning with Control Barrier Functions',
+      surroundingOriginal: 'The barrier certificate guarantees forward invariance.',
+      surroundingTranslation: '屏障证书保证前向不变性。'
+    });
+    expect(messages[0].content).toContain('当前研究语境');
+    expect(messages[0].content).toContain('只输出简洁中文译文');
+    expect(JSON.parse(messages[1].content)).toEqual({
+      selection: 'barrier certificate',
+      documentTitle: 'Safe Reinforcement Learning with Control Barrier Functions',
+      surroundingOriginal: 'The barrier certificate guarantees forward invariance.',
+      surroundingTranslation: '屏障证书保证前向不变性。'
+    });
+  });
+
+  it('validates configured translation endpoints before sending a request', () => {
+    expect(validateMobileTranslationSession({ baseURL: '', model: '', apiKey: '' })).toBe('');
+    expect(validateMobileTranslationSession({ baseURL: '', model: '', apiKey: '' }, true))
+      .toBe('开始翻译前请填写 API Key。');
+    expect(validateMobileTranslationSession({ baseURL: '', model: 'deepseek-chat', apiKey: 'key' }))
+      .toBe('请填写 Base URL。');
+    expect(validateMobileTranslationSession({ baseURL: 'not-a-url', model: 'deepseek-chat', apiKey: 'key' }))
+      .toBe('Base URL 不是有效网址。');
+    expect(validateMobileTranslationSession({ baseURL: 'ftp://example.com', model: 'deepseek-chat', apiKey: 'key' }))
+      .toBe('Base URL 只支持 http:// 或 https:// 地址。');
+    expect(validateMobileTranslationSession({ baseURL: 'https://api.deepseek.com/v1', model: '', apiKey: 'key' }))
+      .toBe('请填写模型名称。');
+    expect(validateMobileTranslationSession({
+      baseURL: 'https://api.deepseek.com/v1',
+      model: 'deepseek-chat',
+      apiKey: 'key'
+    })).toBe('');
   });
 
   it('marks legacy translations for one-time dual-view AI review', () => {

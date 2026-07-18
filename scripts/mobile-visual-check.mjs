@@ -16,7 +16,9 @@ const translationMockState = {
   textRequestCount: 0,
   dualViewRequestCount: 0,
   coherenceContextCount: 0,
-  introducedTermFollowupCount: 0
+  introducedTermFollowupCount: 0,
+  selectionRequestCount: 0,
+  selectionContextCount: 0
 };
 
 function wait(ms) {
@@ -260,6 +262,7 @@ function startTranslationMock() {
       translationMockState.textRequestCount += 1;
       const system = parsed.messages?.[0]?.content ?? '';
       let translation;
+      let isSelectionRequest = false;
       if (typeof system === 'string' && system.includes('两个完全重合的视图')) {
         const pagePayload = JSON.parse(source);
         const pageBlocks = pagePayload.blocks ?? [];
@@ -301,11 +304,26 @@ function startTranslationMock() {
         let translationSource = source;
         try {
           const translationPayload = JSON.parse(source);
-          translationSource = typeof translationPayload.text === 'string' ? translationPayload.text : source;
+          if (typeof translationPayload.selection === 'string') {
+            isSelectionRequest = true;
+            translationMockState.selectionRequestCount += 1;
+            if (
+              typeof translationPayload.documentTitle === 'string' &&
+              typeof translationPayload.surroundingOriginal === 'string' &&
+              translationPayload.surroundingOriginal.includes(translationPayload.selection)
+            ) {
+              translationMockState.selectionContextCount += 1;
+            }
+            translationSource = translationPayload.selection;
+          } else {
+            translationSource = typeof translationPayload.text === 'string' ? translationPayload.text : source;
+          }
         } catch {
-          // Selection translation can still be a plain string.
+          // Older translation requests can still be plain strings.
         }
-        translation = translationSource.includes('Vision Safety Policy')
+        translation = typeof system === 'string' && system.includes('科研论文选词翻译助手')
+        ? '安全策略优化'
+        : translationSource.includes('Vision Safety Policy')
         ? '视觉安全策略'
         : translationSource.includes('shifting liquid continuously')
           ? '现在，往杯中注水并倾倒：流动的液体会持续重新分配抓取器指尖上的重力载荷，这要求实时调整抓取力，而固定抓取力或开环抓取无法实现这一点。核心难点在于抓取稳定性与物体安全性紧密耦合：抓取力不足会导致微小滑移和掉落，而稍大的力则会造成不可逆变形。因此，实用的抓取控制器必须实时检测并抑制初始滑移，在承载物载荷减小时降低抓取力以防止过度抓取，并强制执行接触力的硬性安全上限。'
@@ -313,8 +331,15 @@ function startTranslationMock() {
           ? '前向不变性'
           : '策略更新在有界扰动下保持前向不变性，从而使安全约束在执行过程中持续成立。';
       }
-      response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ choices: [{ message: { content: translation } }] }));
+      const finishResponse = () => {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ choices: [{ message: { content: translation } }] }));
+      };
+      if (isSelectionRequest) {
+        setTimeout(finishResponse, 180);
+      } else {
+        finishResponse();
+      }
     });
   });
   return new Promise((resolve) => server.listen(mockPort, '127.0.0.1', () => resolve(server)));
@@ -710,7 +735,45 @@ try {
     return true;
   })()`);
   await waitForSelector(client, '.mobile-selection-popover');
+  await evaluate(client, `document.querySelector('.mobile-selection-popover button:not(.mobile-selection-close)').click()`);
+  await waitForSelector(client, '.mobile-selection-popover p[role="status"]');
+  const translatedSelectionState = await evaluate(client, `(() => {
+    const popover = document.querySelector('.mobile-selection-popover');
+    const rect = popover.getBoundingClientRect();
+    return {
+      source: popover.querySelector('strong')?.textContent ?? '',
+      translation: popover.querySelector('p[role="status"]')?.textContent ?? '',
+      bounds: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom },
+      label: popover.querySelector('.mobile-selection-label')?.textContent ?? ''
+    };
+  })()`);
+  if (
+    translatedSelectionState.translation !== '安全策略优化' ||
+    translatedSelectionState.label !== '选词翻译' ||
+    translatedSelectionState.bounds.left < 11 ||
+    translatedSelectionState.bounds.right > 379 ||
+    translatedSelectionState.bounds.top < 11 ||
+    translatedSelectionState.bounds.bottom > 833 ||
+    translationMockState.selectionRequestCount !== 1 ||
+    translationMockState.selectionContextCount !== 1
+  ) {
+    throw new Error(`Mobile selection translation failed: ${JSON.stringify({ translatedSelectionState, translationMockState })}`);
+  }
   await capture(client, '04-reader-selection-popover-390x844.png');
+
+  await evaluate(client, `(() => {
+    const paragraph = document.querySelectorAll('.mobile-block-original p, .mobile-block-original h2')[1];
+    const node = paragraph.firstChild;
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, Math.min(24, node.textContent.length));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+    return true;
+  })()`);
+  await waitForExpression(client, `document.querySelector('.mobile-selection-popover strong')?.textContent?.startsWith('The policy update') ? 'updated-by-selectionchange' : ''`);
 
   const audit = await evaluate(client, `(() => ({
     viewport: { width: innerWidth, height: innerHeight },
@@ -735,6 +798,25 @@ try {
     screenHeight: 932
   });
   await capture(client, '05-reader-selection-popover-430x932.png');
+  await evaluate(client, `(() => {
+    document.querySelector('.mobile-selection-popover button:not(.mobile-selection-close)').click();
+    document.querySelector('.mobile-selection-close').click();
+    return true;
+  })()`);
+  await wait(350);
+  const closedSelectionState = await evaluate(client, `(() => ({
+    popoverVisible: Boolean(document.querySelector('.mobile-selection-popover')),
+    selectedText: window.getSelection()?.toString() ?? ''
+  }))()`);
+  if (
+    closedSelectionState.popoverVisible ||
+    closedSelectionState.selectedText ||
+    translationMockState.selectionRequestCount !== 2 ||
+    translationMockState.selectionContextCount !== 2
+  ) {
+    throw new Error(`A late selection response reopened a closed popover: ${JSON.stringify({ closedSelectionState, translationMockState })}`);
+  }
+  console.log('Translated an English selection with paragraph context and followed Safari selectionchange handle updates.');
 
   await client.send('Emulation.setDeviceMetricsOverride', {
     width: 390,
@@ -869,14 +951,19 @@ try {
     throw new Error(`Completed import OCR was not clean and translation-free: ${JSON.stringify({ completedOcrOnlyState, translationMockState, translationRequestsBeforeScannedOcr })}`);
   }
   await capture(client, '08b-reader-scanned-ocr-only-390x844.png');
-  await evaluate(client, `document.querySelector('.mobile-bilingual-toolbar button').click()`);
+  await evaluate(client, `(() => {
+    const button = document.querySelector('.mobile-bilingual-toolbar button');
+    button.click();
+    button.click();
+    return true;
+  })()`);
   await waitForExpression(client, `document.querySelectorAll('.mobile-block-translation').length === 6 ? 'all-pages-translated' : ''`, 20000);
   await waitForExpression(client, `document.querySelector('.mobile-reader-status')?.textContent.includes('全文翻译完成') ? 'translation-finished' : ''`, 20000);
   if (
-    translationMockState.textRequestCount - translationRequestsBeforeScannedOcr < 3 ||
-    translationMockState.dualViewRequestCount - dualViewRequestsBeforeScannedOcr < 3
+    translationMockState.textRequestCount - translationRequestsBeforeScannedOcr !== 3 ||
+    translationMockState.dualViewRequestCount - dualViewRequestsBeforeScannedOcr !== 3
   ) {
-    throw new Error(`Full translation did not start after the explicit user click: ${JSON.stringify({ translationMockState, translationRequestsBeforeScannedOcr })}`);
+    throw new Error(`Full translation double-tap guard failed: ${JSON.stringify({ translationMockState, translationRequestsBeforeScannedOcr })}`);
   }
   await capture(client, '08b-reader-scanned-bilingual-390x844.png');
   const novelReadingTypography = await evaluate(client, `(() => {

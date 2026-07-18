@@ -43,6 +43,12 @@ export interface AcademicTranslationContext {
   previousBilingualParagraphs?: AcademicBilingualContextParagraph[];
 }
 
+export interface AcademicSelectionContext {
+  documentTitle?: string;
+  surroundingOriginal?: string;
+  surroundingTranslation?: string;
+}
+
 export interface AcademicPageReflowResult {
   paragraphs: AcademicPageReflowParagraph[];
   terminology: MobileAcademicTerm[];
@@ -51,6 +57,58 @@ export interface AcademicPageReflowResult {
 export function buildTranslationEndpoint(baseURL: string): string {
   const clean = baseURL.trim().replace(/\/+$/u, '');
   return clean.endsWith('/chat/completions') ? clean : `${clean}/chat/completions`;
+}
+
+export function validateMobileTranslationSession(
+  session: MobileTranslationSession,
+  requireApiKey = false
+): string {
+  if (requireApiKey && !session.apiKey.trim()) {
+    return '开始翻译前请填写 API Key。';
+  }
+  if (!session.apiKey.trim()) {
+    return '';
+  }
+  if (!session.baseURL.trim()) {
+    return '请填写 Base URL。';
+  }
+  try {
+    const url = new URL(session.baseURL.trim());
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      return 'Base URL 只支持 http:// 或 https:// 地址。';
+    }
+  } catch {
+    return 'Base URL 不是有效网址。';
+  }
+  if (!session.model.trim()) {
+    return '请填写模型名称。';
+  }
+  return '';
+}
+
+export function buildAcademicSelectionPrompt(
+  text: string,
+  context: AcademicSelectionContext = {}
+): Array<{ role: 'system' | 'user'; content: string }> {
+  return [
+    {
+      role: 'system',
+      content: [
+        '你是科研论文选词翻译助手。根据论文标题和选中内容所在自然段，判断该英文词语、短语或句子在当前研究语境中的含义。',
+        '单词或短语使用该领域通行的简体中文术语；完整句子则准确翻译。保留公式、变量、缩写和引用编号。',
+        '只输出简洁中文译文，不重复英文原文，不添加词典格式、Markdown、引号、解释性前缀或无关扩展。'
+      ].join('')
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        selection: text.trim(),
+        documentTitle: context.documentTitle?.trim().slice(0, 500) ?? '',
+        surroundingOriginal: context.surroundingOriginal?.trim().slice(0, 1600) ?? '',
+        surroundingTranslation: context.surroundingTranslation?.trim().slice(0, 1600) ?? ''
+      })
+    }
+  ];
 }
 
 export function buildAcademicTranslationPrompt(
@@ -126,6 +184,25 @@ export async function translateAcademicText(
     throw new Error('请先填写本次会话使用的 API Key。');
   }
   return requestChatCompletion(buildAcademicTranslationPrompt(cleanText, context), session, 0.2);
+}
+
+export async function translateAcademicSelection(
+  text: string,
+  session: MobileTranslationSession,
+  context: AcademicSelectionContext = {}
+): Promise<string> {
+  const cleanText = text.trim();
+  if (!cleanText) {
+    throw new Error('没有选中可翻译的英文内容。');
+  }
+  const validationError = validateMobileTranslationSession(session);
+  if (validationError) {
+    throw new Error(validationError);
+  }
+  if (!session.apiKey.trim()) {
+    throw new Error('请先填写本次会话使用的 API Key。');
+  }
+  return requestChatCompletion(buildAcademicSelectionPrompt(cleanText, context), session, 0.1, 45_000);
 }
 
 export async function reflowAndTranslateAcademicPage(
@@ -350,6 +427,10 @@ async function requestChatCompletion(
   temperature: number,
   readTimeout = 60_000
 ): Promise<string> {
+  const validationError = validateMobileTranslationSession(session);
+  if (validationError) {
+    throw new Error(validationError);
+  }
   if (!session.apiKey.trim()) {
     throw new Error('请先填写本次会话使用的 API Key。');
   }
