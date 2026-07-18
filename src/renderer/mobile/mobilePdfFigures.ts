@@ -12,7 +12,7 @@ import type { MobileTranslationEntry } from './mobileTypes';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
-export const MOBILE_PDF_FIGURE_VERSION = 1;
+export const MOBILE_PDF_FIGURE_VERSION = 2;
 
 export interface PdfPaintedImageBounds {
   x: number;
@@ -40,6 +40,7 @@ export interface MobilePdfFigureRegion {
   hasTextCaption: boolean;
   order: number;
   bounds: Required<Pick<PdfBlockBounds, 'x' | 'y' | 'width' | 'height' | 'pageWidth' | 'pageHeight'>>;
+  captionBounds?: PdfBlockBounds;
   hiddenTextHashes: string[];
 }
 
@@ -149,9 +150,16 @@ export function buildPdfCaptionAnchors(
   blocks: ExtractedPdfBlock[]
 ): PdfCaptionAnchor[] {
   const anchors = new Map<string, PdfCaptionAnchor>();
+  const rawLines = buildRawPdfTextLines(items);
   blocks.forEach((block, index) => {
     const label = parseCaptionLabel(block.original);
-    if (!label || !block.bounds) {
+    const matchingRawLine = block.bounds ? findRawLineAtBounds(rawLines, block.bounds) : undefined;
+    if (
+      block.type !== 'caption' ||
+      !label ||
+      !block.bounds ||
+      (matchingRawLine && looksLikeInlineFigureReferenceLine(matchingRawLine, rawLines))
+    ) {
       return;
     }
     const key = `${label.kind}:${label.label}`;
@@ -165,9 +173,13 @@ export function buildPdfCaptionAnchors(
     });
   });
 
-  for (const line of buildRawPdfTextLines(items)) {
+  for (const line of rawLines) {
     const label = parseCaptionLabel(line.original);
-    if (!label) {
+    if (
+      !label ||
+      looksLikeInlineFigureReferenceLine(line, rawLines) ||
+      isBoundsInsideParagraphBlock(line.bounds, blocks)
+    ) {
       continue;
     }
     const key = `${label.kind}:${label.label}`;
@@ -190,7 +202,26 @@ export function buildPdfCaptionAnchors(
 
   for (const item of items) {
     const label = parseCaptionLabel(item.str);
-    if (!label) {
+    const rawLine = findRawLineAtBounds(rawLines, {
+      x: item.x,
+      y: item.y,
+      width: item.width,
+      height: item.height,
+      pageWidth: item.pageWidth,
+      pageHeight: item.pageHeight
+    });
+    if (
+      !label ||
+      (rawLine && looksLikeInlineFigureReferenceLine(rawLine, rawLines)) ||
+      isBoundsInsideParagraphBlock({
+        x: item.x,
+        y: item.y,
+        width: item.width,
+        height: item.height,
+        pageWidth: item.pageWidth,
+        pageHeight: item.pageHeight
+      }, blocks)
+    ) {
       continue;
     }
     const key = `${label.kind}:${label.label}`;
@@ -303,6 +334,7 @@ export function detectPdfFigureRegions(input: DetectPdfFigureRegionsInput): Mobi
         pageWidth: input.pageWidth,
         pageHeight: input.pageHeight
       },
+      captionBounds: anchor.bounds,
       hiddenTextHashes
     }];
   });
@@ -459,7 +491,55 @@ async function readPositionedPdfTextItems(page: PDFPageProxy, pageNumber: number
   });
 }
 
-function buildRawPdfTextLines(items: PositionedPdfTextItem[]): Array<{ original: string; bounds: PdfBlockBounds }> {
+interface RawPdfTextLine {
+  original: string;
+  bounds: PdfBlockBounds;
+}
+
+function findRawLineAtBounds(lines: RawPdfTextLine[], bounds: PdfBlockBounds): RawPdfTextLine | undefined {
+  const centerX = bounds.x + bounds.width / 2;
+  const centerY = bounds.y + bounds.height / 2;
+  return lines.find((line) => (
+    centerX >= line.bounds.x - 3 &&
+    centerX <= line.bounds.x + line.bounds.width + 3 &&
+    centerY >= line.bounds.y - 3 &&
+    centerY <= line.bounds.y + line.bounds.height + 3
+  ));
+}
+
+function isBoundsInsideParagraphBlock(bounds: PdfBlockBounds, blocks: ExtractedPdfBlock[]): boolean {
+  const centerX = bounds.x + bounds.width / 2;
+  const centerY = bounds.y + bounds.height / 2;
+  return blocks.some((block) => (
+    block.type === 'paragraph' &&
+    block.bounds &&
+    centerX >= block.bounds.x - 3 &&
+    centerX <= block.bounds.x + block.bounds.width + 3 &&
+    centerY >= block.bounds.y - 3 &&
+    centerY <= block.bounds.y + block.bounds.height + 3
+  ));
+}
+
+function looksLikeInlineFigureReferenceLine(line: RawPdfTextLine, lines: RawPdfTextLine[]): boolean {
+  if (!/^(fig\.?|figure)\s*\d+[:.]/iu.test(line.original.trim())) {
+    return false;
+  }
+  const previous = lines
+    .filter((candidate) => (
+      candidate !== line &&
+      Math.abs(candidate.bounds.x - line.bounds.x) <= 24 &&
+      candidate.bounds.y < line.bounds.y &&
+      line.bounds.y - candidate.bounds.y <= Math.max(18, candidate.bounds.height * 2, line.bounds.height * 2)
+    ))
+    .sort((left, right) => right.bounds.y - left.bounds.y)[0];
+  if (!previous) {
+    return false;
+  }
+  const words = previous.original.match(/[\p{L}\p{N}]+/gu) ?? [];
+  return words.length >= 6 && !/[.!?。！？][)\]"']*$/u.test(previous.original.trim());
+}
+
+function buildRawPdfTextLines(items: PositionedPdfTextItem[]): RawPdfTextLine[] {
   const groups: PositionedPdfTextItem[][] = [];
   for (const item of [...items].sort((left, right) => left.y - right.y || left.x - right.x)) {
     const line = groups.find((candidate) => Math.abs(candidate[0].y - item.y) <= Math.max(3, candidate[0].height * 0.7));
@@ -594,7 +674,7 @@ function resolveTableBounds(
     ...anchors.filter((candidate) => candidate.bounds.y > top).map((candidate) => candidate.bounds.y - 6),
     ...blocks.filter((block) => (
       block.bounds &&
-      looksLikeProseBoundary(block) &&
+      looksLikeTableFollowingBoundary(block) &&
       horizontalOverlapRatio(block.bounds, scope) > 0.35 &&
       block.bounds.y > top + minimumHeight
     )).map((block) => block.bounds!.y - 6)
@@ -603,6 +683,20 @@ function resolveTableBounds(
   return bottom - top >= minimumHeight
     ? { x: scope.x, y: top, width: scope.width, height: bottom - top }
     : null;
+}
+
+function looksLikeTableFollowingBoundary(block: ExtractedPdfBlock): boolean {
+  if (block.type === 'heading') {
+    return /^([IVX]+|\d+(?:\.\d+)*|[A-Z])\.\s+/u.test(block.original.trim()) ||
+      /^(appendix|references)$/iu.test(block.original.trim());
+  }
+  if (block.type !== 'paragraph') {
+    return false;
+  }
+  const original = block.original.trim();
+  const words = original.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const mathPollution = (original.match(/[=∑∫√∞≤≥≠≈→∥⊙⋆^_{}\u0000-\u001f]/gu) ?? []).length;
+  return words.length >= 12 && mathPollution < 3 && /[.!?][)\]"']*$/u.test(original);
 }
 
 function resolveCaptionScope(bounds: PdfBlockBounds, pageWidth: number, pageHeight: number): PdfBlockBounds {
@@ -620,7 +714,9 @@ function resolveCaptionScope(bounds: PdfBlockBounds, pageWidth: number, pageHeig
 }
 
 function parseCaptionLabel(value: string): Pick<PdfCaptionAnchor, 'kind' | 'label'> | null {
-  const match = value.trim().match(/^(fig(?:ure)?\.?|table)\s*([\divxlcdm]+)\s*[:.]/iu);
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(fig(?:ure)?\.?|table)\s*([\divxlcdm]+)\s*[:.]/iu) ??
+    trimmed.match(/^(TABLE)\s+([IVXLCDM\d]+)(?:\s+|$)/u);
   if (!match) {
     return null;
   }

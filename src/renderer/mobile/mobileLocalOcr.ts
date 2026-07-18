@@ -6,7 +6,7 @@ import tesseractWorkerUrl from 'tesseract.js/dist/worker.min.js?url';
 import tesseractCoreUrl from 'tesseract.js-core/tesseract-core-lstm.wasm.js?url';
 import englishLanguageUrl from '@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz?url';
 import {
-  buildPdfDocumentOutline,
+  buildPdfReaderPageOutline,
   hashText,
   type ExtractedBlockType,
   type ExtractedPdfBlock,
@@ -90,6 +90,36 @@ export interface OcrPageLayoutContext {
   page: number;
   pageWidth: number;
   pageHeight: number;
+}
+
+export function excludeFigureRegionTextItems<TItem extends PositionedPdfTextItem>(
+  items: TItem[],
+  regions: MobilePdfFigureRegion[]
+): TItem[] {
+  if (regions.length === 0) {
+    return items;
+  }
+  return items.filter((item) => !regions.some((region) => {
+    if (region.page !== item.page) {
+      return false;
+    }
+    const centerX = item.x + item.width / 2;
+    const centerY = item.y + item.height / 2;
+    const captionBounds = region.captionBounds;
+    if (
+      captionBounds &&
+      centerX >= captionBounds.x - 3 &&
+      centerX <= captionBounds.x + captionBounds.width + 3 &&
+      centerY >= captionBounds.y - 3 &&
+      centerY <= captionBounds.y + captionBounds.height + 3
+    ) {
+      return false;
+    }
+    return centerX >= region.bounds.x &&
+      centerX <= region.bounds.x + region.bounds.width &&
+      centerY >= region.bounds.y &&
+      centerY <= region.bounds.y + region.bounds.height;
+  }));
 }
 
 type OcrImageRecognizer = (
@@ -241,6 +271,12 @@ export async function recognizePdfPagesLocally(
             });
           } catch (figureError) {
             console.warn(`PDF page ${pageNumber} figure extraction failed; continuing with text.`, figureError);
+          }
+          if (embedded.items.length > 0 && figures.length > 0) {
+            const proseItems = excludeFigureRegionTextItems(embedded.items, figures);
+            if (proseItems.length < embedded.items.length) {
+              embedded = buildEmbeddedPdfTextResult(proseItems, pageNumber, true);
+            }
           }
           if (embedded.blocks.length > 0) {
             options.onProgress?.({
@@ -548,10 +584,18 @@ async function extractEmbeddedPdfTextBlocks(page: PDFPageProxy, pageNumber: numb
       pageHeight: viewport.height
     }];
   });
-  const blocks = buildPdfDocumentOutline([{ page: pageNumber, items }]);
+  return buildEmbeddedPdfTextResult(items, pageNumber);
+}
+
+function buildEmbeddedPdfTextResult(
+  items: PositionedPdfTextItem[],
+  pageNumber: number,
+  allowShortText = false
+): EmbeddedPdfTextResult {
+  const blocks = buildPdfReaderPageOutline(pageNumber, items);
   const rawLetterCount = countOcrLetters(items.map((item) => item.str).join(' '));
   const extractedLetterCount = countOcrLetters(blocks.map((block) => block.original).join(' '));
-  if (rawLetterCount < 60 || extractedLetterCount < 30 || blocks.length === 0) {
+  if ((!allowShortText && (rawLetterCount < 60 || extractedLetterCount < 30)) || blocks.length === 0) {
     return { blocks: [], outlineBlocks: blocks, items };
   }
   return {
@@ -653,7 +697,7 @@ function extractPositionedOcrParagraphs(
   if (items.length === 0) {
     return [];
   }
-  return buildPdfDocumentOutline([{ page: layoutContext.page, items }])
+  return buildPdfReaderPageOutline(layoutContext.page, items)
     .map((block) => ({ original: block.original, type: block.type }))
     .slice(0, 120);
 }

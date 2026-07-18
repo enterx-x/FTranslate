@@ -3,7 +3,7 @@ import type { ArxivPaper } from '../../shared/arxiv';
 export type MobilePaperSource = 'import' | 'arxiv';
 export type MobilePdfKind = 'source' | 'translated';
 export type MobileLocalOcrStatus = 'pending' | 'running' | 'completed' | 'failed';
-export const MOBILE_LOCAL_OCR_VERSION = 4;
+export const MOBILE_LOCAL_OCR_VERSION = 5;
 
 export interface MobileStoredPdf {
   path: string;

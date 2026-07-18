@@ -164,6 +164,30 @@ describe('mobile PDF figure recovery', () => {
     ]);
   });
 
+  it('recognizes an IEEE table caption without punctuation after the Roman numeral', () => {
+    const blocks = [
+      block('table-i', 'TABLE I COMPARISON OF VISUAL-TACTILE DATASETS.', 'caption', 180, 52, 252, 24)
+    ];
+
+    expect(buildPdfCaptionAnchors([], blocks)).toEqual([
+      expect.objectContaining({
+        kind: 'table',
+        label: 'I',
+        original: 'TABLE I COMPARISON OF VISUAL-TACTILE DATASETS.',
+        hasTextCaption: true
+      })
+    ]);
+  });
+
+  it('does not create a figure crop from a wrapped inline Fig. reference', () => {
+    const items = [
+      item('The tactile signals changed during manipulation, as shown in', 312, 100, 251, 9),
+      item('Fig. 2. This result highlights the importance of dense tactile signals.', 312, 112, 251, 9)
+    ];
+
+    expect(buildPdfCaptionAnchors(items, [])).toEqual([]);
+  });
+
   it('finds a caption fragment even when graphic labels precede it on the same row', () => {
     const items = [
       item('Chart label', 24, 220, 86, 11),
@@ -235,5 +259,28 @@ describe('mobile PDF figure recovery', () => {
     expect(regions[0].bounds.y).toBeGreaterThan(160);
     expect(regions[0].bounds.y).toBeLessThan(180);
     expect(regions[0].hiddenTextHashes).not.toContain('title');
+  });
+
+  it('keeps table-internal headings inside a tall vector table crop', () => {
+    const blocks = [
+      block('caption-vi', 'TABLE VI: Reward terms', 'caption', 54, 70, 245, 12),
+      block('tracking', 'Tracking Rewards', 'heading', 54, 116, 245, 10),
+      block('regularization', 'Regularization', 'heading', 54, 220, 245, 10),
+      block('formulae', 'r vel = exp velocity reward terms', 'formula', 54, 130, 245, 300),
+      block('body', 'This paragraph resumes after the complete reward table and explains the stability terms.', 'paragraph', 54, 480, 245, 44)
+    ];
+    const regions = detectPdfFigureRegions({
+      page: 14,
+      pageWidth: 612,
+      pageHeight: 792,
+      blocks,
+      anchors: buildPdfCaptionAnchors([], blocks),
+      imageBounds: []
+    });
+
+    expect(regions).toHaveLength(1);
+    expect(regions[0].bounds.y).toBeLessThan(90);
+    expect(regions[0].bounds.y + regions[0].bounds.height).toBeGreaterThan(450);
+    expect(regions[0].bounds.y + regions[0].bounds.height).toBeLessThanOrEqual(480);
   });
 });

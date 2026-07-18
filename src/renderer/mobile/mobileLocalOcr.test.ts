@@ -3,6 +3,7 @@ import {
   buildCachedLocalOcrBlocks,
   buildLocalOcrBlocks,
   calculateLocalOcrRenderScale,
+  excludeFigureRegionTextItems,
   extractLocalOcrParagraphs,
   MOBILE_OCR_FAST_LONG_EDGE,
   MOBILE_OCR_PRECISE_LONG_EDGE,
@@ -15,6 +16,31 @@ import {
 } from './mobileLocalOcr';
 
 describe('mobile scanned PDF local OCR', () => {
+  it('removes text painted inside a detected figure or table before paragraph reflow', () => {
+    const items = [
+      { str: 'TABLE I: Results', x: 50, y: 90, width: 180, height: 10, page: 3 },
+      { str: 'Mobile ✓ ✗ ✗', x: 60, y: 125, width: 120, height: 10, page: 3 },
+      { str: 'Table I highlights a remaining gap in prior systems.', x: 50, y: 245, width: 250, height: 10, page: 3 }
+    ];
+    const filtered = excludeFigureRegionTextItems(items, [{
+      id: 'table-1',
+      page: 3,
+      kind: 'table',
+      caption: 'TABLE I: Results',
+      captionHash: 'caption-1',
+      hasTextCaption: true,
+      order: 2000.25,
+      bounds: { x: 40, y: 80, width: 520, height: 130, pageWidth: 612, pageHeight: 792 },
+      captionBounds: { x: 48, y: 86, width: 190, height: 18, pageWidth: 612, pageHeight: 792 },
+      hiddenTextHashes: []
+    }]);
+
+    expect(filtered.map((entry) => entry.str)).toEqual([
+      'TABLE I: Results',
+      'Table I highlights a remaining gap in prior systems.'
+    ]);
+  });
+
   it('does not let the final page or PDF worker cleanup remain pending forever', async () => {
     const never = new Promise<void>(() => undefined);
 

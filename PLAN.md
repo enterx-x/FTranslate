@@ -1,5 +1,45 @@
 # PLAN.md
 
+## 2026-07-18：连续双语忠实提取与三篇真实论文回归
+
+### 当前结论
+
+- “提取质量差”的主因不全是 OCR：带文字层论文此前复用了面向 AI 分析的过滤器，并在双栏排序、跨行表题、作者单位、公式和正文内 `Fig.` 引用上发生语义误判。
+- 手机阅读已切换为独立的忠实提取器；只有图表区域内的单元格/图内标签按几何位置排除，作者、单位、短科研片段、图注和参考文献不再因分析规则被丢弃。
+- 本地提取缓存升级到版本 `5`，图表缓存升级到版本 `2`。旧缓存会自动失效并从原 PDF 重新提取，不要求用户删除论文或清除 Safari 网站数据。
+
+### 已完成操作
+
+- 新增阅读专用的双栏重排、首页前置内容排序、跨行章节标题合并、段落连续性判断、科研复合词断行修复和独立公式识别。
+- 支持 `TABLE I` 无标点的 IEEE 表题、两行表题和带单位续行的表题；表格裁切按真实正文边界结束，单元格文字不会混入小说式正文。
+- 图表区域在正文重排前按几何坐标排除原始文字；完整图注保留。正文内部换行后的 `Fig.` 引用会结合上一行上下文判断，不再误建图表裁切区。
+- 第一页数字作者单位、机构脚注按普通正文处理；跨行大章节标题和图注会恢复成一个块，参考文献继续保留。
+
+### 真实 PDF 验证
+
+- `T-BAL_CoP-ESP32_2025.12.24.pdf`：7/7 页文字层完成；两行 `TABLE I` 表题完整，表格保留为原图，3 条伺服公式独立于说明正文，图 7 两行图注完整。
+- `T-DATA_HumanoidVTA_2025.10.28.pdf`：4/4 页文字层完成；跨栏 `TABLE I` 与表名合并，表格单元格不进入正文，`III... DATASET` 合并为一个章节标题，正文内 `Fig. 2. This result...` 保持正文而非伪图注。
+- `T-HRI_SGR_2025.3.5.pdf`：8/8 页文字层完成；作者机构脚注不再成为大标题，图注、章节和参考文献保留。
+- 三篇共 19 页全部结束且未触发 Tesseract OCR；真实文件探针包含表格、公式、伪图注和单位字号断言，验证后已从仓库删除，未提交用户 PDF 或临时截图。
+
+### 验证记录
+
+- `npx vitest run src/renderer/lib/pdfTextStructure.test.ts src/renderer/mobile/mobileLocalOcr.test.ts src/renderer/mobile/mobilePdfFigures.test.ts`：5 个测试文件、139 项测试通过。
+- 三篇真实 PDF 全页探针：1 项集成回归通过，19/19 页来源均为 `text`，无控制字符块、无 OCR fallback。
+- `npm test` / `npm run build` / `npm run dist`：全量 86 个测试文件、545 项测试全部通过；TypeScript、桌面 renderer、Electron 主进程与 NSIS 打包均成功。
+- `npm run build:mobile` 与 `npm run ios:sync`：通过；最新网页资源已同步到 Capacitor iOS 工程，3 个原生插件声明保持完整。
+- `npm run visual:check:mobile`：通过；自动覆盖图表插入、导入即全文提取、退出/切换后的缓存恢复、明确点击后才翻译、小说式双语排版、API Key 与论文恢复。人工复核 `.tmp-mobile-visual-check/03b-reader-inline-figure-390x844.png`、`08b-reader-scanned-bilingual-390x844.png` 和 `08d-reader-scanned-novel-430x932.png`，未发现图表丢失、段落卡片化、文字遮挡或横向溢出。
+- `npm run visual:check`：桌面全页面视觉回归通过；人工复核 `.tmp-visual-check/whole-pdf-reader.png`、`whole-pdf-figures.png` 和 `home.png`，共享 PDF 结构改动未破坏桌面阅读器和项目空间。
+- Windows 安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 114,098,914 字节，SHA-256 为 `846BE7874C7E5D5924032A90817BBC0856C714EBC2FDC3BC4E64E6B89AB5A763`。
+- `npx vercel --prod`：部署 `dpl_BvZDCQm7uXJBP1Z46XSsE46oxk6f` 已完成并绑定 `https://ftranslate-mobile.vercel.app`；固定地址和本轮 `assets/index-TxAqlLl7.js` 均实测 HTTP 200。
+- `npm audit --omit=dev --json`：生产依赖 0 个已知漏洞；Vercel 完整开发依赖安装仍报告 5 个审计告警，不进入移动网页生产运行依赖。
+
+### 剩余风险
+
+- 数学公式当前保留 PDF 文字层可读文本，不做 LaTeX 结构重建；复杂矩阵、多行推导仍以原 PDF 图像核对为准。
+- 无文字层扫描件仍取决于 iPhone 本地 Tesseract 质量；AI 重排只在用户点击翻译后作为保守兜底，不会在导入阶段自动改写英文。
+- Safari 被系统彻底冻结或进程被杀后无法继续执行网页 JavaScript，但已完成页面会逐页保存，重开后从首个缺页续跑。
+
 ## 2026-07-17：连续双语恢复原图与 OCR 末页收尾
 
 ### 当前结论

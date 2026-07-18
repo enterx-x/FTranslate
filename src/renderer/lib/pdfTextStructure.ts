@@ -133,6 +133,184 @@ export function buildPdfPageOutline(page: number, items: PositionedPdfTextItem[]
   return blocks;
 }
 
+/**
+ * Lossless outline for the phone reader. The analysis outline intentionally
+ * drops front matter and references; a reader must preserve them. Text proven
+ * to live inside a figure/table is removed later by the geometric mobile pass.
+ */
+export function buildPdfReaderPageOutline(page: number, items: PositionedPdfTextItem[]): ExtractedPdfBlock[] {
+  const rawLines = buildLines(items.filter((item) => !isPositionedPageSidebarItem(item)));
+  const metrics = buildPageTextMetrics(rawLines);
+  const contentLines = rawLines.filter((line) => shouldKeepLayoutLine(line, metrics));
+  const medianLineHeight = median(contentLines.map((line) => line.height)) ?? PARAGRAPH_GAP_THRESHOLD / 2;
+  const captionMergedLines = mergeBareIeeeTableCaptionLines(contentLines, metrics);
+  const orderedLines = mergeWrappedReaderHeadingLines(
+    orderLinesForReaderLayout(captionMergedLines, page, metrics),
+    page,
+    metrics,
+    medianLineHeight
+  );
+  const blocks: ExtractedPdfBlock[] = [];
+  let currentParagraph: TextLine[] = [];
+  let currentSection = `Page ${page}`;
+
+  function flushParagraph(): void {
+    if (currentParagraph.length === 0) {
+      return;
+    }
+
+    let original = joinParagraphLines(currentParagraph.map((line) => line.text));
+    const inlineSection = extractInlineSection(original);
+    const section = inlineSection?.section ?? currentSection;
+    original = inlineSection?.body ?? original;
+    if (inlineSection) {
+      currentSection = inlineSection.section;
+    }
+    if (containsReadableText(original)) {
+      blocks.push(createBlock(page, 'paragraph', section, original, getLinesBounds(currentParagraph)));
+    }
+    currentParagraph = [];
+  }
+
+  orderedLines.forEach((line, index) => {
+    const type = classifyReaderLine(line, page, metrics, medianLineHeight, orderedLines[index - 1]);
+    if (type !== 'paragraph') {
+      flushParagraph();
+      const original = type === 'heading'
+        ? normalizeSectionHeading(line.text)
+        : type === 'caption'
+          ? normalizeReaderCaption(line.text)
+          : line.text.trim();
+      if (!containsReadableText(original)) {
+        return;
+      }
+      blocks.push(createBlock(
+        page,
+        type,
+        type === 'heading' ? original : currentSection,
+        original,
+        getLinesBounds([line])
+      ));
+      if (type === 'heading') {
+        currentSection = original;
+      }
+      return;
+    }
+
+    const previousLine = currentParagraph[currentParagraph.length - 1];
+    const paragraphGapThreshold = previousLine
+      ? Math.max(medianLineHeight * 2.4, previousLine.height * 1.75, line.height * 1.75)
+      : PARAGRAPH_GAP_THRESHOLD;
+    if (
+      previousLine &&
+      (Math.abs(line.y - previousLine.y) > paragraphGapThreshold ||
+        Math.abs(line.x - previousLine.x) > COLUMN_SPLIT_THRESHOLD / 2 ||
+        hasSignificantReaderFontChange(previousLine, line) ||
+        startsIndentedParagraphAfterSentence(previousLine, line))
+    ) {
+      flushParagraph();
+    }
+    currentParagraph.push(line);
+  });
+
+  flushParagraph();
+  return mergeReaderBlockContinuations(blocks);
+}
+
+function orderLinesForReaderLayout<TItem extends PositionedPdfTextItem>(
+  lines: Array<TextLine<TItem>>,
+  page: number,
+  metrics: PageTextMetrics
+): Array<TextLine<TItem>> {
+  if (page !== 1) {
+    const topCenteredTableCaptions = lines.filter((line) => (
+      /^TABLE\s+[IVXLCDM\d]+(?:\s+|$)/u.test(line.text.trim()) &&
+      line.y <= metrics.minY + metrics.height * 0.18 &&
+      Math.abs(getLineCenterX(line) - (metrics.minX + metrics.width / 2)) <= Math.max(55, metrics.width * 0.14)
+    ));
+    const remainingLines = lines.filter((line) => !topCenteredTableCaptions.includes(line));
+    return [
+      ...topCenteredTableCaptions.sort((left, right) => left.y - right.y || left.x - right.x),
+      ...orderLinesForAcademicLayout(remainingLines)
+    ];
+  }
+  const frontMatterLimit = metrics.minY + metrics.height * 0.18;
+  const frontMatter = lines
+    .filter((line) => line.y <= frontMatterLimit)
+    .sort((left, right) => left.y - right.y || left.x - right.x);
+  const body = lines.filter((line) => line.y > frontMatterLimit);
+  return [...frontMatter, ...orderLinesForAcademicLayout(body)];
+}
+
+function hasSignificantReaderFontChange(previous: TextLine, next: TextLine): boolean {
+  const smaller = Math.min(previous.height, next.height);
+  const larger = Math.max(previous.height, next.height);
+  return smaller / Math.max(1, larger) < 0.78 && Math.abs(next.y - previous.y) > smaller * 1.2;
+}
+
+function mergeReaderBlockContinuations(blocks: ExtractedPdfBlock[]): ExtractedPdfBlock[] {
+  const merged: ExtractedPdfBlock[] = [];
+  for (const block of blocks) {
+    const previous = merged[merged.length - 1];
+    const mergeCaption = previous?.type === 'caption' && block.type === 'paragraph' &&
+      !endsWithSentenceBoundary(previous.original) &&
+      areReaderBlocksVerticallyAdjacent(previous, block) &&
+      (!/^table\b/iu.test(previous.original.trim()) || countWords(block.original) <= 10) &&
+      (
+        /[-\u00ad\u2010-\u2015]$/u.test(previous.original.trim()) ||
+        startsWithLowercaseContinuation(block.original) ||
+        (/^table\b/iu.test(previous.original.trim()) && /[:(]\s*$/u.test(previous.original.trim())) ||
+        /\b(?:and|or|of|for|with|to|in|on|between)\s*$/iu.test(previous.original.trim())
+      );
+    const mergeParagraph = previous?.type === 'paragraph' && block.type === 'paragraph' &&
+      previous.section === block.section &&
+      !endsWithSentenceBoundary(previous.original) &&
+      areReaderParagraphBlocksContiguous(previous, block);
+    if (previous && (mergeCaption || mergeParagraph)) {
+      merged[merged.length - 1] = createBlock(
+        previous.page,
+        previous.type,
+        previous.section,
+        joinParagraphLines([previous.original, block.original]),
+        mergeBounds(previous.bounds, block.bounds)
+      );
+      continue;
+    }
+    merged.push(block);
+  }
+  return merged;
+}
+
+function areReaderBlocksVerticallyAdjacent(previous: ExtractedPdfBlock, next: ExtractedPdfBlock): boolean {
+  if (!previous.bounds || !next.bounds) {
+    return true;
+  }
+  const gap = next.bounds.y - (previous.bounds.y + previous.bounds.height);
+  return gap >= -4 && gap <= Math.max(18, previous.bounds.height * 1.8, next.bounds.height * 1.8);
+}
+
+function areReaderParagraphBlocksContiguous(previous: ExtractedPdfBlock, next: ExtractedPdfBlock): boolean {
+  if (!previous.bounds || !next.bounds || previous.page !== next.page) {
+    return true;
+  }
+  const verticalGap = next.bounds.y - (previous.bounds.y + previous.bounds.height);
+  if (verticalGap >= -4 && verticalGap <= 20) {
+    return true;
+  }
+  const pageWidth = previous.bounds.pageWidth ?? next.bounds.pageWidth ?? 0;
+  const pageHeight = previous.bounds.pageHeight ?? next.bounds.pageHeight ?? 0;
+  return pageWidth > 0 && pageHeight > 0 &&
+    previous.bounds.x + previous.bounds.width / 2 < pageWidth / 2 &&
+    next.bounds.x + next.bounds.width / 2 > pageWidth / 2 &&
+    previous.bounds.y > pageHeight * 0.5 &&
+    next.bounds.y < pageHeight * 0.5;
+}
+
+function isPositionedPageSidebarItem(item: PositionedPdfTextItem): boolean {
+  const pageWidth = item.pageWidth ?? 0;
+  return /^arxiv:/iu.test(item.str.trim()) && pageWidth > 0 && item.x <= pageWidth * 0.1;
+}
+
 export function buildPdfDocumentOutline(pages: Array<{ page: number; items: PositionedPdfTextItem[] }>): ExtractedPdfBlock[] {
   const pageBlocks = pages.flatMap((page) => buildPdfPageOutline(page.page, page.items));
   return addSectionGroupingMetadata(mergeDocumentParagraphContinuations(pageBlocks));
@@ -339,10 +517,212 @@ function orderLinesForAcademicLayout<TItem extends PositionedPdfTextItem>(
   return [...leftColumn, ...rightColumn];
 }
 
+function mergeWrappedReaderHeadingLines<TItem extends PositionedPdfTextItem>(
+  lines: Array<TextLine<TItem>>,
+  page: number,
+  metrics: PageTextMetrics,
+  medianLineHeight: number
+): Array<TextLine<TItem>> {
+  const merged: Array<TextLine<TItem>> = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    let current = lines[index];
+    let next = lines[index + 1];
+    while (next && shouldMergeReaderHeadingLines(current, next, page, metrics, medianLineHeight)) {
+      const combinedItems = [...current.items, ...next.items];
+      current = {
+        text: normalizeExtractedText(`${current.text} ${next.text}`),
+        x: Math.min(current.x, next.x),
+        y: Math.min(current.y, next.y),
+        height: Math.max(current.height, next.height),
+        items: combinedItems
+      };
+      index += 1;
+      next = lines[index + 1];
+    }
+    merged.push(current);
+  }
+  return merged;
+}
+
+function mergeBareIeeeTableCaptionLines<TItem extends PositionedPdfTextItem>(
+  lines: Array<TextLine<TItem>>,
+  metrics: PageTextMetrics
+): Array<TextLine<TItem>> {
+  const consumed = new Set<number>();
+  const merged: Array<TextLine<TItem>> = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (consumed.has(index)) {
+      continue;
+    }
+    const line = lines[index];
+    const normalizedLine = line.text.trim();
+    const bareTableLabel = /^TABLE\s+[IVXLCDM\d]+$/u.test(normalizedLine);
+    const unclosedParenthesis = /^TABLE\s+[IVXLCDM\d]+\s*[:.]/u.test(normalizedLine) &&
+      (normalizedLine.match(/\(/gu) ?? []).length > (normalizedLine.match(/\)/gu) ?? []).length;
+    if (!bareTableLabel && !unclosedParenthesis) {
+      merged.push(line);
+      continue;
+    }
+    const continuationIndex = lines.findIndex((candidate, candidateIndex) => {
+      if (candidateIndex === index || consumed.has(candidateIndex)) {
+        return false;
+      }
+      const verticalGap = candidate.y - line.y;
+      const centersAligned = Math.abs(getLineCenterX(line) - getLineCenterX(candidate)) <= Math.max(45, metrics.width * 0.12);
+      const letters = candidate.text.match(/\p{L}/gu) ?? [];
+      const uppercaseLetters = candidate.text.match(/\p{Lu}/gu) ?? [];
+      const leftAligned = Math.abs(line.x - candidate.x) <= 24;
+      const wordCount = countWords(candidate.text);
+      return verticalGap > 0 &&
+        verticalGap <= Math.max(24, line.height * 2.5, candidate.height * 2.5) &&
+        (
+          (bareTableLabel && centersAligned && wordCount >= 2 && wordCount <= 18 && letters.length >= 6 && uppercaseLetters.length / letters.length >= 0.72) ||
+          (unclosedParenthesis && (leftAligned || centersAligned) && wordCount >= 1 && wordCount <= 4 && /\)/u.test(candidate.text))
+        );
+    });
+    if (continuationIndex < 0) {
+      merged.push(line);
+      continue;
+    }
+    const continuation = lines[continuationIndex];
+    consumed.add(continuationIndex);
+    merged.push({
+      text: normalizeExtractedText(`${line.text} ${continuation.text}`),
+      x: Math.min(line.x, continuation.x),
+      y: Math.min(line.y, continuation.y),
+      height: Math.max(line.height, continuation.height),
+      items: [...line.items, ...continuation.items]
+    });
+  }
+  return merged;
+}
+
+function shouldMergeReaderHeadingLines(
+  current: TextLine,
+  next: TextLine,
+  page: number,
+  metrics: PageTextMetrics,
+  medianLineHeight: number
+): boolean {
+  const verticalGap = next.y - current.y;
+  if (verticalGap <= 0 || verticalGap > Math.max(current.height * 1.9, next.height * 1.9, medianLineHeight * 3)) {
+    return false;
+  }
+  const centersAligned = Math.abs(getLineCenterX(current) - getLineCenterX(next)) <= Math.max(45, metrics.width * 0.12);
+  const leftAligned = Math.abs(current.x - next.x) <= 24;
+  const frontMatterWrap = page === 1 &&
+    centersAligned &&
+    isReaderFrontMatterHeading(current, metrics, medianLineHeight) &&
+    isReaderFrontMatterHeading(next, metrics, medianLineHeight);
+  if (frontMatterWrap) {
+    return true;
+  }
+
+  const numberedHeading = /^([IVX]+|\d+(?:\.\d+)*|[A-Z])\.\s+/u.test(current.text.trim());
+  const nextWords = countWords(next.text);
+  const connectiveWrap = /\b(and|for|of|on|to|with|without|in|under|from)\s*$/iu.test(current.text) ||
+    /^(and|for|of|on|to|with|without|in|under|from)\b/iu.test(next.text.trim());
+  const uppercaseContinuation = /^[\p{Lu}\p{N}][\p{Lu}\p{N} ,:;()/-]{2,}$/u.test(next.text.trim());
+  const bareIeeeTableLabel = /^TABLE\s+[IVXLCDM\d]+$/u.test(current.text.trim());
+  return (
+    bareIeeeTableLabel && centersAligned && nextWords <= 15
+  ) || (
+    numberedHeading && nextWords <= 6 && (
+      (leftAligned && connectiveWrap) ||
+      (centersAligned && uppercaseContinuation)
+    )
+  );
+}
+
+function classifyReaderLine(
+  line: TextLine,
+  page: number,
+  metrics: PageTextMetrics,
+  medianLineHeight: number,
+  previousLine?: TextLine
+): ExtractedBlockType {
+  const normalized = line.text.trim();
+  if (
+    (
+      /^(fig\.?|figure|table)\s*[\divxlcdm]*[:.]/iu.test(normalized) ||
+      /^TABLE\s+[IVXLCDM\d]+(?:\s+|$)/u.test(normalized)
+    ) &&
+    !looksLikeInlineFigureReferenceContinuation(previousLine, line)
+  ) {
+    return 'caption';
+  }
+  if (page === 1 && looksLikeReaderAffiliation(normalized)) {
+    return 'paragraph';
+  }
+  if (isFormulaLike(normalized)) {
+    return 'formula';
+  }
+  if (
+    /^([IVX]+\.\s+)?[A-Z][A-Z0-9 ,:;()/-]{4,}$/u.test(normalized) ||
+    looksLikeSectionHeading(normalizeSectionHeading(normalized)) ||
+    (page === 1 && isReaderFrontMatterHeading(line, metrics, medianLineHeight))
+  ) {
+    return 'heading';
+  }
+  return 'paragraph';
+}
+
+function looksLikeInlineFigureReferenceContinuation(previous: TextLine | undefined, line: TextLine): boolean {
+  if (!previous || !/^(fig\.?|figure)\s*\d+[:.]/iu.test(line.text.trim())) {
+    return false;
+  }
+  const verticalGap = line.y - previous.y;
+  return Math.abs(line.x - previous.x) <= 24 &&
+    verticalGap > 0 &&
+    verticalGap <= Math.max(18, previous.height * 2, line.height * 2) &&
+    countWords(previous.text) >= 6 &&
+    !endsWithSentenceBoundary(previous.text);
+}
+
+function looksLikeReaderAffiliation(text: string): boolean {
+  const normalized = text.trim();
+  if (
+    /^\d+\s+/u.test(normalized) && (
+      /\b(?:department|university|institute|school|college|laborator(?:y|ies)|lab|cent(?:er|re)|faculty)\b/iu.test(normalized) ||
+      (((normalized.match(/,/gu) ?? []).length >= 2) && /\b(?:are|is)$/iu.test(normalized))
+    )
+  ) {
+    return true;
+  }
+  return /^\d+(?:\s*[,;*†‡]\s*|\s+).{0,40}\b(?:department|university|institute|school|college|laborator(?:y|ies)|lab|research cent(?:er|re)|faculty)\b/iu.test(
+    text.trim()
+  );
+}
+
+function isReaderFrontMatterHeading(line: TextLine, metrics: PageTextMetrics, medianLineHeight: number): boolean {
+  const nearTop = line.y <= metrics.minY + metrics.height * 0.28;
+  if (
+    !nearTop ||
+    line.height < medianLineHeight * 1.4 ||
+    countWords(line.text) > 18 ||
+    /^(https?:\/\/|www\.|[\w.-]+\.[a-z]{2,})/iu.test(line.text.trim())
+  ) {
+    return false;
+  }
+  const pageCenter = metrics.minX + metrics.width / 2;
+  const centered = Math.abs(getLineCenterX(line) - pageCenter) <= Math.max(55, metrics.width * 0.16);
+  return centered || line.height >= medianLineHeight * 1.45;
+}
+
+function getLineCenterX(line: TextLine): number {
+  const minX = Math.min(...line.items.map((item) => item.x));
+  const maxX = Math.max(...line.items.map((item) => item.x + item.width));
+  return (minX + maxX) / 2;
+}
+
+function containsReadableText(text: string): boolean {
+  return /[\p{L}\p{N}=∑∫√∞≤≥≠≈→]/u.test(text);
+}
+
 function classifyLine(text: string): ExtractedBlockType {
   const normalized = text.trim();
 
-  if (/^(fig\.|figure|table)\s*\d*[:.]/iu.test(normalized)) {
+  if (/^(fig\.?|figure|table)\s*[\divxlcdm]*[:.]/iu.test(normalized)) {
     return 'caption';
   }
 
@@ -466,6 +846,15 @@ function normalizeSectionHeading(text: string): string {
   return normalized;
 }
 
+function normalizeReaderCaption(text: string): string {
+  const normalized = text.trim();
+  const tablePrefix = normalized.match(/^(TABLE\s+[IVXLCDM\d]+)(.*)$/u);
+  if (tablePrefix) {
+    return normalizeExtractedText(`${tablePrefix[1]} ${normalizeSectionHeading(tablePrefix[2])}`);
+  }
+  return normalizeSectionHeading(normalized);
+}
+
 function extractInlineSection(text: string): { section: string; body: string } | null {
   const match = text.match(/^(abstract|introduction|conclusion|references)\s*[-\u2013\u2014]\s*(.+)$/iu);
   if (!match) {
@@ -483,8 +872,18 @@ function isFormulaLike(text: string): boolean {
     return false;
   }
 
-  const mathSymbols = (text.match(/[=∑∫√∞≤≥≠≈→+\-*/^_{}[\]()]/gu) ?? []).length;
   const letters = (text.match(/\p{L}/gu) ?? []).length;
+  const citationTokens = text.match(/\[\d+(?:\s*[-,]\s*\d+)*\]/gu) ?? [];
+  const withoutCitations = citationTokens.reduce((value, token) => value.replace(token, ''), text);
+  const strongMathSymbols = (withoutCitations.match(/[=∑∫√∞≤≥≠≈→^_{}]/gu) ?? []).length;
+  const operatorSymbols = (withoutCitations.match(/[+*/]/gu) ?? []).length;
+  if (strongMathSymbols === 0 && (letters >= 3 || operatorSymbols < 2)) {
+    return false;
+  }
+  const mathSymbols = strongMathSymbols + operatorSymbols + (withoutCitations.match(/[()[\]]/gu) ?? []).length;
+  if (/=/u.test(withoutCitations) && /[\u0370-\u03ff]/iu.test(withoutCitations) && mathSymbols >= 3) {
+    return true;
+  }
   return mathSymbols >= 3 && mathSymbols >= letters * 0.35;
 }
 
@@ -496,6 +895,9 @@ function joinParagraphLines(lines: string[]): string {
 
     if (/[-\u00ad\u2010-\u2015]$/u.test(paragraph)) {
       const prefix = paragraph.match(/([A-Za-z]+)[-\u00ad\u2010-\u2015]$/u)?.[1] ?? '';
+      if (!prefix || !/^\p{Ll}/u.test(line.trim())) {
+        return paragraph + line.trim();
+      }
       const separator = shouldPreserveCompoundHyphen(prefix) ? '-' : '';
       return paragraph.replace(/[-\u00ad\u2010-\u2015]$/u, '') + separator + line.trim();
     }
@@ -506,7 +908,7 @@ function joinParagraphLines(lines: string[]): string {
 }
 
 function shouldPreserveCompoundHyphen(prefix: string): boolean {
-  return /^(?:whole|multi|real|contact|end|lower|upper|hand|single|loco|thin|tight|tool|low|high|long|short|cross|open|closed)$/iu.test(prefix);
+  return /^(?:whole|multi|real|contact|end|lower|upper|hand|single|loco|thin|tight|tool|low|high|long|short|cross|open|closed|force|task|pose|motion|robot|sensor|vision|tactile|policy|model|world|latent|pretrain|small|large|fine|self|gpu)$/iu.test(prefix);
 }
 
 function normalizeExtractedText(text: string): string {

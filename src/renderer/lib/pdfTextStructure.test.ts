@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPdfDocumentOutline,
   buildPdfPageOutline,
+  buildPdfReaderPageOutline,
   hashText,
   orderPositionedTextItemsForReading,
   type PositionedPdfTextItem
@@ -572,6 +573,205 @@ describe('PDF text structure extraction', () => {
       'left second',
       'right first',
       'right second'
+    ]);
+  });
+
+  it('keeps title, authors, figure captions, and abstract in the faithful mobile reader', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('Learning Versatile Humanoid Manipulation', 90, 52, 360, 18),
+      item('with Touch Dreaming', 170, 76, 210, 18),
+      item('Anonymous Authors', 225, 112, 140, 12),
+      item('Fig. 1: Our system enables versatile humanoid manipulation.', 55, 430, 500, 9),
+      item('Abstract—Humanoid robots promise general-purpose assistance in the real world.', 55, 486, 245, 9),
+      item('This work studies dexterous contact-rich loco-manipulation.', 55, 500, 245, 9)
+    ]);
+
+    expect(outline.map((block) => block.original)).toEqual([
+      'Learning Versatile Humanoid Manipulation with Touch Dreaming',
+      'Anonymous Authors',
+      'Fig. 1: Our system enables versatile humanoid manipulation.',
+      'Humanoid robots promise general-purpose assistance in the real world. This work studies dexterous contact-rich loco-manipulation.'
+    ]);
+    expect(outline.map((block) => block.type)).toEqual([
+      'heading',
+      'paragraph',
+      'caption',
+      'paragraph'
+    ]);
+  });
+
+  it('recognizes Roman-numeral table captions without merging table headers into them', () => {
+    const outline = buildPdfReaderPageOutline(3, [
+      item('TABLE I: Comparisons to previous humanoid learn-', 60, 82, 245, 9),
+      item('ing systems', 60, 92, 70, 9),
+      item('End-Effector Whole-Body Touch Modeling', 145, 106, 150, 6),
+      item('II. RELATED WORK', 215, 170, 180, 14)
+    ]);
+
+    expect(outline[0]).toMatchObject({
+      type: 'caption',
+      original: 'TABLE I: Comparisons to previous humanoid learning systems'
+    });
+    expect(outline[1].original).toBe('End-Effector Whole-Body Touch Modeling');
+  });
+
+  it('joins an IEEE bare table label with its letter-spaced caption', () => {
+    const outline = buildPdfReaderPageOutline(2, [
+      item('TABLE I', 291, 59, 30, 8),
+      item('C OMPARISON OF V ISUAL -T ACTILE D ATASETS.', 228, 68, 156, 8),
+      item('Dataset Samples Modality Vision Language Touch Action', 49, 88, 370, 7),
+      item('Contact-rich Manipulation. Soft objects are challenging to manipulate.', 49, 220, 251, 9),
+      item('real-time feedback on the intended pressure condition.', 312, 220, 251, 9)
+    ]);
+
+    expect(outline[0]).toMatchObject({
+      type: 'caption',
+      original: 'TABLE I COMPARISON OF VISUAL-TACTILE DATASETS.'
+    });
+    expect(outline.slice(1).map((block) => block.original)).toEqual([
+      'Dataset Samples Modality Vision Language Touch Action',
+      'Contact-rich Manipulation. Soft objects are challenging to manipulate.',
+      'real-time feedback on the intended pressure condition.'
+    ]);
+  });
+
+  it('joins a short unit line that completes a wrapped table caption', () => {
+    const outline = buildPdfReaderPageOutline(4, [
+      item('TABLE I: Characterization Results of Load Cell Sensors (Unit:', 49, 52, 250, 9),
+      item('Gram)', 49, 66, 36, 9),
+      item('Ref. Mass LC 1 Reading LC 2 Reading', 55, 92, 235, 7)
+    ]);
+
+    expect(outline[0]).toMatchObject({
+      type: 'caption',
+      original: 'TABLE I: Characterization Results of Load Cell Sensors (Unit: Gram)'
+    });
+  });
+
+  it('does not mistake a wrapped inline Fig. reference for a real caption', () => {
+    const outline = buildPdfReaderPageOutline(2, [
+      item('The tactile signals changed over time during manipulation, as shown in', 312, 100, 251, 9),
+      item('Fig. 2. This result highlights the importance of collecting dense tactile signals.', 312, 112, 251, 9)
+    ]);
+
+    expect(outline).toHaveLength(1);
+    expect(outline[0].type).toBe('paragraph');
+    expect(outline[0].original).toContain('as shown in Fig. 2. This result');
+  });
+
+  it('joins a true wrapped figure caption after a connective word', () => {
+    const outline = buildPdfReaderPageOutline(4, [
+      item('Fig. 7: Graph of the Relationship Between Actual Weight and', 312, 250, 251, 9),
+      item('Load Cell Readings for the Left and Right Feet', 312, 262, 196, 9),
+      item('The characterization results show measurement errors below 19 g.', 312, 296, 251, 9)
+    ]);
+
+    expect(outline[0]).toMatchObject({
+      type: 'caption',
+      original: 'Fig. 7: Graph of the Relationship Between Actual Weight and Load Cell Readings for the Left and Right Feet'
+    });
+  });
+
+  it('does not attach distant lowercase body prose to a table caption', () => {
+    const outline = buildPdfReaderPageOutline(14, [
+      item('TABLE VI: Reward terms', 55, 70, 245, 9),
+      item('large relative to vertical support force, which often indicates unstable interaction.', 55, 480, 245, 9)
+    ]);
+
+    expect(outline.map((block) => block.original)).toEqual([
+      'TABLE VI: Reward terms',
+      'large relative to vertical support force, which often indicates unstable interaction.'
+    ]);
+  });
+
+  it('keeps citation continuations as prose instead of misclassifying brackets as formulas', () => {
+    const outline = buildPdfReaderPageOutline(3, [
+      item('[9], [23], [25], [26], [34]. Building on this line of work,', 55, 120, 245, 9),
+      item('our system combines whole-body control with VR teleoperation.', 55, 134, 245, 9)
+    ]);
+
+    expect(outline).toHaveLength(1);
+    expect(outline[0].type).toBe('paragraph');
+    expect(outline[0].original).toContain('Building on this line of work');
+  });
+
+  it('preserves a citation range when a line wraps after the en dash', () => {
+    const outline = buildPdfReaderPageOutline(3, [
+      item('Prior systems support whole-body tracking [1], [5]–', 55, 120, 245, 9),
+      item('[9], [23], [25], [26], [34]. Building on this line of work.', 55, 134, 245, 9)
+    ]);
+
+    expect(outline[0].original).toContain('[5]–[9]');
+  });
+
+  it('joins wrapped subsection headings before the following body paragraph', () => {
+    const outline = buildPdfReaderPageOutline(3, [
+      item('A. Humanoid Whole-Body Control and Teleoperation for', 55, 80, 245, 12),
+      item('Manipulation', 55, 95, 90, 12),
+      item('Recent progress has been enabled by whole-body control and motion tracking.', 55, 124, 245, 9),
+      item('C. Representation Learning for Contact-Rich Manipulation', 330, 80, 245, 12),
+      item('with Tactile Sensing', 330, 95, 120, 12),
+      item('Tactile sensing complements vision under partial observability.', 330, 124, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'heading').map((block) => block.original)).toEqual([
+      'A. Humanoid Whole-Body Control and Teleoperation for Manipulation',
+      'C. Representation Learning for Contact-Rich Manipulation with Tactile Sensing'
+    ]);
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'Recent progress has been enabled by whole-body control and motion tracking.',
+      'Tactile sensing complements vision under partial observability.'
+    ]);
+  });
+
+  it('joins a wrapped all-caps major section heading without a connective word', () => {
+    const outline = buildPdfReaderPageOutline(2, [
+      item('III. VISUAL-TACTILE SOFT OBJECT MANIPULATION', 65, 80, 245, 12),
+      item('DATASET', 150, 95, 72, 12),
+      item('We describe the humanoid teleoperation dataset and collection protocol.', 55, 124, 245, 9)
+    ]);
+
+    expect(outline.map((block) => ({ type: block.type, original: block.original }))).toEqual([
+      { type: 'heading', original: 'III. VISUAL-TACTILE SOFT OBJECT MANIPULATION DATASET' },
+      { type: 'paragraph', original: 'We describe the humanoid teleoperation dataset and collection protocol.' }
+    ]);
+  });
+
+  it('keeps numbered author affiliations as normal-sized reader prose', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('A Balance Control System for Humanoid Robots', 90, 50, 400, 18),
+      item('1 Department of Electrical Engineering, Example University', 130, 105, 340, 10),
+      item('2 Robotics Research Center, Example Institute', 150, 119, 300, 10),
+      item('3 The Science and Technology Center of Artificial Intelligence, Indonesia', 120, 133, 370, 10),
+      item('4 Dakarai Crowder, Kojo Vandyck, Xiping Sun, and Wenzhen Yuan are', 80, 147, 430, 10),
+      item('Abstract—This paper presents a stable balance controller for humanoid robots.', 55, 210, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.original.includes('Department'))[0].type).toBe('paragraph');
+    expect(outline.filter((block) => block.original.includes('Department'))[0].original).toContain('Robotics Research Center');
+    expect(outline.filter((block) => block.type === 'heading')).toHaveLength(1);
+  });
+
+  it('keeps compact display equations separate from the following prose', () => {
+    const outline = buildPdfReaderPageOutline(4, [
+      item('θ torso = θ torso + (θ e roll · 0.8) (6)', 100, 80, 200, 10),
+      item('In Equation (6), the correction value adjusts the torso servo position.', 55, 112, 245, 9)
+    ]);
+
+    expect(outline.map((block) => block.type)).toEqual(['formula', 'paragraph']);
+  });
+
+  it('keeps references in the faithful reader even though analysis extraction filters them', () => {
+    const items = [
+      item('REFERENCES', 220, 80, 160, 14),
+      item('[36] Huiwon Jang, Sihyun Yu, Heeseung Kwon, Hojin Jeon, Younggyo Seo, and Jinwoo Shin.', 70, 120, 260, 10),
+      item('ContextVLA: Vision-language-action model with amortized multi-frame context.', 70, 134, 260, 10)
+    ];
+
+    expect(buildPdfPageOutline(18, items)).toEqual([]);
+    expect(buildPdfReaderPageOutline(18, items).map((block) => block.original)).toEqual([
+      'REFERENCES',
+      '[36] Huiwon Jang, Sihyun Yu, Heeseung Kwon, Hojin Jeon, Younggyo Seo, and Jinwoo Shin. ContextVLA: Vision-language-action model with amortized multi-frame context.'
     ]);
   });
 });
