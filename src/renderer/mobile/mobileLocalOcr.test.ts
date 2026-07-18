@@ -5,6 +5,7 @@ import {
   buildEmbeddedPdfTextResult,
   buildLocalOcrBlocks,
   calculateLocalOcrRenderScale,
+  collectMobilePdfTextStreamItems,
   collectMobilePdfTextItems,
   excludeFigureRegionTextItems,
   extractLocalOcrParagraphs,
@@ -19,6 +20,45 @@ import {
 } from './mobileLocalOcr';
 
 describe('mobile scanned PDF local OCR', () => {
+  it('reads PDF.js text chunks through getReader without requiring ReadableStream async iteration', async () => {
+    let readIndex = 0;
+    const chunks = [
+      {
+        items: {
+          0: { str: 'Humanoid robots promise general-purpose assistance.' },
+          length: 1
+        }
+      },
+      {
+        items: {
+          0: { str: 'We first develop an RL-based lower-body controller.' },
+          1: { str: 'The original PDF text layer must be preserved.' },
+          length: 2
+        }
+      }
+    ];
+    let released = false;
+    const stream = {
+      getReader: () => ({
+        read: async () => readIndex < chunks.length
+          ? { done: false, value: chunks[readIndex++] }
+          : { done: true },
+        releaseLock: () => {
+          released = true;
+        }
+      })
+    };
+
+    const items = await collectMobilePdfTextStreamItems(stream);
+
+    expect(items.map((item) => (item as { str: string }).str)).toEqual([
+      'Humanoid robots promise general-purpose assistance.',
+      'We first develop an RL-based lower-body controller.',
+      'The original PDF text layer must be preserved.'
+    ]);
+    expect(released).toBe(true);
+  });
+
   it('reads Safari-style array-like PDF text items without requiring flatMap or string.trim', () => {
     const stringLike = { toString: () => 'Humanoid robots remain stable.' };
     const arrayLikeItems = {

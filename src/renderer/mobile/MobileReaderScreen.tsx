@@ -564,6 +564,12 @@ export function MobileReaderScreen({
               {ocrBusy ? '正在提取' : paper.localOcrStatus === 'failed' ? '重新提取' : translatingAll ? '停止' : translatedCount || staleTranslationCount ? '翻译剩余' : '翻译全文'}
             </button>
           </div>
+          {extractionSource.warning ? (
+            <details className="mobile-extraction-diagnostic">
+              <summary>{extractionSource.ocrPages ? '文字层已降级，查看原因' : '文字层兼容处理说明'}</summary>
+              <p>{extractionSource.warning}</p>
+            </details>
+          ) : null}
           <div
             ref={bilingualPageRef}
             className="mobile-bilingual-page"

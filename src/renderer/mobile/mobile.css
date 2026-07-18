@@ -813,6 +813,27 @@
   color: #8b2d37;
 }
 
+.mobile-extraction-diagnostic {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-bottom: 1px solid #e2c7c9;
+  background: #fff7f7;
+  color: #7d3038;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.mobile-extraction-diagnostic summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.mobile-extraction-diagnostic p {
+  margin: 5px 0 1px;
+  overflow-wrap: anywhere;
+  color: #6c3c42;
+}
+
 .mobile-bilingual-page {
   min-height: 0;
   flex: 1;
@@ -1084,6 +1105,7 @@
 .mobile-reader-screen.is-reading-immersive .mobile-reader-header,
 .mobile-reader-screen.is-reading-immersive .mobile-reader-mode-bar,
 .mobile-reader-screen.is-reading-immersive .mobile-bilingual-toolbar,
+.mobile-reader-screen.is-reading-immersive .mobile-extraction-diagnostic,
 .mobile-reader-screen.is-reading-immersive .mobile-reader-status {
   display: none;
 }

@@ -55,6 +55,14 @@ export interface MobilePdfTextCollection {
   runs: MobilePdfTextSourceRun[];
 }
 
+export interface MobilePdfTextChunkStream {
+  getReader(): {
+    read(): Promise<{ done: boolean; value?: unknown }>;
+    cancel?(reason?: unknown): Promise<unknown> | unknown;
+    releaseLock?(): void;
+  };
+}
+
 export interface LocalOcrProgress {
   page: number;
   pageCount: number;
@@ -613,9 +621,87 @@ export interface EmbeddedPdfTextResult {
 
 async function extractEmbeddedPdfTextBlocks(page: PDFPageProxy, pageNumber: number): Promise<EmbeddedPdfTextResult> {
   const viewport = page.getViewport({ scale: 1 });
-  const textContent = await page.getTextContent();
+  const textContent = await readMobilePdfTextContentItems(page);
   const collection = collectMobilePdfTextItems(textContent.items, viewport, pageNumber);
-  return buildEmbeddedPdfTextResult(collection.items, pageNumber, false, collection.runs);
+  const result = buildEmbeddedPdfTextResult(collection.items, pageNumber, false, collection.runs);
+  if (!textContent.warning) {
+    return result;
+  }
+  return {
+    ...result,
+    warning: [textContent.warning, result.warning].filter(Boolean).join('；')
+  };
+}
+
+export async function collectMobilePdfTextStreamItems(stream: MobilePdfTextChunkStream): Promise<unknown[]> {
+  const reader = stream.getReader();
+  const items: unknown[] = [];
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+      const value = chunk.value;
+      if (!value || typeof value !== 'object') {
+        continue;
+      }
+      const chunkItems = safeObjectProperty(value, 'items');
+      const length = safeArrayLikeLength(chunkItems);
+      for (let index = 0; index < length; index += 1) {
+        items.push(safeArrayLikeValue(chunkItems, index));
+      }
+    }
+    return items;
+  } catch (error) {
+    try {
+      await reader.cancel?.(error);
+    } catch {
+      // Preserve the original stream error; cancellation is only cleanup.
+    }
+    throw error;
+  } finally {
+    try {
+      reader.releaseLock?.();
+    } catch {
+      // A failed release must not discard text that was already read.
+    }
+  }
+}
+
+async function readMobilePdfTextContentItems(page: PDFPageProxy): Promise<{
+  items: unknown[];
+  warning?: string;
+}> {
+  let streamFailure = '';
+  try {
+    // PDF.js getTextContent() uses `for await...of` internally. Older Safari
+    // ReadableStream implementations do not expose Symbol.asyncIterator, so
+    // consume the same stream through the widely supported reader API.
+    const items = await collectMobilePdfTextStreamItems(page.streamTextContent());
+    if (items.length > 0) {
+      return { items };
+    }
+    streamFailure = '流式文字层未返回文字项';
+  } catch (error) {
+    streamFailure = `流式文字层读取失败：${formatMobileTextLayerError(error)}`;
+  }
+
+  try {
+    const textContent = await page.getTextContent();
+    const items: unknown[] = [];
+    const length = safeArrayLikeLength(textContent.items);
+    for (let index = 0; index < length; index += 1) {
+      items.push(safeArrayLikeValue(textContent.items, index));
+    }
+    return {
+      items,
+      ...(items.length === 0 && streamFailure ? { warning: streamFailure } : {})
+    };
+  } catch (error) {
+    const aggregateFailure = `聚合文字层读取失败：${formatMobileTextLayerError(error)}`;
+    throw new Error([streamFailure, aggregateFailure].filter(Boolean).join('；'));
+  }
 }
 
 export function collectMobilePdfTextItems(

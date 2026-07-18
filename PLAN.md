@@ -836,11 +836,22 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 视觉对抗式审查：本地与固定生产地址的 `npm run visual:check:mobile` 均通过，覆盖旧论文恢复、arXiv 真实检索/下载、图表、内联译文、扫描 OCR、切换/退出续跑、手动全文翻译、刷新恢复、API Key、改名标签与删除；人工复查 390px/430px 双语、OCR-only 和小说式截图，未发现新增重叠、截断或横向溢出。首次桌面 `visual:check` 在整篇 PDF 场景失败，截图底部显示脚本仍向应用写入已不存在的个人默认路径 `D:\\GPT浏览器下载\\2604.15483v2.pdf`；现已让 `loadPaperRecord` 显式接收解析后的实际 PDF 路径，并生成带图注的自包含 fallback PDF，整篇 PDF 与图表检查随后通过。桌面脚本继续在旧有组会 PPT 内容质量门失败（fallback 缺少足够中文证据；Touch Dreaming 仅剩结果页一条英文指标），与本次手机文字层/UI 无关，已保留失败证据而未伪报全量通过。
 - 交付与发布：Windows 安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,362,070 bytes，SHA-256 为 `7144CB29D9E0A2DA7ED0DAFE40C8E54A21A1958B318DC2AA2A04B9976FC3240D`；`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。最终 Vercel 生产部署 `dpl_7FTGLhYihEbzVB5ohbBcF235axVq` 已绑定 `https://ftranslate-mobile.vercel.app`；固定地址带缓存破除参数返回 200 并加载 `assets/index-D9QjFai3.js`，最终线上完整移动回归再次通过。
 
+### 2026-07-18 Safari PDF.js 流式文字层修复（v8）
+
+- 新真机证据：刷新 v7 后，同一份 `T TouchDreaming 2026.4.14.pdf` 仍显示“本地 OCR 1 页”，正文仍出现 `id loc p`。这证明 v7 对 array-like 文字项和兼容重排的修复没有进入执行点，不能继续把根因归为返回后的文字项结构。
+- 精确根因：当前 PDF.js 的 `PDFPageProxy.getTextContent()` 内部通过 `for await (const value of readableStream)` 汇总 `streamTextContent()`。旧版 iPhone Safari 的 `ReadableStream` 支持 `getReader()`，但没有 `Symbol.asyncIterator`；因此 PDF.js 在返回 `textContent.items` 之前就抛出此前真机出现的 `undefined is not a function (near '...r of e...')`，页面随后直接降级 OCR。
+- 修复：移动提取器绕过 `getTextContent()` 的异步迭代聚合，直接用 `streamTextContent().getReader().read()` 逐块收集文字项；不使用流的可迭代协议、数组展开或 `flatMap`。流式读取为空或失败时才尝试旧聚合 API，两者都失败时错误信息同时保留。阅读器新增可展开的“文字层已降级，查看原因”，真机若再次进入 OCR 可以直接看到具体失败点。
+- 缓存迁移：本地提取版本升到 v8。已有 PDF、论文元数据、API Key 和已完成译文继续保留；v7 的错误 OCR 页面会自动清除并从 PDF 重新提取，相同原文哈希的译文才允许恢复。
+- 真实文件验证：对 `T TouchDreaming 2026.4.14.pdf` 使用新的 reader API 逐页读取，14/14 页全部返回足量文字；第 1 页 163 个文字项 / 2269 字符，第 2 页 260 个文字项 / 6239 字符，末页 838 个文字项 / 2367 字符，无页面触发空文字条件。
+- 自动验证：新增不提供 `ReadableStream` 异步迭代、只提供 `getReader().read()` 的 Safari 回归用例；23 项本地提取测试、47 项移动定向测试通过。`npm run dist` 完整通过，共 87 个测试文件 / 556 项测试，TypeScript、桌面/移动构建和 NSIS 打包成功；`npm audit --omit=dev --json` 为 0 个生产依赖漏洞。
+- 视觉对抗式审查：本地与固定生产地址的 `npm run visual:check:mobile` 均通过，新增的折叠诊断条没有遮挡正文、截断或制造横向溢出；线上回归继续覆盖真实 arXiv 检索/下载、IndexedDB 保存、OCR 与翻译分离、切换退出、整页刷新、API Key、改名标签和删除闭环。桌面 `npm run visual:check` 仍在既有组会 PPT 内容质量门失败（第 2/7/8 页缺页码来源，第 3/4 页中文 bullet 不足），与本次手机文字层和 UI 无关，未伪报通过。
+- 交付与发布：Windows 安装包 `dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,362,069 bytes，SHA-256 为 `51E2CAD31587E50ACB9A718FBB48321488D222D7C6604A3F58EBC5EDE654D13B`。Vercel 生产部署 `dpl_78AZPvCxGpPjyTZSTHbs3TqgZzFH` 已绑定 `https://ftranslate-mobile.vercel.app`；固定地址带缓存破除参数返回 200 并加载 `assets/index-q3pj3S91.js`，线上移动视觉回归通过。
+
 ### 问题台账
 
 | 日期 | 问题 | 根因 | 当前状态 | 后续动作 |
 | --- | --- | --- | --- | --- |
-| 2026-07-18 | Touch Dreaming 在 iPhone 上实际误走 OCR，出现 `id loc p` 等残缺文本 | 文件与桌面样本逐字节相同且桌面 14/14 页有文字层；Safari 的 PDF.js 文字项不一定满足普通数组、原生字符串和坐标数组假设，旧代码任一项异常就整页 OCR | 已改为安全逐项读取、结构重排失败后的文字层兼容重排和真实降级原因；缓存升到 v7；13 篇 122 页桌面语料回归全为文字层 | 部署后同一 iPhone 正常刷新并重开论文；预期显示“PDF 文字层 14 页”或少量“兼容重排”，若仍 OCR，截图中的降级原因将用于下一轮真机定位 |
+| 2026-07-18 | Touch Dreaming 在 v7 真机上仍误走 OCR，出现 `id loc p` 等残缺文本 | PDF.js `getTextContent()` 在返回文字项前用 `for await...of` 聚合流；旧 Safari 的 `ReadableStream` 没有异步迭代接口，故 array-like 兼容处理根本没有机会执行 | 已绕过聚合 API，改用 `streamTextContent().getReader().read()`；缓存升到 v8；真实文件 14/14 页通过 reader API 返回足量文字；生产部署与线上移动回归已完成 | 同一 iPhone 正常刷新并重开论文；预期从第 1 页开始显示“PDF 文字层”，若仍 OCR，展开“文字层已降级，查看原因”并截图 |
 | 2026-07-18 | 精扫可能覆盖更完整首扫，长文写入越积越慢，配置读取失败可能让论文库看似消失 | OCR 候选无质量择优和截断保护；每个中间论文库快照都排队写入；论文库与设置通过同一个 `Promise.all` 恢复 | 已加入候选评分/截断保护、Canvas 直传与即时释放、待写快照合并、论文库/设置独立 settled 恢复；527 项测试及本地/线上刷新恢复回归通过 | 用原 14 页扫描件真机记录总耗时、峰值发热、精扫页数；切后台后重开应从首个缺页续跑 |
 | 2026-07-17 | 扫描 OCR 偏慢，退出后论文似乎未保存 | 所有扫描页固定使用 2600px 高精度识别；启动异步读取的旧空论文库可能晚返回并覆盖导入结果，论文库进度写入也没有全局顺序 | 已改为 2100px 快速首扫、低质量页 2600px 精扫；网页索引同步落盘、写入串行、启动水合合并；523 项测试及导入后整页刷新恢复回归通过 | 用原 14 页扫描论文真机记录普通页/精扫页耗时；不要清除 Safari 网站数据，若系统冻结 OCR，重开后应从首个缺页续跑 |
 | 2026-07-17 | OCR 超时后状态可能复活、删除运行中论文等待过久、图表瞬时失败无法重试 | 超时只结束外层 Promise，底层写入与 PDF.js 页面任务没有 job 生命周期守卫；删除同步等待 OCR；失败 Promise 留在页缓存 | 已加入 job 前后守卫、后台删除排空与二次清理、失败页淘汰、loading task 销毁和销毁后禁止迟到绘制；520 项测试及本地/线上移动回归通过 | 真机对正在处理最后一页的 14 页论文执行一次删除或等待超时，确认状态不会回跳且同文件稍后可重新导入 |
