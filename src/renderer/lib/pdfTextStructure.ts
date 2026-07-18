@@ -145,6 +145,7 @@ export function buildPdfReaderPageOutline(page: number, items: PositionedPdfText
   const metrics = buildPageTextMetrics(rawLines);
   const contentLines = rawLines.filter((line) => shouldKeepLayoutLine(line, metrics));
   const medianLineHeight = median(contentLines.map((line) => line.height)) ?? PARAGRAPH_GAP_THRESHOLD / 2;
+  const medianLineStep = estimateReaderLineStep(contentLines) ?? medianLineHeight * 1.35;
   const captionMergedLines = mergeBareIeeeTableCaptionLines(contentLines, metrics);
   const orderedLines = mergeWrappedReaderHeadingLines(
     orderLinesForReaderLayout(captionMergedLines, page, metrics),
@@ -205,7 +206,7 @@ export function buildPdfReaderPageOutline(page: number, items: PositionedPdfText
     const lineIsAffiliation = page === 1 && looksLikeReaderAffiliation(line.text);
     const previousIsAffiliation = page === 1 && Boolean(previousLine) && looksLikeReaderAffiliation(previousLine.text);
     const paragraphGapThreshold = previousLine
-      ? Math.max(medianLineHeight * 2.4, previousLine.height * 1.75, line.height * 1.75)
+      ? Math.max(medianLineStep * 1.3, previousLine.height * 1.45, line.height * 1.45)
       : PARAGRAPH_GAP_THRESHOLD;
     if (
       previousLine &&
@@ -242,10 +243,14 @@ function orderLinesForReaderLayout<TItem extends PositionedPdfTextItem>(
     ];
   }
   const frontMatterLimit = metrics.minY + metrics.height * 0.18;
+  const pageCenter = metrics.minX + metrics.width / 2;
   const frontMatter = lines
-    .filter((line) => line.y <= frontMatterLimit)
+    .filter((line) => (
+      line.y <= frontMatterLimit &&
+      Math.abs(getLineCenterX(line) - pageCenter) <= Math.max(55, metrics.width * 0.16)
+    ))
     .sort((left, right) => left.y - right.y || left.x - right.x);
-  const body = lines.filter((line) => line.y > frontMatterLimit);
+  const body = lines.filter((line) => !frontMatter.includes(line));
   return [...frontMatter, ...orderLinesForAcademicLayout(body)];
 }
 
@@ -259,6 +264,15 @@ function mergeReaderBlockContinuations(blocks: ExtractedPdfBlock[]): ExtractedPd
   const merged: ExtractedPdfBlock[] = [];
   for (const block of blocks) {
     const previous = merged[merged.length - 1];
+    const forcedHyphenContinuation = previous &&
+      previous.page === block.page &&
+      /[-\u00ad\u2010-\u2015]$/u.test(previous.original.trim()) &&
+      startsWithLowercaseContinuation(block.original);
+    const decimalSentenceContinuation = previous?.type === 'paragraph' &&
+      block.type === 'heading' &&
+      previous.page === block.page &&
+      !endsWithSentenceBoundary(previous.original) &&
+      /^\d+\.\d+\.\s+\p{Lu}/u.test(block.original.trim());
     const mergeCaption = previous?.type === 'caption' && block.type === 'paragraph' &&
       !endsWithSentenceBoundary(previous.original) &&
       areReaderBlocksVerticallyAdjacent(previous, block) &&
@@ -273,15 +287,21 @@ function mergeReaderBlockContinuations(blocks: ExtractedPdfBlock[]): ExtractedPd
       previous.section === block.section &&
       !looksLikeReaderAffiliation(previous.original) &&
       !looksLikeReaderAffiliation(block.original) &&
+      !/^\d+\)\s+\p{Lu}[^:]{2,100}:\s+\p{Lu}/u.test(block.original) &&
       !endsWithSentenceBoundary(previous.original) &&
       (areReaderParagraphBlocksContiguous(previous, block) || isLikelyReaderProseContinuation(previous, block));
     const mergeHeading = previous?.type === 'heading' && block.type === 'paragraph' &&
       /[-\u00ad\u2010-\u2015]$/u.test(previous.original.trim()) &&
       countWords(block.original) <= 16;
-    if (previous && (mergeCaption || mergeParagraph || mergeHeading)) {
+    if (previous && (forcedHyphenContinuation || decimalSentenceContinuation || mergeCaption || mergeParagraph || mergeHeading)) {
+      const mergedType = decimalSentenceContinuation
+        ? 'paragraph'
+        : forcedHyphenContinuation && previous.type !== 'caption' && previous.type !== 'heading'
+          ? (previous.type === 'paragraph' || block.type === 'paragraph' ? 'paragraph' : previous.type)
+          : previous.type;
       merged[merged.length - 1] = createBlock(
         previous.page,
-        previous.type,
+        mergedType,
         previous.section,
         joinParagraphLines([previous.original, block.original]),
         mergeBounds(previous.bounds, block.bounds)
@@ -504,6 +524,9 @@ function startsNewReaderParagraph(currentParagraph: TextLine[], nextLine: TextLi
 }
 
 function looksLikeRunInAcademicHeadingStart(text: string): boolean {
+  if (/^\d+\)\s+\p{Lu}[^:]{2,100}:\s+\p{Lu}/u.test(text)) {
+    return true;
+  }
   const match = text.match(/^([^.!?]{2,72}\.)\s+(.+)$/u);
   if (!match || countWords(match[2]) < 5) {
     return false;
@@ -542,9 +565,20 @@ function looksLikeRunInAcademicHeadingStart(text: string): boolean {
 }
 
 function splitReaderParagraphText(text: string): string[] {
-  const boundaries = [...text.matchAll(/[.!?。！？][)"'\]]*\s+/gu)]
+  const headingBoundaries = [...text.matchAll(/[.!?。！？][)"'\]]*\s+/gu)]
     .map((match) => (match.index ?? 0) + match[0].length)
     .filter((index) => index > 0 && looksLikeRunInAcademicHeadingStart(text.slice(index)));
+  const numberedRunInBoundaries = [...text.matchAll(/\s+(?=\d+\)\s+\p{Lu}[^:]{2,100}:\s+\p{Lu})/gu)]
+    .map((match) => (match.index ?? 0) + match[0].length);
+  const referenceMatches = [...text.matchAll(/(?:^|\s)(?=\d{1,3}\.\s+\p{Lu}[\p{L}'-]+,\s*\p{Lu}\.)/gu)];
+  const referenceBoundaries = referenceMatches.length >= 2
+    ? referenceMatches.map((match) => (match.index ?? 0) + match[0].length)
+    : [];
+  const boundaries = Array.from(new Set([
+    ...headingBoundaries,
+    ...numberedRunInBoundaries,
+    ...referenceBoundaries
+  ])).filter((index) => index > 0).sort((left, right) => left - right);
   if (boundaries.length === 0) {
     return [text];
   }
@@ -561,6 +595,24 @@ function splitReaderParagraphText(text: string): string[] {
 function startsWithLowercaseContinuation(text: string): boolean {
   const firstLetter = text.trim().match(/\p{L}/u)?.[0];
   return Boolean(firstLetter && firstLetter === firstLetter.toLowerCase() && firstLetter !== firstLetter.toUpperCase());
+}
+
+function estimateReaderLineStep(lines: TextLine[]): number | null {
+  const steps: number[] = [];
+  for (const line of lines) {
+    const nextGap = lines
+      .filter((candidate) => (
+        candidate.y > line.y &&
+        Math.abs(candidate.x - line.x) <= 42
+      ))
+      .map((candidate) => candidate.y - line.y)
+      .filter((gap) => gap >= Math.max(3, line.height * 0.65) && gap <= Math.max(42, line.height * 3.5))
+      .sort((left, right) => left - right)[0];
+    if (Number.isFinite(nextGap)) {
+      steps.push(nextGap);
+    }
+  }
+  return median(steps);
 }
 
 function isDefaultPageSection(section: string): boolean {
@@ -791,6 +843,7 @@ function classifyReaderLine(
   if (
     (
       /^(fig\.?|figure|table)\s*[\divxlcdm]*[:.]/iu.test(normalized) ||
+      /^algorithm\s+\d+\b/iu.test(normalized) ||
       /^TABLE\s+[IVXLCDM\d]+(?:\s+|$)/u.test(normalized)
     ) &&
     !looksLikeInlineFigureReferenceContinuation(previousLine, line)
@@ -1057,7 +1110,7 @@ function joinParagraphLines(lines: string[]): string {
 }
 
 function shouldPreserveCompoundHyphen(prefix: string): boolean {
-  return /^(?:whole|multi|real|contact|end|lower|upper|hand|single|loco|thin|tight|tool|low|high|long|short|cross|open|closed|force|task|pose|motion|robot|sensor|vision|tactile|policy|model|world|latent|pretrain|small|large|fine|self|gpu)$/iu.test(prefix);
+  return /^(?:whole|multi|real|contact|end|lower|upper|hand|single|loco|thin|tight|tool|low|high|long|short|cross|open|closed|force|task|pose|motion|robot|sensor|vision|tactile|policy|model|world|latent|pretrain|small|large|fine|self|non|gpu)$/iu.test(prefix);
 }
 
 function normalizeExtractedText(text: string): string {

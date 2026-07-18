@@ -956,4 +956,117 @@ describe('PDF text structure extraction', () => {
 
     expect(outline.find((block) => block.original.includes('Istituto'))?.type).toBe('paragraph');
   });
+
+  it('separates unindented academic paragraphs by the larger baseline gap', () => {
+    const outline = buildPdfReaderPageOutline(2, [
+      item('The first paragraph begins at the regular left edge and continues across', 108, 100, 395, 10),
+      item('multiple tightly spaced lines before ending with a complete sentence.', 108, 112, 395, 10),
+      item('Its final line remains on the same baseline rhythm.', 108, 124, 395, 10),
+      item('The second paragraph uses the same left edge but follows a visible gap.', 108, 142, 395, 10),
+      item('It must remain a separate block for continuous bilingual reading.', 108, 154, 395, 10)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'The first paragraph begins at the regular left edge and continues across multiple tightly spaced lines before ending with a complete sentence. Its final line remains on the same baseline rhythm.',
+      'The second paragraph uses the same left edge but follows a visible gap. It must remain a separate block for continuous bilingual reading.'
+    ]);
+  });
+
+  it('rejoins a hyphenated affiliation after an irregular layout break', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('1 School of Electronic Science and Engineering, Nanjing University, Nan-', 55, 100, 245, 9),
+      item('jing 210023, China.', 380, 320, 178, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      '1 School of Electronic Science and Engineering, Nanjing University, Nanjing 210023, China.'
+    ]);
+  });
+
+  it('rejoins prose split by inline formula classification and preserves compound hyphens', () => {
+    const outline = buildPdfReaderPageOutline(9, [
+      item('We compute a binary hand-', 55, 100, 245, 9),
+      item('volume mask A(x) = 1 and the non-', 55, 126, 245, 9),
+      item('interpenetration loss over the object volume.', 55, 152, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'We compute a binary hand-volume mask A(x) = 1 and the non-interpenetration loss over the object volume.'
+    ]);
+  });
+
+  it('does not mistake a decimal result at a wrapped paragraph boundary for a section heading', () => {
+    const outline = buildPdfReaderPageOutline(5, [
+      item('The hybrid case showed', 55, 100, 245, 9),
+      item('0.14. The EIT-only case exhibits a larger sensitivity differ-', 55, 114, 245, 9),
+      item('ence at specific sites due to material variance.', 55, 128, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'The hybrid case showed 0.14. The EIT-only case exhibits a larger sensitivity difference at specific sites due to material variance.'
+    ]);
+  });
+
+  it('keeps early two-column body text out of the centered first-page front matter', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('A Practical Robotic Skin', 156, 40, 300, 18),
+      item('Alice Author and Bob Author', 206, 76, 200, 11),
+      item('Abstract—We present a tactile skin with accurate force reconstruction.', 55, 122, 245, 9),
+      item('The method remains affordable and easy to fabricate.', 55, 136, 245, 9),
+      item('However, nonlinear sensing complicates signal processing.', 312, 122, 245, 9),
+      item('Our calibration resolves this limitation in practice.', 312, 136, 245, 9),
+      item('1', 300, 700, 8, 8)
+    ]);
+
+    expect(outline.map((block) => block.original)).toEqual([
+      'A Practical Robotic Skin',
+      'Alice Author and Bob Author',
+      'We present a tactile skin with accurate force reconstruction. The method remains affordable and easy to fabricate.',
+      'However, nonlinear sensing complicates signal processing. Our calibration resolves this limitation in practice.'
+    ]);
+  });
+
+  it('keeps an algorithm panel separate from unfinished prose in the other column', () => {
+    const outline = buildPdfReaderPageOutline(7, [
+      item('We use a high-fidelity simulator to generate realistic dynamics', 55, 500, 245, 9),
+      item('Algorithm 1 Decoupled Hierarchical Estimation', 330, 80, 245, 10),
+      item('1: Phase 1: Multi-Hypothesis Initialization', 330, 96, 245, 9),
+      item('samples. The simulator accurately models the real system.', 330, 500, 245, 9)
+    ]);
+
+    expect(outline.find((block) => block.original.startsWith('Algorithm 1'))?.type).toBe('caption');
+    expect(outline.some((block) => block.original.includes('dynamics Algorithm 1'))).toBe(false);
+  });
+
+  it('starts a numbered run-in subsection as a new reader paragraph', () => {
+    const outline = buildPdfReaderPageOutline(12, [
+      item('Table II summarizes the', 55, 100, 245, 9),
+      item('2) Real-Time Online Parameter Estimation in Simulation: We validate online performance.', 55, 112, 245, 9),
+      item('Each simulation environment runs in its own thread.', 55, 124, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'Table II summarizes the',
+      '2) Real-Time Online Parameter Estimation in Simulation: We validate online performance. Each simulation environment runs in its own thread.'
+    ]);
+  });
+
+  it('separates multiple unbracketed bibliography entries exposed as one PDF block', () => {
+    const outline = buildPdfReaderPageOutline(19, [
+      item(
+        'Paper Running Header 44. Müller, N.: First reference title. 45. Ni, J.: Second reference title. 46. Oller, M.: Third reference title.',
+        55,
+        100,
+        500,
+        9
+      )
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'Paper Running Header',
+      '44. Müller, N.: First reference title.',
+      '45. Ni, J.: Second reference title.',
+      '46. Oller, M.: Third reference title.'
+    ]);
+  });
 });

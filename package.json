@@ -19,6 +19,7 @@
     "demo:code-repo": "tsc -p tsconfig.demo.json && node .tmp-demo-build/scripts/code-repo-demo.js",
     "visual:check": "node scripts/visual-check.mjs",
     "visual:check:mobile": "node scripts/mobile-visual-check.mjs",
+    "test:mobile:corpus": "vitest run scripts/mobile-pdf-corpus-check.test.ts --reporter=verbose",
     "ios:add": "npm run build:mobile && cap add ios && node scripts/normalize-capacitor-spm-paths.mjs",
     "ios:sync": "npm run build:mobile && cap sync ios && node scripts/normalize-capacitor-spm-paths.mjs",
     "ios:prepare-download": "node scripts/prepare-ios-download.mjs",
