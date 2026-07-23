@@ -1193,6 +1193,28 @@
   border-block: 1px solid #d9dfe7;
   text-align: center;
   white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mobile-block-original .math-text,
+.mobile-block-translation .math-text {
+  font: inherit;
+}
+
+.mobile-block-original .katex,
+.mobile-block-translation .katex {
+  font-size: 1em;
+}
+
+.mobile-bilingual-block.is-formula .math-text,
+.mobile-bilingual-block.is-formula .katex-display {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+}
+
+.mobile-bilingual-block.is-formula .katex-display {
+  margin: 0;
 }
 
 .mobile-block-translation {

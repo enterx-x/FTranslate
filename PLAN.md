@@ -1,5 +1,34 @@
 # PLAN.md
 
+## 2026-07-23：连续双语科研公式改为 LaTeX / KaTeX 显示
+
+### 当前结论
+
+- 上一轮已经把 TouchDreaming 中被拆开的公式说明恢复为完整自然段，但独立公式和段内变量仍以普通字符显示，`t + τ`、`ℓ = 1`、损失项下标与公式编号无法形成论文级数学排版。
+- 不能把 OCR/PDF 原文直接改写成 LaTeX 后写回缓存，否则会改变 `sourceHash`、破坏已有译文匹配，并让选词翻译读取 KaTeX DOM 中重复的 MathML/HTML 文本。正确边界是“原始数据不变，只在阅读显示层派生 LaTeX”。
+
+### 已完成操作
+
+- 新增移动端科研公式格式化层：`formula` 块将常见希腊字母、上下标、集合、损失项和公式编号转换为展示 LaTeX；段落只识别高置信度的 `D / A / F / S / o_t` 定义并转换为行内 LaTeX，普通英文、标题和图注保持原样。
+- 移动运行时加载 KaTeX 样式，原文与译文统一通过安全的 `MathText` 渲染；已有 `$...$`、`$$...$$`、`\\(...\\)` 和 `\\[...\\]` 结果直接复用，解析失败时由既有渲染器显示转义后的原文。
+- 原文容器保存 `data-source-text`，选词上下文优先读取该属性，不从 KaTeX 生成的 DOM 反推原文。公式块支持内部横向触摸滑动，页面级宽度保持不变。
+- 移动视觉脚本增加 OCR 科研定义夹具、KaTeX 节点、原始数据保留和横向溢出断言；选词回归改为通过 `TreeWalker` 查找真实文本节点，不再假设段落首个子节点必然是纯文本。
+
+### 对抗式验证记录
+
+- 新增测试覆盖 TouchDreaming 集合定义、展示型 loss 公式、公式编号、已有 LaTeX 透传，以及标题/图注不被误改。全量测试 89 个文件、596 项全部通过，`npm run typecheck` 和 `npm run build` 通过。
+- `npm run visual:check:mobile` 通过。390×844 截图 `.tmp-mobile-visual-check/08b-reader-scanned-latex-390x844.png` 中，`D = {(o_t, A_t, F_{t:t+τ}, S_{t:t+τ})}` 已由 KaTeX 重排；原始 OCR 字符串仍完整保留，正文和根页面无横向溢出。
+- 同一移动回归继续通过英文选词翻译、Safari `selectionchange`、全文 OCR/翻译分离、刷新恢复、API Key 缓存、改名标签和删除论文，证明公式 DOM 包装没有破坏既有交互。
+- 桌面 `npm run visual:check` 仍被既有 Presentation 内容质量门拦截：测试草稿第 2/7/8 页缺少可追溯页码，第 3/4 页中文 bullet 少于 2 条；失败与本次移动端公式显示无关，未伪报为通过。
+- `npm run dist` 成功：89 个测试文件、596 项测试通过，TypeScript、桌面 renderer、Electron 和 NSIS 打包完成。`dist/PDF Translation Reader Setup 0.1.12.exe` 为 148,361,853 字节，SHA-256 为 `1109D18D9026A096292AC8A029D5E1EF7E631A60084D36670F18D53395F03BF5`。
+- Vercel 部署 `dpl_B3tSkTtMr6Yqco91EYm3cpJpqxQo` 已绑定 `https://ftranslate-mobile.vercel.app`；首页、`assets/index-ilZs51Vt.js`、`MobileApp-C8rnMWWN.js` 与 KaTeX CSS 均返回 HTTP 200。固定生产地址随后通过完整确定性移动回归，公式场景没有只在本地通过。
+
+### 剩余风险
+
+- PDF 文字层没有 LaTeX 语义。当前只自动转换高置信度科研模式；复杂矩阵、分式、多行对齐和严重 OCR 错符号仍保留原始文本，并以“原始 PDF”作为视觉核对基准。
+- KaTeX 重排不能纠正 OCR 已经识别错的数学字符。后续应以真实失败公式扩充规则和测试，不能用大范围 AI 猜测静默替换论文公式。
+- `npm audit --omit=dev` 当前报告 2 个传递依赖告警：`exceljs / electron-builder` 链中的 `brace-expansion` 高危 DoS，以及 `@univerjs → @grpc/proto-loader` 链中的 `protobufjs 7.6.4` 中危 DoS；本轮未用不受控 `npm audit fix` 扩大公式改动，需另立依赖升级任务并重跑打包/表格功能。
+
 ## 2026-07-19：公式上下标碎片与说明段落误拆修复
 
 ### 当前结论

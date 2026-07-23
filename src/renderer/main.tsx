@@ -10,6 +10,7 @@ if (isMobileRuntime) {
 
 async function loadRuntimeApp() {
   if (isMobileRuntime) {
+    await import('katex/dist/katex.min.css');
     return import('./mobile/MobileApp');
   }
   await Promise.all([import('katex/dist/katex.min.css'), import('./styles/global.css')]);

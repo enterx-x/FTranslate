@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { MathText } from '../components/MathText';
 import { PdfViewer } from '../components/PdfViewer';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import { MobileTranslationSettingsDialog } from './MobileTranslationSettingsDialog';
@@ -29,6 +30,7 @@ import type {
   MobileTranslationSession
 } from './mobileTypes';
 import { summarizeMobileExtractionSources } from './mobileExtractionSource';
+import { formatMobileAcademicText } from './mobileLatex';
 import { isTranslationEntryCurrent } from './mobileTypes';
 import {
   calculateMobileSelectionPopoverPosition,
@@ -715,7 +717,9 @@ export function MobileReaderScreen({
       offsetTop: visualViewport?.offsetTop ?? 0
     });
     const article = startOriginal.closest('.mobile-bilingual-block');
-    const surroundingOriginal = startOriginal.textContent?.replace(/\s+/gu, ' ').trim() ?? '';
+    const surroundingOriginal = startOriginal.getAttribute('data-source-text')?.trim()
+      || startOriginal.textContent?.replace(/\s+/gu, ' ').trim()
+      || '';
     const surroundingTranslation = article?.querySelector('.mobile-block-translation')
       ?.textContent?.replace(/\s+/gu, ' ').trim() ?? '';
     const cacheKey = buildSelectionTranslationCacheKey(
@@ -907,16 +911,25 @@ export function MobileReaderScreen({
               }
               const block = item.block;
               const cached = translationByHash.get(block.sourceHash);
+              const formattedOriginal = formatMobileAcademicText(block.original, block.type);
+              const formattedTranslation = cached?.translation.trim()
+                ? formatMobileAcademicText(
+                    cached.translation,
+                    /[\u3400-\u9fff]/u.test(cached.translation) ? 'paragraph' : block.type
+                  )
+                : '';
               return (
                 <Fragment key={block.id}>
                   {startsPage ? <div className="mobile-bilingual-page-break">第 {block.page} 页</div> : null}
                   <article data-pdf-page={block.page} className={`mobile-bilingual-block is-${block.type}`}>
-                    <div className="mobile-block-original">
-                      {block.type === 'heading' ? <h2>{block.original}</h2> : <p>{block.original}</p>}
+                    <div className="mobile-block-original" data-source-text={block.original}>
+                      {block.type === 'heading'
+                        ? <h2><MathText text={formattedOriginal} /></h2>
+                        : <p><MathText text={formattedOriginal} /></p>}
                     </div>
                     {cached?.translation.trim() ? (
                       <div className="mobile-block-translation">
-                        <p>{cached.translation}</p>
+                        <p><MathText text={formattedTranslation} /></p>
                       </div>
                     ) : null}
                   </article>

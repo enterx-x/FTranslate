@@ -405,7 +405,7 @@ try {
   const localOcrTestSource = `globalThis.__FTRANSLATE_MOBILE_OCR_TEST__ = async (_image, page) => {
     await new Promise(resolve => setTimeout(resolve, page === 2 ? 800 : 80));
     const heading = 'Vision Safety Policy Page ' + page;
-    const body = 'Page ' + page + '. Now fill it with water and pour: the shifting liquid continuously redistributes the gravitational load along the gripper fingers, demanding real-time effort modulation that fixed-effort or open-loop grasping cannot achieve. The core difficulty is that grasp stability and object safety are tightly coupled: insufficient effort leads to micro-slip and drop, while only slightly more force causes irreversible deformation. A practical grasp controller must therefore detect and suppress incipient slip in real time, reduce effort when the carried load decreases to prevent over-gripping, and enforce a hard safety limit on contact force.';
+    const body = 'Page ' + page + '. Now fill it with water and pour: the shifting liquid continuously redistributes the gravitational load along the gripper fingers, demanding real-time effort modulation that fixed-effort or open-loop grasping cannot achieve. The core difficulty is that grasp stability and object safety are tightly coupled: insufficient effort leads to micro-slip and drop, while only slightly more force causes irreversible deformation. A practical grasp controller must therefore detect and suppress incipient slip in real time, reduce effort when the carried load decreases to prevent over-gripping, and enforce a hard safety limit on contact force. Objective. Let dataset D = { ( o t, A t, F t: t + τ, S t: t + τ ) }, where o t is the multimodal observation at time t.';
     const fragmentedParagraphs = (heading + ' ' + body).split(/\\s+/).map(word => ({ text: word }));
     return {
       text: heading + '\\n\\n' + body,
@@ -453,11 +453,13 @@ try {
     throw new Error(`Mobile legacy record recovery failed: ${JSON.stringify(recoveredLegacyRecord)}`);
   }
   await evaluate(client, `(() => {
-    localStorage.setItem('CapacitorStorage.pdfTranslationReader:mobileLibrary:v1', '[]');
-    location.reload();
+    window.confirm = () => true;
+    document.querySelector('.mobile-paper-row .mobile-paper-manage').click();
     return true;
   })()`);
-  await waitForSelector(client, '.mobile-library-screen');
+  await waitForSelector(client, '.mobile-paper-editor-dialog');
+  await evaluate(client, `document.querySelector('.mobile-paper-editor-delete').click()`);
+  await waitForSelectorToDisappear(client, '.mobile-paper-editor-dialog');
   await waitForSelectorToDisappear(client, '.mobile-paper-row');
   console.log('Recovered a legacy mobile library record without a white screen.');
   await wait(350);
@@ -802,7 +804,9 @@ try {
 
   await evaluate(client, `(() => {
     const paragraph = document.querySelector('.mobile-block-original p, .mobile-block-original h2');
-    const node = paragraph.firstChild;
+    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+    const node = walker.nextNode();
+    if (!node) throw new Error('No selectable source text node was found.');
     const range = document.createRange();
     range.setStart(node, 0);
     range.setEnd(node, Math.min(18, node.textContent.length));
@@ -841,7 +845,9 @@ try {
 
   await evaluate(client, `(() => {
     const paragraph = document.querySelectorAll('.mobile-block-original p, .mobile-block-original h2')[1];
-    const node = paragraph.firstChild;
+    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+    const node = walker.nextNode();
+    if (!node) throw new Error('No second selectable source text node was found.');
     const range = document.createRange();
     range.setStart(node, 0);
     range.setEnd(node, Math.min(24, node.textContent.length));
@@ -1029,6 +1035,33 @@ try {
     throw new Error(`Completed import OCR was not clean and translation-free: ${JSON.stringify({ completedOcrOnlyState, translationMockState, translationRequestsBeforeScannedOcr })}`);
   }
   await capture(client, '08b-reader-scanned-ocr-only-390x844.png');
+  await waitForSelector(client, '.mobile-block-original .katex', 20000);
+  await evaluate(client, `Array.from(document.querySelectorAll('.mobile-bilingual-block')).find(block => block.querySelector('.mobile-block-original')?.getAttribute('data-source-text')?.includes('Let dataset D'))?.scrollIntoView({ block: 'center' })`);
+  await wait(180);
+  const latexFormulaLayout = await evaluate(client, `(() => {
+    const block = Array.from(document.querySelectorAll('.mobile-bilingual-block'))
+      .find(candidate => candidate.querySelector('.mobile-block-original')?.getAttribute('data-source-text')?.includes('Let dataset D'));
+    const formula = block?.querySelector('.katex');
+    const source = block?.querySelector('.mobile-block-original');
+    const page = document.querySelector('.mobile-bilingual-page');
+    return {
+      hasKatex: Boolean(formula),
+      sourceText: source?.getAttribute('data-source-text') ?? '',
+      blockWidth: block?.getBoundingClientRect().width ?? 0,
+      pageWidth: page?.getBoundingClientRect().width ?? 0,
+      bodyOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+    };
+  })()`);
+  if (
+    !latexFormulaLayout.hasKatex ||
+    !latexFormulaLayout.sourceText.includes('D = { ( o t, A t, F t: t + τ, S t: t + τ ) }') ||
+    latexFormulaLayout.blockWidth > latexFormulaLayout.pageWidth + 1 ||
+    latexFormulaLayout.bodyOverflow > 1
+  ) {
+    throw new Error(`Mobile LaTeX formula layout is invalid: ${JSON.stringify(latexFormulaLayout)}`);
+  }
+  await capture(client, '08b-reader-scanned-latex-390x844.png');
+  console.log('Rendered OCR academic definitions with KaTeX while preserving the original source text.');
   await evaluate(client, `(() => {
     const button = document.querySelector('.mobile-bilingual-toolbar button');
     button.click();
