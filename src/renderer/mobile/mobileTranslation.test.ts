@@ -3,6 +3,7 @@ import {
   applyAcademicTerminologyPolicy,
   MOBILE_AI_PAGE_REFLOW_VERSION,
   buildAcademicPageReflowPrompt,
+  buildAcademicSelectionQuestionPrompt,
   buildAcademicSelectionPrompt,
   buildAcademicTranslationPrompt,
   buildTranslationEndpoint,
@@ -49,6 +50,28 @@ describe('mobile translation request', () => {
       documentTitle: 'Safe Reinforcement Learning with Control Barrier Functions',
       surroundingOriginal: 'The barrier certificate guarantees forward invariance.',
       surroundingTranslation: '屏障证书保证前向不变性。'
+    });
+  });
+
+  it('grounds a selection question in the selected excerpt and its paragraph context', () => {
+    const messages = buildAcademicSelectionQuestionPrompt(
+      'The barrier certificate guarantees forward invariance.',
+      '这里的 forward invariance 对安全强化学习意味着什么？',
+      {
+        documentTitle: 'Safe Reinforcement Learning with Control Barrier Functions',
+        surroundingOriginal: 'The barrier certificate guarantees forward invariance under the learned policy.',
+        surroundingTranslation: '屏障证书保证学习策略下的前向不变性。'
+      }
+    );
+    expect(messages[0].content).toContain('科研论文选段问答助手');
+    expect(messages[0].content).toContain('区分原文直接支持的结论与合理推断');
+    expect(messages[0].content).toContain('信息不足');
+    expect(JSON.parse(messages[1].content)).toEqual({
+      selection: 'The barrier certificate guarantees forward invariance.',
+      question: '这里的 forward invariance 对安全强化学习意味着什么？',
+      documentTitle: 'Safe Reinforcement Learning with Control Barrier Functions',
+      surroundingOriginal: 'The barrier certificate guarantees forward invariance under the learned policy.',
+      surroundingTranslation: '屏障证书保证学习策略下的前向不变性。'
     });
   });
 

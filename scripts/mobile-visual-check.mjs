@@ -18,7 +18,10 @@ const translationMockState = {
   coherenceContextCount: 0,
   introducedTermFollowupCount: 0,
   selectionRequestCount: 0,
-  selectionContextCount: 0
+  selectionContextCount: 0,
+  selectionQuestionRequestCount: 0,
+  selectionQuestionContextCount: 0,
+  lastSelectionQuestion: ''
 };
 
 function wait(ms) {
@@ -303,7 +306,7 @@ function startTranslationMock() {
       translationMockState.textRequestCount += 1;
       const system = parsed.messages?.[0]?.content ?? '';
       let translation;
-      let isSelectionRequest = false;
+      let isContextualSelectionRequest = false;
       if (typeof system === 'string' && system.includes('两个完全重合的视图')) {
         const pagePayload = JSON.parse(source);
         const pageBlocks = pagePayload.blocks ?? [];
@@ -346,14 +349,23 @@ function startTranslationMock() {
         try {
           const translationPayload = JSON.parse(source);
           if (typeof translationPayload.selection === 'string') {
-            isSelectionRequest = true;
-            translationMockState.selectionRequestCount += 1;
-            if (
+            isContextualSelectionRequest = true;
+            const hasContext = (
               typeof translationPayload.documentTitle === 'string' &&
               typeof translationPayload.surroundingOriginal === 'string' &&
               translationPayload.surroundingOriginal.includes(translationPayload.selection)
-            ) {
-              translationMockState.selectionContextCount += 1;
+            );
+            if (typeof translationPayload.question === 'string') {
+              translationMockState.selectionQuestionRequestCount += 1;
+              translationMockState.lastSelectionQuestion = translationPayload.question;
+              if (hasContext && typeof translationPayload.surroundingTranslation === 'string') {
+                translationMockState.selectionQuestionContextCount += 1;
+              }
+            } else {
+              translationMockState.selectionRequestCount += 1;
+              if (hasContext) {
+                translationMockState.selectionContextCount += 1;
+              }
             }
             translationSource = translationPayload.selection;
           } else {
@@ -362,7 +374,9 @@ function startTranslationMock() {
         } catch {
           // Older translation requests can still be plain strings.
         }
-        translation = typeof system === 'string' && system.includes('科研论文选词翻译助手')
+        translation = typeof system === 'string' && system.includes('科研论文选段问答助手')
+        ? '原文直接说明该策略更新在有界扰动下保持前向不变性。这意味着安全集合在策略执行期间不会被状态轨迹越出；至于具体证明条件，当前片段信息不足，需要查看对应定理和假设。'
+        : typeof system === 'string' && system.includes('科研论文选词翻译助手')
         ? '安全策略优化'
         : translationSource.includes('Vision Safety Policy')
         ? '视觉安全策略'
@@ -376,7 +390,7 @@ function startTranslationMock() {
         response.writeHead(200, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify({ choices: [{ message: { content: translation } }] }));
       };
-      if (isSelectionRequest) {
+      if (isContextualSelectionRequest) {
         setTimeout(finishResponse, 180);
       } else {
         finishResponse();
@@ -817,7 +831,11 @@ try {
     return true;
   })()`);
   await waitForSelector(client, '.mobile-selection-popover');
-  await evaluate(client, `document.querySelector('.mobile-selection-popover button:not(.mobile-selection-close)').click()`);
+  const selectionActions = await evaluate(client, `Array.from(document.querySelectorAll('.mobile-selection-actions button')).map(button => button.textContent.trim())`);
+  if (!selectionActions.includes('翻译选中内容') || !selectionActions.includes('向 AI 提问')) {
+    throw new Error(`Mobile selection actions are incomplete: ${JSON.stringify(selectionActions)}`);
+  }
+  await evaluate(client, `Array.from(document.querySelectorAll('.mobile-selection-actions button')).find(button => button.textContent.includes('翻译')).click()`);
   await waitForSelector(client, '.mobile-selection-popover p[role="status"]');
   const translatedSelectionState = await evaluate(client, `(() => {
     const popover = document.querySelector('.mobile-selection-popover');
@@ -831,7 +849,7 @@ try {
   })()`);
   if (
     translatedSelectionState.translation !== '安全策略优化' ||
-    translatedSelectionState.label !== '选词翻译' ||
+    translatedSelectionState.label !== '选中内容' ||
     translatedSelectionState.bounds.left < 11 ||
     translatedSelectionState.bounds.right > 379 ||
     translatedSelectionState.bounds.top < 11 ||
@@ -883,7 +901,7 @@ try {
   });
   await capture(client, '05-reader-selection-popover-430x932.png');
   await evaluate(client, `(() => {
-    document.querySelector('.mobile-selection-popover button:not(.mobile-selection-close)').click();
+    Array.from(document.querySelectorAll('.mobile-selection-actions button')).find(button => button.textContent.includes('翻译')).click();
     document.querySelector('.mobile-selection-close').click();
     return true;
   })()`);
@@ -901,6 +919,91 @@ try {
     throw new Error(`A late selection response reopened a closed popover: ${JSON.stringify({ closedSelectionState, translationMockState })}`);
   }
   console.log('Translated an English selection with paragraph context and followed Safari selectionchange handle updates.');
+
+  await evaluate(client, `(() => {
+    const paragraph = document.querySelectorAll('.mobile-block-original p, .mobile-block-original h2')[1];
+    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+    const node = walker.nextNode();
+    if (!node) throw new Error('No source text node was found for AI question.');
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, Math.min(36, node.textContent.length));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+    return true;
+  })()`);
+  await waitForSelector(client, '.mobile-selection-popover');
+  await evaluate(client, `Array.from(document.querySelectorAll('.mobile-selection-actions button')).find(button => button.textContent.includes('AI 提问')).click()`);
+  await waitForSelector(client, '.mobile-selection-question-dialog');
+  const selectionQuestion = '这里的前向不变性对安全策略意味着什么？';
+  await evaluate(client, `(() => {
+    const textarea = document.querySelector('#mobile-selection-question');
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    valueSetter.call(textarea, ${JSON.stringify('这里的前向不变性对安全策略意味着什么？')});
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  await waitForExpression(client, `document.querySelector('#mobile-selection-question')?.value === ${JSON.stringify('这里的前向不变性对安全策略意味着什么？')} ? 'question-ready' : ''`);
+  await evaluate(client, `document.querySelector('.mobile-selection-question-dialog .mobile-dialog-primary').click()`);
+  await waitForSelector(client, '.mobile-selection-answer');
+  const selectionQuestionState = await evaluate(client, `(() => {
+    const dialog = document.querySelector('.mobile-selection-question-dialog');
+    const rect = dialog.getBoundingClientRect();
+    return {
+      source: dialog.querySelector('blockquote p')?.textContent ?? '',
+      question: dialog.querySelector('textarea')?.value ?? '',
+      answer: dialog.querySelector('.mobile-selection-answer p')?.textContent ?? '',
+      privacy: dialog.querySelector(':scope > p')?.textContent ?? '',
+      bounds: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }
+    };
+  })()`);
+  if (
+    !selectionQuestionState.source.startsWith('The policy update') ||
+    selectionQuestionState.question !== selectionQuestion ||
+    !selectionQuestionState.answer.includes('原文直接说明') ||
+    !selectionQuestionState.answer.includes('信息不足') ||
+    !selectionQuestionState.privacy.includes('不会改写或缓存论文正文') ||
+    selectionQuestionState.bounds.left < -1 ||
+    selectionQuestionState.bounds.right > 431 ||
+    selectionQuestionState.bounds.top < -1 ||
+    selectionQuestionState.bounds.bottom > 933 ||
+    translationMockState.selectionQuestionRequestCount !== 1 ||
+    translationMockState.selectionQuestionContextCount !== 1 ||
+    translationMockState.lastSelectionQuestion !== selectionQuestion
+  ) {
+    throw new Error(`Mobile selection AI question failed: ${JSON.stringify({ selectionQuestionState, translationMockState })}`);
+  }
+  await capture(client, '06-reader-selection-ai-question-430x932.png');
+
+  await evaluate(client, `(() => {
+    const textarea = document.querySelector('#mobile-selection-question');
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    valueSetter.call(textarea, '请再解释一次');
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  await waitForExpression(client, `document.querySelector('#mobile-selection-question')?.value === '请再解释一次' ? 'followup-ready' : ''`);
+  await evaluate(client, `(() => {
+    document.querySelector('.mobile-selection-question-dialog .mobile-dialog-primary').click();
+    document.querySelector('.mobile-selection-question-dialog header button').click();
+    return true;
+  })()`);
+  await wait(350);
+  const closedQuestionState = await evaluate(client, `(() => ({
+    dialogVisible: Boolean(document.querySelector('.mobile-selection-question-dialog')),
+    selectedText: window.getSelection()?.toString() ?? ''
+  }))()`);
+  if (
+    closedQuestionState.dialogVisible ||
+    closedQuestionState.selectedText ||
+    translationMockState.selectionQuestionRequestCount !== 2 ||
+    translationMockState.selectionQuestionContextCount !== 2
+  ) {
+    throw new Error(`A late AI answer reopened a closed question dialog: ${JSON.stringify({ closedQuestionState, translationMockState })}`);
+  }
+  console.log('Asked AI about a selected source passage with grounded paragraph context and ignored a late closed-dialog response.');
 
   await client.send('Emulation.setDeviceMetricsOverride', {
     width: 390,

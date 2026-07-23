@@ -90,7 +90,8 @@
 
 .mobile-app button,
 .mobile-app input,
-.mobile-app select {
+.mobile-app select,
+.mobile-app textarea {
   font: inherit;
 }
 
@@ -1374,10 +1375,17 @@
   color: #ffc8cc;
 }
 
-.mobile-selection-popover > button:not(.mobile-selection-close) {
-  width: 100%;
-  min-height: 40px;
+.mobile-selection-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
   margin-top: 10px;
+}
+
+.mobile-selection-actions > button {
+  min-width: 0;
+  min-height: 40px;
+  padding: 5px 7px;
   border: 0;
   border-radius: 7px;
   background: #e9efff;
@@ -1385,6 +1393,20 @@
   font-size: 11px;
   font-weight: 700;
   touch-action: manipulation;
+}
+
+.mobile-selection-actions > button:only-child {
+  grid-column: 1 / -1;
+}
+
+.mobile-selection-actions > button.is-secondary {
+  border: 1px solid #667896;
+  background: transparent;
+  color: #eef3ff;
+}
+
+.mobile-selection-actions > button:disabled {
+  opacity: .52;
 }
 
 .mobile-selection-close {
@@ -1474,6 +1496,71 @@
 .mobile-dialog-primary {
   width: 100%;
   margin-top: 16px;
+}
+
+.mobile-selection-question-dialog > blockquote {
+  margin: 0 0 12px;
+  padding: 10px 11px;
+  border: 1px solid var(--mobile-line);
+  border-radius: 8px;
+  background: var(--mobile-surface-muted);
+}
+
+.mobile-selection-question-dialog > blockquote > span,
+.mobile-selection-answer > span {
+  display: block;
+  color: var(--mobile-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .06em;
+}
+
+.mobile-selection-question-dialog > blockquote > p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 5px 0 0;
+  color: #253047;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 12px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.mobile-selection-question-dialog textarea {
+  display: block;
+  width: 100%;
+  min-height: 78px;
+  margin-top: 6px;
+  padding: 9px 10px;
+  resize: vertical;
+  border: 1px solid #bcc7d6;
+  border-radius: 8px;
+  outline: none;
+  background: #fff;
+  color: var(--mobile-ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mobile-selection-question-dialog textarea:focus {
+  border-color: #667aa3;
+  box-shadow: 0 0 0 2px rgba(56, 89, 168, .11);
+}
+
+.mobile-selection-answer {
+  margin-top: 12px;
+  padding: 10px 11px;
+  border-left: 3px solid #7085b3;
+  background: #f4f7fb;
+}
+
+.mobile-selection-answer > p {
+  margin: 5px 0 0;
+  color: #24314a;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
 }
 
 .mobile-paper-editor-hint {

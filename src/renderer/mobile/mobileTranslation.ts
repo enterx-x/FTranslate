@@ -111,6 +111,34 @@ export function buildAcademicSelectionPrompt(
   ];
 }
 
+export function buildAcademicSelectionQuestionPrompt(
+  text: string,
+  question: string,
+  context: AcademicSelectionContext = {}
+): Array<{ role: 'system' | 'user'; content: string }> {
+  return [
+    {
+      role: 'system',
+      content: [
+        '你是科研论文选段问答助手。优先依据用户选中的英文、该内容所在的完整自然段、论文标题和已有中文译文回答问题。',
+        '使用准确、连贯的简体中文和该领域通行的科研术语；保留必要的英文专有名词、公式、变量、缩写和引用编号。',
+        '先直接回答问题，再在必要时解释依据。必须区分原文直接支持的结论与合理推断；如果给出的片段信息不足，应明确说明信息不足以及还需要哪类上下文，不得编造论文结论、实验数据或未提供的方法细节。',
+        '不要复述整段输入，不要输出与问题无关的通用科普，也不要声称已经阅读了未提供的全文。'
+      ].join('')
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        selection: text.trim().slice(0, 1600),
+        question: question.trim().slice(0, 1200),
+        documentTitle: context.documentTitle?.trim().slice(0, 500) ?? '',
+        surroundingOriginal: context.surroundingOriginal?.trim().slice(0, 3200) ?? '',
+        surroundingTranslation: context.surroundingTranslation?.trim().slice(0, 3200) ?? ''
+      })
+    }
+  ];
+}
+
 export function buildAcademicTranslationPrompt(
   text: string,
   context: AcademicTranslationContext = {}
@@ -203,6 +231,35 @@ export async function translateAcademicSelection(
     throw new Error('请先填写本次会话使用的 API Key。');
   }
   return requestChatCompletion(buildAcademicSelectionPrompt(cleanText, context), session, 0.1, 45_000);
+}
+
+export async function askAcademicSelectionQuestion(
+  text: string,
+  question: string,
+  session: MobileTranslationSession,
+  context: AcademicSelectionContext = {}
+): Promise<string> {
+  const cleanText = text.trim();
+  const cleanQuestion = question.trim();
+  if (!cleanText) {
+    throw new Error('没有选中可提问的英文内容。');
+  }
+  if (!cleanQuestion) {
+    throw new Error('请先输入你想问的问题。');
+  }
+  const validationError = validateMobileTranslationSession(session);
+  if (validationError) {
+    throw new Error(validationError);
+  }
+  if (!session.apiKey.trim()) {
+    throw new Error('请先填写本次会话使用的 API Key。');
+  }
+  return requestChatCompletion(
+    buildAcademicSelectionQuestionPrompt(cleanText, cleanQuestion, context),
+    session,
+    0.2,
+    60_000
+  );
 }
 
 export async function reflowAndTranslateAcademicPage(

@@ -4,6 +4,7 @@ import { PdfViewer } from '../components/PdfViewer';
 import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import { MobileTranslationSettingsDialog } from './MobileTranslationSettingsDialog';
 import {
+  askAcademicSelectionQuestion,
   MOBILE_AI_PAGE_REFLOW_VERSION,
   needsAcademicPageAiReview,
   reflowAndTranslateAcademicPage,
@@ -41,7 +42,8 @@ import {
 type MobileReaderMode = 'bilingual' | 'pdf';
 type PendingTranslation =
   | { type: 'all' }
-  | { type: 'selection' };
+  | { type: 'selection' }
+  | { type: 'question' };
 
 interface MobileReaderScreenProps {
   paper: MobilePaper;
@@ -71,6 +73,16 @@ interface SelectionPopoverState {
   surroundingOriginal: string;
   surroundingTranslation: string;
   translation?: string;
+  loading?: boolean;
+  error?: string;
+}
+
+interface SelectionQuestionDialogState {
+  text: string;
+  surroundingOriginal: string;
+  surroundingTranslation: string;
+  question: string;
+  answer?: string;
   loading?: boolean;
   error?: string;
 }
@@ -153,6 +165,7 @@ export function MobileReaderScreen({
   const pendingTranslationRef = useRef<PendingTranslation | null>(null);
   const selectionCaptureTimerRef = useRef<number | null>(null);
   const selectionRequestIdRef = useRef(0);
+  const selectionQuestionRequestIdRef = useRef(0);
   const selectionTranslationCacheRef = useRef(new Map<string, string>());
   const figureMigrationRef = useRef('');
   const replaceFigureEntriesRef = useRef(onReplaceFigureEntries);
@@ -169,6 +182,7 @@ export function MobileReaderScreen({
   const [translatingAll, setTranslatingAll] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<SelectionPopoverState | null>(null);
+  const [selectionQuestionDialog, setSelectionQuestionDialog] = useState<SelectionQuestionDialogState | null>(null);
   const [readingImmersive, setReadingImmersive] = useState(false);
   const [figureRenderer, setFigureRenderer] = useState<MobilePdfFigureRenderer | null>(null);
 
@@ -228,6 +242,7 @@ export function MobileReaderScreen({
   useEffect(() => () => {
     stopTranslationRef.current = true;
     selectionRequestIdRef.current += 1;
+    selectionQuestionRequestIdRef.current += 1;
     if (selectionCaptureTimerRef.current !== null) {
       window.clearTimeout(selectionCaptureTimerRef.current);
     }
@@ -789,6 +804,73 @@ export function MobileReaderScreen({
     }
   }
 
+  function openSelectionQuestionDialog(): void {
+    const selected = selectionPopover;
+    if (!selected) {
+      return;
+    }
+    selectionQuestionRequestIdRef.current += 1;
+    setSelectionQuestionDialog({
+      text: selected.text,
+      surroundingOriginal: selected.surroundingOriginal,
+      surroundingTranslation: selected.surroundingTranslation,
+      question: ''
+    });
+    closeSelectionPopover();
+  }
+
+  async function askSelectionQuestion(session = translationSession): Promise<void> {
+    const dialog = selectionQuestionDialog;
+    if (!dialog || dialog.loading) {
+      return;
+    }
+    const question = dialog.question.trim();
+    if (!question) {
+      setSelectionQuestionDialog((current) => current
+        ? { ...current, error: '请先输入你想问的问题。' }
+        : current);
+      return;
+    }
+    if (!session.apiKey.trim()) {
+      pendingTranslationRef.current = { type: 'question' };
+      setSettingsOpen(true);
+      return;
+    }
+    const requestId = selectionQuestionRequestIdRef.current + 1;
+    selectionQuestionRequestIdRef.current = requestId;
+    setSelectionQuestionDialog((current) => current
+      ? { ...current, loading: true, answer: undefined, error: undefined }
+      : current);
+    try {
+      const answer = await askAcademicSelectionQuestion(dialog.text, question, session, {
+        documentTitle: paper.title,
+        surroundingOriginal: dialog.surroundingOriginal,
+        surroundingTranslation: dialog.surroundingTranslation
+      });
+      if (selectionQuestionRequestIdRef.current !== requestId) {
+        return;
+      }
+      setSelectionQuestionDialog((current) => current?.text === dialog.text
+        ? { ...current, answer, loading: false, error: undefined }
+        : current);
+    } catch (error) {
+      if (selectionQuestionRequestIdRef.current !== requestId) {
+        return;
+      }
+      setSelectionQuestionDialog((current) => current?.text === dialog.text
+        ? { ...current, loading: false, error: formatError(error) }
+        : current);
+    }
+  }
+
+  function closeSelectionQuestionDialog(): void {
+    selectionQuestionRequestIdRef.current += 1;
+    if (pendingTranslationRef.current?.type === 'question') {
+      pendingTranslationRef.current = null;
+    }
+    setSelectionQuestionDialog(null);
+  }
+
   function rememberSelectionTranslation(key: string, translation: string): void {
     const cache = selectionTranslationCacheRef.current;
     if (cache.size >= 100) {
@@ -840,7 +922,7 @@ export function MobileReaderScreen({
                   ? '全文原文提取失败'
                   : `导入后全文提取 · ${paper.visionOcrLastPage ?? 0}${paper.pageCount ? ` / ${paper.pageCount}` : ''} 页${extractionSource.textPages || extractionSource.ocrPages ? ` · ${extractionSource.label}` : ''}`
                 : `${translatedCount} / ${readableBlocks.length} 段已译 · ${extractionSource.label}${figureEntries.length ? ` · ${figureEntries.length} 个图表` : ''}${pendingTranslationCount ? ` · ${pendingTranslationCount} 段待翻译` : ''}${staleTranslationCount ? ` · ${staleTranslationCount} 段待更新` : ''}${aiReviewPendingCount ? ` · ${aiReviewPendingCount} 段待 AI 对照` : ''}`}</span>
-              <small>长按或双击英文词语可选词翻译</small>
+              <small>长按或双击英文，可翻译或向 AI 提问</small>
             </span>
             <button
               type="button"
@@ -968,7 +1050,7 @@ export function MobileReaderScreen({
         <aside
           className="mobile-selection-popover"
           role="dialog"
-          aria-label="选词翻译"
+          aria-label="选中内容操作"
           style={{
             left: selectionPopover.left,
             top: selectionPopover.top,
@@ -976,28 +1058,103 @@ export function MobileReaderScreen({
             maxHeight: selectionPopover.maxHeight
           }}
         >
-          <button type="button" className="mobile-selection-close" aria-label="关闭选词翻译" onClick={() => closeSelectionPopover()}>×</button>
-          <span className="mobile-selection-label">选词翻译</span>
+          <button type="button" className="mobile-selection-close" aria-label="关闭选中内容操作" onClick={() => closeSelectionPopover()}>×</button>
+          <span className="mobile-selection-label">选中内容</span>
           <strong>{selectionPopover.text}</strong>
           {selectionPopover.translation ? <p role="status">{selectionPopover.translation}</p> : null}
           {selectionPopover.error ? <p className="is-error" role="alert">{selectionPopover.error}</p> : null}
-          {!selectionPopover.translation ? (
+          <div className="mobile-selection-actions">
+            {!selectionPopover.translation ? (
+              <button
+                type="button"
+                disabled={selectionPopover.loading || translatingAll}
+                onClick={() => void translateSelection()}
+              >
+                {selectionPopover.loading ? '翻译中…' : translatingAll ? '全文翻译进行中' : selectionPopover.error ? '重试翻译' : '翻译选中内容'}
+              </button>
+            ) : null}
             <button
               type="button"
+              className="is-secondary"
               disabled={selectionPopover.loading || translatingAll}
-              onClick={() => void translateSelection()}
+              onClick={openSelectionQuestionDialog}
             >
-              {selectionPopover.loading ? '翻译中…' : translatingAll ? '全文翻译进行中' : selectionPopover.error ? '重试翻译' : '翻译选中内容'}
+              向 AI 提问
             </button>
-          ) : null}
+          </div>
         </aside>
+      ) : null}
+
+      {selectionQuestionDialog ? (
+        <div className="mobile-dialog-backdrop" role="presentation" onClick={closeSelectionQuestionDialog}>
+          <section
+            className="mobile-translation-dialog mobile-selection-question-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="向 AI 提问"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mobile-dialog-handle" />
+            <header>
+              <strong>向 AI 提问</strong>
+              <button type="button" onClick={closeSelectionQuestionDialog}>关闭</button>
+            </header>
+            <p>仅把所选英文、所在原文段落、论文标题、已有译文和你的问题发送给当前配置的 AI 接口；不会改写或缓存论文正文。</p>
+            <blockquote>
+              <span>选中原文</span>
+              <p>{selectionQuestionDialog.text}</p>
+            </blockquote>
+            <label htmlFor="mobile-selection-question">
+              你想问什么？
+              <textarea
+                id="mobile-selection-question"
+                autoFocus
+                maxLength={1200}
+                rows={3}
+                disabled={selectionQuestionDialog.loading}
+                value={selectionQuestionDialog.question}
+                placeholder="例如：这句话在本文方法中起什么作用？"
+                onChange={(event) => setSelectionQuestionDialog((current) => current
+                  ? { ...current, question: event.target.value, error: undefined }
+                  : current)}
+                onKeyDown={(event) => {
+                  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                    event.preventDefault();
+                    void askSelectionQuestion();
+                  }
+                }}
+              />
+            </label>
+            {selectionQuestionDialog.answer ? (
+              <div className="mobile-selection-answer" role="status" aria-live="polite">
+                <span>AI 回答</span>
+                <p><MathText text={selectionQuestionDialog.answer} /></p>
+              </div>
+            ) : null}
+            {selectionQuestionDialog.error ? (
+              <p className="mobile-dialog-error" role="alert">{selectionQuestionDialog.error}</p>
+            ) : null}
+            <button
+              type="button"
+              className="mobile-dialog-primary"
+              disabled={selectionQuestionDialog.loading || !selectionQuestionDialog.question.trim()}
+              onClick={() => void askSelectionQuestion()}
+            >
+              {selectionQuestionDialog.loading
+                ? 'AI 正在回答…'
+                : selectionQuestionDialog.answer
+                  ? '重新提问'
+                  : '发送问题'}
+            </button>
+          </section>
+        </div>
       ) : null}
 
       {settingsOpen ? (
         <MobileTranslationSettingsDialog
           session={translationSession}
-          title="全文与选词翻译设置"
-          submitLabel={pendingTranslationRef.current ? '保存并开始翻译' : '保存设置'}
+          title="全文翻译、选词与 AI 提问设置"
+          submitLabel={pendingTranslationRef.current ? '保存并继续' : '保存设置'}
           requireApiKey={Boolean(pendingTranslationRef.current)}
           onClose={() => {
             pendingTranslationRef.current = null;
@@ -1008,11 +1165,13 @@ export function MobileReaderScreen({
             const pending = pendingTranslationRef.current;
             pendingTranslationRef.current = null;
             setSettingsOpen(false);
-            setStatus('翻译设置已更新；API Key 已保存在当前设备。');
+            setStatus('AI 设置已更新；API Key 已保存在当前设备。');
             if (pending?.type === 'all') {
               void handleTranslateAll(next);
             } else if (pending?.type === 'selection') {
               void translateSelection(next);
+            } else if (pending?.type === 'question') {
+              void askSelectionQuestion(next);
             }
           }}
         />

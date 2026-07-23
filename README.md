@@ -1,5 +1,14 @@
 # PDF Translation Reader / FTranslate
 
+## iPhone 选段 AI 提问（2026-07-24）
+
+- 连续双语阅读中的英文原文现在支持“选词翻译 / 向 AI 提问”双入口：长按或双击选中同一原文段落内的文字后，轻量浮层会同时显示两个操作；选择“向 AI 提问”后可在底部问答面板输入具体问题。
+- 问答请求只在用户点击“发送问题”后发出，并携带所选文字、其所在完整英文段落、论文标题和已有中文译文。提示词要求使用科研术语，区分原文直接支持的结论与合理推断；上下文不足时必须明确说明缺少什么，不得伪装已阅读未提供的全文。
+- 问答复用当前设备已有的 OpenAI-compatible / DeepSeek 配置。API Key 仍只保存在当前设备；回答只存在于当前问答面板，不写回 PDF 原文、全文译文、论文库或持久化缓存。关闭面板或换选区后，迟到响应会被丢弃，不能重新打开已关闭界面。
+- 390×844 与 430×932 移动回归已覆盖双操作浮层、段落上下文、真实提问、答案显示、窄屏边界、关闭后的迟到响应，以及原有 OCR、翻译、PDF 缓存、改名标签和删除流程。人工复核 `.tmp-mobile-visual-check/06-reader-selection-ai-question-430x932.png`，未发现遮挡、横向溢出或按钮截断。
+- 本地验证：`npm run dist` 中 89 个测试文件、602 项测试通过，TypeScript、桌面/移动 renderer、Electron 和 NSIS 打包通过；`npm run visual:check`、本地 `npm run visual:check:mobile` 与 `npm audit --json` 通过。Windows 安装包为 148,362,028 字节，SHA-256 为 `90826C146F398A41A3741AE9C94BBF2289442DD7F575E922CA26B74E20058848`。
+- 已部署到固定地址 [https://ftranslate-mobile.vercel.app](https://ftranslate-mobile.vercel.app)，部署编号 `dpl_7Kw1PmPHh7QHmFroMVjEktUt2Lbf`；入口 `assets/index-wr9ViK0b.js`、问答逻辑 `assets/MobileApp-HLH0JJtV.js` 和样式均返回 HTTP 200。固定生产地址的完整移动回归再次通过；Safari 正常刷新即可使用，无需清除已有 PDF、译文、API Key 或网站数据。
+
 ## 公式、Presentation 与依赖风险收敛（2026-07-23）
 
 - 移动端 LaTeX 显示继续采用“高置信度重排、原文不改写”的边界。除已有上下标和集合定义外，当前可恢复常见分数、带上下限求和、二范数、平方/立方、根式和完整矩形矩阵；不完整或 KaTeX 无法解析的表达式会回退为可复制的转义原文，不再显示红色 `katex-error`。
