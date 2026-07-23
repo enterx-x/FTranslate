@@ -1,5 +1,44 @@
 # PLAN.md
 
+## 2026-07-23：公式、Presentation 门禁与依赖风险收敛
+
+### 当前结论
+
+- 公式风险不应靠扩大 AI 猜测范围解决。可确定的分数、求和、范数、根式、幂和矩阵由本地规则恢复；无法通过 KaTeX 解析的结果必须显示原始文本，原 PDF/OCR 缓存和选词上下文始终保持不变。
+- 桌面 Presentation 门禁此前同时包含测试样本不足和生成器缺陷：单页假 PDF 无法为实验/结果页提供真实证据；生成器又会让带 `/` 的英文片段绕过中文清洗，并把含摘要的论文信息页误报为页面类型错位。
+- 依赖风险不能只检查生产包。定向补丁后，完整依赖树与生产依赖树均为 0 个已知漏洞，且桌面、移动、Electron 和 NSIS 构建全部通过。
+
+### 已完成操作
+
+- 公式显示增加高置信度结构恢复：简单分数、带界求和、范数幂、根式、简单幂和完整矩形矩阵；KaTeX 改为遇到解析错误抛出并回退到转义原文，不再渲染 `katex-error`。
+- Presentation 自包含视觉 PDF 扩展为 8 页学术样本，覆盖完整论文章节和实验要素；视觉脚本新增质量门文本与失败截图，失败时可以直接看到具体页码和规则。
+- 修复 Related Work 中 `RL / MPC / ...` 被 `/` 误判为公式的问题；论文信息页存在标题/来源元数据时允许附带摘要；来源页脚按“页码 + 章节”去重。
+- 使用 npm `overrides` 升级有公告的传递依赖补丁，不使用 `--force` 或跨主版本自动修复；重新生成 lockfile 后完整审计归零。
+
+### 验证记录
+
+- `npm run dist`：89 个测试文件、601 项测试通过；`typecheck`、桌面 renderer、Electron、NSIS 均通过。
+- `npm run visual:check`：通过；人工复核 `.tmp-visual-check/presentation-page.png`，质量状态为通过，无横向溢出、遮挡或重复来源标签。
+- `npm run build:mobile` 与本地 `npm run visual:check:mobile`：通过；人工复核 `.tmp-mobile-visual-check/08b-reader-scanned-latex-390x844.png`，数学定义正确重排，原文仍可复制，页面无横向溢出。
+- 生产地址 `FTRANSLATE_MOBILE_VISUAL_URL=https://ftranslate-mobile.vercel.app/` 的完整移动回归通过；实时 arXiv 检索按测试参数跳过，未伪报为线上检索成功。
+- `npm audit --json` 与 `npm audit --omit=dev --json`：均为 0。Vercel `npm ci` 审计同样为 0。
+- 安装包：`dist/PDF Translation Reader Setup 0.1.12.exe`，148,362,115 字节，SHA-256 `CBC5F8033D4AE2B28F1FC620223D846D7A57BDF85288B68AE0D281ADE0750F5F`。
+- Vercel 生产部署：`dpl_DnsW916N12WkBsR1dFdzgnYjAYNv`，固定地址 `https://ftranslate-mobile.vercel.app`，入口 `assets/index-DwrpeyvH.js` 返回 HTTP 200。
+
+### 问题与风险
+
+- 本地规则只处理结构明确的常见公式；复杂多层矩阵、跨行公式、严重 OCR 错字仍保留原文并依赖原 PDF 核对，不能保证自动恢复。
+- 用户先前提供的真实 PDF 目录在本轮验证时已不存在，显式语料命令因此跳过；需要路径恢复后才能重跑同一批真实文件。现有单元与视觉回归不能替代对所有极端论文版式的语料测试。
+- Vite 仍提示部分桌面 bundle 大于 500 kB；这是性能和首次加载体积风险，不是本轮功能错误，后续应单独做按页面动态拆包，避免在稳定性修复中混入大规模重构。
+- 生产视觉回归因 arXiv 上游可用性不稳定而设置 `FTRANSLATE_SKIP_LIVE_ARXIV=1`；PDF 导入、公式、OCR、缓存、翻译、选词、改名标签和删除流程均已线上验证，但实时检索仍需在上游恢复时补测。
+
+### 禁止重复犯错
+
+- 不得把 KaTeX 的错误样式当作成功公式；解析失败必须回退原文。
+- 不得用只有标题的一页假 PDF 证明 Presentation 质量门有效。
+- 不得把测试跳过写成通过，也不得只报告 `--omit=dev` 审计而隐藏完整工具链风险。
+- 不得为通过门禁而给无证据页面伪造页码、实验结果或中文结论。
+
 ## 2026-07-23：连续双语科研公式改为 LaTeX / KaTeX 显示
 
 ### 当前结论

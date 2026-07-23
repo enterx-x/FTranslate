@@ -33,9 +33,10 @@ describe('math text rendering', () => {
   });
 
   it('falls back to escaped source when latex is invalid', () => {
-    const html = renderMathTextToHtml('Broken $\\frac{$ stays readable.');
+    const html = renderMathTextToHtml('Broken $\\frac{1}{$ stays readable.');
 
     expect(html).toContain('Broken');
-    expect(html).toContain('\\frac{');
+    expect(html).toContain('\\frac{1}{');
+    expect(html).not.toContain('katex-error');
   });
 });

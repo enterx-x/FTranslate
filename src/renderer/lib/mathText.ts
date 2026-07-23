@@ -23,7 +23,7 @@ export function renderMathTextToHtml(text: string): string {
       try {
         return katex.renderToString(segment.value, {
           displayMode: Boolean(segment.display),
-          throwOnError: false,
+          throwOnError: true,
           strict: false,
           trust: false,
           output: 'html'
@@ -106,7 +106,7 @@ function renderEscapedLine(line: string): string {
   try {
     const renderedFormula = katex.renderToString(looseFormula.formula, {
       displayMode: false,
-      throwOnError: false,
+      throwOnError: true,
       strict: false,
       trust: false,
       output: 'html'

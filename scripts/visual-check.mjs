@@ -25,33 +25,123 @@ function wait(ms) {
 }
 
 function createFallbackPdfBuffer() {
-  const content = `0.86 0.90 0.97 rg
-72 430 451 180 re f
+  const pages = [
+    {
+      figure: true,
+      lines: [
+        'ACADEMIC MOBILE READER VISUAL CHECK',
+        'ABSTRACT',
+        'This paper studies safe whole-body robot control under contact uncertainty.',
+        'The proposed controller combines tactile sensing, policy learning, and safety constraints.',
+        'The contribution is a traceable perception-to-control workflow for real robot tasks.'
+      ]
+    },
+    {
+      lines: [
+        '1 INTRODUCTION',
+        'Safe robot manipulation matters because contact changes can destabilize the whole body.',
+        'Existing systems often separate perception, planning, and control.',
+        'This separation increases tracking error and limits long-horizon task completion.',
+        'The research question is how to connect tactile evidence to stable robot actions.'
+      ]
+    },
+    {
+      lines: [
+        '2 RELATED WORK',
+        'Prior work uses reinforcement learning, model predictive control, and tactile policies.',
+        'Reinforcement learning improves adaptation but may violate safety constraints.',
+        'Model predictive control provides structure but depends on accurate dynamics.',
+        'The remaining gap is a unified policy with explicit contact-aware safety evidence.'
+      ]
+    },
+    {
+      lines: [
+        '3 METHOD',
+        'The input contains proprioception, tactile observations, and task commands.',
+        'A multimodal encoder maps observations into a shared latent representation.',
+        'A policy produces whole-body actions and a safety filter enforces contact limits.',
+        'The output is a stable action sequence for long-horizon manipulation.',
+        'Objective J(theta) combines tracking reward and collision cost.'
+      ]
+    },
+    {
+      lines: [
+        '4 EXPERIMENTS',
+        'Experiments use simulated and real robot manipulation tasks.',
+        'Baselines include PPO, MPC, and a policy without tactile input.',
+        'Metrics include success rate, collision rate, tracking error, and inference time.',
+        'Ablations remove tactile sensing and the safety filter.',
+        'All methods use the same task set and evaluation budget.'
+      ]
+    },
+    {
+      lines: [
+        '5 RESULTS',
+        'The proposed method reaches an 84 percent success rate versus 68 percent for PPO.',
+        'Collision rate decreases from 12 percent to 4 percent.',
+        'The tactile ablation reduces success and increases tracking error.',
+        'The safety filter provides the largest benefit on contact-rich tasks.',
+        'Table 1 compares all baselines and reports mean results over five seeds.'
+      ]
+    },
+    {
+      lines: [
+        '6 LIMITATIONS',
+        'Performance depends on calibrated tactile sensors and reliable state estimates.',
+        'Very large contact disturbances remain difficult for the current controller.',
+        'The evaluation covers one robot platform and a limited set of objects.',
+        'Future work should test cross-robot transfer and dynamic environments.'
+      ]
+    },
+    {
+      lines: [
+        '7 CONCLUSION',
+        'The method connects tactile perception, policy learning, and safety filtering.',
+        'Experiments support improved success and lower collision rates.',
+        'The main reusable idea is to preserve evidence from input through evaluation.',
+        'The next step is a larger multi-robot study with stronger robustness tests.'
+      ]
+    }
+  ];
+  const escapePdfText = (value) => value.replace(/[\\()]/g, '\\$&');
+  const pageContents = pages.map((page) => {
+    const textCommands = page.lines.map((line, index) => {
+      const fontSize = index === 0 ? 18 : 12;
+      const offset = index === 0 ? '' : '0 -30 Td\n';
+      return `${offset}/F1 ${fontSize} Tf\n(${escapePdfText(line)}) Tj`;
+    }).join('\n');
+    const figureCommands = page.figure
+      ? `0.86 0.90 0.97 rg
+72 390 451 185 re f
 0.20 0.29 0.43 RG
 2 w
-72 430 451 180 re S
+72 390 451 185 re S
 BT
-/F1 24 Tf
-72 760 Td
-(PDF Translation Reader visual check) Tj
-0 -36 Td
-/F1 14 Tf
-(This fallback keeps the visual test self-contained.) Tj
-0 -324 Td
 /F1 12 Tf
-(Fig. 1. Visual check figure panel fixture.) Tj
-0 -42 Td
-/F1 14 Tf
-(The paragraph below the figure verifies PDF text extraction and reading layout.) Tj
+72 365 Td
+(Fig. 1. Contact-aware policy architecture and robot task examples.) Tj
+ET
+`
+      : '';
+    return `${figureCommands}BT
+72 780 Td
+${textCommands}
 ET
 `;
+  });
+  const pageRefs = pages.map((_page, index) => 4 + index * 2);
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Count 1 /Kids [3 0 R] >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-    `<< /Length ${Buffer.byteLength(content, 'ascii')} >>\nstream\n${content}endstream`
+    `<< /Type /Pages /Count ${pages.length} /Kids [${pageRefs.map((ref) => `${ref} 0 R`).join(' ')}] >>`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
   ];
+  pageContents.forEach((content, index) => {
+    const contentRef = 5 + index * 2;
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentRef} 0 R >>`,
+      `<< /Length ${Buffer.byteLength(content, 'ascii')} >>\nstream\n${content}endstream`
+    );
+  });
   let pdf = '%PDF-1.4\n';
   const offsets = [0];
   objects.forEach((object, index) => {
@@ -2045,6 +2135,7 @@ async function runPresentationScenario(client) {
         previewRatio: rect && rect.height ? rect.width / rect.height : 0,
         slideCount: thumbs.length,
         qualityFailed: Boolean(document.querySelector('.presentation-quality-fail')),
+        qualityText: document.querySelector('.presentation-quality-fail')?.textContent?.trim() ?? '',
         hasPptxExport: [...document.querySelectorAll('.presentation-page button')]
           .some((button) => /PPTX/i.test(button.textContent ?? '')),
         bullets,
@@ -2080,6 +2171,9 @@ async function runPresentationScenario(client) {
     throw new Error(`presentation: expected 16:9 slide preview, got ${JSON.stringify(snapshot)}`);
   }
   if (snapshot.qualityFailed) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'presentation-quality-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
     throw new Error(`presentation: quality gate is still failing, got ${JSON.stringify(snapshot)}`);
   }
   if (snapshot.legacyAccentMaxChannelDelta > 80) {

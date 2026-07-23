@@ -74,7 +74,7 @@ export function convertExtractedFormulaToLatex(text: string): string {
     .replace(/\bL\s+(force|tact)\b/gu, (_match, label: string) => `L_{\\mathrm{${label}}}`)
     .replace(/\\lambda\s+([A-Z])\b/gu, '\\lambda_$1')
     .replace(/\b([AFS])\s+t\s*:\s*t\s*\+\s*\\tau\b/gu, '$1_{t:t+\\tau}')
-    .replace(/\b([oAaFfSs])\s+([tjk])(?:\s*,\s*([kℓ]))?/gu, (_match, symbol: string, first: string, second?: string) => (
+    .replace(/\b([oAaFfSs])\s+([tijk])(?:\s*,\s*([kℓ]))?/gu, (_match, symbol: string, first: string, second?: string) => (
       `${symbol}_{${first}${second ? `,${second === 'ℓ' ? '\\ell' : second}` : ''}}`
     ))
     .replace(/\s*\(\s*/gu, '(')
@@ -86,5 +86,57 @@ export function convertExtractedFormulaToLatex(text: string): string {
     .replace(/\s+/gu, ' ')
     .trim();
 
+  formula = normalizeHighConfidenceStructures(formula);
+
   return equationNumber ? `${formula} \\tag{${equationNumber}}` : formula;
+}
+
+function normalizeHighConfidenceStructures(formula: string): string {
+  return convertSimpleMatrixLiteral(
+    formula
+      .replace(
+        /\\sum\s+([A-Za-z0-9]+)\s+([A-Za-z])\s*=\s*([A-Za-z0-9]+)/gu,
+        (_match, upper: string, index: string, lower: string) => `\\sum_{${index}=${lower}}^{${upper}}`
+      )
+      .replace(
+        /‖\s*([^‖]{1,240}?)\s*‖(?:\s*([23]))?/gu,
+        (_match, body: string, power?: string) => `\\lVert ${body.trim()} \\rVert${power ? `^${power}` : ''}`
+      )
+      .replace(
+        /√\s*\(\s*([^()]{1,240})\s*\)/gu,
+        (_match, body: string) => `\\sqrt{${normalizeSimplePowers(body)}}`
+      )
+      .replace(/\b([A-Za-z0-9]+)\s*\/\s*([A-Za-z0-9]+)\b/gu, '\\frac{$1}{$2}')
+      .replace(/_\{([A-Za-z0-9])\}/gu, '_$1')
+      .replace(/\s+/gu, ' ')
+      .trim()
+  );
+}
+
+function normalizeSimplePowers(value: string): string {
+  return value
+    .replace(/\b([A-Za-z])\s+([23])\b/gu, '$1^$2')
+    .replace(/\s*\+\s*/gu, ' + ')
+    .replace(/\s*-\s*/gu, ' - ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function convertSimpleMatrixLiteral(formula: string): string {
+  return formula.replace(/\[\s*([^\[\]]+;[^\[\]]+)\s*\]/gu, (match, body: string) => {
+    const rows = body.split(';').map((row) => row.trim().split(/\s+/gu).filter(Boolean));
+    const width = rows[0]?.length ?? 0;
+    const isRectangular = rows.length >= 2 && rows.length <= 8 && width >= 2 && width <= 8
+      && rows.every((row) => row.length === width && row.every(isSimpleMatrixCell));
+
+    if (!isRectangular) {
+      return match;
+    }
+
+    return `\\begin{bmatrix}${rows.map((row) => row.join(' & ')).join(' \\\\ ')}\\end{bmatrix}`;
+  });
+}
+
+function isSimpleMatrixCell(value: string): boolean {
+  return /^(?:\\[A-Za-z]+|[A-Za-z0-9]+)(?:_[A-Za-z0-9]+)?(?:\^[A-Za-z0-9]+)?$/u.test(value);
 }

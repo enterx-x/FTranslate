@@ -591,6 +591,68 @@ describe('presentationPptx', () => {
     expect(buffer.byteLength).toBeGreaterThan(1000);
   });
 
+  it('keeps a sourced abstract summary on the paper-info slide without reporting a type mismatch', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'info'
+        ? {
+            ...item,
+            bullets: [
+              '英文标题：Contact-aware Robot Control',
+              '来源：arXiv · 2026',
+              'The policy combines tactile observations, whole-body control, and safety filtering.'
+            ]
+          }
+        : item
+    );
+
+    expect(buildPresentationReviewReport(draft).slide_type_mismatch).toBe(false);
+  });
+
+  it('does not let slash-separated English related-work fragments bypass Chinese bullet cleanup', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'relatedWork'
+        ? {
+            ...item,
+            bullets: ['RL / MPC / tactile policy leaves safety constraints unresolved'],
+            sourceRefs: [
+              {
+                pageNumber: 3,
+                section: 'Related Work',
+                text: 'RL and MPC baselines still leave tactile safety constraints unresolved.'
+              }
+            ]
+          }
+        : item
+    );
+
+    const relatedWork = buildPptxSlidePlan(draft).find((item) => item.type === 'relatedWork');
+
+    expect(relatedWork?.bullets.length).toBeGreaterThanOrEqual(2);
+    expect(relatedWork?.bullets.every((bullet) => /[\u4e00-\u9fff]/u.test(bullet))).toBe(true);
+    expect(validatePptxQuality([relatedWork!]).join('\n')).not.toContain('仍像英文原文');
+  });
+
+  it('deduplicates repeated page and section labels in slide source footers', () => {
+    const draft = makeSeminarDraft();
+    draft.slides = draft.slides.map((item) =>
+      item.type === 'background'
+        ? {
+            ...item,
+            sourceRefs: [
+              { pageNumber: 2, section: 'Introduction', text: 'The first source block.' },
+              { pageNumber: 2, section: 'Introduction', text: 'The second source block.' }
+            ]
+          }
+        : item
+    );
+
+    const background = buildPptxSlidePlan(draft).find((item) => item.type === 'background');
+
+    expect(background?.sourceFooter).toBe('p. 2 · Introduction');
+  });
+
   it('filters setup figures away from result slides instead of exporting mismatched evidence', () => {
     const setupFigure: PresentationFigureCandidate = {
       ...figure('fig-setup', 'experiments', 'Fig. 4. Robot platform and task examples in the kitchen.', 5),

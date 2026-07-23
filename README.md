@@ -1,5 +1,14 @@
 # PDF Translation Reader / FTranslate
 
+## 公式、Presentation 与依赖风险收敛（2026-07-23）
+
+- 移动端 LaTeX 显示继续采用“高置信度重排、原文不改写”的边界。除已有上下标和集合定义外，当前可恢复常见分数、带上下限求和、二范数、平方/立方、根式和完整矩形矩阵；不完整或 KaTeX 无法解析的表达式会回退为可复制的转义原文，不再显示红色 `katex-error`。
+- Presentation 视觉门禁不再依赖只有一页标题和图注的贫乏假论文。自包含样本现在覆盖 Abstract、Introduction、Related Work、Method、Experiments、Results、Limitations 和 Conclusion，能真实检查来源页码、实验要素和中文要点；同时修复 `/` 分隔英文被误判为公式、带元数据的摘要页被误判为类型错位，以及同页同章节来源标签重复的问题。
+- 依赖覆盖已定向升级 `protobufjs`、`brace-expansion`、`axios`、`esbuild`、`form-data`、`js-yaml`、`tar` 和 `undici` 的安全补丁版本。`npm audit --json` 与 `npm audit --omit=dev --json` 均为 0 个已知漏洞，Vercel 的 `npm ci` 审计同样为 0。
+- 验证结果：`npm run dist` 中 89 个测试文件、601 项测试通过，TypeScript、桌面/移动 renderer、Electron 和 NSIS 打包通过；`npm run visual:check`、本地与生产地址的 `npm run visual:check:mobile` 均通过。Windows 安装包为 148,362,115 字节，SHA-256 为 `CBC5F8033D4AE2B28F1FC620223D846D7A57BDF85288B68AE0D281ADE0750F5F`。
+- 最新网页已部署并绑定 [https://ftranslate-mobile.vercel.app](https://ftranslate-mobile.vercel.app)，部署编号 `dpl_DnsW916N12WkBsR1dFdzgnYjAYNv`，入口 `assets/index-DwrpeyvH.js` 返回 HTTP 200。Safari 正常刷新即可使用；已有 PDF、原文、译文和 API Key 缓存不需要清除。
+- 本轮尝试重跑用户先前给出的 3 篇真实 PDF 时，原路径 `D:\调研PDF\调研pdf\01_严格纳入_触觉模态` 在当前机器上已不存在，因此该命令按设计跳过。这里不把跳过写成通过；此前真实语料结果仍保留在历史记录，本轮新增公式与门禁逻辑由单元、桌面浏览器和移动浏览器回归覆盖。
+
 ## 移动端科研公式 LaTeX 重排（2026-07-23）
 
 - 连续双语阅读中的独立公式不再显示为普通散乱文本。公式块会把 PDF/OCR 提取到的上下标、希腊字母、集合、损失项和公式编号转换为 LaTeX，并使用 KaTeX 在手机上重排；例如 `λ F`、`L act, m i` 和末尾 `(5)` 会恢复为规范的下标与编号。

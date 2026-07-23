@@ -30,6 +30,25 @@ describe('mobile academic LaTeX formatting', () => {
     expect(html).not.toContain('katex-error');
   });
 
+  it('rebuilds common extracted sums, fractions, norms, roots, and powers', () => {
+    const loss = convertExtractedFormulaToLatex('J (θ) = 1 / N ∑ N i = 1 ‖ fˆ i - f i ‖ 2 (6)');
+    const distance = convertExtractedFormulaToLatex('d = √ ( x 2 + y 2 )');
+
+    expect(loss).toBe(
+      'J(\\theta) = \\frac{1}{N} \\sum_{i=1}^{N} \\lVert \\hat{f}_i - f_i \\rVert^2 \\tag{6}'
+    );
+    expect(distance).toBe('d = \\sqrt{x^2 + y^2}');
+    expect(renderMathTextToHtml(`$$${loss}$$`)).not.toContain('katex-error');
+    expect(renderMathTextToHtml(`$$${distance}$$`)).not.toContain('katex-error');
+  });
+
+  it('rebuilds only complete rectangular matrix literals', () => {
+    expect(convertExtractedFormulaToLatex('M = [ a b ; c d ]')).toBe(
+      'M = \\begin{bmatrix}a & b \\\\ c & d\\end{bmatrix}'
+    );
+    expect(convertExtractedFormulaToLatex('range = [ a b c ]')).toBe('range = [ a b c ]');
+  });
+
   it('does not rewrite headings, captions, or already delimited LaTeX', () => {
     expect(formatMobileAcademicText('E. Training Paradigm', 'heading')).toBe('E. Training Paradigm');
     expect(formatMobileAcademicText('Fig. 4: Policy overview.', 'caption')).toBe('Fig. 4: Policy overview.');

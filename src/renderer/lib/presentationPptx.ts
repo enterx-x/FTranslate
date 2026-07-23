@@ -350,7 +350,9 @@ function finalizeStrengthenedBullets(slide: PptxSlidePlan, bullets: string[], fi
 
   const addBullet = (candidate: string | undefined): boolean => {
     const keepCriticalEvidence = candidate ? isCriticalPptEvidenceBullet(slide.type, candidate) : false;
-    const compact = keepCriticalEvidence ? truncateText(cleanText(candidate)?.replace(/\s+/gu, ' ').trim() ?? '', MAX_BULLET_LENGTH) : compactChineseBullet(candidate);
+    const compact = keepCriticalEvidence
+      ? truncateText(cleanText(candidate)?.replace(/\s+/gu, ' ').trim() ?? '', MAX_BULLET_LENGTH)
+      : compactChineseBullet(candidate, slide.type);
     const key = compact ? normalizeBulletForCompare(compact) : '';
     const semanticKey = compact ? getSemanticBulletKey(compact) : '';
     if (
@@ -412,7 +414,7 @@ function strengthenWeakBullets(slide: PptxSlidePlan, bullets: string[]): string[
   const strengthened: string[] = [];
 
   const addBullet = (bullet: string | undefined): void => {
-    const compact = compactChineseBullet(bullet);
+    const compact = compactChineseBullet(bullet, slide.type);
     const key = compact ? normalizeBulletForCompare(compact) : '';
     if (!compact || !key || seen.has(key)) {
       return;
@@ -483,7 +485,7 @@ function buildOriginalBulletFallback(slide: PptxSlidePlan, bullet: string): stri
     return summarizeRefAsChinese(slide.type, cleaned) ?? buildStepBullet(slide.type, cleaned);
   }
 
-  return compactChineseBullet(cleaned);
+  return compactChineseBullet(cleaned, slide.type);
 }
 
 function buildStepBullet(type: PresentationSlideType, step: string): string | undefined {
@@ -799,7 +801,7 @@ function hasGenericTemplateProblem(plan: PptxSlidePlan[]): boolean {
 
 function hasSlideTypeMismatch(plan: PptxSlidePlan[], draft: PresentationDraft): boolean {
   const info = draft.slides.find((slide) => slide.type === 'info');
-  if (info && countMethodTermsInInfo(info.bullets.join(' ')) >= 2) {
+  if (info && !hasPaperInfoMetadata(info.bullets) && countMethodTermsInInfo(info.bullets.join(' ')) >= 2) {
     return true;
   }
   return plan.some((slide) => {
@@ -807,7 +809,7 @@ function hasSlideTypeMismatch(plan: PptxSlidePlan[], draft: PresentationDraft): 
       return /result|experiment|real[-\s]?world|Results|Experiments|真机|实验|结果/iu.test(slide.sourceFooter);
     }
     if (slide.type === 'info') {
-      return countMethodTermsInInfo(slide.bullets.join(' ')) >= 2;
+      return !hasPaperInfoMetadata(slide.bullets) && countMethodTermsInInfo(slide.bullets.join(' ')) >= 2;
     }
     return false;
   });
@@ -1560,6 +1562,10 @@ function getFigureImageData(figure?: PresentationFigureCandidate): string | null
   return figure.imageDataUrl;
 }
 
+function hasPaperInfoMetadata(bullets: string[]): boolean {
+  return bullets.some((bullet) => /^(?:英文标题|标题|作者|来源|会议|期刊|年份|title|author|source)\s*[:：]/iu.test(bullet.trim()));
+}
+
 function getFigureImageAspectRatio(figure?: PresentationFigureCandidate): number {
   if (figure?.imagePixelWidth && figure.imagePixelHeight && figure.imagePixelHeight > 0) {
     return figure.imagePixelWidth / figure.imagePixelHeight;
@@ -2100,10 +2106,10 @@ function summarizeDirectSlideBullet(type: PresentationSlideType, bullet: string)
   if (type === 'info' && /^来源[:：]/u.test(cleaned)) {
     return cleaned.replace(/IEEE Robotics/iu, 'IEEE 机器人方向').replace(/Robotics/iu, '机器人方向');
   }
-  if (asciiRatio(cleaned) > 0.58 && !/[=+*/^_{}]/u.test(cleaned)) {
+  if (asciiRatio(cleaned) > 0.58 && (type !== 'formula' || !/[=+*/^_{}]/u.test(cleaned))) {
     return summarizeRefAsChinese(type, cleaned) ?? summarizeEnglishLikeBullet(cleaned);
   }
-  return compactChineseBullet(cleaned);
+  return compactChineseBullet(cleaned, type);
 }
 
 function filterKeywordBulletsForType(type: PresentationSlideType, bullets: string[]): string[] {
@@ -2440,6 +2446,19 @@ function hasChineseText(text: string): boolean {
 
 function summarizeRefAsChinese(type: PresentationSlideType, text: string): string | undefined {
   const lower = text.toLowerCase();
+  if (type === 'relatedWork') {
+    if (/\b(?:RL|reinforcement learning)\b/iu.test(text) && /\bMPC\b/iu.test(text)) {
+      return /safety|constraint|tactile|contact/iu.test(text)
+        ? '现有 RL/MPC 路线仍缺少触觉安全闭环'
+        : 'RL 与 MPC 代表两类现有控制路线';
+    }
+    if (/\btactile|contact[-\s]?aware\b/iu.test(text)) {
+      return '现有触觉策略仍需统一安全约束';
+    }
+    if (/\bsafety constraints?|safety filter\b/iu.test(text)) {
+      return '现有方法尚未充分处理安全约束';
+    }
+  }
   if (/\bPILOT\b/iu.test(text)) {
     if (type === 'background') return 'PILOT 面向感知移动操作问题';
     if (type === 'method' || type === 'formula') return 'PILOT 串起感知输入和控制输出';
@@ -2537,7 +2556,7 @@ function compactUnique(items: Array<string | undefined>, limit: number): string[
   return result.slice(0, limit);
 }
 
-function compactChineseBullet(text?: string): string | undefined {
+function compactChineseBullet(text?: string, type: PresentationSlideType = 'summary'): string | undefined {
   const cleaned = cleanText(text);
   if (!cleaned) {
     return undefined;
@@ -2546,8 +2565,9 @@ function compactChineseBullet(text?: string): string | undefined {
     .replace(/[，,。.;；:：]+$/u, '')
     .replace(/\s*\(p\.\s*\d+\)\s*$/iu, '')
     .trim();
-  if (asciiRatio(normalized) > 0.58 && !/[=+*/^_{}]/u.test(normalized)) {
-    return summarizeRefAsChinese('summary', normalized) ?? summarizeEnglishLikeBullet(normalized);
+  const preserveFormula = type === 'formula' && /[=+*/^_{}]/u.test(normalized);
+  if (asciiRatio(normalized) > 0.58 && !preserveFormula) {
+    return summarizeRefAsChinese(type, normalized) ?? summarizeEnglishLikeBullet(normalized);
   }
   return truncateText(normalized, MAX_BULLET_LENGTH);
 }
@@ -2599,9 +2619,9 @@ function summarizeEnglishLikeBullet(text: string): string | undefined {
 }
 
 function buildSourceFooter(slide: PresentationSlide, figure?: PresentationFigureCandidate): string {
-  const refs = getScopedSourceRefs(slide)
-    .slice(0, 2)
-    .map((ref) => `p. ${ref.pageNumber} · ${cleanText(ref.section) ?? 'PDF'}`);
+  const refs = [...new Set(
+    getScopedSourceRefs(slide).map((ref) => `p. ${ref.pageNumber} · ${cleanText(ref.section) ?? 'PDF'}`)
+  )].slice(0, 2);
   if (refs.length > 0) {
     return refs.join('  |  ');
   }
