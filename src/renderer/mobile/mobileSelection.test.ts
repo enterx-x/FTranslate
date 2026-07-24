@@ -6,10 +6,11 @@ import {
 } from './mobileSelection';
 
 describe('mobile selection translation', () => {
-  it('normalizes an actual short selection and rejects empty or oversized text', () => {
+  it('normalizes a paragraph-sized selection and rejects empty or oversized text', () => {
     expect(normalizeMobileSelectionText('  control\n barrier   function  ')).toBe('control barrier function');
     expect(normalizeMobileSelectionText('   ')).toBe('');
-    expect(normalizeMobileSelectionText('a'.repeat(801))).toBe('');
+    expect(normalizeMobileSelectionText('a'.repeat(1600))).toBe('a'.repeat(1600));
+    expect(normalizeMobileSelectionText('a'.repeat(1601))).toBe('');
   });
 
   it('only offers the paper selection translator for text containing English', () => {

@@ -24,7 +24,7 @@ const POPOVER_MARGIN = 12;
 const POPOVER_MAX_WIDTH = 280;
 const POPOVER_PREFERRED_HEIGHT = 168;
 
-export function normalizeMobileSelectionText(value: string, maxLength = 800): string {
+export function normalizeMobileSelectionText(value: string, maxLength = 1600): string {
   const normalized = value.replace(/\s+/gu, ' ').trim();
   return normalized.length > 0 && normalized.length <= maxLength ? normalized : '';
 }

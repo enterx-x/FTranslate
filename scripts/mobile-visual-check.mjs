@@ -21,7 +21,8 @@ const translationMockState = {
   selectionContextCount: 0,
   selectionQuestionRequestCount: 0,
   selectionQuestionContextCount: 0,
-  lastSelectionQuestion: ''
+  lastSelectionQuestion: '',
+  lastSelectionQuestionTranslation: ''
 };
 
 function wait(ms) {
@@ -307,6 +308,7 @@ function startTranslationMock() {
       const system = parsed.messages?.[0]?.content ?? '';
       let translation;
       let isContextualSelectionRequest = false;
+      let forceAiQuestionError = false;
       if (typeof system === 'string' && system.includes('两个完全重合的视图')) {
         const pagePayload = JSON.parse(source);
         const pageBlocks = pagePayload.blocks ?? [];
@@ -358,6 +360,8 @@ function startTranslationMock() {
             if (typeof translationPayload.question === 'string') {
               translationMockState.selectionQuestionRequestCount += 1;
               translationMockState.lastSelectionQuestion = translationPayload.question;
+              translationMockState.lastSelectionQuestionTranslation = translationPayload.surroundingTranslation ?? '';
+              forceAiQuestionError = translationPayload.question === '模拟问答请求失败';
               if (hasContext && typeof translationPayload.surroundingTranslation === 'string') {
                 translationMockState.selectionQuestionContextCount += 1;
               }
@@ -387,6 +391,11 @@ function startTranslationMock() {
           : '策略更新在有界扰动下保持前向不变性，从而使安全约束在执行过程中持续成立。';
       }
       const finishResponse = () => {
+        if (forceAiQuestionError) {
+          response.writeHead(502, { 'Content-Type': 'application/json' });
+          response.end('{}');
+          return;
+        }
         response.writeHead(200, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify({ choices: [{ message: { content: translation } }] }));
       };
@@ -956,6 +965,9 @@ try {
       question: dialog.querySelector('textarea')?.value ?? '',
       answer: dialog.querySelector('.mobile-selection-answer p')?.textContent ?? '',
       privacy: dialog.querySelector(':scope > p')?.textContent ?? '',
+      storedTranslation: Array.from(document.querySelectorAll('.mobile-bilingual-block'))
+        .find(block => block.querySelector('.mobile-block-original')?.getAttribute('data-source-text')?.startsWith('The policy update'))
+        ?.querySelector('.mobile-block-translation')?.getAttribute('data-source-text') ?? '',
       bounds: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }
     };
   })()`);
@@ -965,6 +977,8 @@ try {
     !selectionQuestionState.answer.includes('原文直接说明') ||
     !selectionQuestionState.answer.includes('信息不足') ||
     !selectionQuestionState.privacy.includes('不会改写或缓存论文正文') ||
+    !selectionQuestionState.storedTranslation ||
+    translationMockState.lastSelectionQuestionTranslation !== selectionQuestionState.storedTranslation ||
     selectionQuestionState.bounds.left < -1 ||
     selectionQuestionState.bounds.right > 431 ||
     selectionQuestionState.bounds.top < -1 ||
@@ -980,11 +994,32 @@ try {
   await evaluate(client, `(() => {
     const textarea = document.querySelector('#mobile-selection-question');
     const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    valueSetter.call(textarea, '模拟问答请求失败');
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  await waitForExpression(client, `document.querySelector('#mobile-selection-question')?.value === '模拟问答请求失败' ? 'error-question-ready' : ''`);
+  const editedQuestionState = await evaluate(client, `(() => ({
+    answerVisible: Boolean(document.querySelector('.mobile-selection-answer')),
+    submitLabel: document.querySelector('.mobile-selection-question-dialog .mobile-dialog-primary')?.textContent?.trim() ?? ''
+  }))()`);
+  if (editedQuestionState.answerVisible || editedQuestionState.submitLabel !== '发送问题') {
+    throw new Error(`Editing a question left a stale answer visible: ${JSON.stringify(editedQuestionState)}`);
+  }
+  await evaluate(client, `document.querySelector('.mobile-selection-question-dialog .mobile-dialog-primary').click()`);
+  await waitForSelector(client, '.mobile-selection-question-dialog .mobile-dialog-error');
+  const questionError = await evaluate(client, `document.querySelector('.mobile-selection-question-dialog .mobile-dialog-error')?.textContent ?? ''`);
+  if (!questionError.includes('AI 问答请求失败：HTTP 502')) {
+    throw new Error(`AI question failure used an unclear error message: ${questionError}`);
+  }
+  await evaluate(client, `(() => {
+    const textarea = document.querySelector('#mobile-selection-question');
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
     valueSetter.call(textarea, '请再解释一次');
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     return true;
   })()`);
-  await waitForExpression(client, `document.querySelector('#mobile-selection-question')?.value === '请再解释一次' ? 'followup-ready' : ''`);
+  await waitForExpression(client, `document.querySelector('#mobile-selection-question')?.value === '请再解释一次' && !document.querySelector('.mobile-selection-question-dialog .mobile-dialog-error') ? 'followup-ready' : ''`);
   await evaluate(client, `(() => {
     document.querySelector('.mobile-selection-question-dialog .mobile-dialog-primary').click();
     document.querySelector('.mobile-selection-question-dialog header button').click();
@@ -998,8 +1033,8 @@ try {
   if (
     closedQuestionState.dialogVisible ||
     closedQuestionState.selectedText ||
-    translationMockState.selectionQuestionRequestCount !== 2 ||
-    translationMockState.selectionQuestionContextCount !== 2
+    translationMockState.selectionQuestionRequestCount !== 3 ||
+    translationMockState.selectionQuestionContextCount !== 3
   ) {
     throw new Error(`A late AI answer reopened a closed question dialog: ${JSON.stringify({ closedQuestionState, translationMockState })}`);
   }

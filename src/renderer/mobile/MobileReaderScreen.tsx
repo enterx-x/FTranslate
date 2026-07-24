@@ -735,8 +735,10 @@ export function MobileReaderScreen({
     const surroundingOriginal = startOriginal.getAttribute('data-source-text')?.trim()
       || startOriginal.textContent?.replace(/\s+/gu, ' ').trim()
       || '';
-    const surroundingTranslation = article?.querySelector('.mobile-block-translation')
-      ?.textContent?.replace(/\s+/gu, ' ').trim() ?? '';
+    const translationElement = article?.querySelector('.mobile-block-translation');
+    const surroundingTranslation = translationElement?.getAttribute('data-source-text')?.trim()
+      || translationElement?.textContent?.replace(/\s+/gu, ' ').trim()
+      || '';
     const cacheKey = buildSelectionTranslationCacheKey(
       translationSession,
       text,
@@ -1010,7 +1012,7 @@ export function MobileReaderScreen({
                         : <p><MathText text={formattedOriginal} /></p>}
                     </div>
                     {cached?.translation.trim() ? (
-                      <div className="mobile-block-translation">
+                      <div className="mobile-block-translation" data-source-text={cached.translation}>
                         <p><MathText text={formattedTranslation} /></p>
                       </div>
                     ) : null}
@@ -1115,7 +1117,12 @@ export function MobileReaderScreen({
                 value={selectionQuestionDialog.question}
                 placeholder="例如：这句话在本文方法中起什么作用？"
                 onChange={(event) => setSelectionQuestionDialog((current) => current
-                  ? { ...current, question: event.target.value, error: undefined }
+                  ? {
+                    ...current,
+                    question: event.target.value,
+                    answer: undefined,
+                    error: undefined
+                  }
                   : current)}
                 onKeyDown={(event) => {
                   if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
