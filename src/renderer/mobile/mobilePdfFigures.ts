@@ -192,32 +192,71 @@ export function buildPdfCaptionAnchors(
   const rawLines = buildRawPdfTextLines(items);
   blocks.forEach((block, index) => {
     const label = parseCaptionLabel(block.original);
+    const captionMarkerCount = (
+      block.original.match(/\b(?:fig(?:ure)?\.?|table)\s*[\divxlcdm]+\s*[:.]/giu) ?? []
+    ).length;
     const matchingRawLine = block.bounds ? findRawLineAtBounds(rawLines, block.bounds) : undefined;
     if (
       block.type !== 'caption' ||
       !label ||
       !block.bounds ||
+      captionMarkerCount > 1 ||
       (matchingRawLine && looksLikeInlineFigureReferenceLine(matchingRawLine, rawLines))
     ) {
       return;
     }
     const key = `${label.kind}:${label.label}`;
+    const markerItem = items.find((item) => {
+        const itemLabel = parseCaptionLabel(item.str);
+        const centerX = item.x + item.width / 2;
+        const centerY = item.y + item.height / 2;
+        return item.page === block.page &&
+          itemLabel?.kind === label.kind &&
+          itemLabel.label === label.label &&
+          centerX >= block.bounds!.x - 3 &&
+          centerX <= block.bounds!.x + block.bounds!.width + 3 &&
+          centerY >= block.bounds!.y - 3 &&
+          centerY <= block.bounds!.y + block.bounds!.height + 3;
+      });
+    const firstLineItems = markerItem
+      ? items.filter((item) => (
+        item.page === markerItem.page &&
+        item.x >= block.bounds!.x - 2 &&
+        item.x + item.width <= block.bounds!.x + block.bounds!.width + 2 &&
+        Math.abs(item.y - markerItem.y) <= Math.max(4, markerItem.height * 0.85)
+      ))
+      : [];
+    const captionItems = markerItem
+      ? collectStandaloneCaptionItems(items, markerItem, firstLineItems, label.kind === 'table')
+      : [];
+    const expandedCaptionBounds = captionItems.length > 0
+      ? boundsForPositionedItems(captionItems, markerItem?.pageWidth, markerItem?.pageHeight)
+      : block.bounds;
+    const hasGeometricContinuation = captionItems.some((item) => (
+      item.y > block.bounds!.y + block.bounds!.height + Math.max(0.25, item.height * 0.05)
+    ));
+    const captionOriginal = hasGeometricContinuation
+      ? normalizePositionedCaptionItems(captionItems)
+      : block.original;
     anchors.set(key, {
       ...label,
-      original: block.original,
-      bounds: block.bounds,
-      captionHash: block.sourceHash,
-      hasTextCaption: true,
+      original: captionOriginal,
+      bounds: expandedCaptionBounds,
+      captionHash: hasGeometricContinuation
+        ? hashText(`caption|${block.page}|${label.kind}|${label.label}|${captionOriginal}`)
+        : block.sourceHash,
+      hasTextCaption: !hasGeometricContinuation,
       blockOrder: index
     });
   });
 
   for (const line of rawLines) {
     const label = parseCaptionLabel(line.original);
+    const strongCaptionLine = /^(?:fig(?:ure)?\.?|table)\s*[\divxlcdm]+\s*:\s+\p{Lu}/iu.test(line.original.trim());
     if (
       !label ||
       looksLikeInlineFigureReferenceLine(line, rawLines) ||
-      isBoundsInsideParagraphBlock(line.bounds, blocks)
+      (!strongCaptionLine && isBoundsInsideParagraphBlock(line.bounds, blocks))
     ) {
       continue;
     }
@@ -225,15 +264,40 @@ export function buildPdfCaptionAnchors(
     if (anchors.has(key)) {
       continue;
     }
-    const sameScopeBlocks = blocks.filter((block) => block.bounds && horizontalOverlapRatio(block.bounds, line.bounds) > 0.2);
+    const markerItem = items.find((item) => (
+      isStandaloneCaptionMarker(item.str) &&
+      parseCaptionLabel(item.str)?.kind === label.kind &&
+      parseCaptionLabel(item.str)?.label === label.label &&
+      Math.abs(item.y - line.bounds.y) <= Math.max(4, item.height * 0.85) &&
+      item.x >= line.bounds.x - 2 &&
+      item.x + item.width <= line.bounds.x + line.bounds.width + 2
+    ));
+    const firstLineItems = markerItem
+      ? items.filter((item) => (
+        item.page === markerItem.page &&
+        item.x >= line.bounds.x - 2 &&
+        item.x + item.width <= line.bounds.x + line.bounds.width + 2 &&
+        Math.abs(item.y - markerItem.y) <= Math.max(4, markerItem.height * 0.85)
+      ))
+      : [];
+    const captionItems = markerItem
+      ? collectStandaloneCaptionItems(items, markerItem, firstLineItems)
+      : [];
+    const captionBounds = captionItems.length > 0
+      ? boundsForPositionedItems(captionItems, markerItem?.pageWidth, markerItem?.pageHeight)
+      : line.bounds;
+    const captionOriginal = captionItems.length > 0
+      ? normalizePositionedCaptionItems(captionItems)
+      : line.original;
+    const sameScopeBlocks = blocks.filter((block) => block.bounds && horizontalOverlapRatio(block.bounds, captionBounds) > 0.2);
     const nextBlockIndex = blocks.findIndex((block) => (
-      sameScopeBlocks.includes(block) && Boolean(block.bounds && block.bounds.y > line.bounds.y)
+      sameScopeBlocks.includes(block) && Boolean(block.bounds && block.bounds.y > captionBounds.y)
     ));
     anchors.set(key, {
       ...label,
-      original: line.original,
-      bounds: line.bounds,
-      captionHash: hashText(`caption|${items[0]?.page ?? 1}|${label.kind}|${label.label}|${line.original}`),
+      original: captionOriginal,
+      bounds: captionBounds,
+      captionHash: hashText(`caption|${items[0]?.page ?? 1}|${label.kind}|${label.label}|${captionOriginal}`),
       hasTextCaption: false,
       blockOrder: nextBlockIndex >= 0 ? nextBlockIndex : blocks.length
     });
@@ -241,6 +305,7 @@ export function buildPdfCaptionAnchors(
 
   for (const item of items) {
     const label = parseCaptionLabel(item.str);
+    const standaloneCaptionMarker = isStandaloneCaptionMarker(item.str);
     const rawLine = findRawLineAtBounds(rawLines, {
       x: item.x,
       y: item.y,
@@ -252,14 +317,14 @@ export function buildPdfCaptionAnchors(
     if (
       !label ||
       (rawLine && looksLikeInlineFigureReferenceLine(rawLine, rawLines)) ||
-      isBoundsInsideParagraphBlock({
+      (!standaloneCaptionMarker && isBoundsInsideParagraphBlock({
         x: item.x,
         y: item.y,
         width: item.width,
         height: item.height,
         pageWidth: item.pageWidth,
         pageHeight: item.pageHeight
-      }, blocks)
+      }, blocks))
     ) {
       continue;
     }
@@ -273,17 +338,20 @@ export function buildPdfCaptionAnchors(
         Math.abs(candidate.y - item.y) <= Math.max(4, item.height * 0.85)
       ))
       .sort((left, right) => left.x - right.x);
-    const maxX = Math.max(...sameLine.map((candidate) => candidate.x + candidate.width));
-    const maxY = Math.max(...sameLine.map((candidate) => candidate.y + candidate.height));
+    const captionItems = standaloneCaptionMarker
+      ? collectStandaloneCaptionItems(items, item, sameLine)
+      : sameLine;
+    const maxX = Math.max(...captionItems.map((candidate) => candidate.x + candidate.width));
+    const maxY = Math.max(...captionItems.map((candidate) => candidate.y + candidate.height));
     const bounds: PdfBlockBounds = {
       x: item.x,
-      y: Math.min(...sameLine.map((candidate) => candidate.y)),
+      y: Math.min(...captionItems.map((candidate) => candidate.y)),
       width: Math.max(1, maxX - item.x),
-      height: Math.max(1, maxY - Math.min(...sameLine.map((candidate) => candidate.y))),
+      height: Math.max(1, maxY - Math.min(...captionItems.map((candidate) => candidate.y))),
       pageWidth: item.pageWidth,
       pageHeight: item.pageHeight
     };
-    const original = normalizePdfLine(sameLine.map((candidate) => candidate.str).join(' '));
+    const original = normalizePositionedCaptionItems(captionItems);
     const nextBlockIndex = blocks.findIndex((block) => Boolean(block.bounds && block.bounds.y > bounds.y));
     anchors.set(key, {
       ...label,
@@ -300,24 +368,34 @@ export function buildPdfCaptionAnchors(
 
 export function detectPdfFigureRegions(input: DetectPdfFigureRegionsInput): MobilePdfFigureRegion[] {
   const minimumHeight = Math.max(38, input.pageHeight * 0.05);
+  const minimumTableHeight = Math.max(24, input.pageHeight * 0.03);
   const pageMarginY = Math.max(18, input.pageHeight * 0.045);
   const sortedAnchors = [...input.anchors].sort((left, right) => left.bounds.y - right.bounds.y || left.bounds.x - right.bounds.x);
 
   return sortedAnchors.flatMap((anchor): MobilePdfFigureRegion[] => {
-    const scope = resolveCaptionScope(anchor.bounds, input.pageWidth, input.pageHeight);
+    const scope = anchor.kind === 'table'
+      ? expandTableCaptionScope(resolveCaptionScope(anchor.bounds, input.pageWidth, input.pageHeight), anchor.bounds, input.pageWidth)
+      : resolveCaptionScope(anchor.bounds, input.pageWidth, input.pageHeight);
     const sameScopeAnchors = sortedAnchors.filter((candidate) => (
       candidate !== anchor && horizontalOverlapRatio(candidate.bounds, scope) > 0.5
     ));
-    const roughBounds = anchor.kind === 'table'
-      ? resolveTableBounds(anchor, sameScopeAnchors, input.blocks, scope, input.pageHeight, minimumHeight)
+    const unresolvedForwardRoughBounds = anchor.kind === 'table'
+      ? resolveTableBounds(anchor, sameScopeAnchors, input.blocks, scope, input.pageHeight, minimumTableHeight)
       : resolveFigureBounds(anchor, sameScopeAnchors, input.blocks, scope, pageMarginY, minimumHeight);
+    const forwardRoughBounds = anchor.kind === 'table' && input.textItems && unresolvedForwardRoughBounds
+      ? trimTableBoundsAtTextGap(input.textItems, scope, unresolvedForwardRoughBounds, minimumTableHeight)
+      : unresolvedForwardRoughBounds;
+    const forwardStructuredTable = anchor.kind === 'table' && input.textItems && forwardRoughBounds
+      ? reconstructPdfTableFromTextItems(input.textItems, anchor, scope, forwardRoughBounds)
+      : null;
+    const reverseStructuredTable = anchor.kind === 'table' && input.textItems && !forwardStructuredTable
+      ? reconstructPdfTableAboveCaption(input.textItems, anchor, scope, input.pageHeight, minimumTableHeight)
+      : null;
+    const structuredTable = forwardStructuredTable ?? reverseStructuredTable;
+    const roughBounds = structuredTable?.bounds ?? forwardRoughBounds;
     if (!roughBounds) {
       return [];
     }
-
-    const structuredTable = anchor.kind === 'table' && input.textItems
-      ? reconstructPdfTableFromTextItems(input.textItems, anchor, scope, roughBounds)
-      : null;
 
     const paintedImages = input.imageBounds.filter((bounds) => (
       horizontalOverlapRatio(bounds, roughBounds) > 0.18 && verticalOverlapRatio(bounds, roughBounds) > 0.18
@@ -328,8 +406,35 @@ export function detectPdfFigureRegions(input: DetectPdfFigureRegionsInput): Mobi
       paintedUnion.width * paintedUnion.height >= input.pageWidth * input.pageHeight * 0.012 &&
       paintedUnion.height >= minimumHeight * 0.75
     );
-    const unresolvedCrop = structuredTable?.bounds ?? (usePaintedUnion ? expandBounds(paintedUnion!, 4, roughBounds) : roughBounds);
-    const heightLimitedCrop = !usePaintedUnion && unresolvedCrop.height > input.pageHeight * 0.5
+    const paintedContentBounds = usePaintedUnion && input.textItems
+      ? expandPaintedBoundsWithAdjacentText(paintedUnion!, input.textItems, roughBounds, anchor.bounds, input.pageWidth, input.pageHeight)
+      : paintedUnion;
+    const wideCaptionContentBounds = usePaintedUnion && input.textItems
+      ? expandPaintedBoundsAcrossWideCaption(
+          paintedContentBounds!,
+          input.textItems,
+          roughBounds,
+          anchor.bounds,
+          input.pageWidth,
+          input.pageHeight
+        )
+      : paintedContentBounds;
+    const wideCaptionVectorBounds = !structuredTable && !usePaintedUnion && input.textItems && anchor.kind === 'figure'
+      ? expandPaintedBoundsAcrossWideCaption(
+          roughBounds,
+          input.textItems,
+          roughBounds,
+          anchor.bounds,
+          input.pageWidth,
+          input.pageHeight
+        )
+      : roughBounds;
+    const paintedCropLimit = anchor.kind === 'figure' && anchor.bounds.width >= input.pageWidth * 0.62
+      ? { x: 0, y: roughBounds.y, width: input.pageWidth, height: roughBounds.height }
+      : roughBounds;
+    const unresolvedCrop = structuredTable?.bounds ??
+      (usePaintedUnion ? expandBounds(wideCaptionContentBounds!, 4, paintedCropLimit) : wideCaptionVectorBounds);
+    const heightLimitedCrop = !structuredTable && !usePaintedUnion && unresolvedCrop.height > input.pageHeight * 0.5
       ? {
           ...unresolvedCrop,
           y: unresolvedCrop.y + unresolvedCrop.height - input.pageHeight * 0.5,
@@ -341,7 +446,10 @@ export function detectPdfFigureRegions(input: DetectPdfFigureRegionsInput): Mobi
       input.pageWidth,
       input.pageHeight
     );
-    if (crop.width < 40 || (!structuredTable && crop.height < minimumHeight)) {
+    if (
+      crop.width < 40 ||
+      (!structuredTable && crop.height < (anchor.kind === 'table' ? minimumTableHeight : minimumHeight))
+    ) {
       return [];
     }
 
@@ -406,7 +514,18 @@ export function reconstructPdfTableFromTextItems(
   scope: PdfBlockBounds,
   roughBounds: PdfPaintedImageBounds
 ): ReconstructedPdfTable | null {
-  const lines = buildPdfTableTextLines(items, scope, roughBounds);
+  return reconstructPdfTableFromTextItemsAtDensity(items, anchor, scope, roughBounds, false) ??
+    reconstructPdfTableFromTextItemsAtDensity(items, anchor, scope, roughBounds, true);
+}
+
+function reconstructPdfTableFromTextItemsAtDensity(
+  items: PositionedPdfTextItem[],
+  anchor: PdfCaptionAnchor,
+  scope: PdfBlockBounds,
+  roughBounds: PdfPaintedImageBounds,
+  compactColumns: boolean
+): ReconstructedPdfTable | null {
+  const lines = buildPdfTableTextLines(items, scope, roughBounds, compactColumns);
   const multiCellLines = lines.filter((line) => line.segments.length >= 2 && line.segments.length <= 12);
   if (multiCellLines.length < 3) {
     return null;
@@ -416,14 +535,31 @@ export function reconstructPdfTableFromTextItems(
   multiCellLines.forEach((line) => {
     countFrequency.set(line.segments.length, (countFrequency.get(line.segments.length) ?? 0) + 1);
   });
-  const [columnCount, frequency = 0] = [...countFrequency.entries()]
+  const [modalColumnCount, modalFrequency = 0] = [...countFrequency.entries()]
     .sort((left, right) => right[1] - left[1] || right[0] - left[0])[0] ?? [];
-  if (!columnCount || columnCount < 2 || columnCount > 12 || frequency < (columnCount === 2 ? 3 : 2)) {
+  const firstMultiCellLine = multiCellLines[0];
+  const headerAddsSparseLeadingColumn = Boolean(
+    modalColumnCount &&
+    firstMultiCellLine &&
+    firstMultiCellLine.segments.length === modalColumnCount + 1 &&
+    firstMultiCellLine.segments.length <= 12 &&
+    modalFrequency >= 2
+  );
+  const columnCount = headerAddsSparseLeadingColumn
+    ? firstMultiCellLine.segments.length
+    : modalColumnCount;
+  const frequency = countFrequency.get(columnCount ?? 0) ?? 0;
+  if (
+    !columnCount ||
+    columnCount < 2 ||
+    columnCount > 12 ||
+    (!headerAddsSparseLeadingColumn && frequency < (columnCount === 2 ? 3 : 2))
+  ) {
     return null;
   }
 
   const dominantLines = lines.filter((line) => line.segments.length === columnCount);
-  if (dominantLines.length < 2) {
+  if (dominantLines.length < (headerAddsSparseLeadingColumn ? 1 : 2)) {
     return null;
   }
   const columnCenters = Array.from({ length: columnCount }, (_, columnIndex) => medianNumber(
@@ -455,7 +591,44 @@ export function reconstructPdfTableFromTextItems(
   if (strongBodyIndices.length < 2) {
     return null;
   }
-  const lastBodyIndex = strongBodyIndices[strongBodyIndices.length - 1];
+  const candidateLastBodyIndex = strongBodyIndices[strongBodyIndices.length - 1];
+  const adjacentLineSteps = lines
+    .slice(headerStartIndex, candidateLastBodyIndex + 1)
+    .slice(1)
+    .map((line, index) => line.y - lines[headerStartIndex + index].y)
+    .filter((step) => step > 0);
+  const typicalLineStep = medianNumber(adjacentLineSteps) || 8;
+  const tableBreakThreshold = Math.max(22, typicalLineStep * 2.4);
+  let lastBodyIndex = candidateLastBodyIndex;
+  let strongRowsBeforeBreak = 0;
+  for (let index = bodyStartIndex; index <= candidateLastBodyIndex; index += 1) {
+    if (countPopulatedTableCells(assignedLines[index]) >= minimumPopulatedCells) {
+      strongRowsBeforeBreak += 1;
+    }
+    if (
+      index > bodyStartIndex &&
+      strongRowsBeforeBreak >= 2 &&
+      lines[index].y - lines[index - 1].y > tableBreakThreshold
+    ) {
+      lastBodyIndex = index - 1;
+      break;
+    }
+  }
+  if (lastBodyIndex === candidateLastBodyIndex) {
+    for (let index = candidateLastBodyIndex + 1; index < lines.length; index += 1) {
+      const gap = lines[index].y - lines[index - 1].y;
+      if (gap > Math.max(36, typicalLineStep * 4)) {
+        break;
+      }
+      if (looksLikePdfTableSummaryCells(assignedLines[index])) {
+        lastBodyIndex = index;
+        break;
+      }
+      if (countPopulatedTableCells(assignedLines[index]) >= minimumPopulatedCells) {
+        break;
+      }
+    }
+  }
   const selectedLines = lines.slice(headerStartIndex, lastBodyIndex + 1);
   const selectedAssignedLines = assignedLines.slice(headerStartIndex, lastBodyIndex + 1);
 
@@ -478,21 +651,25 @@ export function reconstructPdfTableFromTextItems(
     const cells = bodyCells[index];
     const previousLine = bodyLines[index - 1];
     const populatedCells = countPopulatedTableCells(cells);
-    const continuesPrevious = rows.length > 0 && Boolean(previousLine) && (
+    const summaryRow = looksLikePdfTableSummaryCells(cells);
+    const continuesPrevious = !summaryRow && rows.length > 0 && Boolean(previousLine) && (
       line.y - previousLine.y < Math.max(2.8, rowStep * 0.62) ||
       populatedCells < minimumPopulatedCells
     );
     if (continuesPrevious) {
       appendPdfTableCells(rows[rows.length - 1], cells);
-    } else if (populatedCells >= minimumPopulatedCells) {
+    } else if (populatedCells >= minimumPopulatedCells || summaryRow) {
       rows.push(cells.map((cell) => normalizePdfTableCell(cell)));
     }
   });
 
   const normalizedHeaders = headers.map((header) => normalizePdfTableCell(header));
-  const normalizedRows = rows
+  const normalizedRows = normalizeSparseLeadingTableGroups(rows
     .map((row) => row.map((cell) => normalizePdfTableCell(cell)))
-    .filter((row) => countPopulatedTableCells(row) >= minimumPopulatedCells);
+    .filter((row) => (
+      countPopulatedTableCells(row) >= minimumPopulatedCells ||
+      looksLikePdfTableSummaryCells(row)
+    )));
   const populatedRatio = normalizedRows.reduce(
     (total, row) => total + countPopulatedTableCells(row),
     0
@@ -501,17 +678,24 @@ export function reconstructPdfTableFromTextItems(
     Math.max(1, normalizedRows.length * columnCount);
   const averageHeaderLength = normalizedHeaders.reduce((total, header) => total + header.length, 0) /
     Math.max(1, normalizedHeaders.length);
+  const maximumCellLength = Math.max(0, ...normalizedRows.flat().map((cell) => cell.length));
   const formulaHeavyCellRatio = normalizedRows.flat().filter(isFormulaHeavyTableCell).length /
     Math.max(1, normalizedRows.length * columnCount);
   const repeatedHeaderToken = hasRepeatedPdfTableHeaderToken(normalizedHeaders);
   const numericHeaderRatio = calculatePdfTableNumericHeaderRatio(normalizedHeaders);
+  const hasIndexedColumnHeader = normalizedHeaders.some((header) =>
+    /\b(?:rollout|trial|episode|index|step|task)\b/iu.test(header)
+  );
   if (
     normalizedRows.length < 2 ||
+    (columnCount >= 3 && normalizedHeaders.some((header) => !header)) ||
     populatedRatio < 0.68 ||
     averageCellLength > (columnCount === 2 ? 72 : 110) ||
+    maximumCellLength > 260 ||
+    (normalizedRows.length <= 3 && maximumCellLength > 180) ||
     (formulaHeavyCellRatio >= 0.55 && averageHeaderLength > 28) ||
     (columnCount === 2 && repeatedHeaderToken) ||
-    numericHeaderRatio >= 0.55
+    (numericHeaderRatio >= 0.55 && !hasIndexedColumnHeader)
   ) {
     return null;
   }
@@ -537,7 +721,8 @@ export function reconstructPdfTableFromTextItems(
 function buildPdfTableTextLines(
   items: PositionedPdfTextItem[],
   scope: PdfBlockBounds,
-  roughBounds: PdfPaintedImageBounds
+  roughBounds: PdfPaintedImageBounds,
+  compactColumns: boolean
 ): PdfTableTextLine[] {
   const candidates = items.filter((item) => {
     const centerX = item.x + item.width / 2;
@@ -563,7 +748,9 @@ function buildPdfTableTextLines(
     const medianHeight = medianNumber(sorted.map((item) => item.height)) || 6;
     // Academic tables often leave only a narrow printable gutter between a
     // range cell and the next label. A prose-sized gap merges those columns.
-    const segmentGap = Math.max(5.5, medianHeight * 0.8);
+    const segmentGap = compactColumns
+      ? Math.max(2.2, medianHeight * 0.32)
+      : Math.max(5.5, medianHeight * 0.8);
     const segmentGroups: PositionedPdfTextItem[][] = [];
     for (const item of sorted) {
       const segment = segmentGroups[segmentGroups.length - 1];
@@ -633,6 +820,41 @@ function normalizePdfTableCell(value: string): string {
 
 function countPopulatedTableCells(cells: string[]): number {
   return cells.filter((cell) => cell.trim()).length;
+}
+
+function looksLikePdfTableSummaryCells(cells: string[]): boolean {
+  const populated = cells.filter((cell) => cell.trim());
+  return populated.length >= 2 &&
+    populated.length <= 3 &&
+    /^(?:total|average|mean|overall|all)\b/iu.test(populated[0]);
+}
+
+function normalizeSparseLeadingTableGroups(rows: string[][]): string[][] {
+  if (rows.length < 4 || rows[0]?.length < 2) {
+    return rows;
+  }
+  const labelIndices = rows
+    .map((row, index) => ({ index, label: row[0]?.trim() ?? '' }))
+    .filter(({ label }) => Boolean(label))
+    .map(({ index }) => index);
+  const emptyLeadingCells = rows.length - labelIndices.length;
+  if (labelIndices.length < 2 || emptyLeadingCells < 2) {
+    return rows;
+  }
+  const normalized = rows.map((row) => [...row]);
+  labelIndices.forEach((labelIndex, groupIndex) => {
+    const targetIndex = groupIndex === 0
+      ? 0
+      : Math.floor((labelIndices[groupIndex - 1] + labelIndex) / 2);
+    if (
+      targetIndex < labelIndex &&
+      !normalized[targetIndex][0]?.trim()
+    ) {
+      normalized[targetIndex][0] = normalized[labelIndex][0];
+      normalized[labelIndex][0] = '';
+    }
+  });
+  return normalized;
 }
 
 function isFormulaHeavyTableCell(value: string): boolean {
@@ -855,7 +1077,15 @@ function isBoundsInsideParagraphBlock(bounds: PdfBlockBounds, blocks: ExtractedP
 }
 
 function looksLikeInlineFigureReferenceLine(line: RawPdfTextLine, lines: RawPdfTextLine[]): boolean {
-  if (!/^(fig\.?|figure)\s*\d+[:.]/iu.test(line.original.trim())) {
+  const normalized = line.original.trim();
+  if (!/^(?:fig\.?|figure|table)\s*[\divxlcdm]+[:.]/iu.test(normalized)) {
+    return false;
+  }
+  const strongCaptionWords = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (
+    /^(?:fig\.?|figure|table)\s*[\divxlcdm]+\s*:\s+\p{Lu}/iu.test(normalized) &&
+    strongCaptionWords.length >= 6
+  ) {
     return false;
   }
   const previous = lines
@@ -870,7 +1100,12 @@ function looksLikeInlineFigureReferenceLine(line: RawPdfTextLine, lines: RawPdfT
     return false;
   }
   const words = previous.original.match(/[\p{L}\p{N}]+/gu) ?? [];
-  return words.length >= 6 && !/[.!?。！？][)\]"']*$/u.test(previous.original.trim());
+  const proseConnectors = previous.original.match(
+    /\b(?:a|an|and|are|as|at|by|for|from|given|in|is|of|on|the|to|was|were|with)\b/giu
+  ) ?? [];
+  return words.length >= 6 &&
+    proseConnectors.length >= 2 &&
+    !/[.!?。！？][)\]"']*$/u.test(previous.original.trim());
 }
 
 function buildRawPdfTextLines(items: PositionedPdfTextItem[]): RawPdfTextLine[] {
@@ -885,10 +1120,19 @@ function buildRawPdfTextLines(items: PositionedPdfTextItem[]): RawPdfTextLine[] 
   }
   return groups.flatMap((line) => {
     const segments: PositionedPdfTextItem[][] = [];
+    const pageWidth = line.find((item) => typeof item.pageWidth === 'number' && item.pageWidth > 0)?.pageWidth ?? 0;
     for (const item of line.sort((left, right) => left.x - right.x)) {
       const segment = segments[segments.length - 1];
       const previous = segment?.[segment.length - 1];
-      if (!segment || (previous && item.x - (previous.x + previous.width) > 34)) {
+      const separatesParallelCaptions = Boolean(
+        segment &&
+        pageWidth > 0 &&
+        segment.some((candidate) => /^(?:fig(?:ure)?\.?|table)\s*[\divxlcdm]+\s*[:.]/iu.test(candidate.str.trim())) &&
+        /^(?:fig(?:ure)?\.?|table)\s*[\divxlcdm]+\s*[:.]/iu.test(item.str.trim()) &&
+        segment[0].x < pageWidth / 2 &&
+        item.x >= pageWidth / 2
+      );
+      if (!segment || separatesParallelCaptions || (previous && item.x - (previous.x + previous.width) > 34)) {
         segments.push([item]);
       } else {
         segment.push(item);
@@ -1010,13 +1254,70 @@ function resolveTableBounds(
       block.bounds &&
       looksLikeTableFollowingBoundary(block) &&
       horizontalOverlapRatio(block.bounds, scope) > 0.35 &&
+      (
+        block.type === 'heading' ||
+        block.bounds.width >= scope.width * 0.72
+      ) &&
       block.bounds.y > top + minimumHeight
     )).map((block) => block.bounds!.y - 6)
   ].reduce((nearest, y) => Math.min(nearest, y), pageHeight - Math.max(18, pageHeight * 0.045));
-  const bottom = Math.min(nextBoundary, top + pageHeight * 0.5);
+  const bottom = nextBoundary;
   return bottom - top >= minimumHeight
     ? { x: scope.x, y: top, width: scope.width, height: bottom - top }
     : null;
+}
+
+function trimTableBoundsAtTextGap(
+  items: PositionedPdfTextItem[],
+  scope: PdfBlockBounds,
+  roughBounds: PdfPaintedImageBounds,
+  minimumHeight: number
+): PdfPaintedImageBounds {
+  const candidates = items
+    .filter((item) => {
+      const centerX = item.x + item.width / 2;
+      const centerY = item.y + item.height / 2;
+      return centerX >= scope.x &&
+        centerX <= scope.x + scope.width &&
+        centerY >= roughBounds.y &&
+        centerY <= roughBounds.y + roughBounds.height;
+    })
+    .sort((left, right) => left.y - right.y || left.x - right.x);
+  const rows: Array<{ y: number; bottom: number; text: string }> = [];
+  for (const item of candidates) {
+    const row = rows.find((candidate) => (
+      Math.abs(candidate.y - item.y) <= Math.max(2.5, item.height * 0.45)
+    ));
+    if (row) {
+      row.y = Math.min(row.y, item.y);
+      row.bottom = Math.max(row.bottom, item.y + item.height);
+      row.text = `${row.text} ${item.str}`.trim();
+    } else {
+      rows.push({ y: item.y, bottom: item.y + item.height, text: item.str });
+    }
+  }
+  rows.sort((left, right) => left.y - right.y);
+  if (rows.length < 7) {
+    return roughBounds;
+  }
+  const rowSteps = rows.slice(1).map((row, index) => row.y - rows[index].y).filter((step) => step > 0);
+  const typicalStep = medianNumber(rowSteps) || 8;
+  const breakThreshold = Math.max(22, typicalStep * 2.25);
+  const breakIndex = rows.findIndex((row, index) => (
+    index >= 5 &&
+    row.y - rows[index - 1].y > breakThreshold &&
+    !/^(?:total|average|mean|overall|all)\b/iu.test(row.text.trim())
+  ));
+  if (breakIndex < 0) {
+    return roughBounds;
+  }
+  const bottom = Math.min(
+    roughBounds.y + roughBounds.height,
+    rows[breakIndex - 1].bottom + 5
+  );
+  return bottom - roughBounds.y >= minimumHeight
+    ? { ...roughBounds, height: bottom - roughBounds.y }
+    : roughBounds;
 }
 
 function looksLikeTableFollowingBoundary(block: ExtractedPdfBlock): boolean {
@@ -1028,6 +1329,12 @@ function looksLikeTableFollowingBoundary(block: ExtractedPdfBlock): boolean {
     return false;
   }
   const original = block.original.trim();
+  if (looksLikeDenseTableText(original)) {
+    return false;
+  }
+  if (/^[+\-−–—±]?\d+(?:\.\d+)?\s+\p{Ll}/u.test(original)) {
+    return false;
+  }
   const words = original.match(/[\p{L}\p{N}]+/gu) ?? [];
   const mathPollution = (original.match(/[=∑∫√∞≤≥≠≈→∥⊙⋆^_{}\u0000-\u001f]/gu) ?? []).length;
   return words.length >= 12 && mathPollution < 3 && /[.!?][)\]"']*$/u.test(original);
@@ -1042,9 +1349,170 @@ function resolveCaptionScope(bounds: PdfBlockBounds, pageWidth: number, pageHeig
     return { x: margin, y: 0, width: pageWidth - margin * 2, height: pageHeight };
   }
   const gutter = Math.max(5, pageWidth * 0.01);
+  const figureGutterAllowance = Math.max(8, gutter);
   return bounds.x + bounds.width / 2 <= split
-    ? { x: margin, y: 0, width: split - gutter - margin, height: pageHeight }
-    : { x: split + gutter, y: 0, width: pageWidth - margin - split - gutter, height: pageHeight };
+    ? { x: margin, y: 0, width: split + figureGutterAllowance - margin, height: pageHeight }
+    : {
+        x: split - figureGutterAllowance,
+        y: 0,
+        width: pageWidth - margin - split + figureGutterAllowance,
+        height: pageHeight
+      };
+}
+
+function expandTableCaptionScope(
+  scope: PdfBlockBounds,
+  captionBounds: PdfBlockBounds,
+  pageWidth: number
+): PdfBlockBounds {
+  const expandedX = Math.max(0, Math.min(scope.x, captionBounds.x - 8));
+  const right = Math.min(pageWidth, scope.x + scope.width);
+  return {
+    ...scope,
+    x: expandedX,
+    width: Math.max(1, right - expandedX)
+  };
+}
+
+function reconstructPdfTableAboveCaption(
+  items: PositionedPdfTextItem[],
+  anchor: PdfCaptionAnchor,
+  scope: PdfBlockBounds,
+  pageHeight: number,
+  minimumHeight: number
+): ReconstructedPdfTable | null {
+  const bottom = anchor.bounds.y - 5;
+  if (bottom <= minimumHeight) {
+    return null;
+  }
+  const candidates = [0.12, 0.2, 0.32, 0.48]
+    .map((pageFraction) => {
+      const top = Math.max(0, bottom - Math.max(minimumHeight, pageHeight * pageFraction));
+      return reconstructPdfTableFromTextItems(items, anchor, scope, {
+        x: scope.x,
+        y: top,
+        width: scope.width,
+        height: bottom - top
+      });
+    })
+    .filter((candidate): candidate is ReconstructedPdfTable => Boolean(candidate));
+  return candidates.sort((left, right) => (
+    right.table.rows.length - left.table.rows.length ||
+    right.table.headers.filter(Boolean).length - left.table.headers.filter(Boolean).length ||
+    left.bounds.height - right.bounds.height
+  ))[0] ?? null;
+}
+
+function isStandaloneCaptionMarker(value: string): boolean {
+  return /^(?:fig(?:ure)?\.?|table)\s*[\divxlcdm]+\s*[:.]$/iu.test(value.trim());
+}
+
+function collectStandaloneCaptionItems(
+  items: PositionedPdfTextItem[],
+  anchor: PositionedPdfTextItem,
+  firstLine: PositionedPdfTextItem[],
+  stopAtSentenceBoundary = false
+): PositionedPdfTextItem[] {
+  const maximumBottom = anchor.y + Math.max(72, (anchor.pageHeight ?? 792) * 0.13);
+  const pageWidth = anchor.pageWidth ?? 0;
+  const firstLineMinX = Math.min(...firstLine.map((candidate) => candidate.x));
+  const firstLineMaxX = Math.max(...firstLine.map((candidate) => candidate.x + candidate.width));
+  const firstLineSpansPage = pageWidth > 0 && (
+    firstLineMaxX - firstLineMinX >= pageWidth * 0.56 ||
+    (firstLineMinX < pageWidth * 0.42 && firstLineMaxX > pageWidth * 0.58)
+  );
+  const maximumRight = firstLineSpansPage
+    ? pageWidth
+    : pageWidth > 0 && anchor.x < pageWidth * 0.48
+    ? pageWidth * 0.52
+    : pageWidth || Number.POSITIVE_INFINITY;
+  const candidates = items
+    .filter((candidate) => (
+      candidate.page === anchor.page &&
+      candidate.y >= anchor.y - Math.max(2, anchor.height * 0.3) &&
+      candidate.y <= maximumBottom &&
+      candidate.x >= anchor.x - 2 &&
+      candidate.x + candidate.width <= maximumRight + 2
+    ))
+    .sort((left, right) => left.y - right.y || left.x - right.x);
+  const rows: PositionedPdfTextItem[][] = [];
+  for (const candidate of candidates) {
+    const row = rows.find((entries) => (
+      Math.abs(entries[0].y - candidate.y) <= Math.max(2.5, entries[0].height * 0.55, candidate.height * 0.55)
+    ));
+    if (row) {
+      row.push(candidate);
+    } else {
+      rows.push([candidate]);
+    }
+  }
+  const collected = [...firstLine];
+  const collectedEndsSentence = (): boolean => /[.!?。！？]\s*$/u.test(
+    [...collected]
+      .sort((left, right) => left.y - right.y || left.x - right.x)
+      .map((candidate) => candidate.str)
+      .join(' ')
+      .trim()
+  );
+  if (stopAtSentenceBoundary && collectedEndsSentence()) {
+    return Array.from(new Set(collected));
+  }
+  let previousBottom = Math.max(...firstLine.map((candidate) => candidate.y + candidate.height));
+  for (const row of rows) {
+    const rowTop = Math.min(...row.map((candidate) => candidate.y));
+    if (rowTop <= anchor.y + Math.max(2.5, anchor.height * 0.55)) {
+      continue;
+    }
+    const medianHeight = medianNumber(row.map((candidate) => candidate.height)) || anchor.height;
+    if (rowTop - previousBottom > Math.max(10, medianHeight * 1.5)) {
+      break;
+    }
+    if (stopAtSentenceBoundary && looksLikeTableRowAfterCaption(row)) {
+      break;
+    }
+    collected.push(...row);
+    previousBottom = Math.max(...row.map((candidate) => candidate.y + candidate.height));
+    if (stopAtSentenceBoundary && collectedEndsSentence()) {
+      break;
+    }
+    if (collected.length >= 48) {
+      break;
+    }
+  }
+  return Array.from(new Set(collected));
+}
+
+function looksLikeTableRowAfterCaption(row: PositionedPdfTextItem[]): boolean {
+  const ordered = row
+    .filter((item) => item.str.trim())
+    .sort((left, right) => left.x - right.x);
+  if (ordered.length < 2) {
+    return false;
+  }
+  const medianHeight = medianNumber(ordered.map((item) => item.height)) || 8;
+  const cellGap = Math.max(10, medianHeight * 1.25);
+  return ordered.slice(1).some((item, index) => (
+    item.x - (ordered[index].x + ordered[index].width) >= cellGap
+  ));
+}
+
+function boundsForPositionedItems(
+  items: PositionedPdfTextItem[],
+  pageWidth?: number,
+  pageHeight?: number
+): PdfBlockBounds {
+  const minX = Math.min(...items.map((item) => item.x));
+  const minY = Math.min(...items.map((item) => item.y));
+  const maxX = Math.max(...items.map((item) => item.x + item.width));
+  const maxY = Math.max(...items.map((item) => item.y + item.height));
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+    pageWidth,
+    pageHeight
+  };
 }
 
 function parseCaptionLabel(value: string): Pick<PdfCaptionAnchor, 'kind' | 'label'> | null {
@@ -1060,11 +1528,35 @@ function parseCaptionLabel(value: string): Pick<PdfCaptionAnchor, 'kind' | 'labe
   };
 }
 
+function looksLikeFigureInteriorText(value: string): boolean {
+  const text = value.trim();
+  const words = text.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const numericWords = words.filter((word) => /\d/u.test(word)).length;
+  const panelMarkers = text.match(/\([a-z]\)/gu) ?? [];
+  const chartUnits = text.match(/\((?:m|s|deg|rad|hz|kg|n)\)/giu) ?? [];
+  return panelMarkers.length >= 2 ||
+    chartUnits.length >= 2 ||
+    (words.length >= 8 && numericWords / words.length >= 0.34) ||
+    looksLikeDenseTableText(text);
+}
+
+function looksLikeDenseTableText(value: string): boolean {
+  const text = value.trim();
+  const decimalValues = text.match(/(?:^|\s)[+\-−–—±]?\d+\.\d+(?=\s|$)/gu) ?? [];
+  const categoricalCells = text.match(
+    /\b(?:real(?:\/sim)?|sim|grp(?:\/dex)?|dex|ego|wrist|3rd|hours?|source)\b/giu
+  ) ?? [];
+  return decimalValues.length >= 4 || categoricalCells.length >= 6;
+}
+
 function looksLikeProseBoundary(block: ExtractedPdfBlock): boolean {
   if (block.type === 'heading') {
     return true;
   }
   if (block.type !== 'paragraph') {
+    return false;
+  }
+  if (looksLikeFigureInteriorText(block.original)) {
     return false;
   }
   const words = block.original.match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -1075,8 +1567,33 @@ function normalizePdfLine(value: string): string {
   return value
     .replace(/\s+([,.;:!?%\]])/gu, '$1')
     .replace(/([([])\s+/gu, '$1')
+    .replace(/(\d)\.\s+(\d)/gu, '$1.$2')
+    .replace(/(\p{L})-\s+(\p{Ll})/gu, '$1-$2')
+    .replace(/(\d)\s*\/\s*(\d)/gu, '$1/$2')
+    .replace(/\s+([’'])s\b/gu, '$1s')
     .replace(/\s+/gu, ' ')
     .trim();
+}
+
+function normalizePositionedCaptionItems(items: PositionedPdfTextItem[]): string {
+  const sorted = [...items].sort((left, right) => left.y - right.y || left.x - right.x);
+  let value = '';
+  let previous: PositionedPdfTextItem | undefined;
+  for (const item of sorted) {
+    const text = item.str.trim();
+    if (!text) {
+      continue;
+    }
+    const startsWrappedLine = Boolean(previous) &&
+      Math.abs(item.y - previous!.y) > Math.max(2.5, item.height * 0.55, previous!.height * 0.55);
+    if (startsWrappedLine && /(\p{L})-$/u.test(value) && /^\p{Ll}/u.test(text)) {
+      value = `${value.slice(0, -1)}${text}`;
+    } else {
+      value = value ? `${value} ${text}` : text;
+    }
+    previous = item;
+  }
+  return normalizePdfLine(value);
 }
 
 function horizontalOverlapRatio(left: PdfPaintedImageBounds, right: PdfPaintedImageBounds): number {
@@ -1101,6 +1618,109 @@ function unionBounds(bounds: PdfPaintedImageBounds[]): PdfPaintedImageBounds {
   const maxX = Math.max(...bounds.map((entry) => entry.x + entry.width));
   const maxY = Math.max(...bounds.map((entry) => entry.y + entry.height));
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+function expandPaintedBoundsWithAdjacentText(
+  paintedBounds: PdfPaintedImageBounds,
+  items: PositionedPdfTextItem[],
+  roughBounds: PdfPaintedImageBounds,
+  captionBounds: PdfBlockBounds,
+  pageWidth: number,
+  pageHeight: number
+): PdfPaintedImageBounds {
+  let expanded = paintedBounds;
+  const proximity = Math.max(16, Math.min(pageWidth, pageHeight) * 0.03);
+  for (let pass = 0; pass < 3; pass += 1) {
+    const neighborhood = expandBounds(expanded, proximity, roughBounds);
+    const adjacentText = items
+      .map((item): PdfPaintedImageBounds => ({
+        x: item.x,
+        y: item.y,
+        width: Math.max(1, item.width),
+        height: Math.max(1, item.height)
+      }))
+      .filter((bounds) => (
+        boundsCenterInside(bounds, roughBounds) &&
+        boundsCenterInside(bounds, neighborhood) &&
+        !boundsCenterInside(bounds, expandBounds(captionBounds, 3, {
+          x: 0,
+          y: 0,
+          width: pageWidth,
+          height: pageHeight
+        }))
+      ));
+    if (adjacentText.length === 0) {
+      break;
+    }
+    const next = unionBounds([expanded, ...adjacentText]);
+    if (
+      Math.abs(next.x - expanded.x) < 0.1 &&
+      Math.abs(next.y - expanded.y) < 0.1 &&
+      Math.abs(next.width - expanded.width) < 0.1 &&
+      Math.abs(next.height - expanded.height) < 0.1
+    ) {
+      break;
+    }
+    expanded = next;
+  }
+  return expanded;
+}
+
+function expandPaintedBoundsAcrossWideCaption(
+  paintedBounds: PdfPaintedImageBounds,
+  items: PositionedPdfTextItem[],
+  roughBounds: PdfPaintedImageBounds,
+  captionBounds: PdfBlockBounds,
+  pageWidth: number,
+  pageHeight: number
+): PdfPaintedImageBounds {
+  if (captionBounds.width < pageWidth * 0.62) {
+    return paintedBounds;
+  }
+  const verticalMargin = Math.max(18, Math.min(pageWidth, pageHeight) * 0.035);
+  const verticalBand = {
+    x: roughBounds.x,
+    y: Math.max(roughBounds.y, paintedBounds.y - verticalMargin),
+    width: roughBounds.width,
+    height: Math.min(
+      roughBounds.y + roughBounds.height,
+      paintedBounds.y + paintedBounds.height + verticalMargin
+    ) - Math.max(roughBounds.y, paintedBounds.y - verticalMargin)
+  };
+  const captionExclusion = expandBounds(captionBounds, 3, {
+    x: 0,
+    y: 0,
+    width: pageWidth,
+    height: pageHeight
+  });
+  const distantFigureLabels = items
+    .filter((item) => isLikelyFigureLabelText(item.str))
+    .map((item): PdfPaintedImageBounds => ({
+      x: item.x,
+      y: item.y,
+      width: Math.max(1, item.width),
+      height: Math.max(1, item.height)
+    }))
+    .filter((bounds) => {
+      const centerY = bounds.y + bounds.height / 2;
+      return centerY >= verticalBand.y &&
+        centerY <= verticalBand.y + verticalBand.height &&
+        horizontalOverlapRatio(bounds, verticalBand) > 0.2 &&
+        !boundsCenterInside(bounds, captionExclusion);
+    });
+  if (distantFigureLabels.length === 0) {
+    return paintedBounds;
+  }
+  return unionBounds([paintedBounds, ...distantFigureLabels]);
+}
+
+function isLikelyFigureLabelText(value: string): boolean {
+  const text = value.trim();
+  if (!text || text.length > 140) {
+    return false;
+  }
+  const words = text.match(/[\p{L}\p{N}]+/gu) ?? [];
+  return words.length <= 24 && !(words.length >= 12 && /[.!?。！？]\s*$/u.test(text));
 }
 
 function expandBounds(bounds: PdfPaintedImageBounds, amount: number, limit: PdfPaintedImageBounds): PdfPaintedImageBounds {

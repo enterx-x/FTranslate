@@ -148,7 +148,9 @@ export function buildPdfReaderPageOutline(page: number, items: PositionedPdfText
   const medianLineStep = estimateReaderLineStep(contentLines) ?? medianLineHeight * 1.35;
   const captionMergedLines = mergeBareIeeeTableCaptionLines(contentLines, metrics);
   const orderedLines = mergeWrappedReaderHeadingLines(
-    orderLinesForReaderLayout(captionMergedLines, page, metrics),
+    mergeReaderCaptionContinuationLines(
+      orderLinesForReaderLayout(captionMergedLines, page, metrics)
+    ),
     page,
     metrics,
     medianLineHeight
@@ -162,16 +164,16 @@ export function buildPdfReaderPageOutline(page: number, items: PositionedPdfText
       return;
     }
 
-    let original = joinParagraphLines(currentParagraph.map((line) => line.text));
-    const inlineSection = extractInlineSection(original);
-    const section = inlineSection?.section ?? currentSection;
-    original = inlineSection?.body ?? original;
-    if (inlineSection) {
-      currentSection = inlineSection.section;
-    }
+    const original = joinParagraphLines(currentParagraph.map((line) => line.text));
     splitReaderParagraphText(original).forEach((paragraph) => {
-      if (containsReadableText(paragraph)) {
-        blocks.push(createBlock(page, 'paragraph', section, paragraph, getLinesBounds(currentParagraph)));
+      const inlineSection = extractInlineSection(paragraph);
+      const section = inlineSection?.section ?? currentSection;
+      const paragraphBody = inlineSection?.body ?? paragraph;
+      if (inlineSection) {
+        currentSection = inlineSection.section;
+      }
+      if (containsReadableText(paragraphBody)) {
+        blocks.push(createBlock(page, 'paragraph', section, paragraphBody, getLinesBounds(currentParagraph)));
       }
     });
     currentParagraph = [];
@@ -205,6 +207,8 @@ export function buildPdfReaderPageOutline(page: number, items: PositionedPdfText
     const previousLine = currentParagraph[currentParagraph.length - 1];
     const lineIsAffiliation = page === 1 && looksLikeReaderAffiliation(line.text);
     const previousIsAffiliation = page === 1 && Boolean(previousLine) && looksLikeReaderAffiliation(previousLine.text);
+    const continuesBracketedReference = /^\[\d{1,4}\]\s/u.test(currentParagraph[0]?.text.trim() ?? '') &&
+      !/^\[\d{1,4}\]\s/u.test(line.text.trim());
     const paragraphGapThreshold = previousLine
       ? Math.max(medianLineStep * 1.3, previousLine.height * 1.45, line.height * 1.45)
       : PARAGRAPH_GAP_THRESHOLD;
@@ -212,7 +216,7 @@ export function buildPdfReaderPageOutline(page: number, items: PositionedPdfText
       previousLine &&
       (lineIsAffiliation !== previousIsAffiliation ||
         Math.abs(line.y - previousLine.y) > paragraphGapThreshold ||
-        Math.abs(line.x - previousLine.x) > COLUMN_SPLIT_THRESHOLD / 2 ||
+        (!continuesBracketedReference && Math.abs(line.x - previousLine.x) > COLUMN_SPLIT_THRESHOLD / 2) ||
         hasSignificantReaderFontChange(previousLine, line) ||
         startsNewReaderParagraph(currentParagraph, line))
     ) {
@@ -222,7 +226,41 @@ export function buildPdfReaderPageOutline(page: number, items: PositionedPdfText
   });
 
   flushParagraph();
-  return mergeReaderBlockContinuations(blocks);
+  return mergeReaderReferenceContinuations(mergeReaderBlockContinuations(blocks));
+}
+
+function mergeReaderReferenceContinuations(blocks: ExtractedPdfBlock[]): ExtractedPdfBlock[] {
+  const referenceEntryCount = blocks.filter((block) => /^\[\d{1,4}\]\s/u.test(block.original.trim())).length;
+  if (referenceEntryCount < 2) {
+    return blocks;
+  }
+  const merged: ExtractedPdfBlock[] = [];
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    const previous = merged.at(-1);
+    const next = blocks[index + 1];
+    const venueHeading = block.type === 'heading' &&
+      /^(?:19|20)\d{2}\s+(?:IEEE|ACM|International|Conference|Transactions|Proceedings)\b/iu
+        .test(block.original.trim());
+    if (
+      venueHeading &&
+      previous?.type === 'paragraph' &&
+      next?.type === 'paragraph' &&
+      !/^\[\d{1,4}\]\s/u.test(next.original.trim())
+    ) {
+      merged[merged.length - 1] = createBlock(
+        previous.page,
+        'paragraph',
+        previous.section,
+        joinParagraphLines([previous.original, block.original, next.original]),
+        mergeBounds(mergeBounds(previous.bounds, block.bounds), next.bounds)
+      );
+      index += 1;
+      continue;
+    }
+    merged.push(block);
+  }
+  return merged;
 }
 
 function orderLinesForReaderLayout<TItem extends PositionedPdfTextItem>(
@@ -230,6 +268,10 @@ function orderLinesForReaderLayout<TItem extends PositionedPdfTextItem>(
   page: number,
   metrics: PageTextMetrics
 ): Array<TextLine<TItem>> {
+  if (looksLikeSingleColumnReferenceLayout(lines, metrics)) {
+    return mergeSingleColumnReferenceRowFragments(lines, metrics)
+      .sort((left, right) => left.y - right.y || left.x - right.x);
+  }
   if (page !== 1) {
     const topCenteredTableCaptions = lines.filter((line) => (
       /^TABLE\s+[IVXLCDM\d]+(?:\s+|$)/u.test(line.text.trim()) &&
@@ -239,7 +281,7 @@ function orderLinesForReaderLayout<TItem extends PositionedPdfTextItem>(
     const remainingLines = lines.filter((line) => !topCenteredTableCaptions.includes(line));
     return [
       ...topCenteredTableCaptions.sort((left, right) => left.y - right.y || left.x - right.x),
-      ...orderLinesForAcademicLayout(remainingLines)
+      ...orderParallelCaptionBands(orderLinesForAcademicLayout(remainingLines), metrics)
     ];
   }
   const frontMatterLimit = metrics.minY + metrics.height * 0.18;
@@ -247,11 +289,146 @@ function orderLinesForReaderLayout<TItem extends PositionedPdfTextItem>(
   const frontMatter = lines
     .filter((line) => (
       line.y <= frontMatterLimit &&
-      Math.abs(getLineCenterX(line) - pageCenter) <= Math.max(55, metrics.width * 0.16)
+      (
+        Math.abs(getLineCenterX(line) - pageCenter) <= Math.max(55, metrics.width * 0.16) ||
+        looksLikePageOneFrontMatterLine(line)
+      )
     ))
     .sort((left, right) => left.y - right.y || left.x - right.x);
   const body = lines.filter((line) => !frontMatter.includes(line));
-  return [...frontMatter, ...orderLinesForAcademicLayout(body)];
+  const pageFootnotes = body
+    .filter((line) => looksLikePageOneFootnoteLine(line.text))
+    .sort((left, right) => left.y - right.y || left.x - right.x);
+  const orderedBody = orderParallelCaptionBands(
+    orderLinesForAcademicLayout(body.filter((line) => !pageFootnotes.includes(line))),
+    metrics
+  );
+  // Keep page-one author notes with the metadata they describe. Appending them
+  // after the article body can place a corresponding-author note between the
+  // final line on page one and its continuation on page two.
+  return [...frontMatter, ...pageFootnotes, ...orderedBody];
+}
+
+function looksLikePageOneFrontMatterLine(line: TextLine): boolean {
+  const text = line.text.trim();
+  if (
+    !text ||
+    /^(?:abstract|introduction|fig(?:ure)?\.?|table)\b/iu.test(text) ||
+    /[.!?。！？]\s*$/u.test(text)
+  ) {
+    return looksLikeReaderAffiliation(text);
+  }
+  const words = text.match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (words.length < 2 || words.length > 28 || text.length > 220) {
+    return false;
+  }
+  const titleLikeWords = words.filter((word) => /^\p{Lu}/u.test(word)).length;
+  return looksLikeReaderAffiliation(text) ||
+    /https?:\/\//iu.test(text) ||
+    /[∗†‡♮*]/u.test(text) ||
+    titleLikeWords / words.length >= 0.45;
+}
+
+function looksLikePageOneFootnoteLine(text: string): boolean {
+  return /^[∗†‡♮*]\s*(?:equal contribution|corresponding author|core contributors|project lead|work done)\b/iu
+    .test(text.trim());
+}
+
+function orderParallelCaptionBands<TItem extends PositionedPdfTextItem>(
+  orderedLines: Array<TextLine<TItem>>,
+  metrics: PageTextMetrics
+): Array<TextLine<TItem>> {
+  const pageCenter = metrics.minX + metrics.width / 2;
+  const captionAnchors = orderedLines.filter((line) =>
+    /^(?:fig(?:ure)?\.?|table)\s*[\divxlcdm]+[:.]/iu.test(line.text.trim())
+  );
+  const bandStarts = captionAnchors
+    .filter((anchor) => anchor.x < pageCenter)
+    .flatMap((leftAnchor) => {
+      const rightAnchor = captionAnchors.find((candidate) =>
+        candidate.x >= pageCenter &&
+        Math.abs(candidate.y - leftAnchor.y) <= Math.max(10, leftAnchor.height * 2, candidate.height * 2)
+      );
+      return rightAnchor ? [Math.min(leftAnchor.y, rightAnchor.y)] : [];
+    })
+    .filter((bandY, index, all) => all.findIndex((candidate) => Math.abs(candidate - bandY) <= 2) === index)
+    .sort((left, right) => left - right);
+
+  return bandStarts.reduce((currentLines, bandY) => {
+    const bandBottom = bandY + Math.max(40, metrics.medianLineHeight * 5);
+    const bandLines = currentLines.filter((line) => {
+      const minX = Math.min(...line.items.map((item) => item.x));
+      const maxX = Math.max(...line.items.map((item) => item.x + item.width));
+      return line.y >= bandY - 2 &&
+        line.y <= bandBottom &&
+        maxX - minX <= metrics.width * 0.62;
+    });
+    const leftLines = bandLines
+      .filter((line) => getLineCenterX(line) < pageCenter)
+      .sort((left, right) => left.y - right.y || left.x - right.x);
+    const rightLines = bandLines
+      .filter((line) => getLineCenterX(line) >= pageCenter)
+      .sort((left, right) => left.y - right.y || left.x - right.x);
+    if (leftLines.length === 0 || rightLines.length === 0) {
+      return currentLines;
+    }
+    const bandSet = new Set(bandLines);
+    const firstBandIndex = currentLines.findIndex((line) => bandSet.has(line));
+    const insertionIndex = currentLines
+      .slice(0, Math.max(0, firstBandIndex))
+      .filter((line) => !bandSet.has(line))
+      .length;
+    const remaining = currentLines.filter((line) => !bandSet.has(line));
+    return [
+      ...remaining.slice(0, insertionIndex),
+      ...leftLines,
+      ...rightLines,
+      ...remaining.slice(insertionIndex)
+    ];
+  }, orderedLines);
+}
+
+function looksLikeSingleColumnReferenceLayout<TItem extends PositionedPdfTextItem>(
+  lines: Array<TextLine<TItem>>,
+  metrics: PageTextMetrics
+): boolean {
+  const referenceStarts = lines.filter((line) => /^\[\d{1,4}\]\s/u.test(line.text.trim()));
+  if (referenceStarts.length < 2) {
+    return false;
+  }
+  const leftEdges = referenceStarts.map((line) => line.x);
+  const alignedToContentEdge =
+    Math.min(...leftEdges) - metrics.minX <= Math.max(48, metrics.width * 0.12);
+  return alignedToContentEdge &&
+    Math.max(...leftEdges) - Math.min(...leftEdges) <= Math.max(36, metrics.width * 0.12);
+}
+
+function mergeSingleColumnReferenceRowFragments<TItem extends PositionedPdfTextItem>(
+  lines: Array<TextLine<TItem>>,
+  _metrics: PageTextMetrics
+): Array<TextLine<TItem>> {
+  const rowGroups: Array<Array<TextLine<TItem>>> = [];
+  for (const line of [...lines].sort((left, right) => left.y - right.y || left.x - right.x)) {
+    const row = rowGroups.find((candidates) => {
+      const reference = candidates[0];
+      return Math.abs(reference.y - line.y) <= Math.max(4, Math.min(reference.height, line.height) * 0.9);
+    });
+    if (row) {
+      row.push(line);
+    } else {
+      rowGroups.push([line]);
+    }
+  }
+  return rowGroups.map((row) => {
+    const combinedItems = row.flatMap((line) => line.items).sort((left, right) => left.x - right.x);
+    return {
+      text: normalizeExtractedText(combinedItems.map((item) => item.str.trim()).join(' ')),
+      x: Math.min(...row.map((line) => line.x)),
+      y: Math.min(...row.map((line) => line.y)),
+      height: Math.max(...row.map((line) => line.height)),
+      items: combinedItems
+    };
+  });
 }
 
 function hasSignificantReaderFontChange(previous: TextLine, next: TextLine): boolean {
@@ -276,24 +453,47 @@ function mergeReaderBlockContinuations(blocks: ExtractedPdfBlock[]): ExtractedPd
     const mergeCaption = previous?.type === 'caption' && block.type === 'paragraph' &&
       !endsWithSentenceBoundary(previous.original) &&
       areReaderBlocksVerticallyAdjacent(previous, block) &&
-      (!/^table\b/iu.test(previous.original.trim()) || countWords(block.original) <= 10) &&
+      (!/^table\b/iu.test(previous.original.trim()) || countWords(block.original) <= 28) &&
       (
         /[-\u00ad\u2010-\u2015]$/u.test(previous.original.trim()) ||
         startsWithLowercaseContinuation(block.original) ||
         (/^table\b/iu.test(previous.original.trim()) && /[:(]\s*$/u.test(previous.original.trim())) ||
-        /\b(?:and|or|of|for|with|to|in|on|between)\s*$/iu.test(previous.original.trim())
+        /\b(?:a|an|and|as|at|between|by|for|from|in|of|on|or|the|to|with)\s*$/iu.test(previous.original.trim())
       );
     const mergeParagraph = previous?.type === 'paragraph' && block.type === 'paragraph' &&
       previous.section === block.section &&
+      !looksLikeReaderTableCellFragment(previous.original) &&
+      !/^[a-z]\)\s+\p{Lu}[^:]{2,100}:/u.test(block.original.trim()) &&
+      !/^\[\d{1,4}\]\s/u.test(block.original.trim()) &&
+      !/^https?:\/\//iu.test(previous.original.trim()) &&
+      !/^https?:\/\//iu.test(block.original.trim()) &&
       !looksLikeReaderAffiliation(previous.original) &&
       !looksLikeReaderAffiliation(block.original) &&
       !/^\d+\)\s+\p{Lu}[^:]{2,100}:\s+\p{Lu}/u.test(block.original) &&
       !endsWithSentenceBoundary(previous.original) &&
       (areReaderParagraphBlocksContiguous(previous, block) || isLikelyReaderProseContinuation(previous, block));
+    const mergeOverlaidRunInLabel = previous?.type === 'paragraph' &&
+      block.type === 'paragraph' &&
+      previous.page === block.page &&
+      previous.section === block.section &&
+      previous.original.trim().length <= 80 &&
+      !/^[a-z]\)\s+\p{Lu}[^:]{2,100}:/u.test(block.original.trim()) &&
+      /(?:\bvs\.|[-\u2010-\u2015/:])$/iu.test(previous.original.trim()) &&
+      haveNearlyIdenticalReaderBounds(previous.bounds, block.bounds);
     const mergeHeading = previous?.type === 'heading' && block.type === 'paragraph' &&
       /[-\u00ad\u2010-\u2015]$/u.test(previous.original.trim()) &&
       countWords(block.original) <= 16;
-    if (previous && (forcedHyphenContinuation || decimalSentenceContinuation || mergeCaption || mergeParagraph || mergeHeading)) {
+    if (
+      previous &&
+      (
+        forcedHyphenContinuation ||
+        decimalSentenceContinuation ||
+        mergeCaption ||
+        mergeParagraph ||
+        mergeOverlaidRunInLabel ||
+        mergeHeading
+      )
+    ) {
       const mergedType = decimalSentenceContinuation
         ? 'paragraph'
         : forcedHyphenContinuation && previous.type !== 'caption' && previous.type !== 'heading'
@@ -309,6 +509,212 @@ function mergeReaderBlockContinuations(blocks: ExtractedPdfBlock[]): ExtractedPd
       continue;
     }
     merged.push(block);
+  }
+  return repairReaderMathBoundaries(mergeReaderParagraphsAcrossFloatingCaptions(merged));
+}
+
+function haveNearlyIdenticalReaderBounds(left?: PdfBlockBounds, right?: PdfBlockBounds): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  return Math.abs(left.x - right.x) <= 3 &&
+    Math.abs(left.y - right.y) <= 3 &&
+    Math.abs(left.width - right.width) <= Math.max(4, left.width * 0.03) &&
+    Math.abs(left.height - right.height) <= Math.max(4, left.height * 0.08);
+}
+
+function repairReaderMathBoundaries(blocks: ExtractedPdfBlock[]): ExtractedPdfBlock[] {
+  const splitBlocks: ExtractedPdfBlock[] = [];
+  for (const block of blocks) {
+    if (block.type !== 'paragraph') {
+      splitBlocks.push(block);
+      continue;
+    }
+    const segments = splitReaderMathAndBulletBlock(block);
+    splitBlocks.push(...segments);
+  }
+
+  const repaired: ExtractedPdfBlock[] = [];
+  for (let index = 0; index < splitBlocks.length; index += 1) {
+    const block = splitBlocks[index];
+    const next = splitBlocks[index + 1];
+    if (block.type === 'formula' && isEquationNumberFragment(block.original)) {
+      let precedingFormulaIndex = -1;
+      for (let candidateIndex = repaired.length - 1; candidateIndex >= 0; candidateIndex -= 1) {
+        const candidate = repaired[candidateIndex];
+        if (
+          candidate.type === 'formula' &&
+          candidate.page === block.page &&
+          verticalBoundsOverlap(candidate.bounds, block.bounds)
+        ) {
+          precedingFormulaIndex = candidateIndex;
+          break;
+        }
+      }
+      if (precedingFormulaIndex >= 0) {
+        const precedingFormula = repaired[precedingFormulaIndex];
+        repaired[precedingFormulaIndex] = createBlock(
+          precedingFormula.page,
+          'formula',
+          precedingFormula.section,
+          joinParagraphLines([precedingFormula.original, block.original]),
+          mergeBounds(precedingFormula.bounds, block.bounds)
+        );
+        continue;
+      }
+    }
+    if (
+      block.type === 'formula' &&
+      isEquationNumberFragment(block.original) &&
+      next?.type === 'formula' &&
+      block.page === next.page &&
+      verticalBoundsOverlap(block.bounds, next.bounds)
+    ) {
+      repaired.push(createBlock(
+        next.page,
+        'formula',
+        next.section,
+        joinParagraphLines([next.original, block.original]),
+        mergeBounds(block.bounds, next.bounds)
+      ));
+      index += 1;
+      continue;
+    }
+    const previous = repaired[repaired.length - 1];
+    if (
+      previous?.type === 'formula' &&
+      block.type === 'formula' &&
+      previous.page === block.page &&
+      (
+        isEquationNumberFragment(block.original) ||
+        isFormulaSuffixFragment(block.original) ||
+        verticalBoundsOverlap(previous.bounds, block.bounds)
+      )
+    ) {
+      repaired[repaired.length - 1] = createBlock(
+        previous.page,
+        'formula',
+        previous.section,
+        joinParagraphLines([previous.original, block.original]),
+        mergeBounds(previous.bounds, block.bounds)
+      );
+      continue;
+    }
+    repaired.push(block);
+  }
+  return repaired;
+}
+
+function splitReaderMathAndBulletBlock(block: ExtractedPdfBlock): ExtractedPdfBlock[] {
+  const original = block.original.trim();
+  const bulletIndex = original.indexOf('•');
+  if (bulletIndex > 0) {
+    const prefix = original.slice(0, bulletIndex).trim();
+    const bullet = original.slice(bulletIndex).trim();
+    const prefixType: ExtractedBlockType = /^\d+\)\s+[^:]{2,100}:$/u.test(prefix)
+      ? 'heading'
+      : looksLikeStandaloneEquation(prefix) ||
+          isEquationNumberFragment(prefix) ||
+          isFormulaSuffixFragment(prefix)
+        ? 'formula'
+        : 'paragraph';
+    return [
+      createBlock(
+        block.page,
+        prefixType,
+        prefixType === 'heading' ? prefix : block.section,
+        prefix,
+        block.bounds
+      ),
+      createBlock(block.page, 'paragraph', block.section, bullet, block.bounds)
+    ];
+  }
+
+  const whereIndex = original.search(/\s+where\s+/iu);
+  if (whereIndex > 0) {
+    const prefix = original.slice(0, whereIndex).trim();
+    const explanation = original.slice(whereIndex).trim();
+    if (looksLikeStandaloneEquation(prefix) || isFormulaSuffixFragment(prefix)) {
+      return [
+        createBlock(block.page, 'formula', block.section, prefix, block.bounds),
+        createBlock(block.page, 'paragraph', block.section, explanation, block.bounds)
+      ];
+    }
+  }
+
+  if (looksLikeStandaloneEquation(original) || isEquationNumberFragment(original)) {
+    return [createBlock(block.page, 'formula', block.section, original, block.bounds)];
+  }
+  return [block];
+}
+
+function looksLikeStandaloneEquation(text: string): boolean {
+  const normalized = text.trim();
+  if (
+    normalized.length > 240 ||
+    !/[=∑∏∫√]/u.test(normalized) ||
+    /^where\b/iu.test(normalized)
+  ) {
+    return false;
+  }
+  const proseWords = normalized
+    .match(/[A-Za-z]{4,}/gu)
+    ?.filter((word) => !/^(?:arccos|clip|cosh|exp|log|max|min|rank|ref|root|sin|sqrt|tanh)$/iu.test(word)) ?? [];
+  return proseWords.length <= 1;
+}
+
+function isEquationNumberFragment(text: string): boolean {
+  return /^\(\d{1,3}\)$/u.test(text.trim());
+}
+
+function looksLikeReaderTableCellFragment(text: string): boolean {
+  const normalized = text.trim();
+  return normalized.length <= 32 &&
+    /^[+\-−–—±]?\d+(?:\.\d+)?(?:\s*(?:%|rad|m|s|cm|mm))?$/iu.test(normalized);
+}
+
+function isFormulaSuffixFragment(text: string): boolean {
+  const normalized = text.trim();
+  return /^(?:\(\d{1,3}\)\s*)?(?:ref|target|[012])(?:\s+(?:ref|target|[a-z\d])){0,7}$/iu.test(normalized) ||
+    /^\(\d{1,3}\)(?:\s+[a-z\d]+){1,8}$/iu.test(normalized) ||
+    /^[012]\s*\(\d{1,3}\)$/u.test(normalized);
+}
+
+function verticalBoundsOverlap(left?: PdfBlockBounds, right?: PdfBlockBounds): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  const overlap = Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y);
+  return overlap >= -Math.max(3, Math.min(left.height, right.height) * 0.4);
+}
+
+function mergeReaderParagraphsAcrossFloatingCaptions(blocks: ExtractedPdfBlock[]): ExtractedPdfBlock[] {
+  const merged: ExtractedPdfBlock[] = [];
+  for (let index = 0; index < blocks.length; index += 1) {
+    const previous = blocks[index];
+    const caption = blocks[index + 1];
+    const continuation = blocks[index + 2];
+    const crossesFloatingCaption = previous?.type === 'paragraph' &&
+      caption?.type === 'caption' &&
+      continuation?.type === 'paragraph' &&
+      previous.page === caption.page &&
+      caption.page === continuation.page &&
+      previous.section === continuation.section &&
+      !endsWithSentenceBoundary(previous.original) &&
+      startsWithLowercaseContinuation(continuation.original);
+    if (!crossesFloatingCaption) {
+      merged.push(previous);
+      continue;
+    }
+    merged.push(createBlock(
+      previous.page,
+      'paragraph',
+      previous.section,
+      joinParagraphLines([previous.original, continuation.original]),
+      mergeBounds(previous.bounds, continuation.bounds)
+    ));
+    merged.push(caption);
+    index += 2;
   }
   return merged;
 }
@@ -510,6 +916,16 @@ function startsNewReaderParagraph(currentParagraph: TextLine[], nextLine: TextLi
     return false;
   }
   const nextText = nextLine.text.trim();
+  if (/^\[\d{1,4}\]\s/u.test(nextText)) {
+    return true;
+  }
+  if (/^\[\d{1,4}\]\s/u.test(currentParagraph[0].text.trim())) {
+    return false;
+  }
+  const baselineDelta = Math.abs(nextLine.y - previousLine.y);
+  if (baselineDelta <= Math.max(4, Math.min(previousLine.height, nextLine.height) * 0.9)) {
+    return false;
+  }
   if (
     endsWithSentenceBoundary(previousLine.text) &&
     (/^\[\d{1,4}\]\s/u.test(nextText) || /^(?:[•●▪◦]|\(?[a-z]\)|\d+[.)])\s+/iu.test(nextText))
@@ -565,19 +981,45 @@ function looksLikeRunInAcademicHeadingStart(text: string): boolean {
 }
 
 function splitReaderParagraphText(text: string): string[] {
+  if (/^\[\d{1,4}\]\s/u.test(text.trim())) {
+    const bracketedReferenceBoundaries = [...text.matchAll(/\s+(?=\[\d{1,4}\]\s)/gu)]
+      .map((match) => (match.index ?? 0) + match[0].length);
+    if (bracketedReferenceBoundaries.length === 0) {
+      return [text];
+    }
+    const references: string[] = [];
+    let referenceStart = 0;
+    for (const boundary of bracketedReferenceBoundaries) {
+      references.push(text.slice(referenceStart, boundary).trim());
+      referenceStart = boundary;
+    }
+    references.push(text.slice(referenceStart).trim());
+    return references.filter(Boolean);
+  }
   const headingBoundaries = [...text.matchAll(/[.!?。！？][)"'\]]*\s+/gu)]
     .map((match) => (match.index ?? 0) + match[0].length)
     .filter((index) => index > 0 && looksLikeRunInAcademicHeadingStart(text.slice(index)));
   const numberedRunInBoundaries = [...text.matchAll(/\s+(?=\d+\)\s+\p{Lu}[^:]{2,100}:\s+\p{Lu})/gu)]
     .map((match) => (match.index ?? 0) + match[0].length);
+  const letteredRunInBoundaries = [...text.matchAll(/:\s+(?=[a-z]\)\s+\p{Lu}[^:]{2,100}:)/gu)]
+    .map((match) => (match.index ?? 0) + match[0].length);
   const referenceMatches = [...text.matchAll(/(?:^|\s)(?=\d{1,3}\.\s+\p{Lu}[\p{L}'-]+,\s*\p{Lu}\.)/gu)];
   const referenceBoundaries = referenceMatches.length >= 2
     ? referenceMatches.map((match) => (match.index ?? 0) + match[0].length)
     : [];
+  const semanticBoundaries = [...text.matchAll(
+    /\s+(?=(?:Abstract\s*[:\u2014-]|[\u2217\u2020]\s*(?:Core contributors?|Corresponding authors?)))/giu
+  )].map((match) => (match.index ?? 0) + match[0].length);
+  const projectUrlBoundaries = [...text.matchAll(/\s+(?=https?:\/\/)/giu)]
+    .map((match) => (match.index ?? 0) + match[0].length)
+    .filter((index) => /^https?:\/\/\S+\s+Abstract\s*[:\u2014-]/iu.test(text.slice(index)));
   const boundaries = Array.from(new Set([
     ...headingBoundaries,
     ...numberedRunInBoundaries,
-    ...referenceBoundaries
+    ...letteredRunInBoundaries,
+    ...referenceBoundaries,
+    ...semanticBoundaries,
+    ...projectUrlBoundaries
   ])).filter((index) => index > 0).sort((left, right) => left - right);
   if (boundaries.length === 0) {
     return [text];
@@ -630,6 +1072,40 @@ export function orderPositionedTextItemsForReading<TItem extends PositionedPdfTe
 }
 
 function buildLines<TItem extends PositionedPdfTextItem>(items: TItem[]): Array<TextLine<TItem>> {
+  const pageWidth = items.find((item) => typeof item.pageWidth === 'number' && item.pageWidth > 0)?.pageWidth ?? 0;
+  const contentMinX = items.length > 0 ? Math.min(...items.map((item) => item.x)) : 0;
+  const contentMaxX = Math.max(1, ...items.map((item) => item.x + item.width));
+  const likelyColumnSplitX = pageWidth > 0 ? pageWidth / 2 : (contentMinX + contentMaxX) / 2;
+  const referenceColumnAnchors = pageWidth > 0
+    ? items
+      .filter((item) => /^\[\d{1,4}\]\s/u.test(item.str.trim()))
+    : [];
+  const captionColumnAnchors = pageWidth > 0
+    ? items
+      .filter((item) => /^(?:fig(?:ure)?\.?|table)\s*[\divxlcdm]+[:.]/iu.test(item.str.trim()))
+    : [];
+  const hasParallelReferenceAnchors = referenceColumnAnchors.some((item) => item.x < pageWidth * 0.45) &&
+    referenceColumnAnchors.some((item) => item.x > pageWidth * 0.5);
+  const leftReferenceAnchors = referenceColumnAnchors.filter((item) => item.x < pageWidth / 2);
+  const rightReferenceAnchors = referenceColumnAnchors.filter((item) => item.x >= pageWidth / 2);
+  const oneSidedReferenceAnchors = leftReferenceAnchors.length >= 2 && rightReferenceAnchors.length === 0
+    ? leftReferenceAnchors
+    : rightReferenceAnchors.length >= 2 && leftReferenceAnchors.length === 0
+      ? rightReferenceAnchors
+      : [];
+  const oneSidedReferenceStartY = oneSidedReferenceAnchors.length > 0
+    ? Math.min(...oneSidedReferenceAnchors.map((item) => item.y)) -
+      Math.max(12, Math.max(...oneSidedReferenceAnchors.map((item) => item.height)) * 2.5)
+    : Number.POSITIVE_INFINITY;
+  const parallelCaptionAnchorYs = captionColumnAnchors
+    .filter((anchor) =>
+      captionColumnAnchors.some((candidate) =>
+        candidate !== anchor &&
+        (anchor.x < pageWidth / 2) !== (candidate.x < pageWidth / 2) &&
+        Math.abs(anchor.y - candidate.y) <= Math.max(10, anchor.height * 2, candidate.height * 2)
+      )
+    )
+    .map((anchor) => anchor.y);
   const sortedItems = items
     .filter((item) => item.str.trim())
     .sort((left, right) => left.y - right.y || left.x - right.x);
@@ -664,16 +1140,44 @@ function buildLines<TItem extends PositionedPdfTextItem>(items: TItem[]): Array<
         previousItem &&
         horizontalGap > 8 &&
         baselineDrift > Math.max(2, Math.min(previousItem.height, item.height) * 0.3);
+      const nearbyWideSingleColumnRun = pageWidth > 0 && items.some((candidate) => (
+        candidate !== item &&
+        candidate.width >= pageWidth * 0.55 &&
+        candidate.x <= pageWidth * 0.28 &&
+        candidate.x + candidate.width >= pageWidth * 0.72 &&
+        Math.abs(candidate.y - item.y) <= Math.max(20, candidate.height * 2.2, item.height * 2.2)
+      ));
       const likelyDifferentColumns =
         previousItem &&
         horizontalGap > 8 &&
-        (currentSegmentWidth > 200 || (currentSegmentWidth > 120 && item.width > 40));
+        !nearbyWideSingleColumnRun &&
+        (
+          pageWidth > 0
+            ? previousItem.x + previousItem.width <= likelyColumnSplitX + 6 &&
+              item.x >= likelyColumnSplitX - 2
+            : currentSegmentWidth >= 120 &&
+              currentSegmentWidth <= 320 &&
+              item.x - currentSegment[0].x >= 240
+        );
+      const crossesPageMidpoint =
+        previousItem &&
+        pageWidth > 0 &&
+        (
+          hasParallelReferenceAnchors ||
+          item.y >= oneSidedReferenceStartY ||
+          parallelCaptionAnchorYs.some((anchorY) =>
+            Math.abs(anchorY - item.y) <= Math.max(40, item.height * 5)
+          )
+        ) &&
+        currentSegment[0].x < pageWidth / 2 - 4 &&
+        item.x >= pageWidth / 2 + 2;
 
       if (
         !currentSegment ||
         horizontalGap > LINE_SEGMENT_GAP_THRESHOLD ||
         likelyDifferentBaselines ||
-        likelyDifferentColumns
+        likelyDifferentColumns ||
+        crossesPageMidpoint
       ) {
         segments.push([item]);
       } else {
@@ -700,17 +1204,21 @@ function orderLinesForAcademicLayout<TItem extends PositionedPdfTextItem>(
 
   const minX = Math.min(...lines.map((line) => line.x));
   const maxX = Math.max(...lines.map((line) => line.x));
+  const pageWidth = lines
+    .flatMap((line) => line.items)
+    .find((item) => typeof item.pageWidth === 'number' && item.pageWidth > 0)
+    ?.pageWidth;
 
   if (maxX - minX < COLUMN_SPLIT_THRESHOLD) {
     return [...lines].sort((left, right) => left.y - right.y || left.x - right.x);
   }
 
-  const splitX = (minX + maxX) / 2;
+  const splitX = pageWidth ? pageWidth / 2 : (minX + maxX) / 2;
   const leftColumn = lines
-    .filter((line) => line.x <= splitX)
+    .filter((line) => line.x < splitX)
     .sort((left, right) => left.y - right.y || left.x - right.x);
   const rightColumn = lines
-    .filter((line) => line.x > splitX)
+    .filter((line) => line.x >= splitX)
     .sort((left, right) => left.y - right.y || left.x - right.x);
 
   return [...leftColumn, ...rightColumn];
@@ -796,6 +1304,48 @@ function mergeBareIeeeTableCaptionLines<TItem extends PositionedPdfTextItem>(
   return merged;
 }
 
+function mergeReaderCaptionContinuationLines<TItem extends PositionedPdfTextItem>(
+  lines: Array<TextLine<TItem>>
+): Array<TextLine<TItem>> {
+  const merged: Array<TextLine<TItem>> = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    let current = lines[index];
+    if (!/^(?:fig(?:ure)?\.?|table)\s*[\divxlcdm]+\s*[:.]/iu.test(current.text.trim())) {
+      merged.push(current);
+      continue;
+    }
+    while (!/[.!?。！？]\s*$/u.test(current.text.trim())) {
+      const next = lines[index + 1];
+      if (!next) {
+        break;
+      }
+      const currentBottom = Math.max(...current.items.map((item) => item.y + item.height));
+      const verticalGap = next.y - currentBottom;
+      const aligned = Math.abs(current.x - next.x) <= 24 ||
+        Math.abs(getLineCenterX(current) - getLineCenterX(next)) <= 36;
+      if (
+        verticalGap < -2 ||
+        verticalGap > Math.max(10, current.height * 1.6, next.height * 1.6) ||
+        !aligned ||
+        !/^\p{Ll}/u.test(next.text.trim())
+      ) {
+        break;
+      }
+      const combinedItems = [...current.items, ...next.items];
+      current = {
+        text: joinParagraphLines([current.text, next.text]),
+        x: Math.min(current.x, next.x),
+        y: Math.min(current.y, next.y),
+        height: Math.max(current.height, next.height),
+        items: combinedItems
+      };
+      index += 1;
+    }
+    merged.push(current);
+  }
+  return merged;
+}
+
 function shouldMergeReaderHeadingLines(
   current: TextLine,
   next: TextLine,
@@ -803,12 +1353,28 @@ function shouldMergeReaderHeadingLines(
   metrics: PageTextMetrics,
   medianLineHeight: number
 ): boolean {
-  const verticalGap = next.y - current.y;
+  const currentLastLineY = Math.max(current.y, ...current.items.map((item) => item.y));
+  const verticalGap = next.y - currentLastLineY;
   if (verticalGap <= 0 || verticalGap > Math.max(current.height * 1.9, next.height * 1.9, medianLineHeight * 3)) {
     return false;
   }
   const centersAligned = Math.abs(getLineCenterX(current) - getLineCenterX(next)) <= Math.max(45, metrics.width * 0.12);
   const leftAligned = Math.abs(current.x - next.x) <= 24;
+  const nextWords = countWords(next.text);
+  const connectiveWrap = /\b(and|for|of|on|to|with|without|in|under|from)\s*$/iu.test(current.text) ||
+    /^(and|for|of|on|to|with|without|in|under|from)\b/iu.test(next.text.trim());
+  const pageHeight = current.items.find((item) => typeof item.pageHeight === 'number' && item.pageHeight > 0)?.pageHeight ??
+    metrics.maxY;
+  const frontMatterConnectiveTitleWrap = page === 1 &&
+    centersAligned &&
+    current.y <= pageHeight * 0.3 &&
+    current.text.includes(':') &&
+    looksLikeFrontMatterTitle(current.text) &&
+    connectiveWrap &&
+    nextWords <= 8;
+  if (frontMatterConnectiveTitleWrap) {
+    return true;
+  }
   const frontMatterWrap = page === 1 &&
     centersAligned &&
     isReaderFrontMatterHeading(current, metrics, medianLineHeight) &&
@@ -818,9 +1384,6 @@ function shouldMergeReaderHeadingLines(
   }
 
   const numberedHeading = /^([IVX]+|\d+(?:\.\d+)*|[A-Z])\.\s+/u.test(current.text.trim());
-  const nextWords = countWords(next.text);
-  const connectiveWrap = /\b(and|for|of|on|to|with|without|in|under|from)\s*$/iu.test(current.text) ||
-    /^(and|for|of|on|to|with|without|in|under|from)\b/iu.test(next.text.trim());
   const uppercaseContinuation = /^[\p{Lu}\p{N}][\p{Lu}\p{N} ,:;()/-]{2,}$/u.test(next.text.trim());
   const bareIeeeTableLabel = /^TABLE\s+[IVXLCDM\d]+$/u.test(current.text.trim());
   return (
@@ -843,7 +1406,7 @@ function classifyReaderLine(
   const normalized = line.text.trim();
   if (
     (
-      /^(fig\.?|figure|table)\s*[\divxlcdm]*[:.]/iu.test(normalized) ||
+      /^(?:fig(?:ure)?\.?|table)\s*[\divxlcdm]+\s*[:.]/iu.test(normalized) ||
       /^algorithm\s+\d+\b/iu.test(normalized) ||
       /^TABLE\s+[IVXLCDM\d]+(?:\s+|$)/u.test(normalized)
     ) &&
@@ -860,6 +1423,15 @@ function classifyReaderLine(
   if (
     /^([IVX]+\.\s+)?[A-Z][A-Z0-9 ,:;()/-]{4,}$/u.test(normalized) ||
     looksLikeSectionHeading(normalizeSectionHeading(normalized)) ||
+    (
+      page === 1 &&
+      normalized.includes(':') &&
+      line.y <= (
+        line.items.find((item) => typeof item.pageHeight === 'number' && item.pageHeight > 0)?.pageHeight ??
+        metrics.maxY
+      ) * 0.3 &&
+      looksLikeFrontMatterTitle(normalized)
+    ) ||
     (page === 1 && isReaderFrontMatterHeading(line, metrics, medianLineHeight))
   ) {
     return 'heading';
@@ -868,21 +1440,28 @@ function classifyReaderLine(
 }
 
 function looksLikeInlineFigureReferenceContinuation(previous: TextLine | undefined, line: TextLine): boolean {
-  if (!previous || !/^(fig\.?|figure)\s*\d+[:.]/iu.test(line.text.trim())) {
+  if (!previous || !/^(?:fig\.?|figure|table)\s*[\divxlcdm]+[:.]/iu.test(line.text.trim())) {
     return false;
   }
   const verticalGap = line.y - previous.y;
+  const proseConnectors = previous.text.match(
+    /\b(?:a|an|and|are|as|at|by|for|from|given|in|is|of|on|the|to|was|were|with)\b/giu
+  ) ?? [];
   return Math.abs(line.x - previous.x) <= 24 &&
     verticalGap > 0 &&
     verticalGap <= Math.max(18, previous.height * 2, line.height * 2) &&
     countWords(previous.text) >= 6 &&
+    proseConnectors.length >= 2 &&
     !endsWithSentenceBoundary(previous.text);
 }
 
 function looksLikeReaderAffiliation(text: string): boolean {
   const normalized = text.trim();
+  if (looksLikePageOneFootnoteLine(normalized)) {
+    return true;
+  }
   const numberedPrefix = /^\d+(?:\s*[,;*†‡]\s*\d+)*\s+/u.test(normalized);
-  const affiliationVocabulary = /\b(?:department|university|institute|istituto|institut|school|college|laborator(?:y|ies)|lab|cent(?:er|re)|faculty|technology|robotics|perception|embodied ai)\b/iu;
+  const affiliationVocabulary = /\b(?:department|university|institute|istituto|institut|school|college|laborator(?:y|ies)|lab|cent(?:er|re)|faculty|technology|robotics|perception|artificial intelligence|embodied ai|ai)\b/iu;
   if (
     numberedPrefix && (
       affiliationVocabulary.test(normalized) ||
@@ -925,7 +1504,7 @@ function containsReadableText(text: string): boolean {
 function classifyLine(text: string): ExtractedBlockType {
   const normalized = text.trim();
 
-  if (/^(fig\.?|figure|table)\s*[\divxlcdm]*[:.]/iu.test(normalized)) {
+  if (/^(?:fig(?:ure)?\.?|table)\s*[\divxlcdm]+\s*[:.]/iu.test(normalized)) {
     return 'caption';
   }
 
@@ -1033,7 +1612,8 @@ function looksLikeSectionHeading(text: string): boolean {
       normalized
     ) ||
     /^([IVX]+|\d+(?:\.\d+)*)\.?\s+\p{Lu}[\p{L}\p{N} ,:;()/-]{3,}$/u.test(normalized) ||
-    /^[A-Z]\.\s+\p{Lu}[\p{L}\p{N} ,:;()/-]{3,}$/u.test(normalized)
+    /^[A-Z]\.\s+\p{Lu}[\p{L}\p{N} ,:;()/-]{3,}$/u.test(normalized) ||
+    /^[A-Z]\.\d+(?:\.\d+)*\.?\s+\p{Lu}[\p{L}\p{N} ,:;()/-]{3,}$/u.test(normalized)
   );
 }
 
@@ -1059,7 +1639,7 @@ function normalizeReaderCaption(text: string): string {
 }
 
 function extractInlineSection(text: string): { section: string; body: string } | null {
-  const match = text.match(/^(abstract|introduction|conclusion|references)\s*[-\u2013\u2014]\s*(.+)$/iu);
+  const match = text.match(/^(abstract|introduction|conclusion|references)\s*[:\u2013\u2014-]\s*(.+)$/iu);
   if (!match) {
     return null;
   }
@@ -1091,7 +1671,17 @@ function isFormulaLike(text: string): boolean {
 }
 
 function looksLikeProseWithInlineMath(text: string): boolean {
+  const normalized = text.trim();
   const proseWords = text.match(/\b[A-Za-z]{2,}\b/gu) ?? [];
+  if (
+    proseWords.length >= 4 &&
+    (
+      /\bwhere\b/iu.test(normalized) ||
+      /[.!?;:]\s*(?:however|therefore|for|in|this|the|we)\b/iu.test(normalized)
+    )
+  ) {
+    return true;
+  }
   return proseWords.length >= 4 && /^["'“”‘’(]*[A-Za-z]{2,}\b/u.test(text.trim());
 }
 
@@ -1116,16 +1706,25 @@ function joinParagraphLines(lines: string[]): string {
 }
 
 function shouldPreserveCompoundHyphen(prefix: string): boolean {
-  return /^(?:whole|multi|real|contact|end|lower|upper|hand|single|loco|thin|tight|tool|low|high|long|short|cross|open|closed|force|task|pose|motion|robot|sensor|vision|tactile|policy|model|world|latent|pretrain|small|large|fine|self|non|gpu)$/iu.test(prefix);
+  return /^(?:whole|multi|real|contact|end|lower|upper|hand|single|loco|thin|tight|tool|low|medium|high|long|short|cross|open|closed|fixed|force|task|pose|motion|robot|sensor|vision|tactile|policy|model|world|latent|pretrain|small|large|fine|self|non|co|gpu|to|data)$/iu.test(prefix);
 }
 
 function normalizeExtractedText(text: string): string {
-  return text
+  const normalized = text
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/gu, '')
     .replace(/\s+/gu, ' ')
     .replace(/\s+([,;:!?]|\.(?!\.))/gu, '$1')
+    .replace(/(\d)\.\s+(\d)/gu, '$1.$2')
+    .replace(/(\p{L})-\s+(\p{Ll})/gu, '$1-$2')
+    .replace(/\{\s+/gu, '{')
+    .replace(/\s+\}/gu, '}')
+    .replace(/\s+([’'])s\b/gu, '$1s')
     .replace(/([πΠ])\s+(\d)\s*\.\s*(\d)/gu, '$1$2.$3')
     .trim();
+  const smallCapsPairs = normalized.match(/\b\p{Lu}\s+\p{Lu}{2,}\b/gu) ?? [];
+  return smallCapsPairs.length >= 2
+    ? normalized.replace(/\b(\p{Lu})\s+(\p{Lu}{2,})\b/gu, '$1$2')
+    : normalized;
 }
 
 function countWords(text: string): number {
@@ -1182,6 +1781,10 @@ function shouldKeepLayoutLine(line: TextLine, metrics: PageTextMetrics): boolean
     return false;
   }
 
+  if (isLikelyPublisherBrandChrome(line)) {
+    return false;
+  }
+
   if (isLikelySidebarLine(line, metrics)) {
     return false;
   }
@@ -1189,10 +1792,42 @@ function shouldKeepLayoutLine(line: TextLine, metrics: PageTextMetrics): boolean
   return true;
 }
 
+function isLikelyPublisherBrandChrome(line: TextLine): boolean {
+  const normalized = line.text.trim();
+  const page = line.items[0]?.page ?? 0;
+  const pageHeight = line.items.find((item) => typeof item.pageHeight === 'number' && item.pageHeight > 0)?.pageHeight ?? 0;
+  const nearTopBrandWord = pageHeight > 0 &&
+    line.y <= pageHeight * 0.08 &&
+    (/^BeingBeyond$/iu.test(normalized) || /^智在[无⽆]界$/u.test(normalized));
+  return page === 1 &&
+    !/\bBeing-H0(?:\.\d+)?\s*:/iu.test(normalized) &&
+    (
+      nearTopBrandWord ||
+      (
+        /\bBeingBeyond\b/iu.test(normalized) &&
+        /[\u2e80-\u2fff\u3400-\u9fff]/u.test(normalized)
+      ) ||
+      (
+        /^∝\s*/u.test(normalized) &&
+        (
+          /[\u2e80-\u2fff\u3400-\u9fff]/u.test(normalized) ||
+          /\bBeingBeyond\b/iu.test(normalized)
+        )
+      )
+    );
+}
+
 function isLikelyPageChrome(line: TextLine, metrics: PageTextMetrics): boolean {
   const normalized = line.text.trim();
-  const nearTop = line.y <= metrics.minY + metrics.height * 0.08;
-  const nearBottom = line.y >= metrics.maxY - metrics.height * 0.08;
+  const pageHeight = line.items.find((item) => (
+    typeof item.pageHeight === 'number' && item.pageHeight > 0
+  ))?.pageHeight;
+  const nearTop = pageHeight
+    ? line.y <= Math.max(32, pageHeight * 0.065)
+    : line.y <= metrics.minY + metrics.height * 0.08;
+  const nearBottom = pageHeight
+    ? line.y + line.height >= pageHeight * 0.93
+    : line.y >= metrics.maxY - metrics.height * 0.08;
 
   if (/^\d{1,4}$/u.test(normalized) && (nearTop || nearBottom)) {
     return true;

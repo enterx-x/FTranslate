@@ -302,9 +302,29 @@ export function MobileReaderScreen({
   const hiddenFigureTextHashes = useMemo(() => new Set(
     figureEntries.flatMap((entry) => entry.figureTextHashes ?? [])
   ), [figureEntries]);
+  const structuredTableCaptionHashes = useMemo(() => new Set(
+    figureEntries
+      .filter((entry) => entry.figureKind === 'table' && Boolean(entry.figureTable))
+      .map((entry) => entry.figureCaptionHash)
+      .filter((hash): hash is string => Boolean(hash))
+  ), [figureEntries]);
+  const structuredTableCaptionKeys = useMemo(() => new Set(
+    figureEntries
+      .filter((entry) => entry.figureKind === 'table' && Boolean(entry.figureTable))
+      .flatMap((entry) => buildMobilePdfCaptionLookupKeys(entry.original)
+        .map((key) => `${entry.page}:${key}`))
+  ), [figureEntries]);
   const readableBlocks = useMemo(
-    () => blocks.filter((block) => !hiddenFigureTextHashes.has(block.sourceHash)),
-    [blocks, hiddenFigureTextHashes]
+    () => blocks.filter((block) => (
+      !hiddenFigureTextHashes.has(block.sourceHash) &&
+      !structuredTableCaptionHashes.has(block.sourceHash) &&
+      !(
+        block.type === 'caption' &&
+        buildMobilePdfCaptionLookupKeys(block.original)
+          .some((key) => structuredTableCaptionKeys.has(`${block.page}:${key}`))
+      )
+    )),
+    [blocks, hiddenFigureTextHashes, structuredTableCaptionHashes, structuredTableCaptionKeys]
   );
   const feedItems = useMemo(() => {
     const textItems: MobileReaderFeedItem[] = readableBlocks.map((block, index) => ({
@@ -472,7 +492,10 @@ export function MobileReaderScreen({
         ...(Number.isFinite(cached?.order) ? { order: cached?.order } : {}),
         ...(cached?.blockType ? { blockType: cached.blockType } : {}),
         ...(Number.isFinite(cached?.aiReflowVersion) ? { aiReflowVersion: cached?.aiReflowVersion } : {}),
-        ...(cached?.introducedTerms?.length ? { introducedTerms: cached.introducedTerms } : {})
+        ...(cached?.introducedTerms?.length ? { introducedTerms: cached.introducedTerms } : {}),
+        ...(Number.isFinite(cached?.crossPageEndPage)
+          ? { crossPageEndPage: cached?.crossPageEndPage }
+          : {})
       };
       await onSaveTranslation(entry);
       if (updateStatus) {
@@ -1043,9 +1066,17 @@ export function MobileReaderScreen({
                     {startsPage ? <div className="mobile-bilingual-page-break">第 {item.page} 页</div> : null}
                     <figure data-pdf-page={item.page} className={`mobile-pdf-figure is-${item.region.kind}`}>
                       {item.region.kind === 'table' && item.region.table
-                        ? <MobilePdfStructuredTable table={item.region.table} caption={item.region.caption} />
+                        ? (
+                            <MobilePdfStructuredTable
+                              table={item.region.table}
+                              caption={item.region.caption}
+                              translation={translationByHash.get(item.region.captionHash)?.translation ?? ''}
+                            />
+                          )
                         : <MobilePdfFigureCanvas renderer={figureRenderer} region={item.region} />}
-                      {!item.region.hasTextCaption ? <figcaption>{item.region.caption}</figcaption> : null}
+                      {(!item.region.table && !item.region.hasTextCaption)
+                        ? <figcaption>{item.region.caption}</figcaption>
+                        : null}
                     </figure>
                   </Fragment>
                 );
@@ -1350,34 +1381,52 @@ function figureEntryToRegion(entry: MobileTranslationEntry): MobilePdfFigureRegi
 
 function MobilePdfStructuredTable({
   table,
-  caption
+  caption,
+  translation
 }: {
   table: MobileStructuredTable;
   caption: string;
+  translation: string;
 }) {
   const minimumWidth = Math.max(520, table.headers.length * 128);
+  const formattedCaption = formatMobileAcademicText(caption, 'caption');
+  const formattedTranslation = translation.trim()
+    ? formatMobileAcademicText(translation, /[\u3400-\u9fff]/u.test(translation) ? 'paragraph' : 'caption')
+    : '';
   return (
-    <div className="mobile-pdf-table-shell">
-      <div className="mobile-pdf-table-scroll" role="region" aria-label={`可横向滚动的表格：${caption}`} tabIndex={0}>
-        <table style={{ minWidth: `${minimumWidth}px` }}>
-          <thead>
-            <tr>
-              {table.headers.map((header, index) => <th key={`${index}:${header}`} scope="col">{header}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {table.rows.map((row, rowIndex) => (
-              <tr key={`${rowIndex}:${row.join('|')}`}>
-                {row.map((cell, columnIndex) => columnIndex === 0
-                  ? <th key={`${columnIndex}:${cell}`} scope="row">{cell}</th>
-                  : <td key={`${columnIndex}:${cell}`}>{cell}</td>)}
+    <>
+      <figcaption className="mobile-pdf-table-caption">
+        <div className="mobile-block-original" data-source-text={caption}>
+          <p><MathText text={formattedCaption} /></p>
+        </div>
+        {formattedTranslation ? (
+          <div className="mobile-block-translation" data-source-text={translation}>
+            <p><MathText text={formattedTranslation} /></p>
+          </div>
+        ) : null}
+      </figcaption>
+      <div className="mobile-pdf-table-shell">
+        <div className="mobile-pdf-table-scroll" role="region" aria-label={`可横向滚动的表格：${caption}`} tabIndex={0}>
+          <table style={{ minWidth: `${minimumWidth}px` }}>
+            <thead>
+              <tr>
+                {table.headers.map((header, index) => <th key={`${index}:${header}`} scope="col">{header}</th>)}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {table.rows.map((row, rowIndex) => (
+                <tr key={`${rowIndex}:${row.join('|')}`}>
+                  {row.map((cell, columnIndex) => columnIndex === 0
+                    ? <th key={`${columnIndex}:${cell}`} scope="row">{cell}</th>
+                    : <td key={`${columnIndex}:${cell}`}>{cell}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <span className="mobile-pdf-table-hint">左右滑动查看完整表格</span>
       </div>
-      <span className="mobile-pdf-table-hint">左右滑动查看完整表格</span>
-    </div>
+    </>
   );
 }
 

@@ -7,19 +7,148 @@ import {
   calculateLocalOcrRenderScale,
   collectMobilePdfTextStreamItems,
   collectMobilePdfTextItems,
+  excludeFigureRegionBlocks,
   excludeFigureRegionTextItems,
   extractLocalOcrParagraphs,
   MOBILE_OCR_FAST_LONG_EDGE,
   MOBILE_OCR_PRECISE_LONG_EDGE,
   needsPreciseLocalOcrRetry,
   selectBestLocalOcrCandidate,
+  stitchMobileCrossPageParagraphs,
   runWhileMobileOcrJobActive,
   resolveLocalOcrResumeState,
   settleMobileTaskWithin,
   withMobileTaskTimeout
 } from './mobileLocalOcr';
+import type { MobileTranslationEntry } from './mobileTypes';
 
 describe('mobile scanned PDF local OCR', () => {
+  it('stitches lowercase paragraph continuations across adjacent PDF pages', () => {
+    const entry = (
+      sourceHash: string,
+      page: number,
+      order: number,
+      original: string,
+      blockType: MobileTranslationEntry['blockType'] = 'paragraph'
+    ): MobileTranslationEntry => ({
+      sourceHash,
+      page,
+      original,
+      translation: '',
+      translatedAt: '2026-07-28T00:00:00.000Z',
+      model: '',
+      origin: 'text',
+      extractionMode: 'structured',
+      order,
+      blockType
+    });
+    const figure: MobileTranslationEntry = {
+      ...entry('figure', 1, 1000.5, 'Figure 1: Overview.', 'caption'),
+      origin: 'figure',
+      figureVersion: 1,
+      figureKind: 'figure'
+    };
+
+    const stitched = stitchMobileCrossPageParagraphs([
+      entry('page-1', 1, 1000, 'The latent queries infer future-'),
+      figure,
+      entry('page-2-first', 2, 2000, 'aware representations from the current observation.'),
+      entry('page-2-second', 2, 2001, 'A new paragraph starts here.')
+    ]);
+
+    expect(stitched).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        page: 1,
+        original: 'The latent queries infer future-aware representations from the current observation.',
+        blockType: 'paragraph'
+      }),
+      figure,
+      expect.objectContaining({ sourceHash: 'page-2-second' })
+    ]));
+    expect(stitched.some((candidate) => candidate.sourceHash === 'page-2-first')).toBe(false);
+    expect(stitched).toHaveLength(3);
+  });
+
+  it('does not stitch page-one contributor notes or formulas into the next page', () => {
+    const entries: MobileTranslationEntry[] = [
+      {
+        sourceHash: 'note',
+        page: 1,
+        original: '∗ Core contributors',
+        translation: '',
+        translatedAt: '2026-07-28T00:00:00.000Z',
+        model: '',
+        origin: 'text',
+        order: 1000,
+        blockType: 'paragraph'
+      },
+      {
+        sourceHash: 'body',
+        page: 2,
+        original: 'commands are produced by the policy.',
+        translation: '',
+        translatedAt: '2026-07-28T00:00:00.000Z',
+        model: '',
+        origin: 'text',
+        order: 2000,
+        blockType: 'paragraph'
+      },
+      {
+        sourceHash: 'formula',
+        page: 3,
+        original: 'L(θ) = ∥a − a∗∥₁',
+        translation: '',
+        translatedAt: '2026-07-28T00:00:00.000Z',
+        model: '',
+        origin: 'text',
+        order: 3000,
+        blockType: 'formula'
+      },
+      {
+        sourceHash: 'definition',
+        page: 4,
+        original: 'where a∗ denotes the expert action.',
+        translation: '',
+        translatedAt: '2026-07-28T00:00:00.000Z',
+        model: '',
+        origin: 'text',
+        order: 4000,
+        blockType: 'paragraph'
+      }
+    ];
+
+    expect(stitchMobileCrossPageParagraphs(entries)).toEqual(entries);
+  });
+
+  it('does not stitch a lowercase lettered subsection into the preceding page', () => {
+    const entries: MobileTranslationEntry[] = [
+      {
+        sourceHash: 'previous',
+        page: 14,
+        original: 'No proprioceptive inputs are used for either data source.',
+        translation: '',
+        translatedAt: '2026-07-28T00:00:00.000Z',
+        model: '',
+        origin: 'text',
+        order: 14000,
+        blockType: 'paragraph'
+      },
+      {
+        sourceHash: 'subsection',
+        page: 15,
+        original: 'b) Robot Platform: The camera captures egocentric RGB images.',
+        translation: '',
+        translatedAt: '2026-07-28T00:00:00.000Z',
+        model: '',
+        origin: 'text',
+        order: 15000,
+        blockType: 'paragraph'
+      }
+    ];
+
+    expect(stitchMobileCrossPageParagraphs(entries)).toEqual(entries);
+  });
+
   it('reads PDF.js text chunks through getReader without requiring ReadableStream async iteration', async () => {
     let readIndex = 0;
     const chunks = [
@@ -89,6 +218,64 @@ describe('mobile scanned PDF local OCR', () => {
     ]);
     expect(result.items).toHaveLength(1);
     expect(result.items[0]).toMatchObject({ str: 'Humanoid robots remain stable.', x: 42, y: 82 });
+  });
+
+  it('removes bibliography back-reference page links without changing the publication year', () => {
+    const reference = '[35] Guangrun Li et al. H2r: A human-to-robot policy. arXiv preprint, 2025. 2, 3, 4, 13';
+    const result = buildEmbeddedPdfTextResult(
+      [{ str: reference, x: 55, y: 120, width: 500, height: 10, page: 10, pageWidth: 612, pageHeight: 792 }],
+      10,
+      true,
+      [{ str: reference, hasEOL: true }],
+      () => [{
+        id: 'reference',
+        section: 'References',
+        original: reference,
+        translation: '',
+        type: 'paragraph',
+        page: 10,
+        sourceHash: 'reference'
+      }]
+    );
+
+    expect(result.blocks[0].block.original).toBe(
+      '[35] Guangrun Li et al. H2r: A human-to-robot policy. arXiv preprint, 2025.'
+    );
+  });
+
+  it('removes embedded LaTeXiT payloads while preserving the visible formula text', () => {
+    const rawItems = [{
+      str: 'Extension <latexit sha1_base64="abc123">AAABase64Payload==</latexit> v, t | m alignment',
+      transform: [1, 0, 0, 1, 42, 710],
+      width: 180,
+      height: 12,
+      hasEOL: true
+    }];
+
+    const result = collectMobilePdfTextItems(rawItems, {
+      width: 612,
+      height: 792,
+      convertToViewportPoint: (x, y) => [x, 792 - y]
+    }, 1);
+
+    expect(result.runs.map((run) => run.str)).toEqual(['v, t | m alignment']);
+    expect(result.items.map((entry) => entry.str)).toEqual(['v, t | m alignment']);
+    expect(result.runs[0].str).not.toContain('latexit');
+    expect(result.runs[0].str).not.toContain('AAABase64Payload');
+  });
+
+  it('removes a LaTeXiT payload that PDF.js splits across positioned text items', () => {
+    const items = [
+      { str: 'Extension v, t', x: 42, y: 82, width: 60, height: 12, page: 1, pageWidth: 612, pageHeight: 792 },
+      { str: '<latexit sha1_base64="abc123">', x: 104, y: 82, width: 60, height: 12, page: 1, pageWidth: 612, pageHeight: 792 },
+      { str: 'AAABase64Payload==</latexit>', x: 166, y: 82, width: 80, height: 12, page: 1, pageWidth: 612, pageHeight: 792 },
+      { str: '| m alignment', x: 248, y: 82, width: 70, height: 12, page: 1, pageWidth: 612, pageHeight: 792 }
+    ];
+    const result = buildEmbeddedPdfTextResult(items, 1, true);
+
+    expect(result.blocks.map(({ block }) => block.original).join(' ')).toContain('Extension v, t | m alignment');
+    expect(result.blocks.map(({ block }) => block.original).join(' ')).not.toContain('latexit');
+    expect(result.blocks.map(({ block }) => block.original).join(' ')).not.toContain('AAABase64Payload');
   });
 
   it('keeps readable PDF text through compatibility reflow when structured reflow throws', () => {
@@ -211,6 +398,136 @@ describe('mobile scanned PDF local OCR', () => {
     expect(filtered.map((entry) => entry.str)).toEqual([
       'TABLE I: Results',
       'Table I highlights a remaining gap in prior systems.'
+    ]);
+  });
+
+  it('removes a raw caption marker when the recovered table renders that caption itself', () => {
+    const items = [
+      { str: 'Method', x: 330, y: 100, width: 50, height: 10, page: 10 },
+      { str: 'Table 2:', x: 330, y: 176, width: 48, height: 10, page: 10 },
+      { str: 'Quantitative performance.', x: 384, y: 176, width: 150, height: 10, page: 10 },
+      { str: 'The left-column paragraph remains readable.', x: 54, y: 176, width: 210, height: 10, page: 10 }
+    ];
+    const filtered = excludeFigureRegionTextItems(items, [{
+      id: 'table-2',
+      page: 10,
+      kind: 'table',
+      caption: 'Table 2: Quantitative performance.',
+      captionHash: 'caption-2',
+      hasTextCaption: false,
+      order: 9000.25,
+      bounds: { x: 322, y: 92, width: 224, height: 76, pageWidth: 612, pageHeight: 792 },
+      captionBounds: { x: 330, y: 176, width: 204, height: 10, pageWidth: 612, pageHeight: 792 },
+      hiddenTextHashes: []
+    }]);
+
+    expect(filtered.map((entry) => entry.str)).toEqual([
+      'The left-column paragraph remains readable.'
+    ]);
+  });
+
+  it('keeps prose connected to a figure edge while removing labels inside the figure', () => {
+    const items = [
+      { str: 'Task', x: 108, y: 123, width: 20, height: 10, page: 10, pageWidth: 612, pageHeight: 792 },
+      { str: 'and', x: 136, y: 123, width: 16, height: 10, page: 10, pageWidth: 612, pageHeight: 792 },
+      { str: 'data.', x: 160, y: 123, width: 22, height: 10, page: 10, pageWidth: 612, pageHeight: 792 },
+      { str: 'The hu-', x: 200, y: 123, width: 37, height: 10, page: 10, pageWidth: 612, pageHeight: 792 },
+      { str: 'The humanoid performs a long-horizon', x: 108, y: 135, width: 129, height: 10, page: 10, pageWidth: 612, pageHeight: 792 },
+      { str: 'OpenHLM', x: 330, y: 180, width: 60, height: 12, page: 10, pageWidth: 612, pageHeight: 792 },
+      { str: 'Figure 8: Long-horizon task.', x: 277, y: 339, width: 197, height: 10, page: 10, pageWidth: 612, pageHeight: 792 }
+    ];
+    const filtered = excludeFigureRegionTextItems(items, [{
+      id: 'figure-8',
+      page: 10,
+      kind: 'figure',
+      caption: 'Figure 8: Long-horizon task.',
+      captionHash: 'caption-8',
+      hasTextCaption: true,
+      order: 7999.75,
+      bounds: { x: 139, y: 122, width: 369, height: 211, pageWidth: 612, pageHeight: 792 },
+      captionBounds: { x: 277, y: 339, width: 197, height: 10, pageWidth: 612, pageHeight: 792 },
+      hiddenTextHashes: []
+    }]);
+
+    expect(filtered.map((entry) => entry.str)).toEqual([
+      'Task',
+      'and',
+      'data.',
+      'The hu-',
+      'The humanoid performs a long-horizon',
+      'Figure 8: Long-horizon task.'
+    ]);
+  });
+
+  it('does not preserve short diagram labels merely because they touch a figure edge', () => {
+    const items = [
+      { str: 'and conditioned on language and high-level task descriptors', x: 54, y: 86, width: 246, height: 10, page: 3, pageWidth: 612, pageHeight: 792 },
+      { str: 'Object Adapter', x: 313, y: 86, width: 72, height: 10, page: 3, pageWidth: 612, pageHeight: 792 },
+      { str: 'Privilege Adapter', x: 492, y: 86, width: 82, height: 10, page: 3, pageWidth: 612, pageHeight: 792 },
+      { str: 'Dynamics-aware World Model', x: 350, y: 112, width: 150, height: 10, page: 3, pageWidth: 612, pageHeight: 792 },
+      { str: 'demonstrated by WMP and extended to active interaction.', x: 312, y: 145, width: 250, height: 10, page: 3, pageWidth: 612, pageHeight: 792 }
+    ];
+    const filtered = excludeFigureRegionTextItems(items, [{
+      id: 'figure-3',
+      page: 3,
+      kind: 'figure',
+      caption: 'Fig. 3: Dynamics-aware world model.',
+      captionHash: 'caption-3',
+      hasTextCaption: true,
+      order: 2999.75,
+      bounds: { x: 312, y: 48, width: 254, height: 80, pageWidth: 612, pageHeight: 792 },
+      captionBounds: { x: 312, y: 130, width: 254, height: 12, pageWidth: 612, pageHeight: 792 },
+      hiddenTextHashes: []
+    }]);
+
+    expect(filtered.map((entry) => entry.str)).toEqual([
+      'and conditioned on language and high-level task descriptors',
+      'demonstrated by WMP and extended to active interaction.'
+    ]);
+  });
+
+  it('removes any reconstructed block fully contained by a figure while keeping its caption and surrounding prose', () => {
+    const makeBlock = (
+      original: string,
+      type: 'paragraph' | 'caption',
+      x: number,
+      y: number,
+      width: number,
+      height: number
+    ) => ({
+      block: {
+        id: original,
+        section: 'Page 1',
+        original,
+        translation: '',
+        type,
+        page: 1,
+        sourceHash: original,
+        bounds: { x, y, width, height, pageWidth: 612, pageHeight: 792 }
+      },
+      order: y
+    });
+    const blocks = [
+      makeBlock('The surrounding paragraph remains readable.', 'paragraph', 55, 140, 502, 12),
+      makeBlock('Hand-Over & Place', 'paragraph', 92, 579, 63, 8),
+      makeBlock('Figure 1: Cross-embodiment tasks.', 'caption', 71, 610, 467, 20)
+    ];
+    const filtered = excludeFigureRegionBlocks(blocks, [{
+      id: 'figure-1',
+      page: 1,
+      kind: 'figure',
+      caption: 'Figure 1: Cross-embodiment tasks.',
+      captionHash: 'caption-1',
+      hasTextCaption: true,
+      order: 609.75,
+      bounds: { x: 46, y: 160, width: 520, height: 433, pageWidth: 612, pageHeight: 792 },
+      captionBounds: { x: 71, y: 610, width: 467, height: 20, pageWidth: 612, pageHeight: 792 },
+      hiddenTextHashes: []
+    }]);
+
+    expect(filtered.map(({ block }) => block.original)).toEqual([
+      'The surrounding paragraph remains readable.',
+      'Figure 1: Cross-embodiment tasks.'
     ]);
   });
 

@@ -56,6 +56,32 @@ describe('PDF text structure extraction', () => {
     expect(outline.every((block) => block.sourceHash)).toBe(true);
   });
 
+  it('merges a caption continuation even when the PDF exposes no standalone caption marker', () => {
+    const outline = buildPdfReaderPageOutline(20, [
+      item(
+        'Table 3: Comparison results of visual-grounded hand motion generation tasks on both',
+        70,
+        88,
+        470,
+        10
+      ),
+      item(
+        'head and tail splits, whose samples come from two complementary datasets.',
+        70,
+        100,
+        470,
+        10
+      ),
+      item('Method MPJPE MWTE PA-MPJPE', 140, 130, 330, 8)
+    ]);
+
+    expect(outline[0]).toMatchObject({
+      type: 'caption',
+      original: 'Table 3: Comparison results of visual-grounded hand motion generation tasks on both head and tail splits, whose samples come from two complementary datasets.'
+    });
+    expect(outline.some((block) => block.original.startsWith('head and tail'))).toBe(false);
+  });
+
   it('normalizes letter-spaced section headings extracted from PDFs', () => {
     const outline = buildPdfPageOutline(2, [
       item('I. I NTRODUCTION', 180, 80, 160, 14),
@@ -69,6 +95,18 @@ describe('PDF text structure extraction', () => {
       'I. INTRODUCTION',
       'II. RELATED WORK',
       'II. RELATED WORK'
+    ]);
+  });
+
+  it('recognizes appendix subsection headings such as E.2', () => {
+    const outline = buildPdfReaderPageOutline(30, [
+      item('E.2 Scaling HuMI Demonstrations', 55, 100, 245, 12),
+      item('Figure 13 examines how demonstration count affects performance.', 55, 126, 245, 9)
+    ]);
+
+    expect(outline.map((block) => ({ type: block.type, original: block.original }))).toEqual([
+      { type: 'heading', original: 'E.2 Scaling HuMI Demonstrations' },
+      { type: 'paragraph', original: 'Figure 13 examines how demonstration count affects performance.' }
     ]);
   });
 
@@ -116,12 +154,15 @@ describe('PDF text structure extraction', () => {
   it('preserves scientific compound hyphens and removes spaces before punctuation', () => {
     const outline = buildPdfPageOutline(3, [
       item('The whole-', 60, 100),
-      item('body controller preserves stability , contact-aware execution , and safety.', 60, 113)
+      item('body controller preserves stability , contact-aware execution , and safety.', 60, 113),
+      item('The fixed-', 60, 150),
+      item('base task remains the comparison baseline.', 60, 163)
     ]);
 
     expect(outline[0].original).toBe(
       'The whole-body controller preserves stability, contact-aware execution, and safety.'
     );
+    expect(outline[1].original).toBe('The fixed-base task remains the comparison baseline.');
   });
 
   it('cleans PDF item spacing around model version tokens', () => {
@@ -212,6 +253,34 @@ describe('PDF text structure extraction', () => {
 
     expect(outline.map((block) => block.original)).toEqual([
       'Foundation models work on the principle that generalist capabilities emerge from training on large and diverse datasets.'
+    ]);
+  });
+
+  it('filters a physical footer page number before it can attach to the final paragraph', () => {
+    const pageItem = (
+      str: string,
+      x: number,
+      y: number,
+      width = 120,
+      height = 10
+    ): PositionedPdfTextItem => ({
+      str,
+      x,
+      y,
+      width,
+      height,
+      page: 12,
+      pageWidth: 612,
+      pageHeight: 792
+    });
+    const outline = buildPdfReaderPageOutline(12, [
+      pageItem('To bridge semantic understanding and physical actuation, we integrate datasets', 80, 690, 462),
+      pageItem('focused on grounded reasoning, object localization, and', 80, 704, 320),
+      pageItem('12', 300, 748, 12, 9)
+    ]);
+
+    expect(outline.map((block) => block.original)).toEqual([
+      'To bridge semantic understanding and physical actuation, we integrate datasets focused on grounded reasoning, object localization, and'
     ]);
   });
 
@@ -600,6 +669,95 @@ describe('PDF text structure extraction', () => {
     ]);
   });
 
+  it('merges all three centered lines of a wrapped first-page title', () => {
+    const pageItem = (...args: Parameters<typeof item>): PositionedPdfTextItem => ({
+      ...item(...args),
+      pageWidth: 612,
+      pageHeight: 792
+    });
+    const outline = buildPdfReaderPageOutline(1, [
+      pageItem('HiWET: Hierarchical World-Frame End-Effector', 92, 78, 428, 20),
+      pageItem('Tracking for Long-Horizon Humanoid', 145, 106, 322, 20),
+      pageItem('Loco-Manipulation', 213, 134, 186, 20),
+      pageItem('Zhanxiang Cao, Liyun Yan, and Yang Zhang', 155, 170, 302, 10),
+      pageItem('Abstract: Humanoid loco-manipulation requires precise tracking.', 55, 240, 245, 9),
+      pageItem('The controller coordinates locomotion and manipulation.', 55, 254, 245, 9),
+      pageItem('I. INTRODUCTION', 115, 290, 125, 10)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'heading').map((block) => block.original)).toContain(
+      'HiWET: Hierarchical World-Frame End-Effector Tracking for Long-Horizon Humanoid Loco-Manipulation'
+    );
+  });
+
+  it('keeps a short numbered company affiliation out of section headings', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('OpenHLM: Whole-Body Humanoid Loco-Manipulation', 120, 80, 370, 18),
+      item('1 Tsinghua University 2 Shanghai Qi Zhi Institute', 179, 150, 204, 10),
+      item('3 Spirit AI', 391.2, 150, 80, 10),
+      item('Abstract: Whole-body humanoid control requires coordination.', 110, 200, 390, 9)
+    ]);
+
+    expect(outline.find((block) => block.original.includes('3 Spirit AI'))?.type).toBe('paragraph');
+  });
+
+  it('separates a project URL and first-page footnote markers from adjacent prose', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('OpenHLM: Whole-Body Humanoid Loco-Manipulation', 120, 80, 370, 18),
+      item('Yingdong Hu, Haodong Zhu, and Yang Gao', 170, 135, 270, 10),
+      item('https://openhlm-project.github.io/', 225, 190, 165, 11),
+      item('Abstract: Whole-body humanoid control requires coordination.', 108, 220, 396, 9),
+      item('The proposed model maps language and pixels directly to actions.', 108, 234, 396, 9),
+      item('Our checkpoints are available at https://openhlm-project.github.io/.', 108, 248, 396, 9),
+      item('1 Introduction', 108, 290, 90, 12),
+      item(
+        'A high-level vision-language-action model maps pixels to whole-body actions ∗ Core contributors',
+        108,
+        680,
+        396,
+        9
+      ),
+      item('† Corresponding author', 120, 710, 90, 8)
+    ]);
+
+    const texts = outline.map((block) => block.original);
+    expect(texts).toContain('https://openhlm-project.github.io/');
+    expect(texts).toContain(
+      'Whole-body humanoid control requires coordination. The proposed model maps language and pixels directly to actions. ' +
+      'Our checkpoints are available at https://openhlm-project.github.io/.'
+    );
+    expect(texts).toContain('A high-level vision-language-action model maps pixels to whole-body actions');
+    expect(texts).toContain('∗ Core contributors');
+    expect(texts).toContain('† Corresponding author');
+  });
+
+  it('drops publisher logo text without dropping a Being-H model title', () => {
+    const pageItem = (...args: Parameters<typeof item>): PositionedPdfTextItem => ({
+      ...item(...args),
+      pageWidth: 612,
+      pageHeight: 792
+    });
+    const outline = buildPdfReaderPageOutline(1, [
+      pageItem('智在无界 BeingBeyond', 244, 14, 142, 16),
+      pageItem('智在⽆界', 244, 15, 59, 15),
+      pageItem('BeingBeyond', 315, 14, 71, 15),
+      pageItem('∝ 智在无界 ∝ BeingBeyond', 70, 20, 120, 64),
+      pageItem('∝ 智在⽆界', 70, 32, 96, 38),
+      pageItem('∝ BeingBeyond', 70, 75, 96, 16),
+      pageItem('Being-H0.5: Scaling Human-Centric Robot Learning', 86, 110, 440, 20),
+      pageItem('for Cross-Embodiment Generalization', 150, 136, 310, 20),
+      pageItem('BeingBeyond Team', 235, 172, 140, 11),
+      pageItem('Abstract: We study cross-embodiment robot learning.', 55, 250, 245, 9),
+      pageItem('The model transfers across several robot platforms.', 55, 264, 245, 9)
+    ]);
+
+    expect(outline.some((block) => /智在无界|^∝/u.test(block.original))).toBe(false);
+    expect(outline.map((block) => block.original)).toContain(
+      'Being-H0.5: Scaling Human-Centric Robot Learning for Cross-Embodiment Generalization'
+    );
+    expect(outline.map((block) => block.original)).toContain('BeingBeyond Team');
+  });
+
   it('recognizes Roman-numeral table captions without merging table headers into them', () => {
     const outline = buildPdfReaderPageOutline(3, [
       item('TABLE I: Comparisons to previous humanoid learn-', 60, 82, 245, 9),
@@ -648,6 +806,19 @@ describe('PDF text structure extraction', () => {
     });
   });
 
+  it('joins a full lowercase continuation line in a wrapped table caption', () => {
+    const outline = buildPdfReaderPageOutline(9, [
+      item('TABLE VIII: Ablation study on contact reward thresholds. We varied the', 312, 370, 251, 9),
+      item('tolerance (ϵ) and force threshold (F) parameters (Eq. 7 and 8).', 312, 382, 251, 9),
+      item('ϵtol Fthr SR ↑ Position Error ↓', 320, 406, 230, 7)
+    ]);
+
+    expect(outline[0]).toMatchObject({
+      type: 'caption',
+      original: 'TABLE VIII: Ablation study on contact reward thresholds. We varied the tolerance (ϵ) and force threshold (F) parameters (Eq. 7 and 8).'
+    });
+  });
+
   it('does not mistake a wrapped inline Fig. reference for a real caption', () => {
     const outline = buildPdfReaderPageOutline(2, [
       item('The tactile signals changed over time during manipulation, as shown in', 312, 100, 251, 9),
@@ -657,6 +828,31 @@ describe('PDF text structure extraction', () => {
     expect(outline).toHaveLength(1);
     expect(outline[0].type).toBe('paragraph');
     expect(outline[0].original).toContain('as shown in Fig. 2. This result');
+  });
+
+  it('keeps sentences beginning with a Fig. reference as prose', () => {
+    const outline = buildPdfReaderPageOutline(8, [
+      item('Fig. 7 presents results across four tasks as demonstrations scale.', 55, 100, 245, 9),
+      item('Across all sampling ratios, performance improves consistently.', 55, 114, 245, 9)
+    ]);
+
+    expect(outline.map((block) => block.type)).toEqual(['paragraph']);
+    expect(outline[0].original).toContain(
+      'Fig. 7 presents results across four tasks as demonstrations scale.'
+    );
+  });
+
+  it('does not mistake a wrapped inline Table reference for a real caption', () => {
+    const outline = buildPdfReaderPageOutline(15, [
+      item('The observation details for complex interaction behaviors are given in', 49, 558, 251, 10),
+      item('Table IX.', 49, 570, 38, 10)
+    ]);
+
+    expect(outline).toHaveLength(1);
+    expect(outline[0]).toMatchObject({
+      type: 'paragraph',
+      original: 'The observation details for complex interaction behaviors are given in Table IX.'
+    });
   });
 
   it('does not treat a trailing Fig. abbreviation as the end of a paragraph', () => {
@@ -681,6 +877,36 @@ describe('PDF text structure extraction', () => {
       type: 'caption',
       original: 'Fig. 7: Graph of the Relationship Between Actual Weight and Load Cell Readings for the Left and Right Feet'
     });
+  });
+
+  it('rejoins prose interrupted by a floating figure caption', () => {
+    const outline = buildPdfReaderPageOutline(10, [
+      item('We collect six demonstrations per pair', 55, 100, 500, 9),
+      item('Figure 8: Long-horizon language-conditioned task.', 55, 132, 500, 9),
+      item('under each condition before evaluating the policy.', 55, 164, 500, 9)
+    ]);
+
+    expect(outline.map((block) => ({ type: block.type, original: block.original }))).toEqual([
+      {
+        type: 'paragraph',
+        original: 'We collect six demonstrations per pair under each condition before evaluating the policy.'
+      },
+      {
+        type: 'caption',
+        original: 'Figure 8: Long-horizon language-conditioned task.'
+      }
+    ]);
+  });
+
+  it('normalizes split decimals, spaced compounds, braces, and a medium-height line break', () => {
+    const outline = buildPdfReaderPageOutline(10, [
+      item('The humanoid walks to a medium-', 55, 100, 245, 9),
+      item('height table and reaches 87. 5% on the Held- out { fruit 1 } trials.', 55, 112, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'The humanoid walks to a medium-height table and reaches 87.5% on the Held-out {fruit 1} trials.'
+    ]);
   });
 
   it('does not attach distant lowercase body prose to a table caption', () => {
@@ -781,6 +1007,29 @@ describe('PDF text structure extraction', () => {
     ]);
 
     expect(outline.map((block) => block.type)).toEqual(['formula', 'paragraph']);
+  });
+
+  it('does not turn a prose explanation after inline math into a display equation', () => {
+    const outline = buildPdfReaderPageOutline(7, [
+      item(
+        'm = {θ, r rot, τ, β}. However, it is critical to represent hand motion both efficiently and effectively.',
+        55,
+        80,
+        245,
+        9
+      ),
+      item(
+        'λ 1 = 0.02, λ 2 = 1.0. For multimodal sequence modeling, we consider three model scales.',
+        55,
+        112,
+        245,
+        9
+      )
+    ]);
+
+    expect(outline.every((block) => block.type === 'paragraph')).toBe(true);
+    expect(outline.map((block) => block.original).join(' ')).toContain('However');
+    expect(outline.map((block) => block.original).join(' ')).toContain('For multimodal sequence modeling');
   });
 
   it('keeps prose definitions with PDF superscript and subscript fragments in one reader paragraph', () => {
@@ -930,6 +1179,105 @@ describe('PDF text structure extraction', () => {
     ]);
   });
 
+  it('rejoins same-row hyperlink fragments in a single-column reference list without reordering them as columns', () => {
+    const pageItem = (...args: Parameters<typeof item>): PositionedPdfTextItem => ({
+      ...item(...args),
+      pageWidth: 612,
+      pageHeight: 792
+    });
+    const outline = buildPdfReaderPageOutline(13, [
+      pageItem('[6] J.', 78, 100, 34, 9),
+      pageItem('Li, X.', 124, 102.8, 42, 7),
+      pageItem('Cheng, and X. Wang. Adaptive motion optimization.', 178, 100.2, 310, 9),
+      pageItem('arXiv preprint arXiv:2505.03738, 2025.', 98, 114, 390, 9),
+      pageItem('[7] NVIDIA GEAR Team. GR00T N1.6: An improved open foundation model.', 78, 132, 410, 9),
+      pageItem('NVIDIA Research Blog, Accessed: 2026-05-06.', 98, 146, 390, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      '[6] J. Li, X. Cheng, and X. Wang. Adaptive motion optimization. arXiv preprint arXiv:2505.03738, 2025.',
+      '[7] NVIDIA GEAR Team. GR00T N1.6: An improved open foundation model. NVIDIA Research Blog, Accessed: 2026-05-06.'
+    ]);
+  });
+
+  it('does not interleave side-by-side figure captions when their PDF runs have narrow gaps', () => {
+    const pageItem = (...args: Parameters<typeof item>): PositionedPdfTextItem => ({
+      ...item(...args),
+      pageWidth: 612,
+      pageHeight: 792
+    });
+    const outline = buildPdfReaderPageOutline(23, [
+      pageItem('The final score appears as a task progress fraction in', 55, 410, 266, 9),
+      pageItem('[0, 1]. For example, in the cola task, the robot loses one point.', 322, 410.2, 235, 9),
+      pageItem('The robot uses wrist grippers. Visual perception is pro-', 55, 430, 270, 9),
+      pageItem('vided by a fisheye stereo camera mounted on the robot.', 55, 444, 225, 9),
+      pageItem('Figure 9: Humanoid robot hardware. The', 55, 500, 205, 9),
+      pageItem('Figure 10: HuMI hardware. Handheld grip-', 315, 500.3, 235, 9),
+      pageItem('Unitree G1 is equipped with wrist-mounted', 55, 514, 215, 9),
+      pageItem('pers and body trackers are used to collect', 315, 514.2, 225, 9),
+      pageItem('grippers and onboard cameras.', 55, 528, 180, 9),
+      pageItem('teleoperation-free demonstrations.', 315, 528.1, 205, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'caption').map((block) => block.original)).toEqual([
+      'Figure 9: Humanoid robot hardware. The Unitree G1 is equipped with wrist-mounted grippers and onboard cameras.',
+      'Figure 10: HuMI hardware. Handheld grippers and body trackers are used to collect teleoperation-free demonstrations.'
+    ]);
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'The final score appears as a task progress fraction in [0, 1]. For example, in the cola task, the robot loses one point.',
+      'The robot uses wrist grippers. Visual perception is provided by a fisheye stereo camera mounted on the robot.'
+    ]);
+  });
+
+  it('keeps short continuation runs in their own reference column and starts every bracketed entry', () => {
+    const pageItem = (...args: Parameters<typeof item>): PositionedPdfTextItem => ({
+      ...item(...args),
+      pageWidth: 612,
+      pageHeight: 792
+    });
+    const outline = buildPdfReaderPageOutline(12, [
+      pageItem('[61] Longyan Wu et al. FreeTacMan: Robot-free data collection.', 55, 100, 245, 9),
+      pageItem('arXiv preprint', 220, 114, 80, 9),
+      pageItem('[73] Yanjie Ze et al. TWIST: Teleoperated whole-body imitation.', 312, 114.2, 245, 9),
+      pageItem('[62] Boshen Xu et al. EgoDTM: Egocentric video-language pretraining. 2', 55, 128, 245, 9),
+      pageItem('[74] Yanjie Ze et al. TWIST2: Scalable humanoid data collection. 2', 312, 128.2, 245, 9)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      '[61] Longyan Wu et al. FreeTacMan: Robot-free data collection. arXiv preprint',
+      '[62] Boshen Xu et al. EgoDTM: Egocentric video-language pretraining. 2',
+      '[73] Yanjie Ze et al. TWIST: Teleoperated whole-body imitation.',
+      '[74] Yanjie Ze et al. TWIST2: Scalable humanoid data collection. 2'
+    ]);
+  });
+
+  it('does not interleave a left-column conclusion with a right-column reference list', () => {
+    const pageItem = (...args: Parameters<typeof item>): PositionedPdfTextItem => ({
+      ...item(...args),
+      pageWidth: 612,
+      pageHeight: 792
+    });
+    const outline = buildPdfReaderPageOutline(9, [
+      pageItem('TABLE II: Data collection efficiency.', 49, 62, 514, 9),
+      pageItem('The left-column discussion continues before the conclusion', 49, 271, 270, 9),
+      pageItem('R', 321, 271.2, 7, 9),
+      pageItem('EFERENCES', 331, 271.1, 62, 9),
+      pageItem('and finishes without entering the bibliography.', 49, 285, 270, 9),
+      pageItem('[1] A. Author. First reference title.', 321, 285.2, 235, 9),
+      pageItem('VI. CONCLUSION', 115, 313, 115, 10),
+      pageItem('[2] B. Author. Second reference title.', 321, 313.2, 235, 9),
+      pageItem('We conclude that the method transfers across environments.', 49, 327, 270, 9),
+      pageItem('Conference on Robot Learning, 2026.', 341, 327.2, 215, 9)
+    ]);
+
+    const texts = outline.map((block) => block.original);
+    expect(texts.some((text) => text.includes('REFERENCES') && text.includes('left-column'))).toBe(false);
+    expect(texts.some((text) => text.includes('[1]') && text.includes('VI. CONCLUSION'))).toBe(false);
+    expect(texts.findIndex((text) => text.includes('VI. CONCLUSION'))).toBeLessThan(
+      texts.findIndex((text) => text.includes('[1]'))
+    );
+  });
+
   it('removes hidden PDF font control characters from reader text', () => {
     const outline = buildPdfReaderPageOutline(2, [
       item('The resultant wrench is expressed as \u0014 lambda = rho \u0002 T \u0003.', 55, 90, 245, 9),
@@ -1049,6 +1397,90 @@ describe('PDF text structure extraction', () => {
     ]);
   });
 
+  it('keeps off-center first-page authors and affiliations before the figure and abstract', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('Robot-Free Egocentric Demonstration', 120, 44, 370, 18),
+      item('Modi Shi 2, 3 ∗ Di Huang 3', 60, 92, 120, 10),
+      item('Shijia Peng 1 ∗ Jin Chen 2 ∗ Haoran Jiang 2', 205, 92, 210, 10),
+      item('Tianyu Li 2 Li Chen 1 †', 430, 92, 120, 10),
+      item('1 The University of Hong Kong', 80, 116, 180, 9),
+      item('2 Shanghai Innovation Institute', 270, 116, 175, 9),
+      item('3 Beihang University', 455, 116, 115, 9),
+      item('Fig. 1: Human-to-humanoid transfer overview.', 55, 560, 500, 9),
+      item('Abstract—Human demonstrations provide diverse supervision for robot learning.', 55, 640, 245, 9),
+      item('The aligned policy transfers to unseen environments.', 55, 654, 245, 9),
+      item('The view alignment reduces domain discrepancies.', 312, 640, 245, 9)
+    ]);
+
+    const originals = outline.map((block) => block.original);
+    const captionIndex = originals.findIndex((text) => text.startsWith('Fig. 1:'));
+    const abstractIndex = originals.findIndex((text) => text.startsWith('Human demonstrations'));
+    for (const authorOrAffiliation of ['Modi Shi', 'Shijia Peng', 'Tianyu Li', 'University of Hong Kong', 'Beihang University']) {
+      expect(originals.findIndex((text) => text.includes(authorOrAffiliation))).toBeLessThan(captionIndex);
+    }
+    expect(captionIndex).toBeLessThan(abstractIndex);
+  });
+
+  it('keeps page-one footnotes out of a two-column abstract continuation', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('Cross-Embodiment Humanoid Learning', 120, 44, 370, 18),
+      item('Abstract—Human demonstrations provide diverse supervision and establish a', 55, 560, 245, 9),
+      item('systematic alignment pipeline spanning hardware design and data processing. At', 55, 620, 245, 9),
+      item('the core of our human-to-', 55, 700, 245, 9),
+      item('∗ Equal Contribution. † Work done while at Example AI.', 55, 730, 245, 8),
+      item('humanoid alignment pipeline lie two key components for robust transfer.', 312, 560, 245, 9),
+      item('I. INTRODUCTION', 360, 650, 160, 13),
+      item('Humanoid robots can operate in diverse environments.', 312, 680, 245, 9)
+    ]);
+
+    const abstract = outline.find((block) => block.section === 'Abstract');
+    expect(abstract?.original).toContain('human-to-humanoid alignment pipeline');
+    expect(abstract?.original).not.toContain('Equal Contribution');
+    const footnoteIndex = outline.findIndex((block) => block.original.includes('Equal Contribution'));
+    const abstractIndex = outline.findIndex((block) => block.section === 'Abstract');
+    expect(outline[footnoteIndex]?.type).toBe('paragraph');
+    expect(footnoteIndex).toBeLessThan(abstractIndex);
+  });
+
+  it('keeps a core-contributors note with front matter instead of after unfinished body prose', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('OpenHLM: Whole-Body Humanoid Loco-Manipulation', 120, 44, 370, 18),
+      item('Abstract—We present a whole-body humanoid policy that maps', 55, 560, 245, 9),
+      item('observations and language to actions.', 312, 560, 245, 9),
+      item('∗ Core contributors', 55, 730, 110, 8)
+    ]);
+
+    const footnoteIndex = outline.findIndex((block) => block.original.includes('Core contributors'));
+    const abstractIndex = outline.findIndex((block) => block.section === 'Abstract');
+    expect(footnoteIndex).toBeGreaterThanOrEqual(0);
+    expect(footnoteIndex).toBeLessThan(abstractIndex);
+  });
+
+  it('keeps a wrapped conference title inside its bibliography entry', () => {
+    const outline = buildPdfReaderPageOutline(11, [
+      item('feng Lin, Tao Kong, Yong Yu, and Weinan Zhang. World model-based perception. In', 55, 90, 245, 9),
+      item('2025 IEEE International Conference on Robotics and', 55, 104, 245, 14),
+      item('Automation (ICRA), pages 11531–11537. IEEE, 2025.', 55, 122, 245, 9),
+      item('[26] Mikko Lauri, David Hsu, and Joni Pajarinen. Partially observable robotics.', 55, 150, 245, 9),
+      item('[27] Chenhao Li, Andreas Krause, and Marco Hutter. Robotic world model.', 55, 178, 245, 9)
+    ]);
+
+    expect(outline.some((block) => block.type === 'heading' && block.original.startsWith('2025 IEEE'))).toBe(false);
+    expect(outline.some((block) => (
+      block.type === 'paragraph' &&
+      block.original.includes('In 2025 IEEE International Conference on Robotics and Automation (ICRA)')
+    ))).toBe(true);
+  });
+
+  it('repairs repeated PDF small-caps splits and common scientific compound wraps', () => {
+    const outline = buildPdfReaderPageOutline(1, [
+      item('Abstract—We present E GO H UMANOID for a data-', 55, 560, 245, 9),
+      item('hungry learning problem.', 55, 574, 245, 9)
+    ]);
+
+    expect(outline[0].original).toBe('We present EGO HUMANOID for a data-hungry learning problem.');
+  });
+
   it('keeps an algorithm panel separate from unfinished prose in the other column', () => {
     const outline = buildPdfReaderPageOutline(7, [
       item('We use a high-fidelity simulator to generate realistic dynamics', 55, 500, 245, 9),
@@ -1059,6 +1491,27 @@ describe('PDF text structure extraction', () => {
 
     expect(outline.find((block) => block.original.startsWith('Algorithm 1'))?.type).toBe('caption');
     expect(outline.some((block) => block.original.includes('dynamics Algorithm 1'))).toBe(false);
+  });
+
+  it('keeps a right-column caption at the exact page midpoint out of left-column prose', () => {
+    const pageItem = (...args: Parameters<typeof item>): PositionedPdfTextItem => ({
+      ...item(...args),
+      pageWidth: 612,
+      pageHeight: 792
+    });
+    const outline = buildPdfReaderPageOutline(9, [
+      pageItem('The feature dimension is partitioned into', 70, 100, 218, 10),
+      pageItem('Figure 4: Architecture of part-level hand motion tok-', 306, 100, 237, 10),
+      pageItem('groups along the channel axis.', 70, 112, 150, 10),
+      pageItem('enization based on GRQ.', 306, 112, 110, 10)
+    ]);
+
+    expect(outline.find((block) => block.type === 'caption')?.original).toBe(
+      'Figure 4: Architecture of part-level hand motion tokenization based on GRQ.'
+    );
+    expect(outline.find((block) => block.type === 'paragraph')?.original).toBe(
+      'The feature dimension is partitioned into groups along the channel axis.'
+    );
   });
 
   it('starts a numbered run-in subsection as a new reader paragraph', () => {
@@ -1072,6 +1525,102 @@ describe('PDF text structure extraction', () => {
       'Table II summarizes the',
       '2) Real-Time Online Parameter Estimation in Simulation: We validate online performance. Each simulation environment runs in its own thread.'
     ]);
+  });
+
+  it('keeps short trailing words on a long PDF line inside their paragraph', () => {
+    const outline = buildPdfReaderPageOutline(11, [
+      item('Dynamic tasks are where the predictive advantage is most visible.', 70, 100, 443, 10),
+      item('The', 523, 100, 18, 10),
+      item('clearest margin appears on dynamic scenes.', 70, 112, 230, 10),
+      item('Physical suites highlight a second strength of the model.', 70, 150, 377, 10),
+      item('On', 457, 150, 14, 10),
+      item('Physical Rea-', 474, 150, 69, 10),
+      item('soning, the closest baseline remains strong.', 70, 162, 230, 10)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'Dynamic tasks are where the predictive advantage is most visible. The clearest margin appears on dynamic scenes.',
+      'Physical suites highlight a second strength of the model. On Physical Reasoning, the closest baseline remains strong.'
+    ]);
+  });
+
+  it('rejoins narrow midpoint fragments inside a nearby full-width single-column paragraph', () => {
+    const pageItem = (...args: Parameters<typeof item>): PositionedPdfTextItem => ({
+      ...item(...args),
+      pageWidth: 612,
+      pageHeight: 792
+    });
+    const outline = buildPdfReaderPageOutline(6, [
+      pageItem('as our default backbone and leave its internal architecture untouched, focusing instead on the', 108, 584, 396, 10),
+      pageItem('interface between the VLA and the humanoid.', 108, 596, 195, 10),
+      pageItem('Two things must change by construction:', 312, 596, 173, 10),
+      pageItem('the', 492, 596, 12, 10),
+      pageItem('output action vector and the input proprioceptive state.', 108, 608, 230, 10),
+      pageItem('We ablate four design choices around', 346, 608, 158, 10)
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'as our default backbone and leave its internal architecture untouched, focusing instead on the ' +
+      'interface between the VLA and the humanoid. Two things must change by construction: the ' +
+      'output action vector and the input proprioceptive state. We ablate four design choices around'
+    ]);
+  });
+
+  it('does not attach an orphan numeric table cell to prose below the table', () => {
+    const outline = buildPdfReaderPageOutline(5, [
+      item('TABLE I: Domain-randomization and termination thresholds.', 49, 62, 251, 9),
+      item('End-Effector Z-Error (m) 0.25', 49, 313, 102, 7),
+      item('0.375', 212, 313, 21, 7),
+      item('and the current base action remains available to the residual policy.', 49, 341, 251, 10)
+    ]);
+
+    expect(outline.map((block) => block.original)).toContain('0.375');
+    expect(outline.map((block) => block.original)).toContain(
+      'and the current base action remains available to the residual policy.'
+    );
+    expect(outline.some((block) => block.original.startsWith('0.375 and the current'))).toBe(false);
+  });
+
+  it('preserves a lettered run-in paragraph after an explanatory colon', () => {
+    const outline = buildPdfReaderPageOutline(5, [
+      item(
+        'The actuation-aware modeling is detailed as follows: a) Aggressive Domain Randomization: ' +
+        'We increase the disturbance range while retaining recoverable states.',
+        49,
+        100,
+        251,
+        30
+      )
+    ]);
+
+    expect(outline.filter((block) => block.type === 'paragraph').map((block) => block.original)).toEqual([
+      'The actuation-aware modeling is detailed as follows:',
+      'a) Aggressive Domain Randomization: We increase the disturbance range while retaining recoverable states.'
+    ]);
+  });
+
+  it('keeps an evaluation heading, bullet, display equation, and equation number separate', () => {
+    const outline = buildPdfReaderPageOutline(16, [
+      item('2) Evaluation Metrics:', 322, 498, 128, 9),
+      item('• Global Mean Per Body Position Error measures global tracking accuracy.', 334, 516, 224, 9),
+      item('E g-mpbpe = E || p t − p ref || 2', 384, 543, 148, 9),
+      item('(10)', 546, 547, 18, 7),
+      item('• Root-Relative Mean Per Body Position Error removes the root translation.', 334, 568, 224, 9),
+      item('E mpbpe = E || p t − p root || 2', 384, 594, 148, 9),
+      item('(11)', 546, 598, 18, 7),
+      item('• Mean Per Body Orientation Error uses quaternion distance.', 334, 616, 224, 9)
+    ]);
+
+    expect(outline.find((block) => block.original === '2) Evaluation Metrics:')?.type).toBe('heading');
+    expect(outline.filter((block) => block.original.startsWith('•')).map((block) => block.type)).toEqual([
+      'paragraph',
+      'paragraph',
+      'paragraph'
+    ]);
+    const formulas = outline.filter((block) => block.type === 'formula');
+    expect(formulas.find((block) => block.original.includes('E g-mpbpe'))?.original).toContain('(10)');
+    expect(formulas.find((block) => block.original.includes('E mpbpe'))?.original).toContain('(11)');
+    expect(formulas.every((block) => !block.original.includes('•'))).toBe(true);
   });
 
   it('separates multiple unbracketed bibliography entries exposed as one PDF block', () => {

@@ -949,3 +949,28 @@ python -m http.server 8765 --bind 127.0.0.1 --directory .superpowers/brainstorm/
 首页、全局侧栏、PDF 阅读器和 AI 助手已统一为浅色优先的 Research OS 视觉语言：侧栏按科研工作流分组，主操作使用深石墨到蓝紫渐变，关键检查器使用局部玻璃材质和柔和发光。PDF 双语画布保持主区域优先；AI 助手仅在真实生成期间显示持续状态动效，结束后自动归于静态。
 
 界面仍支持 `prefers-reduced-motion: reduce`。视觉回归截图位于 `.tmp-visual-check/home.png`、`.tmp-visual-check/whole-pdf-reader.png` 和 `.tmp-visual-check/ai-assistant.png`。
+
+## 2026-07-28 移动 PDF 真实论文结构回归
+
+手机连续双语阅读已用 8 篇 Humanoid VLA 真实论文做逐页对抗式回归，共覆盖 196 页。全部页面都直接命中 PDF 文字层，没有误走 OCR；提取结果包含 133 个图表区域、42 个可验证的语义表格，以及 12 个无法安全还原行列时保留的原图表区域。导入阶段仍不会调用 DeepSeek，只有用户点击“全文翻译”后才会发送纯文本。
+
+本轮不只检查“是否有输出”，还修复了真实页面对照发现的结构错误：
+
+- 双栏正文在页面中部误换栏、同段被拆开或相邻两段被合并；
+- PDF 换页处的正文和参考文献被页标打断；全文完成后会确定性缝合跨页小写续段；
+- 多行图注第二行混入正文、图片与图注错位、图内坐标文字泄漏到连续阅读；
+- 长表格尾行混入正文、纯数字表格行粘到段首、表格标题吞掉表头；
+- 参考文献中的红色回链页码被粘到年份后，以及会议名称被误判成正文标题；
+- 第一页作者脚注被排到正文末尾，割断第一页与第二页之间的文章内容。
+
+浏览器视觉复核还发现了统计门禁无法暴露的 UI 问题：没有句号的 `TABLE I: ...` 表题会把下方表头和数据行一起吞入 caption，导致本可重制的表格退回截图；语义表格接管 caption 后又可能与普通阅读块重复显示。现在 caption 会在明显的表头行前停止，语义表格自身保留且只显示一次标题，并继续支持横向滚动、选词和复制。
+
+本地提取缓存版本已升级到 v12。旧 PDF、论文库、标签、API Key 和原始文件继续保留；旧结构缓存会重新提取，相同原文哈希的已有译文可继续复用。复杂公式仍保留为公式块，并在用户明确点击翻译时允许 AI 以 LaTeX 做保守重排；本地提取不会让 AI 改写原文。
+
+真实语料回归命令：
+
+```powershell
+$env:FTRANSLATE_PDF_CORPUS_DIR='D:\调研PDF\调研pdf\Humanoid VLA'
+$env:FTRANSLATE_PDF_CORPUS_FILES='16 Being-H0.7 2026.4.30 arxiv.pdf|10 HAIC 2026.2.12 RSS.pdf|11 OmniXtreme 2026.2.27-RSS.pdf|12 HiWET 2026.2.6 RSS.pdf|13 EgoHumanoid 2026.2.10 RSS.pdf|14 OpenHLM 2026.6.20 arXiv.pdf|15 Being-H0 2025.7.21 ICML .pdf|16 Being-H0.5 2026.1.19 arxiv.pdf'
+npx vitest run scripts/mobile-pdf-corpus-check.test.ts
+```

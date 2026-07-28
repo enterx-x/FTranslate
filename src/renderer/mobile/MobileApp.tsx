@@ -9,7 +9,8 @@ import {
   recognizePdfPagesLocally,
   resolveLocalOcrResumeState,
   runWhileMobileOcrJobActive,
-  settleMobileTaskWithin
+  settleMobileTaskWithin,
+  stitchMobileCrossPageParagraphs
 } from './mobileLocalOcr';
 import {
   createMobileLibraryWriteQueue,
@@ -551,7 +552,11 @@ function MobileApp() {
         ) {
           return;
         }
-        const finalEntries = translationCacheByPaperRef.current.get(paper.id) ?? [];
+        const extractedEntries = translationCacheByPaperRef.current.get(paper.id) ?? [];
+        const finalEntries = stitchMobileCrossPageParagraphs(extractedEntries);
+        if (finalEntries !== extractedEntries) {
+          await persistPaperTranslationSet(paper.id, finalEntries);
+        }
         const finalBlockCount = buildCachedLocalOcrBlocks(finalEntries).length;
         const figureCount = finalEntries.filter((entry) => (
           entry.origin === 'figure' && entry.figureVersion === MOBILE_PDF_FIGURE_VERSION

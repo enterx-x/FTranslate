@@ -1067,6 +1067,14 @@
   width: 100%;
 }
 
+.mobile-pdf-figure .mobile-pdf-table-caption {
+  margin: 0 0 10px;
+}
+
+.mobile-pdf-table-caption .mobile-block-translation {
+  margin-top: 10px;
+}
+
 .mobile-pdf-table-scroll {
   width: 100%;
   overflow-x: auto;

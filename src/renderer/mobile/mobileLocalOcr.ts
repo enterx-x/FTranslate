@@ -127,6 +127,7 @@ export function excludeFigureRegionTextItems<TItem extends PositionedPdfTextItem
   if (regions.length === 0) {
     return items;
   }
+  const edgeConnectedTextItems = collectFigureEdgeConnectedTextItems(items, regions);
   return items.filter((item) => !regions.some((region) => {
     if (region.page !== item.page) {
       return false;
@@ -141,6 +142,9 @@ export function excludeFigureRegionTextItems<TItem extends PositionedPdfTextItem
       centerY >= captionBounds.y - 3 &&
       centerY <= captionBounds.y + captionBounds.height + 3
     ) {
+      return !region.hasTextCaption;
+    }
+    if (edgeConnectedTextItems.has(item)) {
       return false;
     }
     return centerX >= region.bounds.x &&
@@ -148,6 +152,112 @@ export function excludeFigureRegionTextItems<TItem extends PositionedPdfTextItem
       centerY >= region.bounds.y &&
       centerY <= region.bounds.y + region.bounds.height;
   }));
+}
+
+export function excludeFigureRegionBlocks(
+  blocks: LocalOcrBlock[],
+  regions: MobilePdfFigureRegion[]
+): LocalOcrBlock[] {
+  if (regions.length === 0) {
+    return blocks;
+  }
+  return blocks.filter(({ block }) => {
+    if (block.type === 'caption' || !block.bounds) {
+      return true;
+    }
+    const tolerance = 3;
+    return !regions.some((region) => (
+      region.page === block.page &&
+      block.bounds!.x >= region.bounds.x - tolerance &&
+      block.bounds!.x + block.bounds!.width <= region.bounds.x + region.bounds.width + tolerance &&
+      block.bounds!.y >= region.bounds.y - tolerance &&
+      block.bounds!.y + block.bounds!.height <= region.bounds.y + region.bounds.height + tolerance
+    ));
+  });
+}
+
+function collectFigureEdgeConnectedTextItems<TItem extends PositionedPdfTextItem>(
+  items: TItem[],
+  regions: MobilePdfFigureRegion[]
+): Set<TItem> {
+  const preserved = new Set<TItem>();
+  for (const region of regions) {
+    // A table owns all text inside its geometric scope. Preserving text that
+    // touches the crop edge is useful for prose wrapped around a figure, but
+    // would leak side-by-side table cells back into the reading paragraph.
+    if (region.kind === 'table') {
+      continue;
+    }
+    const rows: TItem[][] = [];
+    const candidates = items
+      .filter((item) => {
+        if (item.page !== region.page) {
+          return false;
+        }
+        const centerY = item.y + item.height / 2;
+        return centerY >= region.bounds.y && centerY <= region.bounds.y + region.bounds.height;
+      })
+      .sort((left, right) => left.y - right.y || left.x - right.x);
+    for (const item of candidates) {
+      const row = rows.find((entries) => {
+        const reference = entries[0];
+        return Math.abs(reference.y - item.y) <= Math.max(3, reference.height * 0.6, item.height * 0.6);
+      });
+      if (row) {
+        row.push(item);
+      } else {
+        rows.push([item]);
+      }
+    }
+    for (const row of rows) {
+      const segments: TItem[][] = [];
+      for (const item of [...row].sort((left, right) => left.x - right.x)) {
+        const segment = segments[segments.length - 1];
+        const previous = segment?.[segment.length - 1];
+        const gap = previous ? item.x - (previous.x + previous.width) : 0;
+        const crossesFigureEdge = Boolean(previous && gap > 10 && (
+          (
+            previous.x + previous.width <= region.bounds.x + 1 &&
+            item.x >= region.bounds.x - 1
+          ) ||
+          (
+            previous.x + previous.width <= region.bounds.x + region.bounds.width + 1 &&
+            item.x >= region.bounds.x + region.bounds.width - 1
+          )
+        ));
+        if (
+          !segment ||
+          crossesFigureEdge ||
+          gap > Math.max(28, previous.height * 1.5, item.height * 1.5)
+        ) {
+          segments.push([item]);
+        } else {
+          segment.push(item);
+        }
+      }
+      for (const segment of segments) {
+        const minX = Math.min(...segment.map((item) => item.x));
+        const maxX = Math.max(...segment.map((item) => item.x + item.width));
+        const segmentWords = segment
+          .flatMap((item) => item.str.match(/\p{L}[\p{L}\p{N}'-]*/gu) ?? []);
+        const lowercaseWords = segmentWords.filter((word) => /^\p{Ll}/u.test(word)).length;
+        const looksLikeProseSegment = segmentWords.length >= 4 && (
+          lowercaseWords / segmentWords.length >= 0.45 ||
+          segment.some((item) => /[.!?。！？]/u.test(item.str))
+        );
+        if (
+          looksLikeProseSegment &&
+          (
+            minX < region.bounds.x - 2 ||
+            maxX > region.bounds.x + region.bounds.width + 2
+          )
+        ) {
+          segment.forEach((item) => preserved.add(item));
+        }
+      }
+    }
+  }
+  return preserved;
 }
 
 type OcrImageRecognizer = (
@@ -186,9 +296,13 @@ export async function recognizePdfPagesLocally(
     pageTimeoutMs?: number;
     saveTimeoutMs?: number;
     cleanupTimeoutMs?: number;
+    standardFontDataUrl?: string;
   } = {}
 ): Promise<LocalOcrRunResult> {
-  const loadingTask = pdfjsLib.getDocument({ data: pdfData.slice() });
+  const loadingTask = pdfjsLib.getDocument({
+    data: pdfData.slice(),
+    ...(options.standardFontDataUrl ? { standardFontDataUrl: options.standardFontDataUrl } : {})
+  });
   let pdfDocument: PDFDocumentProxy | null = null;
   const ocrWorkerRef: { current: Worker | null } = { current: null };
   let lastProcessedPage = Math.max(0, (options.startPage ?? 1) - 1);
@@ -319,6 +433,10 @@ export async function recognizePdfPagesLocally(
               }
             }
           }
+          embedded = {
+            ...embedded,
+            blocks: excludeFigureRegionBlocks(embedded.blocks, figures)
+          };
           if (embedded.blocks.length > 0) {
             const compatibilityMode = embedded.mode === 'compatibility';
             options.onProgress?.({
@@ -576,6 +694,159 @@ export function buildCachedLocalOcrBlocks(entries: MobileTranslationEntry[]): Ex
     }));
 }
 
+export function stitchMobileCrossPageParagraphs(
+  entries: MobileTranslationEntry[]
+): MobileTranslationEntry[] {
+  const sourceEntries = entries
+    .filter((entry) => entry.origin === 'text' || entry.origin === 'ocr' || entry.origin === 'vision')
+    .sort((left, right) => (
+      left.page - right.page ||
+      (Number.isFinite(left.order) ? Number(left.order) : left.page * 1000) -
+        (Number.isFinite(right.order) ? Number(right.order) : right.page * 1000)
+    ));
+  const pageGroups = new Map<number, MobileTranslationEntry[]>();
+  for (const entry of sourceEntries) {
+    pageGroups.set(entry.page, [...(pageGroups.get(entry.page) ?? []), entry]);
+  }
+  const pages = Array.from(pageGroups.keys()).sort((left, right) => left - right);
+  const replacements = new Map<string, MobileTranslationEntry>();
+  const removed = new Set<string>();
+  const consumed = new Set<string>();
+
+  for (let index = 0; index < pages.length - 1; index += 1) {
+    const page = pages[index];
+    const nextPage = pages[index + 1];
+    if (nextPage !== page + 1) {
+      continue;
+    }
+    const previous = pageGroups.get(page)?.at(-1);
+    const next = pageGroups.get(nextPage)?.[0];
+    if (
+      !previous ||
+      !next ||
+      consumed.has(previous.sourceHash) ||
+      consumed.has(next.sourceHash) ||
+      !isMobileCrossPageParagraphContinuation(previous, next)
+    ) {
+      continue;
+    }
+    const original = joinMobileCrossPageText(previous.original, next.original);
+    const canReuseTranslation = Boolean(
+      previous.translation.trim() &&
+      next.translation.trim() &&
+      previous.model === next.model &&
+      (previous.baseURL ?? '') === (next.baseURL ?? '')
+    );
+    const sourceHash = hashText(
+      `cross-page|${previous.page}|${previous.sourceHash}|${next.sourceHash}|${original}`
+    );
+    const extractionWarnings = Array.from(new Set(
+      [previous.extractionWarning, next.extractionWarning].filter((value): value is string => Boolean(value))
+    ));
+    replacements.set(previous.sourceHash, {
+      ...previous,
+      sourceHash,
+      original,
+      translation: canReuseTranslation
+        ? joinMobileCrossPageText(previous.translation, next.translation)
+        : '',
+      translatedAt: canReuseTranslation
+        ? [previous.translatedAt, next.translatedAt].sort().at(-1) ?? previous.translatedAt
+        : new Date(0).toISOString(),
+      model: canReuseTranslation ? previous.model : '',
+      origin: previous.origin === 'ocr' || next.origin === 'ocr'
+        ? 'ocr'
+        : previous.origin === 'vision' || next.origin === 'vision'
+          ? 'vision'
+          : 'text',
+      extractionMode: previous.extractionMode === 'ocr' || next.extractionMode === 'ocr'
+        ? 'ocr'
+        : previous.extractionMode === 'compatibility' || next.extractionMode === 'compatibility'
+          ? 'compatibility'
+          : 'structured',
+      ...(extractionWarnings.length > 0
+        ? { extractionWarning: extractionWarnings.join('；') }
+        : { extractionWarning: undefined }),
+      blockType: 'paragraph',
+      crossPageEndPage: next.crossPageEndPage ?? next.page,
+      ...(canReuseTranslation && previous.aiReflowVersion === next.aiReflowVersion
+        ? { aiReflowVersion: previous.aiReflowVersion }
+        : { aiReflowVersion: undefined }),
+      introducedTerms: mergeMobileAcademicTerms(previous.introducedTerms, next.introducedTerms)
+    });
+    removed.add(next.sourceHash);
+    consumed.add(previous.sourceHash);
+    consumed.add(next.sourceHash);
+  }
+
+  if (replacements.size === 0) {
+    return entries;
+  }
+  return entries.flatMap((entry) => {
+    if (removed.has(entry.sourceHash)) {
+      return [];
+    }
+    return [replacements.get(entry.sourceHash) ?? entry];
+  });
+}
+
+function isMobileCrossPageParagraphContinuation(
+  previous: MobileTranslationEntry,
+  next: MobileTranslationEntry
+): boolean {
+  const previousType = previous.blockType ?? 'paragraph';
+  const nextType = next.blockType ?? 'paragraph';
+  const previousText = previous.original.trim();
+  const nextText = next.original.trim();
+  return previousType === 'paragraph' &&
+    nextType === 'paragraph' &&
+    previous.crossPageEndPage === undefined &&
+    Boolean(previousText) &&
+    /^\p{Ll}/u.test(nextText) &&
+    !/^[a-z]\s*[).:]\s+/u.test(nextText) &&
+    !/^[∗†‡♮*]\s*(?:equal contribution|corresponding author|core contributors|project lead|work done)\b/iu
+      .test(previousText);
+}
+
+function joinMobileCrossPageText(previous: string, next: string): string {
+  const left = previous.trim();
+  const right = next.trim();
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  if (/(\p{L})-$/u.test(left) && /^\p{Ll}/u.test(right)) {
+    const prefix = left.match(/(\p{L}+)-$/u)?.[1] ?? '';
+    const separator = shouldPreserveMobileCompoundHyphen(prefix) ? '-' : '';
+    return `${left.slice(0, -1)}${separator}${right}`;
+  }
+  const separator = /[\u3400-\u9fff]$/u.test(left) && /^[\u3400-\u9fff]/u.test(right) ? '' : ' ';
+  return `${left}${separator}${right}`.replace(/\s+/gu, ' ').trim();
+}
+
+function shouldPreserveMobileCompoundHyphen(prefix: string): boolean {
+  return /^(?:whole|multi|real|contact|end|lower|upper|hand|human|future|single|loco|thin|tight|tool|low|medium|high|long|short|cross|open|closed|fixed|force|task|pose|motion|robot|sensor|vision|tactile|policy|model|world|latent|pretrain|small|large|fine|self|non|co|gpu|to|data)$/iu
+    .test(prefix);
+}
+
+function mergeMobileAcademicTerms(
+  previous: MobileTranslationEntry['introducedTerms'],
+  next: MobileTranslationEntry['introducedTerms']
+): MobileTranslationEntry['introducedTerms'] {
+  const terms = [...(previous ?? []), ...(next ?? [])];
+  const seen = new Set<string>();
+  return terms.filter((term) => {
+    const key = term.english.trim().toLocaleLowerCase();
+    if (!key || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 export function resolveLocalOcrResumeState(input: LocalOcrResumeStateInput): {
   required: boolean;
   startPage: number;
@@ -717,7 +988,7 @@ export function collectMobilePdfTextItems(
     if (!rawItem || typeof rawItem !== 'object') {
       continue;
     }
-    const text = coercePdfTextString(safeObjectProperty(rawItem, 'str')).trim();
+    const text = sanitizeEmbeddedPdfText(coercePdfTextString(safeObjectProperty(rawItem, 'str')));
     if (!text) {
       continue;
     }
@@ -771,12 +1042,12 @@ export function buildEmbeddedPdfTextResult(
   let blocks: ExtractedPdfBlock[] = [];
   let structuredFailure = '';
   try {
-    blocks = outlineBuilder(pageNumber, items);
+    blocks = sanitizeExtractedPdfBlocks(outlineBuilder(pageNumber, items));
   } catch (error) {
     structuredFailure = `PDF 文字层结构重排异常：${formatMobileTextLayerError(error)}`;
     console.warn(`PDF page ${pageNumber} structured text reflow failed; using compatibility reflow.`, error);
   }
-  const rawText = runs.map((run) => run.str).join(' ');
+  const rawText = sanitizeEmbeddedPdfText(runs.map((run) => run.str).join(' '));
   const extractedText = blocks.map((block) => block.original).join(' ');
   const rawLetterCount = countOcrLetters(rawText);
   const extractedLetterCount = countOcrLetters(extractedText);
@@ -803,7 +1074,11 @@ export function buildEmbeddedPdfTextResult(
     };
   }
   if (rawLetterCount >= minimumLetterCount) {
-    const compatibilityBlocks = buildCompatiblePdfTextBlocks(pageNumber, runs);
+    const compatibilityBlocks = buildCompatiblePdfTextBlocks(pageNumber, runs)
+      .flatMap((entry) => {
+        const sanitized = sanitizeExtractedPdfBlock(entry.block);
+        return sanitized ? [{ ...entry, block: sanitized }] : [];
+      });
     if (compatibilityBlocks.length > 0) {
       return {
         blocks: compatibilityBlocks,
@@ -987,6 +1262,43 @@ function coercePdfTextString(value: unknown): string {
   } catch {
     return '';
   }
+}
+
+function sanitizeEmbeddedPdfText(value: string): string {
+  return value
+    .replace(/(?:\bExtension\s+)?<latexit\b[^>]*>[\s\S]*?<\/latexit>\s*!?/giu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function sanitizeExtractedPdfBlocks(blocks: ExtractedPdfBlock[]): ExtractedPdfBlock[] {
+  return blocks.flatMap((block) => {
+    const sanitized = sanitizeExtractedPdfBlock(block);
+    return sanitized ? [sanitized] : [];
+  });
+}
+
+function sanitizeExtractedPdfBlock(block: ExtractedPdfBlock): ExtractedPdfBlock | null {
+  const sanitizedText = sanitizeEmbeddedPdfText(block.original);
+  const original = /^\[\d{1,4}\]\s+/u.test(sanitizedText)
+    ? sanitizedText.replace(
+      /(\b(?:19|20)\d{2})\.\s*\d+(?:\s*,\s*\d+)*\s*$/u,
+      '$1.'
+    )
+    : sanitizedText;
+  if (!original) {
+    return null;
+  }
+  if (original === block.original) {
+    return block;
+  }
+  const sourceHash = hashText(`${block.page}|${block.type}|${block.section}|${original}`);
+  return {
+    ...block,
+    id: `pdf-${block.page}-${sourceHash}`,
+    original,
+    sourceHash
+  };
 }
 
 function formatMobileTextLayerError(error: unknown): string {

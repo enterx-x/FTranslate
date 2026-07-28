@@ -3,7 +3,7 @@ import type { ArxivPaper } from '../../shared/arxiv';
 export type MobilePaperSource = 'import' | 'arxiv';
 export type MobilePdfKind = 'source' | 'translated';
 export type MobileLocalOcrStatus = 'pending' | 'running' | 'completed' | 'failed';
-export const MOBILE_LOCAL_OCR_VERSION = 11;
+export const MOBILE_LOCAL_OCR_VERSION = 12;
 
 export interface MobileStoredPdf {
   path: string;
@@ -77,6 +77,7 @@ export interface MobileTranslationEntry {
   introducedTerms?: MobileAcademicTerm[];
   order?: number;
   blockType?: 'heading' | 'paragraph' | 'formula' | 'caption';
+  crossPageEndPage?: number;
   figureVersion?: number;
   figureKind?: 'figure' | 'table';
   figureBounds?: MobileFigureBounds;
@@ -486,6 +487,10 @@ function isTranslationEntry(value: unknown): value is MobileTranslationEntry {
     ) &&
     (entry.extractionWarning === undefined || typeof entry.extractionWarning === 'string') &&
     (entry.aiReflowVersion === undefined || typeof entry.aiReflowVersion === 'number') &&
+    (
+      entry.crossPageEndPage === undefined ||
+      (Number.isInteger(entry.crossPageEndPage) && entry.crossPageEndPage >= entry.page)
+    ) &&
     (
       entry.introducedTerms === undefined ||
       (

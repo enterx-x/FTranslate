@@ -662,22 +662,33 @@ try {
     FALLBACK_READER_BLOCKS.tableCaption,
     FALLBACK_READER_BLOCKS.tableFollowup
   ];
+  const expectedFallbackTextBlocks = expectedFallbackBlocks.filter(
+    (block) => block !== FALLBACK_READER_BLOCKS.tableCaption
+  );
   const fallbackReaderIntegrity = await evaluate(client, `(() => ({
     sourceBlocks: Array.from(document.querySelectorAll('.mobile-view-layer:not([hidden]) .mobile-block-original[data-source-text]'))
       .map(element => element.getAttribute('data-source-text')),
-    clippedBlocks: Array.from(document.querySelectorAll('.mobile-view-layer:not([hidden]) .mobile-block-original > h2, .mobile-view-layer:not([hidden]) .mobile-block-original > p'))
+    readerUnits: Array.from(document.querySelectorAll(
+      '.mobile-view-layer:not([hidden]) .mobile-block-original[data-source-text], ' +
+      '.mobile-view-layer:not([hidden]) .mobile-pdf-figure > figcaption'
+    )).map(element => element.getAttribute('data-source-text') || element.textContent?.replace(/\\s+/gu, ' ').trim() || ''),
+    clippedBlocks: Array.from(document.querySelectorAll(
+      '.mobile-view-layer:not([hidden]) .mobile-block-original > h2, ' +
+      '.mobile-view-layer:not([hidden]) .mobile-block-original > p, ' +
+      '.mobile-view-layer:not([hidden]) .mobile-pdf-figure > figcaption'
+    ))
       .filter(element => {
         const style = getComputedStyle(element);
         return style.webkitLineClamp !== 'none' || style.maxHeight !== 'none' || element.scrollHeight > element.clientHeight + 1;
       })
       .map(element => element.textContent)
   }))()`);
-  const missingFallbackBlocks = expectedFallbackBlocks.filter((expected) => !fallbackReaderIntegrity.sourceBlocks.includes(expected));
-  const orderedFallbackBlocks = fallbackReaderIntegrity.sourceBlocks.filter((value) => expectedFallbackBlocks.includes(value));
+  const missingFallbackBlocks = expectedFallbackTextBlocks.filter((expected) => !fallbackReaderIntegrity.readerUnits.includes(expected));
+  const orderedFallbackBlocks = fallbackReaderIntegrity.readerUnits.filter((value) => expectedFallbackTextBlocks.includes(value));
   if (
     missingFallbackBlocks.length > 0 ||
     fallbackReaderIntegrity.clippedBlocks.length > 0 ||
-    orderedFallbackBlocks.join('\n') !== expectedFallbackBlocks.join('\n')
+    orderedFallbackBlocks.join('\n') !== expectedFallbackTextBlocks.join('\n')
   ) {
     throw new Error(`Fallback PDF text was split, merged, truncated, or visually clamped: ${JSON.stringify({
       expectedFallbackBlocks,
@@ -760,7 +771,20 @@ try {
   await capture(client, '03b-reader-inline-figure-390x844.png');
   console.log('Captured an original PDF figure inserted before its caption.');
 
-  await waitForSelector(client, '.mobile-pdf-table-scroll', 20000);
+  await waitForExpression(
+    client,
+    `document.querySelectorAll('.mobile-pdf-figure').length >= 2 ? 'figures-ready' : ''`,
+    20000
+  );
+  const recoveredFigureKinds = await evaluate(client, `Array.from(document.querySelectorAll('.mobile-pdf-figure')).map(figure => ({
+    className: figure.className,
+    caption: figure.querySelector(':scope > figcaption')?.textContent?.replace(/\\s+/gu, ' ').trim() ?? '',
+    hasStructuredTable: Boolean(figure.querySelector('.mobile-pdf-table-scroll')),
+    hasCanvas: Boolean(figure.querySelector('canvas'))
+  }))`);
+  if (!recoveredFigureKinds.some((figure) => figure.hasStructuredTable)) {
+    throw new Error(`Recovered PDF table was not rebuilt semantically: ${JSON.stringify(recoveredFigureKinds)}`);
+  }
   await evaluate(client, `document.querySelector('.mobile-pdf-table-scroll').scrollIntoView({ block: 'center' })`);
   await wait(250);
   const structuredTableLayout = await evaluate(client, `(() => {
@@ -771,6 +795,13 @@ try {
       regionWidth: region?.getBoundingClientRect().width ?? 0,
       pageWidth: page?.getBoundingClientRect().width ?? 0,
       scrollWidth: region?.scrollWidth ?? 0,
+      figureText: region?.closest('.mobile-pdf-figure')?.textContent?.replace(/\s+/gu, ' ').trim() ?? '',
+      captionSource: region?.closest('.mobile-pdf-figure')
+        ?.querySelector('.mobile-pdf-table-caption .mobile-block-original')
+        ?.getAttribute('data-source-text') ?? '',
+      captionOccurrences: Array.from(document.querySelectorAll('.mobile-block-original[data-source-text]'))
+        .filter(element => element.getAttribute('data-source-text') === ${JSON.stringify(FALLBACK_READER_BLOCKS.tableCaption)})
+        .length,
       columnHeaders: Array.from(table?.querySelectorAll('thead th') ?? []).map(cell => cell.textContent?.trim()),
       rowCount: table?.querySelectorAll('tbody tr').length ?? 0,
       rows: Array.from(table?.querySelectorAll('tbody tr') ?? []).map(row => (
@@ -784,6 +815,8 @@ try {
     structuredTableLayout.regionWidth <= 100 ||
     structuredTableLayout.regionWidth > structuredTableLayout.pageWidth + 1 ||
     structuredTableLayout.scrollWidth <= structuredTableLayout.regionWidth ||
+    structuredTableLayout.captionSource !== FALLBACK_READER_BLOCKS.tableCaption ||
+    structuredTableLayout.captionOccurrences !== 1 ||
     structuredTableLayout.columnHeaders.join('|') !== 'Method|Success|Collision|Runtime' ||
     structuredTableLayout.rowCount !== 3 ||
     structuredTableLayout.rows.map(row => row.join('|')).join('\n') !== [
