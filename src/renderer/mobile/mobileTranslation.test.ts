@@ -3,6 +3,7 @@ import {
   applyAcademicTerminologyPolicy,
   MOBILE_AI_PAGE_REFLOW_VERSION,
   buildAcademicPageReflowPrompt,
+  buildAcademicSelectionQuestionPayload,
   buildAcademicSelectionQuestionPrompt,
   buildAcademicSelectionPrompt,
   buildAcademicTranslationPrompt,
@@ -74,6 +75,36 @@ describe('mobile translation request', () => {
       surroundingOriginal: 'The barrier certificate guarantees forward invariance under the learned policy.',
       surroundingTranslation: '屏障证书保证学习策略下的前向不变性。'
     });
+  });
+
+  it('builds the exact bounded selection question payload used by both the UI preview and request', () => {
+    const selection = 'The selected theorem guarantees forward invariance.';
+    const surroundingOriginal = `${'Earlier unrelated context. '.repeat(180)}${selection}${' Later evidence. '.repeat(180)}`;
+    const context = {
+      documentTitle: ` ${'Safe control '.repeat(80)} `,
+      page: 7,
+      surroundingOriginal,
+      surroundingTranslation: ` ${'已有译文。'.repeat(900)} `
+    };
+    const payload = buildAcademicSelectionQuestionPayload(
+      selection,
+      ' 这个结论依赖什么条件？ ',
+      context
+    );
+    const promptPayload = JSON.parse(buildAcademicSelectionQuestionPrompt(
+      selection,
+      ' 这个结论依赖什么条件？ ',
+      context
+    )[1].content);
+
+    expect(payload).toEqual(promptPayload);
+    expect(payload.selection).toBe(selection);
+    expect(payload.question).toBe('这个结论依赖什么条件？');
+    expect(payload.page).toBe(7);
+    expect(payload.documentTitle.length).toBeLessThanOrEqual(500);
+    expect(payload.surroundingOriginal).toContain(selection);
+    expect(payload.surroundingOriginal.length).toBeLessThanOrEqual(3200);
+    expect(payload.surroundingTranslation.length).toBeLessThanOrEqual(3200);
   });
 
   it('keeps a late selection inside the bounded context window', () => {

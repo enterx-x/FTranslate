@@ -5,6 +5,7 @@ import type { ExtractedPdfBlock } from '../lib/pdfTextStructure';
 import { MobileTranslationSettingsDialog } from './MobileTranslationSettingsDialog';
 import {
   askAcademicSelectionQuestion,
+  buildAcademicSelectionQuestionPayload,
   MOBILE_AI_PAGE_REFLOW_VERSION,
   needsAcademicPageAiReview,
   reflowAndTranslateAcademicPage,
@@ -66,6 +67,7 @@ type MobileReaderFeedItem =
 
 interface SelectionPopoverState {
   text: string;
+  page: number;
   width: number;
   left: number;
   top: number;
@@ -79,13 +81,34 @@ interface SelectionPopoverState {
 
 interface SelectionQuestionDialogState {
   text: string;
+  page: number;
   surroundingOriginal: string;
   surroundingTranslation: string;
   question: string;
   answer?: string;
+  copyStatus?: 'copied' | 'error';
   loading?: boolean;
   error?: string;
 }
+
+const SELECTION_QUESTION_PRESETS = [
+  {
+    label: '解释这段',
+    question: '请用准确但易懂的语言解释这段话，并说明其中的关键科研术语。'
+  },
+  {
+    label: '说明作用',
+    question: '这段内容在本文的方法、实验或论证中起什么作用？'
+  },
+  {
+    label: '依据与假设',
+    question: '这段结论依赖哪些前提、假设或证据？当前片段不能确定的请明确说明。'
+  },
+  {
+    label: '可能局限',
+    question: '从当前片段看，这一表述可能有哪些适用边界或局限？请区分原文事实与推断。'
+  }
+] as const;
 
 function buildPageAcademicTranslationContext(
   documentTitle: string,
@@ -739,6 +762,7 @@ export function MobileReaderScreen({
     const surroundingTranslation = translationElement?.getAttribute('data-source-text')?.trim()
       || translationElement?.textContent?.replace(/\s+/gu, ' ').trim()
       || '';
+    const sourcePage = Number(article?.getAttribute('data-pdf-page'));
     const cacheKey = buildSelectionTranslationCacheKey(
       translationSession,
       text,
@@ -747,6 +771,7 @@ export function MobileReaderScreen({
     selectionRequestIdRef.current += 1;
     setSelectionPopover({
       text,
+      page: Number.isInteger(sourcePage) && sourcePage > 0 ? sourcePage : currentPage,
       ...position,
       surroundingOriginal,
       surroundingTranslation,
@@ -814,6 +839,7 @@ export function MobileReaderScreen({
     selectionQuestionRequestIdRef.current += 1;
     setSelectionQuestionDialog({
       text: selected.text,
+      page: selected.page,
       surroundingOriginal: selected.surroundingOriginal,
       surroundingTranslation: selected.surroundingTranslation,
       question: ''
@@ -841,11 +867,12 @@ export function MobileReaderScreen({
     const requestId = selectionQuestionRequestIdRef.current + 1;
     selectionQuestionRequestIdRef.current = requestId;
     setSelectionQuestionDialog((current) => current
-      ? { ...current, loading: true, answer: undefined, error: undefined }
+      ? { ...current, loading: true, answer: undefined, copyStatus: undefined, error: undefined }
       : current);
     try {
       const answer = await askAcademicSelectionQuestion(dialog.text, question, session, {
         documentTitle: paper.title,
+        page: dialog.page,
         surroundingOriginal: dialog.surroundingOriginal,
         surroundingTranslation: dialog.surroundingTranslation
       });
@@ -853,14 +880,14 @@ export function MobileReaderScreen({
         return;
       }
       setSelectionQuestionDialog((current) => current?.text === dialog.text
-        ? { ...current, answer, loading: false, error: undefined }
+        ? { ...current, answer, copyStatus: undefined, loading: false, error: undefined }
         : current);
     } catch (error) {
       if (selectionQuestionRequestIdRef.current !== requestId) {
         return;
       }
       setSelectionQuestionDialog((current) => current?.text === dialog.text
-        ? { ...current, loading: false, error: formatError(error) }
+        ? { ...current, copyStatus: undefined, loading: false, error: formatError(error) }
         : current);
     }
   }
@@ -871,6 +898,23 @@ export function MobileReaderScreen({
       pendingTranslationRef.current = null;
     }
     setSelectionQuestionDialog(null);
+  }
+
+  async function copySelectionQuestionAnswer(): Promise<void> {
+    const answer = selectionQuestionDialog?.answer;
+    if (!answer) {
+      return;
+    }
+    try {
+      await copyMobileText(answer);
+      setSelectionQuestionDialog((current) => current?.answer === answer
+        ? { ...current, copyStatus: 'copied' }
+        : current);
+    } catch {
+      setSelectionQuestionDialog((current) => current?.answer === answer
+        ? { ...current, copyStatus: 'error' }
+        : current);
+    }
   }
 
   function rememberSelectionTranslation(key: string, translation: string): void {
@@ -891,6 +935,19 @@ export function MobileReaderScreen({
       window.getSelection()?.removeAllRanges();
     }
   }
+
+  const selectionQuestionPayload = selectionQuestionDialog
+    ? buildAcademicSelectionQuestionPayload(
+      selectionQuestionDialog.text,
+      selectionQuestionDialog.question,
+      {
+        documentTitle: paper.title,
+        page: selectionQuestionDialog.page,
+        surroundingOriginal: selectionQuestionDialog.surroundingOriginal,
+        surroundingTranslation: selectionQuestionDialog.surroundingTranslation
+      }
+    )
+    : null;
 
   return (
     <section className={`mobile-screen mobile-reader-screen${mode === 'bilingual' && readingImmersive ? ' is-reading-immersive' : ''}`} aria-label="PDF 阅读与翻译">
@@ -1101,13 +1158,57 @@ export function MobileReaderScreen({
               <strong>向 AI 提问</strong>
               <button type="button" onClick={closeSelectionQuestionDialog}>关闭</button>
             </header>
-            <p>仅把所选英文、所在原文段落、论文标题、已有译文和你的问题发送给当前配置的 AI 接口；不会改写或缓存论文正文。</p>
+            <p>仅把下方可核对的内容发送给当前配置的 AI 接口；不会改写论文正文，也不会保存本次问答。</p>
             <blockquote>
-              <span>选中原文</span>
+              <span>第 {selectionQuestionDialog.page} 页 · 选中原文</span>
               <p>{selectionQuestionDialog.text}</p>
             </blockquote>
+            {selectionQuestionPayload ? (
+              <details className="mobile-selection-question-context">
+                <summary>查看实际发送内容</summary>
+                <dl>
+                  <div>
+                    <dt>论文标题</dt>
+                    <dd>{selectionQuestionPayload.documentTitle || '未提供'}</dd>
+                  </div>
+                  <div>
+                    <dt>来源页码</dt>
+                    <dd>第 {selectionQuestionPayload.page ?? selectionQuestionDialog.page} 页</dd>
+                  </div>
+                  <div>
+                    <dt>所在原文段落</dt>
+                    <dd>{selectionQuestionPayload.surroundingOriginal || '未提取到原文上下文'}</dd>
+                  </div>
+                  <div>
+                    <dt>已有译文</dt>
+                    <dd>{selectionQuestionPayload.surroundingTranslation || '当前段落尚未翻译'}</dd>
+                  </div>
+                </dl>
+              </details>
+            ) : null}
             <label htmlFor="mobile-selection-question">
               你想问什么？
+              <span className="mobile-selection-question-hint">点一下只会填入问题，不会直接发送</span>
+              <span className="mobile-selection-question-presets" aria-label="常用问题">
+                {SELECTION_QUESTION_PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    disabled={selectionQuestionDialog.loading}
+                    onClick={() => setSelectionQuestionDialog((current) => current
+                      ? {
+                        ...current,
+                        question: preset.question,
+                        answer: undefined,
+                        copyStatus: undefined,
+                        error: undefined
+                      }
+                      : current)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </span>
               <textarea
                 id="mobile-selection-question"
                 autoFocus
@@ -1121,6 +1222,7 @@ export function MobileReaderScreen({
                     ...current,
                     question: event.target.value,
                     answer: undefined,
+                    copyStatus: undefined,
                     error: undefined
                   }
                   : current)}
@@ -1134,8 +1236,16 @@ export function MobileReaderScreen({
             </label>
             {selectionQuestionDialog.answer ? (
               <div className="mobile-selection-answer" role="status" aria-live="polite">
-                <span>AI 回答</span>
+                <div className="mobile-selection-answer-header">
+                  <span>AI 回答</span>
+                  <button type="button" onClick={() => void copySelectionQuestionAnswer()}>
+                    {selectionQuestionDialog.copyStatus === 'copied' ? '已复制' : '复制回答'}
+                  </button>
+                </div>
                 <p><MathText text={selectionQuestionDialog.answer} /></p>
+                {selectionQuestionDialog.copyStatus === 'error' ? (
+                  <small role="alert">复制失败，请长按回答手动复制。</small>
+                ) : null}
               </div>
             ) : null}
             {selectionQuestionDialog.error ? (
@@ -1360,6 +1470,34 @@ function formatInitialReaderStatus(
   return paper.localOcrStatus === 'completed' && restoredCount > 0
     ? `已恢复 ${restoredCount} 段本地译文和原文缓存。`
     : formatLocalOcrStatus(paper);
+}
+
+async function copyMobileText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Safari may expose the Clipboard API but reject it outside a permitted gesture.
+    }
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.readOnly = true;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  textarea.style.pointerEvents = 'none';
+  document.body.appendChild(textarea);
+  textarea.select();
+  let copied = false;
+  try {
+    copied = document.execCommand('copy');
+  } finally {
+    textarea.remove();
+  }
+  if (!copied) {
+    throw new Error('Clipboard copy failed');
+  }
 }
 
 function formatError(error: unknown): string {

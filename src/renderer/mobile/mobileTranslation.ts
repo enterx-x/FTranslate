@@ -45,8 +45,18 @@ export interface AcademicTranslationContext {
 
 export interface AcademicSelectionContext {
   documentTitle?: string;
+  page?: number;
   surroundingOriginal?: string;
   surroundingTranslation?: string;
+}
+
+export interface AcademicSelectionQuestionPayload {
+  selection: string;
+  question: string;
+  documentTitle: string;
+  page?: number;
+  surroundingOriginal: string;
+  surroundingTranslation: string;
 }
 
 export interface AcademicPageReflowResult {
@@ -121,7 +131,6 @@ export function buildAcademicSelectionQuestionPrompt(
   question: string,
   context: AcademicSelectionContext = {}
 ): Array<{ role: 'system' | 'user'; content: string }> {
-  const selection = normalizeAcademicPromptText(text, 1600);
   return [
     {
       role: 'system',
@@ -135,19 +144,31 @@ export function buildAcademicSelectionQuestionPrompt(
     },
     {
       role: 'user',
-      content: JSON.stringify({
-        selection,
-        question: question.trim().slice(0, 1200),
-        documentTitle: context.documentTitle?.trim().slice(0, 500) ?? '',
-        surroundingOriginal: buildSelectionContextWindow(
-          context.surroundingOriginal,
-          selection,
-          3200
-        ),
-        surroundingTranslation: context.surroundingTranslation?.trim().slice(0, 3200) ?? ''
-      })
+      content: JSON.stringify(buildAcademicSelectionQuestionPayload(text, question, context))
     }
   ];
+}
+
+export function buildAcademicSelectionQuestionPayload(
+  text: string,
+  question: string,
+  context: AcademicSelectionContext = {}
+): AcademicSelectionQuestionPayload {
+  const selection = normalizeAcademicPromptText(text, 1600);
+  return {
+    selection,
+    question: question.trim().slice(0, 1200),
+    documentTitle: context.documentTitle?.trim().slice(0, 500) ?? '',
+    ...(Number.isInteger(context.page) && Number(context.page) > 0
+      ? { page: Math.floor(Number(context.page)) }
+      : {}),
+    surroundingOriginal: buildSelectionContextWindow(
+      context.surroundingOriginal,
+      selection,
+      3200
+    ),
+    surroundingTranslation: context.surroundingTranslation?.trim().slice(0, 3200) ?? ''
+  };
 }
 
 export function buildAcademicTranslationPrompt(

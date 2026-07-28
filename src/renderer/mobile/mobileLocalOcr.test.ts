@@ -117,6 +117,65 @@ describe('mobile scanned PDF local OCR', () => {
     expect(result.warning).toContain('兼容重排');
   });
 
+  it('rejects structured reflow that silently drops substantial text from any reader block type', () => {
+    const runs = [
+      { str: 'Safe Policy Optimization with Control Barrier Functions', hasEOL: true },
+      { str: 'The policy update preserves forward invariance under bounded disturbances.', hasEOL: true },
+      { str: 'Fig. 1: Constraint satisfaction remains stable across all evaluated variants.', hasEOL: true },
+      { str: 'The controller reduces violations while preserving task performance.', hasEOL: true }
+    ];
+    const items = runs.map((run, index) => ({
+      str: run.str,
+      x: 52,
+      y: 60 + index * 26,
+      width: 480,
+      height: index === 0 ? 18 : 10,
+      page: 1,
+      pageWidth: 612,
+      pageHeight: 792
+    }));
+    const result = buildEmbeddedPdfTextResult(items, 1, false, runs, () => [{
+      id: 'incomplete-heading',
+      section: runs[0].str,
+      original: runs[0].str,
+      translation: '',
+      type: 'heading',
+      page: 1,
+      sourceHash: 'incomplete-heading'
+    }]);
+
+    expect(result.mode).toBe('compatibility');
+    expect(result.warning).toContain('文字完整度不足');
+    expect(result.blocks.map((entry) => entry.block.original).join(' ')).toContain(runs[3].str);
+  });
+
+  it('rejects a formula reflow that keeps variables but drops mathematical operators', () => {
+    const runs = [{ str: 'D = A + F + S', hasEOL: true }];
+    const items = [{
+      str: runs[0].str,
+      x: 160,
+      y: 200,
+      width: 180,
+      height: 14,
+      page: 1,
+      pageWidth: 612,
+      pageHeight: 792
+    }];
+    const result = buildEmbeddedPdfTextResult(items, 1, true, runs, () => [{
+      id: 'incomplete-formula',
+      section: 'D A F S',
+      original: 'D A F S',
+      translation: '',
+      type: 'formula',
+      page: 1,
+      sourceHash: 'incomplete-formula'
+    }]);
+
+    expect(result.mode).toBe('compatibility');
+    expect(result.warning).toContain('文字完整度不足');
+    expect(result.blocks.map((entry) => entry.block.original).join(' ')).toContain('D = A + F + S');
+  });
+
   it('joins line-end hyphenation in compatibility text without fragmenting the paragraph', () => {
     const blocks = buildCompatiblePdfTextBlocks(2, [
       { str: 'The contact-aware inter-', hasEOL: true },

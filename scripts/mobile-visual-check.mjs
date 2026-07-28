@@ -22,7 +22,17 @@ const translationMockState = {
   selectionQuestionRequestCount: 0,
   selectionQuestionContextCount: 0,
   lastSelectionQuestion: '',
+  lastSelectionQuestionPage: 0,
   lastSelectionQuestionTranslation: ''
+};
+
+const FALLBACK_READER_BLOCKS = {
+  headingLines: ['Safe Policy Optimization with', 'Control Barrier Functions'],
+  policy: 'The policy update preserves forward invariance under bounded disturbances.',
+  figureCaption: 'Fig. 1: Constraint satisfaction across five safety-policy variants.',
+  controller: 'The proposed controller reduces violations while preserving task performance.',
+  tableCaption: 'TABLE I: Safety policy comparison',
+  tableFollowup: 'The structured comparison remains selectable and readable on a narrow mobile screen.'
 };
 
 function wait(ms) {
@@ -32,11 +42,13 @@ function wait(ms) {
 function createFallbackPdfBuffer() {
   const content = `BT
 /F1 24 Tf
-72 760 Td
-(Safe Policy Optimization with Control Barrier Functions) Tj
-0 -36 Td
+1 0 0 1 105 760 Tm
+(${FALLBACK_READER_BLOCKS.headingLines[0]}) Tj
+1 0 0 1 150 730 Tm
+(${FALLBACK_READER_BLOCKS.headingLines[1]}) Tj
 /F1 14 Tf
-(The policy update preserves forward invariance under bounded disturbances.) Tj
+1 0 0 1 72 688 Tm
+(${FALLBACK_READER_BLOCKS.policy}) Tj
 ET
 q
 0.96 g
@@ -64,15 +76,15 @@ ET
 BT
 /F1 11 Tf
 72 425 Td
-(Fig. 1: Constraint satisfaction across five safety-policy variants.) Tj
+(${FALLBACK_READER_BLOCKS.figureCaption}) Tj
 0 -42 Td
 /F1 14 Tf
-(The proposed controller reduces violations while preserving task performance.) Tj
+(${FALLBACK_READER_BLOCKS.controller}) Tj
 ET
 BT
 /F1 12 Tf
 1 0 0 1 72 320 Tm
-(TABLE I: Safety policy comparison) Tj
+(${FALLBACK_READER_BLOCKS.tableCaption}) Tj
 /F1 10 Tf
 1 0 0 1 72 294 Tm
 (Method) Tj
@@ -108,7 +120,7 @@ BT
 (16 ms) Tj
 /F1 12 Tf
 1 0 0 1 72 180 Tm
-(The structured comparison remains selectable and readable on a narrow mobile screen.) Tj
+(${FALLBACK_READER_BLOCKS.tableFollowup}) Tj
 ET`;
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -360,6 +372,7 @@ function startTranslationMock() {
             if (typeof translationPayload.question === 'string') {
               translationMockState.selectionQuestionRequestCount += 1;
               translationMockState.lastSelectionQuestion = translationPayload.question;
+              translationMockState.lastSelectionQuestionPage = Number(translationPayload.page ?? 0);
               translationMockState.lastSelectionQuestionTranslation = translationPayload.surroundingTranslation ?? '';
               forceAiQuestionError = translationPayload.question === '模拟问答请求失败';
               if (hasContext && typeof translationPayload.surroundingTranslation === 'string') {
@@ -641,6 +654,38 @@ try {
   })()`);
   await waitForExpression(client, `document.querySelector('.mobile-view-layer:not([hidden]) .mobile-reader-header strong')?.textContent.includes('safe-policy-optimization') ? 'active-fallback-reader' : ''`, 20000);
   await waitForSelector(client, '.mobile-view-layer:not([hidden]) .mobile-bilingual-block');
+  const expectedFallbackBlocks = [
+    FALLBACK_READER_BLOCKS.headingLines.join(' '),
+    FALLBACK_READER_BLOCKS.policy,
+    FALLBACK_READER_BLOCKS.figureCaption,
+    FALLBACK_READER_BLOCKS.controller,
+    FALLBACK_READER_BLOCKS.tableCaption,
+    FALLBACK_READER_BLOCKS.tableFollowup
+  ];
+  const fallbackReaderIntegrity = await evaluate(client, `(() => ({
+    sourceBlocks: Array.from(document.querySelectorAll('.mobile-view-layer:not([hidden]) .mobile-block-original[data-source-text]'))
+      .map(element => element.getAttribute('data-source-text')),
+    clippedBlocks: Array.from(document.querySelectorAll('.mobile-view-layer:not([hidden]) .mobile-block-original > h2, .mobile-view-layer:not([hidden]) .mobile-block-original > p'))
+      .filter(element => {
+        const style = getComputedStyle(element);
+        return style.webkitLineClamp !== 'none' || style.maxHeight !== 'none' || element.scrollHeight > element.clientHeight + 1;
+      })
+      .map(element => element.textContent)
+  }))()`);
+  const missingFallbackBlocks = expectedFallbackBlocks.filter((expected) => !fallbackReaderIntegrity.sourceBlocks.includes(expected));
+  const orderedFallbackBlocks = fallbackReaderIntegrity.sourceBlocks.filter((value) => expectedFallbackBlocks.includes(value));
+  if (
+    missingFallbackBlocks.length > 0 ||
+    fallbackReaderIntegrity.clippedBlocks.length > 0 ||
+    orderedFallbackBlocks.join('\n') !== expectedFallbackBlocks.join('\n')
+  ) {
+    throw new Error(`Fallback PDF text was split, merged, truncated, or visually clamped: ${JSON.stringify({
+      expectedFallbackBlocks,
+      missingFallbackBlocks,
+      orderedFallbackBlocks,
+      ...fallbackReaderIntegrity
+    })}`);
+  }
   await evaluate(client, `document.querySelectorAll('.mobile-view-layer:not([hidden]) .mobile-reader-mode-bar button')[1].click()`);
   await waitForSelector(client, '.mobile-view-layer:not([hidden]) .mobile-pdf-reader');
   await waitForSelector(client, '.mobile-view-layer:not([hidden]) .mobile-pdf-reader .pdfViewer .page canvas', 20000);
@@ -728,7 +773,9 @@ try {
       scrollWidth: region?.scrollWidth ?? 0,
       columnHeaders: Array.from(table?.querySelectorAll('thead th') ?? []).map(cell => cell.textContent?.trim()),
       rowCount: table?.querySelectorAll('tbody tr').length ?? 0,
-      firstRow: Array.from(table?.querySelectorAll('tbody tr:first-child > *') ?? []).map(cell => cell.textContent?.trim()),
+      rows: Array.from(table?.querySelectorAll('tbody tr') ?? []).map(row => (
+        Array.from(row.querySelectorAll(':scope > *')).map(cell => cell.textContent?.trim())
+      )),
       hasCanvas: Boolean(region?.querySelector('canvas')),
       bodyOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
     };
@@ -739,7 +786,11 @@ try {
     structuredTableLayout.scrollWidth <= structuredTableLayout.regionWidth ||
     structuredTableLayout.columnHeaders.join('|') !== 'Method|Success|Collision|Runtime' ||
     structuredTableLayout.rowCount !== 3 ||
-    structuredTableLayout.firstRow.join('|') !== 'Baseline RL|71%|18%|12 ms' ||
+    structuredTableLayout.rows.map(row => row.join('|')).join('\n') !== [
+      'Baseline RL|71%|18%|12 ms',
+      'CBF policy|86%|4%|18 ms',
+      'Ours|94%|1%|16 ms'
+    ].join('\n') ||
     structuredTableLayout.hasCanvas ||
     structuredTableLayout.bodyOverflow > 1
   ) {
@@ -871,7 +922,10 @@ try {
   await capture(client, '04-reader-selection-popover-390x844.png');
 
   await evaluate(client, `(() => {
-    const paragraph = document.querySelectorAll('.mobile-block-original p, .mobile-block-original h2')[1];
+    const paragraph = Array.from(document.querySelectorAll('.mobile-block-original[data-source-text]'))
+      .find(element => element.getAttribute('data-source-text') === ${JSON.stringify(FALLBACK_READER_BLOCKS.controller)})
+      ?.querySelector('p, h2');
+    if (!paragraph) throw new Error('Controller source paragraph was not found.');
     const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
     const node = walker.nextNode();
     if (!node) throw new Error('No second selectable source text node was found.');
@@ -884,7 +938,7 @@ try {
     document.dispatchEvent(new Event('selectionchange'));
     return true;
   })()`);
-  await waitForExpression(client, `document.querySelector('.mobile-selection-popover strong')?.textContent?.startsWith('The policy update') ? 'updated-by-selectionchange' : ''`);
+  await waitForExpression(client, `document.querySelector('.mobile-selection-popover strong')?.textContent?.startsWith('The proposed controller') ? 'updated-by-selectionchange' : ''`);
 
   const audit = await evaluate(client, `(() => ({
     viewport: { width: innerWidth, height: innerHeight },
@@ -908,7 +962,29 @@ try {
     screenWidth: 430,
     screenHeight: 932
   });
+  await evaluate(client, `(() => {
+    const paragraph = Array.from(document.querySelectorAll('.mobile-block-original[data-source-text]'))
+      .find(element => element.getAttribute('data-source-text') === ${JSON.stringify(FALLBACK_READER_BLOCKS.controller)})
+      ?.querySelector('p, h2');
+    if (!paragraph) throw new Error('Controller source paragraph was not found after resizing.');
+    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+    const node = walker.nextNode();
+    if (!node) throw new Error('No controller source text node was found after resizing.');
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, Math.min(24, node.textContent.length));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+    return true;
+  })()`);
+  await waitForExpression(client, `document.querySelector('.mobile-selection-popover strong')?.textContent?.startsWith('The proposed controller') ? 'resized-selection-ready' : ''`);
   await capture(client, '05-reader-selection-popover-430x932.png');
+  const resizedSelectionActions = await evaluate(client, `Array.from(document.querySelectorAll('.mobile-selection-actions button')).map(button => button.textContent.trim())`);
+  if (!resizedSelectionActions.some(label => label.includes('翻译'))) {
+    throw new Error(`Resized selection lost its translation action: ${JSON.stringify(resizedSelectionActions)}`);
+  }
   await evaluate(client, `(() => {
     Array.from(document.querySelectorAll('.mobile-selection-actions button')).find(button => button.textContent.includes('翻译')).click();
     document.querySelector('.mobile-selection-close').click();
@@ -930,7 +1006,10 @@ try {
   console.log('Translated an English selection with paragraph context and followed Safari selectionchange handle updates.');
 
   await evaluate(client, `(() => {
-    const paragraph = document.querySelectorAll('.mobile-block-original p, .mobile-block-original h2')[1];
+    const paragraph = Array.from(document.querySelectorAll('.mobile-block-original[data-source-text]'))
+      .find(element => element.getAttribute('data-source-text') === ${JSON.stringify(FALLBACK_READER_BLOCKS.policy)})
+      ?.querySelector('p, h2');
+    if (!paragraph) throw new Error('Policy source paragraph was not found for AI question.');
     const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
     const node = walker.nextNode();
     if (!node) throw new Error('No source text node was found for AI question.');
@@ -944,8 +1023,44 @@ try {
     return true;
   })()`);
   await waitForSelector(client, '.mobile-selection-popover');
+  const questionRequestsBeforePreset = translationMockState.selectionQuestionRequestCount;
   await evaluate(client, `Array.from(document.querySelectorAll('.mobile-selection-actions button')).find(button => button.textContent.includes('AI 提问')).click()`);
   await waitForSelector(client, '.mobile-selection-question-dialog');
+  const presetQuestion = '这段结论依赖哪些前提、假设或证据？当前片段不能确定的请明确说明。';
+  await evaluate(client, `(() => {
+    const dialog = document.querySelector('.mobile-selection-question-dialog');
+    const preset = Array.from(dialog.querySelectorAll('.mobile-selection-question-presets button'))
+      .find(button => button.textContent.includes('依据与假设'));
+    if (!preset) throw new Error('Selection question preset was not found.');
+    preset.click();
+    dialog.querySelector('.mobile-selection-question-context summary')?.click();
+    return true;
+  })()`);
+  await waitForExpression(client, `document.querySelector('#mobile-selection-question')?.value === ${JSON.stringify(presetQuestion)} && document.querySelector('.mobile-selection-question-context')?.open ? 'preset-ready' : ''`);
+  const presetQuestionState = await evaluate(client, `(() => {
+    const dialog = document.querySelector('.mobile-selection-question-dialog');
+    const context = dialog.querySelector('.mobile-selection-question-context');
+    return {
+      labels: Array.from(dialog.querySelectorAll('.mobile-selection-question-presets button')).map(button => button.textContent.trim()),
+      hint: dialog.querySelector('.mobile-selection-question-hint')?.textContent ?? '',
+      context: context?.textContent ?? '',
+      overflow: dialog.scrollWidth - dialog.clientWidth
+    };
+  })()`);
+  if (
+    presetQuestionState.labels.join('|') !== '解释这段|说明作用|依据与假设|可能局限' ||
+    !presetQuestionState.hint.includes('不会直接发送') ||
+    !presetQuestionState.context.includes('第 1 页') ||
+    !presetQuestionState.context.includes('The policy update') ||
+    !presetQuestionState.context.includes('策略更新') ||
+    presetQuestionState.overflow > 1 ||
+    translationMockState.selectionQuestionRequestCount !== questionRequestsBeforePreset
+  ) {
+    throw new Error(`Selection question convenience controls failed or sent early: ${JSON.stringify({ presetQuestionState, translationMockState })}`);
+  }
+  await wait(220);
+  await capture(client, '06a-reader-selection-ai-context-430x932.png');
+  await evaluate(client, `document.querySelector('.mobile-selection-question-context summary')?.click()`);
   const selectionQuestion = '这里的前向不变性对安全策略意味着什么？';
   await evaluate(client, `(() => {
     const textarea = document.querySelector('#mobile-selection-question');
@@ -976,9 +1091,10 @@ try {
     selectionQuestionState.question !== selectionQuestion ||
     !selectionQuestionState.answer.includes('原文直接说明') ||
     !selectionQuestionState.answer.includes('信息不足') ||
-    !selectionQuestionState.privacy.includes('不会改写或缓存论文正文') ||
+    !selectionQuestionState.privacy.includes('不会保存本次问答') ||
     !selectionQuestionState.storedTranslation ||
     translationMockState.lastSelectionQuestionTranslation !== selectionQuestionState.storedTranslation ||
+    translationMockState.lastSelectionQuestionPage !== 1 ||
     selectionQuestionState.bounds.left < -1 ||
     selectionQuestionState.bounds.right > 431 ||
     selectionQuestionState.bounds.top < -1 ||
@@ -988,6 +1104,23 @@ try {
     translationMockState.lastSelectionQuestion !== selectionQuestion
   ) {
     throw new Error(`Mobile selection AI question failed: ${JSON.stringify({ selectionQuestionState, translationMockState })}`);
+  }
+  await evaluate(client, `(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (value) => {
+          window.__copiedMobileAnswer = value;
+        }
+      }
+    });
+    document.querySelector('.mobile-selection-answer-header button').click();
+    return true;
+  })()`);
+  await waitForExpression(client, `document.querySelector('.mobile-selection-answer-header button')?.textContent.includes('已复制') ? 'answer-copied' : ''`);
+  const copiedQuestionAnswer = await evaluate(client, `window.__copiedMobileAnswer ?? ''`);
+  if (copiedQuestionAnswer !== selectionQuestionState.answer) {
+    throw new Error(`Copied AI answer did not match the visible answer: ${JSON.stringify({ copiedQuestionAnswer, answer: selectionQuestionState.answer })}`);
   }
   await capture(client, '06-reader-selection-ai-question-430x932.png');
 

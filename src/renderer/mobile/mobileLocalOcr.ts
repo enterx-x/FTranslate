@@ -777,10 +777,20 @@ export function buildEmbeddedPdfTextResult(
     console.warn(`PDF page ${pageNumber} structured text reflow failed; using compatibility reflow.`, error);
   }
   const rawText = runs.map((run) => run.str).join(' ');
+  const extractedText = blocks.map((block) => block.original).join(' ');
   const rawLetterCount = countOcrLetters(rawText);
-  const extractedLetterCount = countOcrLetters(blocks.map((block) => block.original).join(' '));
+  const extractedLetterCount = countOcrLetters(extractedText);
+  const structuredCoverage = calculateTextTokenCoverage(rawText, extractedText);
+  const structuredCoverageFailure = structuredCoverage < 0.82
+    ? `PDF 文字层结构重排文字完整度不足（${Math.round(structuredCoverage * 100)}%），已使用兼容重排。`
+    : '';
   const minimumLetterCount = allowShortText ? 4 : 30;
-  if (blocks.length > 0 && rawLetterCount >= minimumLetterCount && extractedLetterCount >= minimumLetterCount) {
+  if (
+    blocks.length > 0 &&
+    rawLetterCount >= minimumLetterCount &&
+    extractedLetterCount >= minimumLetterCount &&
+    !structuredCoverageFailure
+  ) {
     return {
       blocks: blocks.map((block, index) => ({
         block,
@@ -801,9 +811,9 @@ export function buildEmbeddedPdfTextResult(
         items,
         runs,
         mode: 'compatibility',
-        warning: structuredFailure
+        warning: structuredCoverageFailure || (structuredFailure
           ? `${structuredFailure}；已使用兼容重排。`
-          : 'PDF 文字层可读取，但结构重排没有生成完整段落，已使用兼容重排。'
+          : 'PDF 文字层可读取，但结构重排没有生成完整段落，已使用兼容重排。')
       };
     }
   }
@@ -815,6 +825,38 @@ export function buildEmbeddedPdfTextResult(
     mode: 'empty',
     warning: structuredFailure || `PDF 文字层只返回 ${rawLetterCount} 个有效字母，正文不足。`
   };
+}
+
+function calculateTextTokenCoverage(source: string, extracted: string): number {
+  const sourceTokens = tokenizeCoverageText(source);
+  if (sourceTokens.length === 0) {
+    const sourceLetters = countOcrLetters(source);
+    return sourceLetters === 0
+      ? 1
+      : Math.min(1, countOcrLetters(extracted) / sourceLetters);
+  }
+  const available = new Map<string, number>();
+  for (const token of tokenizeCoverageText(extracted)) {
+    available.set(token, (available.get(token) ?? 0) + 1);
+  }
+  let coveredWeight = 0;
+  let totalWeight = 0;
+  for (const token of sourceTokens) {
+    totalWeight += token.length;
+    const remaining = available.get(token) ?? 0;
+    if (remaining > 0) {
+      coveredWeight += token.length;
+      available.set(token, remaining - 1);
+    }
+  }
+  return totalWeight > 0 ? coveredWeight / totalWeight : 1;
+}
+
+function tokenizeCoverageText(value: string): string[] {
+  return value
+    .toLocaleLowerCase()
+    .replace(/(\p{L})-\s+(?=\p{Ll})/gu, '$1')
+    .match(/[\p{L}\p{N}]+|[=+×÷≤≥∑∫]/gu) ?? [];
 }
 
 export function buildCompatiblePdfTextBlocks(
