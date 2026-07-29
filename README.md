@@ -974,3 +974,5 @@ $env:FTRANSLATE_PDF_CORPUS_DIR='D:\调研PDF\调研pdf\Humanoid VLA'
 $env:FTRANSLATE_PDF_CORPUS_FILES='16 Being-H0.7 2026.4.30 arxiv.pdf|10 HAIC 2026.2.12 RSS.pdf|11 OmniXtreme 2026.2.27-RSS.pdf|12 HiWET 2026.2.6 RSS.pdf|13 EgoHumanoid 2026.2.10 RSS.pdf|14 OpenHLM 2026.6.20 arXiv.pdf|15 Being-H0 2025.7.21 ICML .pdf|16 Being-H0.5 2026.1.19 arxiv.pdf'
 npx vitest run scripts/mobile-pdf-corpus-check.test.ts
 ```
+
+网页生产版已于 2026-07-29 部署到 [https://ftranslate-mobile.vercel.app](https://ftranslate-mobile.vercel.app)，部署编号 `dpl_BkWaLft7Hd7p7LhfznZTAmSqeNho`。固定地址当前入口为 `assets/index-DgRkd4G3.js`，移动阅读逻辑为 `assets/MobileApp-CBxHyf2s.js`；线上完整移动视觉回归通过，生产 `/api/arxiv` 返回 HTTP 200、Atom feed 和实际论文条目。

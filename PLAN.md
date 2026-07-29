@@ -1307,4 +1307,5 @@ $env:VISUAL_CHECK_PACKAGED='1'; npm run visual:check
 - 缓存迁移：`MOBILE_LOCAL_OCR_VERSION` 升到 12。旧文件和论文库不删除；结构缓存重做，相同哈希译文复用，跨页结构完成后整体落盘。
 - 已完成自动验证：真实语料 9 项测试通过；全量 89 个测试文件、665 项测试通过；TypeScript、移动/桌面构建、移动视觉检查、桌面源码与安装包视觉检查全部通过。
 - 交付验证：`npm run dist` 已重建 Windows NSIS 安装包 `dist/PDF Translation Reader Setup 0.1.12.exe`，大小 148,362,722 bytes（141.49 MiB），SHA-256 `562181989D986904F6E4A088B5E7D257C2070B58A856EFB00D60FEE875163451`。构建只有既有的大 chunk、缺少 package author、electron-builder 重复依赖引用和 Node DEP0190 警告。
+- 网页交付：2026-07-29 将提交 `432eb96` 部署到 Vercel production，部署编号 `dpl_BkWaLft7Hd7p7LhfznZTAmSqeNho`，并重新绑定固定地址 `https://ftranslate-mobile.vercel.app`。缓存破除请求返回新入口 `assets/index-DgRkd4G3.js`；固定生产地址的完整 `visual:check:mobile` 通过，真实 arXiv 检索、同源 PDF 下载、结构表格、图文顺序、翻译、选词问答和刷新恢复均通过；独立 `/api/arxiv` 探针返回 HTTP 200、Atom XML 与论文条目。
 - 剩余风险：12 张复杂表格仍使用安全裁图而不是冒险生成错误行列；这批 8 篇 PDF 全部具有文字层，因此不能替代扫描 PDF 的真实 OCR 精度测试；PDF.js 对 Being-H0 系列字体仍可能输出 TrueType 警告，但当前 81 页全部完成文字层提取；iPhone Safari 真机性能、后台冻结和存储配额仍需要真实设备验证。
