@@ -1,6 +1,22 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { DailyBriefFeedback, DailyBriefPreferences, DailyBriefSnapshot } from '../shared/dailyBrief';
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  getDailyBriefSnapshot: () => ipcRenderer.invoke('daily-brief:snapshot'),
+  onDailyBriefOpen: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('daily-brief:open', listener);
+    return () => ipcRenderer.removeListener('daily-brief:open', listener);
+  },
+  saveDailyBriefPreferences: (preferences: DailyBriefPreferences) => ipcRenderer.invoke('daily-brief:save-preferences', preferences),
+  runDailyBrief: () => ipcRenderer.invoke('daily-brief:run'),
+  setDailyBriefFeedback: (feedback: DailyBriefFeedback) => ipcRenderer.invoke('daily-brief:feedback', feedback),
+  removeDailyBriefFeedback: (paperId: string) => ipcRenderer.invoke('daily-brief:remove-feedback', paperId),
+  onDailyBriefChanged: (callback: (snapshot: DailyBriefSnapshot) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, snapshot: DailyBriefSnapshot) => callback(snapshot);
+    ipcRenderer.on('daily-brief:changed', listener);
+    return () => ipcRenderer.removeListener('daily-brief:changed', listener);
+  },
   openPdf: () => ipcRenderer.invoke('dialog:open-pdf'),
   openTranslation: () => ipcRenderer.invoke('dialog:open-translation'),
   openTranslatedPdf: () => ipcRenderer.invoke('dialog:open-translated-pdf'),

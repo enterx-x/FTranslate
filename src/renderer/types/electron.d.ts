@@ -5,6 +5,8 @@ import type {
   ArxivTitleAbstractTranslationResult
 } from '../../shared/arxiv';
 
+import type { DailyBriefFeedback, DailyBriefPreferences, DailyBriefSnapshot } from '../../shared/dailyBrief';
+
 export interface PdfFilePayload {
   filePath: string;
   fileName: string;
@@ -236,6 +238,13 @@ export interface PdfTranslationResult {
 }
 
 export interface ElectronApi {
+  getDailyBriefSnapshot: () => Promise<DailyBriefSnapshot>;
+  onDailyBriefOpen: (callback: () => void) => () => void;
+  saveDailyBriefPreferences: (preferences: DailyBriefPreferences) => Promise<DailyBriefSnapshot>;
+  runDailyBrief: () => Promise<DailyBriefSnapshot>;
+  setDailyBriefFeedback: (feedback: DailyBriefFeedback) => Promise<DailyBriefSnapshot>;
+  removeDailyBriefFeedback: (paperId: string) => Promise<DailyBriefSnapshot>;
+  onDailyBriefChanged: (callback: (snapshot: DailyBriefSnapshot) => void) => () => void;
   openPdf: () => Promise<PdfFilePayload | null>;
   openTranslation: () => Promise<TextFilePayload | null>;
   openTranslatedPdf: () => Promise<PdfFilePayload | null>;

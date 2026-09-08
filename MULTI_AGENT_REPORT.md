@@ -1,91 +1,33 @@
-# Multi-Agent Engineering Report
+# 每日科研助手：多代理交付记录
 
-## 0. Activation Record
-- Trigger phrase: continue with multi-agent work.
-- Activated at: 2026-06-14.
-- User task: continue FTranslate optimization with parallel agents, focusing on arXiv search, offline translation mojibake/performance, UI/UX checks, verification, commit, and push.
-- Project root: `D:\FTranslate`.
+2026-09-08。用户指定三个 Luna/MAX 代理，由主代理统一派发、审查、整合。收到停用要求后，主代理和执行代理均不再使用 Superpowers 及相关技能，也不再转派。详细任务与验收条件见 `docs/daily-research-implementation.md`。
 
-## 1. Main Orchestrator Plan
-### 1.1 Objective
-Stabilize the arXiv search and offline translation workstream while keeping the app deployable. Immediate bar: Chinese queries such as haptic/tactile terms should expand to English arXiv terms, offline title/abstract translation should reject mojibake, reuse SQLite cache, and keep UI actions reachable on common desktop sizes.
+## 分工与结果
 
-### 1.2 Technical Stack
-Electron + React + TypeScript + Vite, Node/Electron main process IPC, SQLite cache, optional Argos Translate sidecar, PDF.js, and localStorage-backed renderer state.
+| 负责方 | 范围 | 结果 |
+|---|---|---|
+| 后端代理 | shared 合同、简报服务与测试 | 完成并冻结；13 项定向测试、typecheck 通过 |
+| 今日页面代理 | 表单、结果、历史、可撤销反馈与样式 | 完成并冻结；7 项定向测试、renderer 类型检查通过 |
+| 导航代理 | 五个默认入口、论文库、视觉脚本 | 完成并冻结；18 项定向测试通过 |
+| 主代理 | IPC、AI 配置、下载阅读集成、并发与异常审查、视觉、打包、git | 源码、安装包与打包后视觉验收通过，git 结果见仓库提交记录 |
 
-### 1.3 Minimum Runnable Loop
-`npm run test`, `npm run typecheck`, `npm run build`, `npm run visual:check`, `npm run dist`, real Argos smoke test, then commit and push.
+## 主代理复审与修复
 
-### 1.4 Scope
-- Finish arXiv Chinese query expansion, local translation cache, batch translation, and responsive arXiv UI fixes.
-- Keep changes minimal and compatible with existing localStorage and SQLite cache.
-- Avoid touching unrelated PDF/PPT/knowledge-graph logic in this pass.
+- 损坏历史文件在修复写入前备份，保存失败不误记当日成功；串行提交配置和反馈，防止回滚覆盖。
+- 排除词支持中文顿号；正反馈提供有限类别加分，不相关可撤销。统一去版本后的 arXiv ID，避免版本不同导致重复下载或反馈不一致。
+- 输入保存前执行共享校验；匹配分为 0–100 分，不展示为概率；旧首页设置安全回到今日。
+- 新 AI 设置使用已有凭据存储，同一来源才保留旧 Key；HTTP 超时覆盖响应正文；AI 默认关闭。
+- 修复视觉脚本表达式与旧入口、reload 未就绪、mock 缓存标志错误。今日的滚动条变细，AI 配置区不再显示无关阅读状态。
 
-### 1.5 Risks
-- Old renderer localStorage metadata can still contain bad mojibake rows; UI must filter them before display.
-- Argos model startup dominates the first batch; a persistent worker is needed for warm-batch speed.
-- Windows PowerShell can display UTF-8 Chinese incorrectly; verify with app/tests instead of terminal output only.
+## 验证
 
-## 2. Subagent Reports
-### 2.1 Explorer A - Translation/Cache Review
-- P0: mojibake detection missed common strings such as `鏈哄櫒`, `鐢ㄤ簬`, and Latin mojibake like `æœºå™¨`.
-- P0: bad SQLite cache rows were ignored but not deleted, so broken translations could reappear.
-- P1: Argos performance was dominated by Python process/model startup per batch. A persistent Python worker should make warm translation batches much faster.
-- P1: marker-based combined translation is fragile; JSON-array batch translation is safer.
+- 最终构建：95 个测试文件、710 项测试通过；TypeScript、renderer、Electron 通过。
+- 最新源码视觉检查通过：1366/1440/1920 今日页与 AI 设置，保存兴趣、规则生成、反馈撤销、刷新恢复、错误保留历史、从简报打开已有论文、论文库、PDF、arXiv、设置。
+- 人工复核：`.tmp-visual-check/daily-generated-1440.png`、`daily-error-1366.png`、`daily-generated-1920.png`、`paper-library.png`、`settings-ai-1366.png`，未发现明显遮挡或横向溢出。
+- `npm run dist` 和打包后 `visual:check` 通过；安装包大小、哈希与本次提交范围见 `PLAN.md`。测试 PDF 填充色泄漏修复后再次执行打包后门禁并查看阅读截图，内容清晰。
 
-### 2.2 Explorer B - UI/Visual Review
-- P1: compact arXiv layout hid the detail panel, making detail-only actions unreachable.
-- P1: narrow responsive rules could leave the page with `overflow: hidden` and inaccessible content.
-- P2: result-card action buttons should use adaptive grid sizing; abstract/detail panels need clearer scroll behavior.
+## 验证边界
 
-### 2.3 Follow-up Agents
-- Existing code and visual agents were reused for a second pass. They are checking the final diff, visual behavior, and remaining P0/P1 risks.
+简报检索视觉验收使用隔离 userData 和 arXiv mock，调度/网络与磁盘异常使用注入测试。未调用用户真实 AI 服务，未改用户的自动任务偏好。原生下载保存对话框和系统通知显示需要实际环境交互验证；没有承诺电脑关机后的推送。AI 摘要语义仍需用户核对原文，底层未取消的检索可能在超时后继续完成，但结果不再提交。
 
-## 3. Unified Task Board
-| Task ID | Owner | Files | Status | Acceptance |
-|---|---|---|---|---|
-| A1 | Explorer A | arXiv/translation code | DONE | concrete cache/translation risks reported |
-| A2 | Explorer B | arXiv UI/CSS | DONE | concrete responsive UI risks reported |
-| A3 | Main | shared/main/renderer arXiv files | DONE | tests and real Argos smoke pass |
-| A4 | Main | docs/cache/install | IN_PROGRESS | full build/visual/dist, commit, push |
-
-## 4. Implemented Fixes
-- Added shared mojibake detection for common UTF-8/GBK corruption patterns.
-- Bumped arXiv search cache query version after title/abstract and Chinese expansion changes.
-- Added Chinese haptic/tactile query expansion so queries such as "触觉" can match English title/abstract terms.
-- Added batch title/abstract translation IPC.
-- Added SQLite cache rejection for mojibake translation rows.
-- Added persistent Argos Python worker for warm-batch translation speed.
-- Added renderer-side filtering of old bad localStorage translation metadata before display.
-- Added a detail-panel button to manually translate selected arXiv title/abstract.
-- Adjusted arXiv card/detail action layout to avoid cramped buttons and inaccessible actions.
-
-## 5. Verification Log
-### Automated Tests
-- `npm run test -- src/main/arxivTranslationService.test.ts src/renderer/lib/arxivClient.test.ts`: passed, 257 tests.
-- `npm run typecheck`: passed.
-- `npm run build:electron`: passed.
-
-### Real Argos Smoke
-- Cold batch: 3 papers translated in about 7.2 seconds.
-- Warm batch: 3 papers translated in about 0.46 seconds.
-- Output contained no replacement-character mojibake in the smoke test.
-
-### Cache Cleanup
-- Scanned `C:\Users\23176\AppData\Roaming\pdf-translation-reader\arxiv-translation-cache.sqlite`.
-- Rows scanned: 180.
-- Rows deleted by current detector: 0.
-- Conclusion: most persistent SQLite rows are readable; remaining screenshot mojibake is likely stale renderer metadata or an old installed app build.
-
-## 6. Open Checks
-- Run full `npm run test`, `npm run build`, `npm run visual:check`, and `npm run dist`.
-- If packaging succeeds, sync `dist\win-unpacked` to the installed app directory for the user's desktop shortcut.
-- Commit and push to `origin/codex/arxiv-ui-night-optimization`.
-
-## 7. Known Limitations
-- Argos first translation after app startup still has a cold-start cost.
-- Argos translation quality is usable for title/abstract preview, but not equivalent to AI translation.
-- Old localStorage metadata can still exist on disk; current UI filters it at display time and allows retranslation.
-
-## 8. Final Decision
-Minimum runnable loop achieved: not yet; full visual/build/dist verification is still running next.
+工作区原有 8 个 PDF/移动相关修改保持未暂存，不混入本次提交；本地安装包包含当前工作区已有代码。未部署移动网页、未安装或覆盖用户正在使用的应用。

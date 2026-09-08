@@ -24,6 +24,10 @@ import type { AiAssistantFocus } from './components/AiAssistantPage';
 import { AppSidebar, type AppSidebarSection } from './components/AppSidebar';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { HomePage } from './components/HomePage';
+import { DailyBriefPage } from './components/DailyBriefPage';
+import { AiConnectionSettings } from './components/AiConnectionSettings';
+import { useDailyBrief } from './hooks/useDailyBrief';
+import { canonicalizeArxivStableId } from '../shared/dailyBrief';
 import { buildKnowledgeGraph } from './lib/knowledgeGraph';
 import {
   RESEARCH_PROJECTS_KEY,
@@ -33,7 +37,7 @@ import {
   serializeResearchProjects,
   type ResearchProject
 } from './lib/researchProjects';
-import { describeReferenceStrategy } from './lib/appSettings';
+import { APP_SETTINGS_KEY, parseAppSettings, describeReferenceStrategy } from './lib/appSettings';
 import {
   buildPresentationDraft,
   extractFigureCandidates,
@@ -169,9 +173,15 @@ const SettingsPage = lazy(async () => {
 });
 
 export default function App() {
-  const [view, setView] = useState<AppView>('home');
+  const dailyBrief = useDailyBrief();
+  const briefDownloadLock = useRef(false);
+  const [view, setView] = useState<AppView>(() => parseAppSettings(localStorage.getItem(APP_SETTINGS_KEY)).general.defaultHome === 'reader' ? 'reader' : 'home');
   const { getAppMainClassName } = useViewTransition(view);
-  const [homeSection, setHomeSection] = useState<'hub' | 'library'>('hub');
+  const [homeSection, setHomeSection] = useState<'hub' | 'library'>(() => parseAppSettings(localStorage.getItem(APP_SETTINGS_KEY)).general.defaultHome === 'library' ? 'library' : 'hub');
+  useEffect(() => window.electronAPI.onDailyBriefOpen(() => {
+    setHomeSection('hub');
+    setView('home');
+  }), []);
   const [aiAssistantFocus, setAiAssistantFocus] = useState<AiAssistantFocus>('analysis');
   const [readerMode, setReaderMode] = useState<ReaderMode>('manual');
   const {
@@ -1053,6 +1063,46 @@ export default function App() {
     };
     const storedRecord = rememberPaper(record);
     setStatusMessage(`arXiv PDF 已加入论文库：${storedRecord.englishTitle}`);
+  }
+
+  async function handleOpenBriefPaper(paper: ArxivPaper): Promise<void> {
+    if (briefDownloadLock.current) return;
+    briefDownloadLock.current = true;
+    try {
+      const existing = paperLibrary.find((item) =>
+        item.notes?.split('\n').some((line) => line.trim().startsWith('arXiv: ') && canonicalizeArxivStableId(line.trim().slice(7)) === canonicalizeArxivStableId(paper.stableId))
+      );
+      if (existing) {
+        await handleOpenPaper(existing);
+        return;
+      }
+      const payload = await window.electronAPI.downloadArxivPdf({
+        pdfUrl: paper.pdfUrl,
+        defaultFileName: `${paper.stableId.replace(/[^a-zA-Z0-9._-]/g, '_')}.pdf`
+      });
+      if (!payload) return;
+      handleArxivPaperDownloaded(paper, payload);
+      applyPdfPayload(payload);
+      const freshSession = buildFreshPdfSessionState();
+      setTranslationDocument(freshSession.translationDocument);
+      setCurrentParagraphIndex(0);
+      setShowTranslation(false);
+      setIsEditing(false);
+      setEditingText('');
+      setActiveNotes(`arXiv: ${paper.stableId}\n${paper.summary}`.trim());
+      setReaderMode('ai');
+      setView('reader');
+      try {
+        await dailyBrief.setFeedback({ paperId: paper.stableId, kind: 'saved', title: paper.title, topics: paper.categories });
+      } catch {
+        setStatusMessage('论文已下载并加入论文库，但推荐偏好保存失败，可在今日页重试。');
+      }
+    } catch (error) {
+      setStatusMessage(`打开简报论文失败：${String(error)}`);
+      throw error;
+    } finally {
+      briefDownloadLock.current = false;
+    }
   }
 
   function ensureActivePaperForCurrentPdf(): PaperRecord | null {
@@ -2103,7 +2153,20 @@ export default function App() {
       <div className="app-shell desktop-shell home-shell">
         {renderSidebar()}
         <div className={getAppMainClassName()}>
-          <HomePage
+          {homeSection === 'hub' ? (
+            <DailyBriefPage
+              snapshot={dailyBrief.snapshot}
+              error={dailyBrief.error}
+              busy={dailyBrief.busy}
+              onSavePreferences={dailyBrief.savePreferences}
+              onRun={dailyBrief.run}
+              onFeedback={dailyBrief.setFeedback}
+              onRemoveFeedback={dailyBrief.removeFeedback}
+              onOpenPaper={handleOpenBriefPaper}
+              onOpenLibrary={openLibrary}
+              onOpenSearch={openArxivSearch}
+            />
+          ) : <HomePage
             papers={paperLibrary}
             activeSection={homeSection}
             onSectionChange={setHomeSection}
@@ -2117,7 +2180,7 @@ export default function App() {
             projectWorkspaceSnapshot={projectWorkspaceSnapshot}
             onUpdatePaper={handleUpdatePaper}
             onRemovePaper={handleRemovePaper}
-          />
+          />}
           <ConnectedStatusBar />
         </div>
       </div>
@@ -2319,6 +2382,11 @@ export default function App() {
               <SettingsPage
                 onBackHome={openWorkspace}
                 onOpenAiAssistant={handleOpenAiAssistantForSettings}
+                aiSettingsPanel={<AiConnectionSettings
+                  form={aiForm} configured={Boolean(aiSettings?.apiKeyConfigured)} busy={isAiBusy}
+                  message={statusMessage} onProviderChange={handleProviderChange} onChange={handleAiFormChange}
+                  onSave={handleSaveAiSettings} onTest={handleTestAiConnection}
+                />}
               />
             </Suspense>
           </ErrorBoundary>

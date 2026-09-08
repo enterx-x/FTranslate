@@ -51,13 +51,14 @@ export function useAiSettings(setStatusMessage: (message: string) => void) {
   const handleProviderChange = useCallback((provider: AiProviderId): void => {
     setAiBalance(null);
     if (provider === 'custom') {
-      setAiForm((value) => ({ ...value, provider }));
+      setAiForm((value) => ({ ...value, provider, apiKey: '' }));
       return;
     }
 
     const preset = AI_PROVIDER_PRESETS[provider];
     setAiForm((value) => ({
       ...value,
+      apiKey: '',
       ...withDefaultAiRuntimeOptions({
         provider,
         baseURL: preset.baseURL,

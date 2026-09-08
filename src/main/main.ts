@@ -1,5 +1,10 @@
 ﻿import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, safeStorage, shell } from 'electron';
 import { spawn, spawnSync } from 'node:child_process';
+import { Notification } from 'electron';
+import { createDailyBriefService } from './dailyBriefService';
+import { registerDailyBriefIpcHandlers } from './ipc/handlers/dailyBrief';
+import { fetchAiText } from './aiHttp';
+import { canReuseAiCredential } from '../shared/aiCredentialScope';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -1944,7 +1949,10 @@ async function saveStoredAiSettings(request: AiSettingsRequest): Promise<StoredA
     encryptedApiKey:
       request.apiKey && request.apiKey.trim()
         ? encryptApiKey(request.apiKey.trim())
-        : existing.encryptedApiKey
+        : canReuseAiCredential(existing, {
+            provider: parseProvider(request.provider) ?? existing.provider,
+            baseURL: request.baseURL.trim() || existing.baseURL
+          }) ? existing.encryptedApiKey : undefined
   };
   const normalizedNext = normalizeStoredAiSettings(next);
 
@@ -3147,7 +3155,57 @@ async function exportPdfForIpc(request: { sourcePath: string; defaultFileName: s
   };
 }
 
+let dailyBriefService: ReturnType<typeof createDailyBriefService> | null = null;
+let dailyBriefTimer: ReturnType<typeof setInterval> | null = null;
+
+function getDailyBriefService() {
+  if (!dailyBriefService) {
+    dailyBriefService = createDailyBriefService({
+      storagePath: path.join(app.getPath('userData'), 'daily-brief.json'),
+      search: async (request) => {
+        if (isVisualArxivMockEnabled()) {
+          const result = buildVisualArxivSearchResult();
+          const currentDate = new Date(Date.now() - 60_000).toISOString();
+          return { ...result, cacheHit: false, cacheStale: false, papers: result.papers.map((paper) => ({ ...paper, published: currentDate, publishedAt: currentDate, updated: currentDate })) };
+        }
+        return getArxivService().search(request, 'daily-brief');
+      },
+      complete: async (request) => {
+        const stored = await loadStoredAiSettings();
+        const apiKey = decryptApiKey(stored.encryptedApiKey);
+        if (!apiKey) throw new Error('请先在设置中配置 AI 服务，或关闭简报的 AI 增强。');
+        const settings = { ...stored, timeoutSeconds: 45, maxTokens: 4096, maxRetries: 0 };
+        const chat = buildGenericChatCompletionRequest(settings, request);
+        const response = await fetchAiText(chat.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify(chat.body)
+        }, 45_000);
+        if (!response.ok) throw new Error(`简报 AI 请求失败：HTTP ${response.status}`);
+        return parseChatCompletionContent(response.text);
+      },
+      onChange: (snapshot) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed()) window.webContents.send('daily-brief:changed', snapshot);
+        }
+      },
+      notify: (brief) => {
+        if (!isVisualArxivMockEnabled() && Notification.isSupported() && brief.items.length > 0) {
+          const notification = new Notification({ title: 'FTranslate · 今日论文', body: `已整理 ${brief.items.length} 篇论文，打开应用查看推荐理由。` });
+          notification.on('click', () => {
+            showMainWindow();
+            mainWindow?.webContents.send('daily-brief:open');
+          });
+          notification.show();
+        }
+      }
+    });
+  }
+  return dailyBriefService;
+}
+
 function registerIpcHandlers(): void {
+  registerDailyBriefIpcHandlers(ipcMain, getDailyBriefService());
   registerAppIpcHandlers(ipcMain, {
     ai: {
       loadAiSettings: loadAiSettingsForIpc,
@@ -3209,6 +3267,11 @@ app.whenReady().then(async () => {
   await createMainWindow();
   registerGlobalShortcut();
   scheduleLocalTranslationWarmup();
+  const tickDailyBrief = () => {
+    void getDailyBriefService().tick().catch((error) => console.error('Daily brief scheduler:', String(error)));
+  };
+  dailyBriefTimer = setInterval(tickDailyBrief, 30_000);
+  tickDailyBrief();
 });
 
 app.on('activate', () => {
@@ -3216,6 +3279,8 @@ app.on('activate', () => {
 });
 
 app.on('will-quit', () => {
+  if (dailyBriefTimer) clearInterval(dailyBriefTimer);
+  dailyBriefService?.dispose();
   // 退出前释放全局快捷键，避免系统快捷键被残留占用。
   globalShortcut.unregisterAll();
   arxivService?.close();

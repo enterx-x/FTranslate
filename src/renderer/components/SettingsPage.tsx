@@ -33,18 +33,15 @@ export const DEFAULT_SETTINGS_CATEGORY: SettingsCategory = 'general';
 interface SettingsPageProps {
   onBackHome: () => void;
   onOpenAiAssistant: () => void;
+  aiSettingsPanel?: ReactNode;
 }
 
 const categories: Array<{ id: SettingsCategory; title: string; caption: string }> = [
   { id: 'general', title: '通用设置', caption: '主题、缩放、首页和自动保存' },
   { id: 'pdf', title: 'PDF 阅读设置', caption: '阅读模式、缩放和参考文献策略' },
   { id: 'ai', title: 'AI 设置', caption: 'Provider、模型和高级参数入口' },
-  { id: 'web', title: '联网查新设置', caption: '查新范围和引用格式' },
-  { id: 'sheet', title: '研究表格设置', caption: '公式、行高、预览和缩放' },
   { id: 'notes', title: '笔记设置', caption: 'Markdown、公式和自动关联' },
-  { id: 'graph', title: '知识图谱设置', caption: '默认来源、节点和标签策略' },
-  { id: 'presentation', title: '组会 PPT 设置', caption: '学术组会风格、页数、语言、图表和导出偏好' },
-  { id: 'export', title: '导出与路径', caption: 'PDF、双语 PDF、图谱、PPT 和笔记路径' },
+  { id: 'export', title: '导出与路径', caption: 'PDF、译文和笔记路径' },
   { id: 'data', title: '数据与缓存', caption: '本地存储、缓存和危险操作' }
 ];
 
@@ -53,12 +50,7 @@ const exportPathFields: Array<{ key: keyof ExportPathSettings; label: string; hi
   { key: 'pdfExportPath', label: 'PDF 导出路径', hint: '原文 PDF 或副本导出目录' },
   { key: 'bilingualPdfExportPath', label: '双语 PDF 导出路径', hint: 'PDFMathTranslate 输出或手动导出的目录' },
   { key: 'translationJsonExportPath', label: '翻译 JSON 导出路径', hint: 'AI 缓存和段落译文 JSON' },
-  { key: 'knowledgeGraphImageExportPath', label: '知识图谱图片导出路径', hint: 'SVG/PNG 图谱图片' },
-  { key: 'knowledgeGraphJsonExportPath', label: '知识图谱 JSON 导出路径', hint: '图谱节点和边数据' },
-  { key: 'notesExportPath', label: '笔记导出路径', hint: 'Markdown 或纯文本笔记导出目录' },
-  { key: 'researchSheetExportPath', label: '研究表格导出路径', hint: 'Excel 工作簿导出目录' },
-  { key: 'pptExportPath', label: '组会 PPT 导出路径', hint: 'PPTX、Markdown 大纲和 JSON 草稿目录' },
-  { key: 'pptAssetCachePath', label: 'PPT 图片素材缓存路径', hint: '后续图表截图、裁剪图和临时素材目录' }
+  { key: 'notesExportPath', label: '笔记导出路径', hint: 'Markdown 或纯文本笔记导出目录' }
 ];
 
 export function SettingsPage(props: SettingsPageProps) {
@@ -162,20 +154,20 @@ export function SettingsPage(props: SettingsPageProps) {
           <div>
             <span className="eyebrow">Settings</span>
             <h1>设置</h1>
-            <p>集中管理导出路径、PDF 阅读、AI 参数、研究表格、笔记、知识图谱和组会 PPT 偏好。</p>
+            <p>管理阅读、翻译、笔记和本地数据。每日论文的方向与推送时间在「今日」中设置。</p>
           </div>
         </div>
         <div className="page-header-actions">
-          <button type="button" className="secondary-button button-with-icon" onClick={props.onOpenAiAssistant}>
+          <button type="button" className="secondary-button button-with-icon" onClick={() => setActiveCategory('ai')}>
             <img className="button-icon" src={settingsIcon} alt="" />
-            <span>AI 助手配置</span>
+            <span>AI 服务配置</span>
           </button>
           <button type="button" className="primary-button button-with-icon" onClick={() => saveSettings()}>
             <img className="button-icon" src={saveIcon} alt="" />
             <span>保存设置</span>
           </button>
           <button type="button" className="secondary-button" onClick={props.onBackHome}>
-            返回工作台
+            返回今日
           </button>
         </div>
       </header>
@@ -674,6 +666,12 @@ export function SettingsPage(props: SettingsPageProps) {
             </SettingsCard>
           ) : null}
 
+          {activeCategory === 'ai' && props.aiSettingsPanel ? (
+            <SettingsCard title="AI 服务" badge="每日简报与阅读共用" description="配置提供翻译和简报分析的模型服务。">
+              {props.aiSettingsPanel}
+            </SettingsCard>
+          ) : null}
+
           {activeCategory === 'ai' ? (
             <SettingsCard
               title="本地离线翻译"
@@ -767,7 +765,7 @@ export function SettingsPage(props: SettingsPageProps) {
                 <label>
                   默认首页
                   <select
-                    value={settings.general.defaultHome}
+                    value={settings.general.defaultHome === 'researchSheet' ? 'workspace' : settings.general.defaultHome}
                     onChange={(event) =>
                       updateSettings((current) => ({
                         ...current,
@@ -778,9 +776,8 @@ export function SettingsPage(props: SettingsPageProps) {
                       }))
                     }
                   >
-                    <option value="workspace">工作台</option>
+                    <option value="workspace">今日</option>
                     <option value="library">论文库</option>
-                    <option value="researchSheet">研究表格</option>
                     <option value="reader">PDF 阅读</option>
                   </select>
                 </label>
@@ -842,23 +839,18 @@ export function SettingsPage(props: SettingsPageProps) {
             </SettingsCard>
           ) : null}
 
-          {activeCategory === 'ai' || activeCategory === 'web' || activeCategory === 'data' ? (
+          {activeCategory === 'data' ? (
             <SettingsCard
               title={categories.find((category) => category.id === activeCategory)?.title ?? '设置'}
               badge={activeCategory === 'data' ? `${localStorageUsage} KB` : '兼容旧数据'}
-              description="这部分先提供统一入口和摘要，具体 Provider、模型、余额和联网查新参数仍在 AI 助手中编辑。"
+              description="本地阅读数据与显示偏好。重置 UI 不会删除论文文件或每日简报。"
             >
               <div className="settings-summary-list">
                 <p><strong>主题模式</strong><span>{settings.general.themeMode}</span></p>
                 <p><strong>界面缩放</strong><span>{settings.general.uiScale}</span></p>
                 <p><strong>自动保存</strong><span>{settings.general.autoSave ? '开启' : '关闭'}</span></p>
-                <p><strong>AI 高级参数</strong><span>请在 AI 助手中编辑并测试连接</span></p>
               </div>
               <div className="settings-actions">
-                <button type="button" className="secondary-button button-with-icon" onClick={props.onOpenAiAssistant}>
-                  <img className="button-icon" src={settingsIcon} alt="" />
-                  <span>前往 AI 助手</span>
-                </button>
                 <button type="button" className="danger-button button-with-icon" onClick={resetSettings}>
                   <img className="button-icon" src={refreshIcon} alt="" />
                   <span>重置 UI 设置</span>

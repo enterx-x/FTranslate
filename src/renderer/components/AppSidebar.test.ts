@@ -26,15 +26,39 @@ describe('AppSidebar navigation targets', () => {
     }
   );
 
-  it('uses clear AI R&D workspace labels instead of generic legacy wording', () => {
-    const labels = getSidebarNavigationItems().map((item) => item.label);
+  it('keeps the daily reading loop as the only default navigation surface', () => {
+    expect(getSidebarNavigationItems().map((item) => item.section)).toEqual([
+      'workspace',
+      'library',
+      'arxiv',
+      'reader',
+      'settings'
+    ]);
+    expect(getSidebarNavigationItems().map((item) => item.label)).toEqual([
+      '今日',
+      '论文库',
+      'arXiv 检索',
+      'PDF 阅读',
+      '设置'
+    ]);
+  });
 
-    expect(labels.slice(0, 4)).toEqual(['项目空间', 'arXiv 检索', '论文库', 'PDF 阅读']);
-    expect(labels).toContain('项目空间');
-    expect(labels).toContain('研究表格');
-    expect(labels).toContain('论文导师');
-    expect(labels).not.toContain('工作台');
-    expect(labels).not.toContain('AI 问答');
+  it('does not expose retired research modules in the visible navigation', () => {
+    const visibleSections = getSidebarNavigationItems().map((item) => item.section);
+    const visibleLabels = getSidebarNavigationItems().map((item) => item.label);
+
+    expect(visibleSections).not.toContain('experimentMatrix');
+    expect(visibleSections).not.toContain('researchSheet');
+    expect(visibleSections).not.toContain('knowledgeGraph');
+    expect(visibleSections).not.toContain('presentation');
+    expect(visibleSections).not.toContain('paperTutor');
+    expect(visibleSections).not.toContain('ai');
+    expect(visibleLabels).not.toContain('实验矩阵');
+    expect(visibleLabels).not.toContain('研究表格');
+    expect(visibleLabels).not.toContain('证据图谱');
+    expect(visibleLabels).not.toContain('组会 PPT');
+    expect(visibleLabels).not.toContain('论文导师');
+    expect(visibleLabels).not.toContain('AI 助手');
   });
 
   it('dispatches each section through the configured handler map', () => {
@@ -61,14 +85,13 @@ describe('AppSidebar navigation targets', () => {
     expect(calls).toEqual(['reader', 'arxiv', 'settings']);
   });
 
-  it('organizes navigation into focused Research OS groups', () => {
-    const groups = getSidebarNavigationItems().map((item) => item.group);
-
-    expect(groups).toContain('overview');
-    expect(groups).toContain('reading');
-    expect(groups).toContain('evidence');
-    expect(groups).toContain('experiments');
-    expect(groups).toContain('assistant');
-    expect(groups).toContain('outputs');
+  it('organizes the visible loop into daily, reading, and utility groups', () => {
+    expect(getSidebarNavigationItems().map((item) => item.group)).toEqual([
+      'overview',
+      'reading',
+      'reading',
+      'reading',
+      'utility'
+    ]);
   });
 });

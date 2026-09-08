@@ -116,6 +116,7 @@ function createFallbackPdfBuffer() {
 0.20 0.29 0.43 RG
 2 w
 72 390 451 185 re S
+0 g
 BT
 /F1 12 Tf
 72 365 Td
@@ -123,7 +124,8 @@ BT
 ET
 `
       : '';
-    return `${figureCommands}BT
+    return `${figureCommands}0 g
+BT
 72 780 Td
 ${textCommands}
 ET
@@ -262,17 +264,43 @@ async function evaluateJson(client, expression) {
     awaitPromise: true,
     returnByValue: true
   });
-  return JSON.parse(result.result.value);
+  if (result.exceptionDetails) {
+    const exception = result.exceptionDetails.exception;
+    const description = exception?.description || exception?.value || result.exceptionDetails.text || 'Unknown renderer exception';
+    throw new Error(`Runtime.evaluate failed: ${description}`);
+  }
+  const serialized = result.result?.value;
+  if (typeof serialized !== 'string') {
+    throw new Error(
+      `Runtime.evaluate returned ${result.result?.type ?? 'no result'} instead of JSON: ${JSON.stringify(result)}`
+    );
+  }
+  try {
+    return JSON.parse(serialized);
+  } catch (error) {
+    throw new Error(`Runtime.evaluate returned invalid JSON: ${serialized.slice(0, 500)}`, { cause: error });
+  }
 }
 
 async function waitForAppReady(client) {
   let lastSnapshot = null;
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const snapshot = await evaluateJson(client, `() => ({
-      ready: Boolean(document.querySelector('.home-page, .split-layout, .experiment-matrix-page, .research-sheet-page, .ai-assistant-page, .paper-tutor-page, .knowledge-graph-page, .presentation-page, .arxiv-page, .settings-page')),
+      ready: Boolean(
+        document.querySelector(
+          '.home-page, .split-layout, .experiment-matrix-page, .research-sheet-page, .ai-assistant-page, .paper-tutor-page, .knowledge-graph-page, .presentation-page, .arxiv-page, .settings-page'
+        )
+      ) || [...document.querySelectorAll('main')].some((item) =>
+        (item.textContent ?? '').includes('今日研究简报')
+      ),
       activeSidebar: document.querySelector('.app-sidebar-link.active')?.getAttribute('data-sidebar-section') ?? '',
       knownViews: {
-        home: Boolean(document.querySelector('.home-page')),
+        home: Boolean(document.querySelector('.home-page')) || [...document.querySelectorAll('main')].some((item) =>
+          (item.textContent ?? '').includes('今日研究简报')
+        ),
+        dailyBrief: [...document.querySelectorAll('main')].some((item) =>
+          (item.textContent ?? '').includes('今日研究简报')
+        ),
         reader: Boolean(document.querySelector('.split-layout')),
         experimentMatrix: Boolean(document.querySelector('.experiment-matrix-page')),
         researchSheet: Boolean(document.querySelector('.research-sheet-page')),
@@ -284,7 +312,7 @@ async function waitForAppReady(client) {
         settings: Boolean(document.querySelector('.settings-page')),
         settingsLoading: Boolean(document.querySelector('.settings-loading'))
       },
-      text: (document.body.textContent ?? '').slice(0, 1200)
+      text: (document.body?.textContent ?? '').slice(0, 1200)
     })`);
     lastSnapshot = snapshot;
     if (snapshot.ready) {
@@ -525,6 +553,197 @@ async function clickSidebarSection(client, section) {
   }`);
   if (!clicked) {
     throw new Error(`Sidebar section not found: ${section}`);
+  }
+  await wait(700);
+}
+
+async function captureVisualScreenshot(client, filename) {
+  const shot = await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+  await writeFile(path.join(outputDir, filename), Buffer.from(shot.data, 'base64'));
+}
+
+async function setVisualViewportWidth(client, requestedWidth) {
+  let mode = 'window';
+  try {
+    const target = await client.send('Browser.getWindowForTarget');
+    const current = await client.send('Browser.getWindowBounds', { windowId: target.windowId });
+    const bounds = current.bounds ?? {};
+    await client.send('Browser.setWindowBounds', {
+      windowId: target.windowId,
+      bounds: {
+        windowState: 'normal',
+        width: requestedWidth,
+        height: Math.max(720, Number(bounds.height) || 900)
+      }
+    });
+  } catch {
+    mode = 'emulation';
+    const viewport = await evaluateJson(client, `() => ({ height: window.innerHeight || 900 })`);
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: requestedWidth,
+      height: Math.max(720, viewport.height),
+      deviceScaleFactor: 1,
+      mobile: false
+    });
+  }
+  await wait(250);
+  const actual = await evaluateJson(client, `() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+    mode: ${JSON.stringify(mode)}
+  })`);
+  return { requestedWidth, ...actual };
+}
+
+async function readDailyBriefSurface(client) {
+  return evaluateJson(client, `() => {
+    const page = [...document.querySelectorAll('main')].find((item) =>
+      (item.textContent ?? '').includes('今日研究简报')
+    );
+    const pageText = page?.textContent ?? '';
+    const controls = [...(page?.querySelectorAll('button, input, textarea, select') ?? [])];
+    const outOfBoundsControls = controls
+      .map((item) => item.getBoundingClientRect())
+      .filter((rect) => rect.width > 0 && (rect.left < -3 || rect.right > window.innerWidth + 3)).length;
+    const sidebarItems = [...document.querySelectorAll('.app-sidebar-link')].map((item) => ({
+      section: item.getAttribute('data-sidebar-section') ?? '',
+      label: (item.textContent ?? '').trim()
+    }));
+    return {
+      hasPage: Boolean(page),
+      hasPreferences: Boolean(page?.querySelector('form')),
+      hasResults: /今日推荐|最近一份简报/.test(pageText),
+      hasOnboarding: /还没有今天的推荐|自动生成已关闭|尚未配置兴趣|正在读取本地状态/.test(pageText),
+      hasBriefItems: [...(page?.querySelectorAll('article') ?? [])].length > 0,
+      briefItemCount: [...(page?.querySelectorAll('article') ?? [])].length,
+      hasAbstractEvidence: /依据公开摘要/.test(pageText),
+      hasMatchScore: pageText.includes('匹配分') && pageText.includes('/100'),
+      hasRecommendationReason: /为什么推荐/.test(pageText),
+      hasReadingAction: pageText.includes('阅读 / 下载 PDF'),
+      feedbackSelectedCount: page?.querySelectorAll('[aria-pressed="true"]').length ?? 0,
+      hasFeedbackSaved: /已标记“想读”|已标记“稍后看”|已标记“暂不相关”/.test(pageText),
+      hasFeedbackUndo: [...(page?.querySelectorAll('button') ?? [])].some((button) =>
+        (button.textContent ?? '').trim() === '撤销'
+      ),
+      hasError: /上次运行失败|生成每日简报失败|简报生成失败/.test(pageText),
+      errorAlerts: [...document.querySelectorAll('[role="alert"]')]
+        .map((item) => (item.textContent ?? '').trim())
+        .filter(Boolean),
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+      outOfBoundsControls,
+      activeSidebar: document.querySelector('.app-sidebar-link.active')?.getAttribute('data-sidebar-section') ?? '',
+      sidebarItems,
+      interests: page?.querySelector('textarea')?.value ?? '',
+      excludeTerms: page?.querySelectorAll('textarea')[1]?.value ?? '',
+      maxPapers: page?.querySelector('input[type="number"]')?.value ?? '',
+      buttonTexts: [...(page?.querySelectorAll('button') ?? [])].map((button) => (button.textContent ?? '').trim()),
+      pageText: pageText.slice(0, 1600)
+    };
+  }`);
+}
+
+async function waitForDailyBriefSurface(client, predicate, description, attempts = 120) {
+  let last = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    last = await readDailyBriefSurface(client);
+    if (predicate(last)) {
+      return last;
+    }
+    await wait(250);
+  }
+  throw new Error(`Timed out waiting for ${description}: ${JSON.stringify(last)}`);
+}
+
+async function captureDailyBriefAtWidths(client, name) {
+  const results = [];
+  for (const width of [1366, 1440, 1920]) {
+    const viewport = await setVisualViewportWidth(client, width);
+    const surface = await readDailyBriefSurface(client);
+    if (
+      !surface.hasPage ||
+      surface.hasHorizontalOverflow ||
+      surface.outOfBoundsControls > 0 ||
+      surface.activeSidebar !== 'workspace'
+    ) {
+      await captureVisualScreenshot(client, `daily-${name}-${width}-failed.png`);
+      throw new Error(`daily brief: ${name} layout failed at ${width}px, got ${JSON.stringify({ viewport, surface })}`);
+    }
+    await captureVisualScreenshot(client, `daily-${name}-${width}.png`);
+    results.push({ viewport, surface });
+  }
+  return results;
+}
+
+async function fillDailyBriefPreferences(client) {
+  const filled = await evaluateJson(client, `() => {
+    const page = [...document.querySelectorAll('main')].find((item) =>
+      (item.textContent ?? '').includes('今日研究简报')
+    );
+    if (!page) return false;
+    const textareas = [...page.querySelectorAll('textarea')];
+    const timeInput = page.querySelector('input[type="time"]');
+    const numberInput = page.querySelector('input[type="number"]');
+    const checkboxes = [...page.querySelectorAll('input[type="checkbox"]')];
+    const setValue = (element, value) => {
+      if (!element) return;
+      const prototype = Object.getPrototypeOf(element);
+      const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+      setter?.call(element, String(value));
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    setValue(textareas[0], ${JSON.stringify('robot manipulation, tactile sensing')});
+    setValue(textareas[1], ${JSON.stringify('survey')});
+    setValue(timeInput, ${JSON.stringify('08:30')});
+    setValue(numberInput, ${JSON.stringify('5')});
+    if (checkboxes[0]?.checked) checkboxes[0].click();
+    if (checkboxes[1] && checkboxes[1].checked) checkboxes[1].click();
+    return {
+      interests: textareas[0]?.value ?? '',
+      excludeTerms: textareas[1]?.value ?? '',
+      time: timeInput?.value ?? '',
+      maxPapers: numberInput?.value ?? '',
+      enabled: checkboxes[0]?.checked ?? false,
+      useAi: checkboxes[1]?.checked ?? false
+    };
+  }`);
+  if (!filled || filled.interests !== 'robot manipulation, tactile sensing' || filled.useAi) {
+    throw new Error(`daily brief: failed to fill saved preferences: ${JSON.stringify(filled)}`);
+  }
+  await wait(250);
+  return filled;
+}
+
+async function clickDailyBriefFeedback(client, label) {
+  const clicked = await evaluateJson(client, `() => {
+    const page = [...document.querySelectorAll('main')].find((item) =>
+      (item.textContent ?? '').includes('今日研究简报')
+    );
+    const button = [...(page?.querySelectorAll('article button') ?? [])].find((item) =>
+      (item.textContent ?? '').trim() === ${JSON.stringify(label)}
+    );
+    button?.click();
+    return Boolean(button);
+  }`);
+  if (!clicked) {
+    throw new Error(`daily brief: feedback button not found: ${label}`);
+  }
+  await wait(700);
+}
+
+async function clickDailyBriefUndo(client) {
+  const clicked = await evaluateJson(client, `() => {
+    const page = [...document.querySelectorAll('main')].find((item) =>
+      (item.textContent ?? '').includes('今日研究简报')
+    );
+    const button = [...(page?.querySelectorAll('button') ?? [])].find((item) =>
+      (item.textContent ?? '').trim() === '撤销'
+    );
+    button?.click();
+    return Boolean(button);
+  }`);
+  if (!clicked) {
+    throw new Error('daily brief: feedback undo button not found');
   }
   await wait(700);
 }
@@ -1128,6 +1347,174 @@ async function loadPaperRecord(client, sourcePdfPath, translationPath, extraPape
 }
 
 async function runHomeScenario(client) {
+  const daily = await evaluateJson(client, `() => {
+    const page = [...document.querySelectorAll('main')].find((item) =>
+      (item.textContent ?? '').includes('今日研究简报')
+    );
+    const text = page?.textContent ?? '';
+    return {
+      hasPage: Boolean(page),
+      hasPreferences: Boolean(page?.querySelector('form')),
+      hasResults: /今日推荐/.test(text),
+      hasOnboarding: /还没有今天的推荐|自动生成已关闭|正在读取本地状态/.test(text),
+      activeSidebar: document.querySelector('.app-sidebar-link.active')?.getAttribute('data-sidebar-section') ?? '',
+      actionTexts: [...(page?.querySelectorAll('button') ?? [])].map((button) => button.textContent?.trim() ?? ''),
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+      hasRetiredWorkbench: Boolean(
+        document.querySelector(
+          '.research-workbench-page, .research-workbench-shell, .research-workflow-board, .research-command-strip'
+        )
+      )
+    };
+  }`);
+
+  if (!daily.hasPage || !daily.hasPreferences || !daily.hasResults || !daily.hasOnboarding || daily.hasHorizontalOverflow || daily.hasRetiredWorkbench) {
+    await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+      writeFile(path.join(outputDir, 'daily-brief-failed.png'), Buffer.from(shot.data, 'base64'))
+    );
+    throw new Error(`daily brief: expected onboarding page without retired workbench, got ${JSON.stringify(daily)}`);
+  }
+
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'daily-brief.png'), Buffer.from(shot.data, 'base64'))
+  );
+
+  const onboarding = await waitForDailyBriefSurface(
+    client,
+    (surface) => surface.hasPage && surface.hasPreferences && surface.hasOnboarding && surface.activeSidebar === 'workspace',
+    'the settled daily brief onboarding surface'
+  );
+  const expectedSidebar = [
+    ['workspace', '今日'],
+    ['library', '论文库'],
+    ['arxiv', 'arXiv 检索'],
+    ['reader', 'PDF 阅读'],
+    ['settings', '设置']
+  ];
+  if (
+    onboarding.sidebarItems.length !== expectedSidebar.length ||
+    onboarding.sidebarItems.some(
+      (item, index) => item.section !== expectedSidebar[index][0] || item.label !== expectedSidebar[index][1]
+    )
+  ) {
+    throw new Error(`daily brief: expected the five current sidebar entries, got ${JSON.stringify(onboarding.sidebarItems)}`);
+  }
+  const onboardingWidths = await captureDailyBriefAtWidths(client, 'onboarding');
+
+  const filledPreferences = await fillDailyBriefPreferences(client);
+  await clickButtonByText(client, '保存偏好');
+  const savedPreferences = await waitForDailyBriefSurface(
+    client,
+    (surface) =>
+      surface.interests === filledPreferences.interests &&
+      surface.excludeTerms === filledPreferences.excludeTerms &&
+      surface.buttonTexts.includes('已保存'),
+    'saved daily brief preferences'
+  );
+  const persistedPreferences = await evaluateJson(
+    client,
+    `async () => (await window.electronAPI.getDailyBriefSnapshot()).preferences`
+  );
+  if (
+    persistedPreferences.interests !== filledPreferences.interests ||
+    persistedPreferences.excludeTerms !== filledPreferences.excludeTerms ||
+    persistedPreferences.useAi !== false
+  ) {
+    throw new Error(`daily brief: saved preference contract was not persisted, got ${JSON.stringify(persistedPreferences)}`);
+  }
+
+  await clickButtonByText(client, '运行一次');
+  const generated = await waitForDailyBriefSurface(
+    client,
+    (surface) =>
+      surface.hasBriefItems &&
+      surface.hasAbstractEvidence &&
+      surface.hasMatchScore &&
+      surface.hasRecommendationReason &&
+      surface.hasReadingAction &&
+      !surface.hasHorizontalOverflow &&
+      surface.activeSidebar === 'workspace',
+    'a rule-generated daily brief from the visual arXiv mock'
+  );
+  const generatedSnapshot = await evaluateJson(client, `async () => window.electronAPI.getDailyBriefSnapshot()`);
+  const firstGeneratedItem = generatedSnapshot.briefs?.[0]?.items?.[0] ?? null;
+  if (!firstGeneratedItem || generatedSnapshot.briefs?.[0]?.mode !== 'rules') {
+    throw new Error(`daily brief: expected a non-empty rules brief, got ${JSON.stringify(generatedSnapshot)}`);
+  }
+  const generatedWidths = await captureDailyBriefAtWidths(client, 'generated');
+
+  await clickDailyBriefFeedback(client, '想读');
+  const feedbackSaved = await waitForDailyBriefSurface(
+    client,
+    (surface) => surface.feedbackSelectedCount > 0 && surface.hasFeedbackSaved && surface.hasFeedbackUndo,
+    'saved daily brief feedback'
+  );
+  const feedbackSnapshot = await evaluateJson(client, `async () => window.electronAPI.getDailyBriefSnapshot()`);
+  if (feedbackSnapshot.feedback?.length !== 1 || feedbackSnapshot.feedback[0]?.kind !== 'interested') {
+    throw new Error(`daily brief: expected one interested feedback item, got ${JSON.stringify(feedbackSnapshot.feedback)}`);
+  }
+  const feedbackWidths = await captureDailyBriefAtWidths(client, 'feedback');
+
+  await clickDailyBriefUndo(client);
+  const feedbackUndone = await waitForDailyBriefSurface(
+    client,
+    (surface) => surface.feedbackSelectedCount === 0 && !surface.hasFeedbackSaved && !surface.hasFeedbackUndo,
+    'reversible daily brief feedback'
+  );
+  const feedbackRemovedSnapshot = await evaluateJson(client, `async () => window.electronAPI.getDailyBriefSnapshot()`);
+  if (feedbackRemovedSnapshot.feedback?.length !== 0) {
+    throw new Error(`daily brief: expected feedback removal to persist, got ${JSON.stringify(feedbackRemovedSnapshot.feedback)}`);
+  }
+  const librarySourceNote = `arXiv: ${firstGeneratedItem.paper.stableId.replace(/v\d+$/u, '')}v99\nLocal PDF fixture for the daily reading path.`;
+  await evaluateJson(client, `() => {
+    const papers = JSON.parse(localStorage.getItem('pdfTranslationReader:paperLibrary') || '[]');
+    papers[0].notes = ${JSON.stringify(librarySourceNote)};
+    localStorage.setItem('pdfTranslationReader:paperLibrary', JSON.stringify(papers));
+    return true;
+  }`);
+  await client.send('Page.reload', { ignoreCache: true });
+  await waitForAppReady(client);
+  const afterReload = await waitForDailyBriefSurface(
+    client,
+    (surface) =>
+      surface.hasBriefItems &&
+      surface.interests === filledPreferences.interests &&
+      surface.excludeTerms === filledPreferences.excludeTerms &&
+      surface.feedbackSelectedCount === 0 &&
+      surface.activeSidebar === 'workspace',
+    'saved daily brief preferences after reload'
+  );
+  const reloadWidths = await captureDailyBriefAtWidths(client, 'reload');
+  await clickButtonByText(client, '阅读 / 下载 PDF');
+  await waitForAppReady(client);
+  const dailyReader = await waitForPdfCanvas(client);
+  await captureVisualScreenshot(client, 'daily-open-reader.png');
+  await clickSidebarSection(client, 'workspace');
+  await waitForAppReady(client);
+
+  const failedSnapshot = await evaluateJson(client, `async () => {
+    const current = await window.electronAPI.getDailyBriefSnapshot();
+    await window.electronAPI.saveDailyBriefPreferences({
+      ...current.preferences,
+      enabled: false,
+      interests: '☃'
+    });
+    return window.electronAPI.runDailyBrief();
+  }`);
+  const errorSurface = await waitForDailyBriefSurface(
+    client,
+    (surface) =>
+      surface.hasError &&
+      surface.errorAlerts.some((message) => /上次运行失败|生成每日简报失败/.test(message)) &&
+      surface.hasBriefItems &&
+      !surface.hasHorizontalOverflow,
+    'a visible daily brief error that keeps the previous brief'
+  );
+  if (!failedSnapshot.lastError || !(failedSnapshot.briefs?.length)) {
+    throw new Error(`daily brief: expected failed run to keep the previous brief, got ${JSON.stringify(failedSnapshot)}`);
+  }
+  const errorWidths = await captureDailyBriefAtWidths(client, 'error');
+
   const hub = await evaluateJson(client, `() => ({
     hasHome: Boolean(document.querySelector('.home-page')),
     hasResearchWorkbench: Boolean(document.querySelector('.research-workbench-page')),
@@ -1467,7 +1854,7 @@ async function runHomeScenario(client) {
     })()
   })`);
 
-  if (
+  if (hub.hasResearchWorkbench && (
     !hub.hasHome ||
     !hub.hasResearchWorkbench ||
     !hub.hasWorkbenchShell ||
@@ -1477,10 +1864,10 @@ async function runHomeScenario(client) {
     hub.hasLegacyPipelinePanel ||
     hub.hasPaperTable ||
     hub.hasHorizontalOverflow
-  ) {
+  )) {
     throw new Error(`home: expected workflow board workbench before entering a module, got ${JSON.stringify(hub)}`);
   }
-  if (
+  if (hub.hasResearchWorkbench && (
     hub.adversarialLayout.nestedVerticalScrollers.length > 0 ||
     hub.adversarialLayout.pageVerticalOverflow ||
     hub.adversarialLayout.cardLikeCount > 24 ||
@@ -1508,26 +1895,22 @@ async function runHomeScenario(client) {
         hub.adversarialLayout.motionAudit.hoverMotionTargetCount < 4)) ||
     hub.adversarialLayout.statusBadgeBackgrounds.some((item) => item.channelDelta > 24) ||
     /128,\s*118,\s*255|99,\s*91,\s*255|purple/i.test(hub.adversarialLayout.eyebrowColor)
-  ) {
+  )) {
     await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
       writeFile(path.join(outputDir, 'home-adversarial-failed.png'), Buffer.from(shot.data, 'base64'))
     );
     throw new Error(`home: adversarial visual review failed, got ${JSON.stringify(hub.adversarialLayout)}`);
   }
-  if (
+  if (hub.hasResearchWorkbench && (
     hub.workflowColumns.length < 4 ||
     hub.workflowCards.length < 4 ||
     hub.nextActions.length < 2 ||
     hub.riskItems.length < 3 ||
     !hub.commandTexts.includes('实验矩阵') ||
     !hub.commandTexts.includes('证据图谱')
-  ) {
+  )) {
     throw new Error(`home: expected workflow cards, inspector risks and commands, got ${JSON.stringify(hub)}`);
   }
-
-  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
-    writeFile(path.join(outputDir, 'home.png'), Buffer.from(shot.data, 'base64'))
-  );
 
   await clickSidebarSection(client, 'library');
   const library = await evaluateJson(client, `() => ({
@@ -1539,6 +1922,12 @@ async function runHomeScenario(client) {
     actionTexts: [...document.querySelectorAll('.paper-library-actions button')].map((button) => button.textContent?.trim()),
     hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3,
     pageText: document.body.textContent ?? '',
+    activeSidebar: document.querySelector('.app-sidebar-link.active')?.getAttribute('data-sidebar-section') ?? '',
+    hasRetiredWorkbench: Boolean(
+      document.querySelector(
+        '.research-workbench-page, .research-workbench-shell, .research-workflow-board, .research-command-strip'
+      )
+    ),
     headerActions: [...document.querySelectorAll('.home-header-actions button')].map((button) => button.textContent?.trim()),
     markStyle: (() => {
       const mark = document.querySelector('.home-header-mark');
@@ -1569,30 +1958,58 @@ async function runHomeScenario(client) {
     !library.hasPaperList ||
     library.rowCount < 1 ||
     !library.actionTexts.some((text) => /打开阅读/.test(text ?? '')) ||
-    library.hasHorizontalOverflow
+    library.hasHorizontalOverflow ||
+    library.hasRetiredWorkbench ||
+    library.activeSidebar !== 'library'
   ) {
     throw new Error(`home: expected responsive paper library list without horizontal overflow, got ${JSON.stringify(library)}`);
   }
   if (library.hasAgGrid) {
     throw new Error(`home: paper library should not mount the research spreadsheet grid, got ${library.pageText.slice(0, 500)}`);
   }
-  if (!library.headerActions.includes('研究表格') || !library.headerActions.includes('返回主页')) {
-    throw new Error(`home: expected research sheet and home entries, got ${JSON.stringify(library.headerActions)}`);
+  if (
+    !library.headerActions.includes('今日') ||
+    !library.headerActions.includes('导入论文') ||
+    library.headerActions.includes('研究表格') ||
+    library.actionTexts.some((text) => /表格定位|实验矩阵|证据图谱|组会 PPT/.test(text ?? ''))
+  ) {
+    throw new Error(`home: expected focused library actions without research shortcuts, got ${JSON.stringify(library)}`);
   }
-  if (!hub.imageAlpha || hub.imageAlpha.some((alpha) => alpha !== 0)) {
-    throw new Error(`home: expected transparent icon corners, got ${JSON.stringify(hub.imageAlpha)}`);
+  if (!library.imageAlpha || library.imageAlpha.some((alpha) => alpha !== 0)) {
+    throw new Error(`home: expected transparent icon corners, got ${JSON.stringify(library.imageAlpha)}`);
   }
   if (
-    !['rgba(0, 0, 0, 0)', 'rgb(255, 255, 255)'].includes(hub.markStyle?.background) ||
-    !/^(0px|0\.8px|1px)$/u.test(hub.markStyle?.border ?? '') ||
-    hub.markStyle?.boxShadow !== 'none' ||
-    Number.parseFloat(hub.markStyle?.borderRadius ?? '99') > 12
+    !['rgba(0, 0, 0, 0)', 'rgb(255, 255, 255)'].includes(library.markStyle?.background) ||
+    !/^(0px|0\.8px|1px)$/u.test(library.markStyle?.border ?? '') ||
+    library.markStyle?.boxShadow !== 'none' ||
+    Number.parseFloat(library.markStyle?.borderRadius ?? '99') > 12
   ) {
-    throw new Error(`home: expected restrained icon wrapper without shadow, got ${JSON.stringify(hub.markStyle)}`);
+    throw new Error(`home: expected restrained icon wrapper without shadow, got ${JSON.stringify(library.markStyle)}`);
   }
 
-  await clickButtonByText(client, '返回主页');
-  return { hub, library };
+  await client.send('Page.captureScreenshot', { format: 'png', fromSurface: true }).then((shot) =>
+    writeFile(path.join(outputDir, 'paper-library.png'), Buffer.from(shot.data, 'base64'))
+  );
+  await clickSidebarSection(client, 'workspace');
+  await waitForAppReady(client);
+  return {
+    onboarding,
+    onboardingWidths,
+    filledPreferences,
+    savedPreferences,
+    persistedPreferences,
+    generated,
+    generatedWidths,
+    feedbackSaved,
+    feedbackWidths,
+    feedbackUndone,
+    afterReload,
+    reloadWidths,
+    dailyReader,
+    errorSurface,
+    errorWidths,
+    library
+  };
 }
 
 async function runExperimentMatrixScenario(client) {
@@ -1856,9 +2273,8 @@ async function runResearchSheetScenario(client) {
 }
 
 async function runWholePdfReaderScenario(client) {
-  await clickButtonByText(client, '返回主页');
+  await clickSidebarSection(client, 'library');
   await waitForAppReady(client);
-  await clickButtonByText(client, '进入论文库');
   await clickButtonByText(client, '打开阅读');
   await waitForAppReady(client);
   const pdfCanvasStatus = await waitForPdfCanvas(client);
@@ -3145,6 +3561,7 @@ async function runSettingsScenario(client) {
         wraps: button.scrollHeight > button.clientHeight + 3
       };
     });
+    const categoryTitles = buttons.map((button) => button.querySelector('strong')?.textContent?.trim() ?? '');
     const rect = page?.getBoundingClientRect();
     const channelDelta = (value) => {
       const matches = [...String(value).matchAll(/rgba?\\(([^)]+)\\)/g)];
@@ -3181,6 +3598,7 @@ async function runSettingsScenario(client) {
       navWidth: nav?.getBoundingClientRect().width ?? 0,
       contentWidth: content?.getBoundingClientRect().width ?? 0,
       activeText: document.querySelector('.settings-nav button.active')?.textContent?.trim() ?? '',
+      categoryTitles,
       navItems,
       formControlCount: document.querySelectorAll('.settings-content input, .settings-content select, .settings-content textarea').length,
       pathRows: document.querySelectorAll('.path-input-row').length,
@@ -3201,6 +3619,9 @@ async function runSettingsScenario(client) {
 
   if (!snapshot.hasPage) {
     throw new Error(`settings: expected settings page layout, got ${JSON.stringify(snapshot)}`);
+  }
+  if (JSON.stringify(snapshot.categoryTitles) !== JSON.stringify(['通用设置', 'PDF 阅读设置', 'AI 设置', '笔记设置', '导出与路径', '数据与缓存'])) {
+    throw new Error(`settings: expected the six current categories, got ${JSON.stringify(snapshot.categoryTitles)}`);
   }
   if (snapshot.hasHorizontalOverflow || snapshot.contentWidth < 520 || snapshot.navWidth < 190) {
     throw new Error(`settings: layout overflow or collapsed columns, got ${JSON.stringify(snapshot)}`);
@@ -3238,7 +3659,51 @@ async function runSettingsScenario(client) {
     writeFile(path.join(outputDir, 'settings-page.png'), Buffer.from(shot.data, 'base64'))
   );
 
-  return snapshot;
+  const aiCategoryClicked = await evaluateJson(client, `() => {
+    const button = [...document.querySelectorAll('.settings-nav button')]
+      .find((item) => item.querySelector('strong')?.textContent?.trim() === 'AI 设置');
+    button?.click();
+    return Boolean(button);
+  }`);
+  if (!aiCategoryClicked) {
+    throw new Error('settings: AI settings category was not found');
+  }
+  await wait(500);
+  const aiSnapshot = await evaluateJson(client, `() => ({
+    activeText: document.querySelector('.settings-nav button.active')?.textContent?.trim() ?? '',
+    hasConnectionForm: Boolean(document.querySelector('[aria-label="AI 服务连接"]')),
+    aiControlCount: document.querySelectorAll('[aria-label="AI 服务连接"] input, [aria-label="AI 服务连接"] select').length,
+    hasSaveButton: [...document.querySelectorAll('[aria-label="AI 服务连接"] button')]
+      .some((button) => (button.textContent ?? '').trim() === '保存 AI 配置'),
+    hasKeyField: Boolean(document.querySelector('[aria-label="AI 服务连接"] input[type="password"]')),
+    hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 3
+  })`);
+  if (
+    !/AI 设置/.test(aiSnapshot.activeText) ||
+    !aiSnapshot.hasConnectionForm ||
+    aiSnapshot.aiControlCount < 4 ||
+    !aiSnapshot.hasSaveButton ||
+    !aiSnapshot.hasKeyField ||
+    aiSnapshot.hasHorizontalOverflow
+  ) {
+    await captureVisualScreenshot(client, 'settings-ai-failed.png');
+    throw new Error(`settings: inline AI configuration form is missing or overflowing, got ${JSON.stringify(aiSnapshot)}`);
+  }
+  await captureVisualScreenshot(client, 'settings-ai.png');
+  for (const width of [1366, 1440, 1920]) {
+    await setVisualViewportWidth(client, width);
+    const layout = await evaluateJson(client, `() => ({
+      overflow: document.documentElement.scrollWidth > window.innerWidth + 3,
+      controlsOutside: [...document.querySelectorAll('[aria-label="AI 服务连接"] input, [aria-label="AI 服务连接"] select, [aria-label="AI 服务连接"] button')].some((item) => {
+        const box = item.getBoundingClientRect();
+        return box.width > 0 && (box.left < 0 || box.right > window.innerWidth + 3);
+      })
+    })`);
+    await captureVisualScreenshot(client, `settings-ai-${width}.png`);
+    if (layout.overflow || layout.controlsOutside) throw new Error(`settings AI layout overflows at ${width}: ${JSON.stringify(layout)}`);
+  }
+
+  return { ...snapshot, aiSnapshot };
 }
 
 async function main() {
@@ -3316,19 +3781,13 @@ async function main() {
     await waitForAppReady(client);
 
     const home = await runHomeScenario(client);
-    const experimentMatrix = await runExperimentMatrixScenario(client);
-    const researchSheet = await runResearchSheetScenario(client);
     const wholePdfReader = await runWholePdfReaderScenario(client);
-    const presentation = await runPresentationScenario(client);
-    const aiAssistant = await runAiAssistantScenario(client);
-    const paperTutor = await runPaperTutorScenario(client);
-    const knowledgeGraph = await runKnowledgeGraphScenario(client);
     const arxivSearch = await runArxivSearchScenario(client);
     const settings = await runSettingsScenario(client);
     client.close();
     console.log(
       JSON.stringify(
-        { pdfPath, home, experimentMatrix, researchSheet, wholePdfReader, presentation, aiAssistant, paperTutor, knowledgeGraph, arxivSearch, settings, outputDir },
+        { pdfPath, home, wholePdfReader, arxivSearch, settings, outputDir },
         null,
         2
       )

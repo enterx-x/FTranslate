@@ -1,14 +1,10 @@
 import { Fragment } from 'react';
 import brandMarkUrl from '../assets/brand-mark.png';
 import workspaceIcon from '../assets/icons/duotone/workspace.svg';
-import researchSheetIcon from '../assets/icons/duotone/research-sheet.svg';
 import libraryIcon from '../assets/icons/duotone/library.svg';
 import pdfReaderIcon from '../assets/icons/duotone/pdf-reader.svg';
-import aiFillIcon from '../assets/icons/duotone/ai-fill.svg';
-import analysisIcon from '../assets/icons/duotone/analysis.svg';
 import searchIcon from '../assets/icons/duotone/search.svg';
 import settingsIcon from '../assets/icons/duotone/settings.svg';
-import translateIcon from '../assets/icons/duotone/translate.svg';
 import styles from '../styles/components/AppSidebar.module.css';
 
 export type AppSidebarSection =
@@ -53,15 +49,17 @@ type SidebarNavigationGroup =
   | 'evidence'
   | 'experiments'
   | 'assistant'
-  | 'outputs';
+  | 'outputs'
+  | 'utility';
 
 const groupLabels: Record<SidebarNavigationGroup, string> = {
-  overview: '项目概览',
+  overview: '每日研究',
   reading: '论文与阅读',
   evidence: '方法与证据',
   experiments: '实验与运行',
   assistant: 'AI 研究助手',
-  outputs: '组会与导出'
+  outputs: '组会与导出',
+  utility: '应用设置'
 };
 
 const groupOrder: SidebarNavigationGroup[] = [
@@ -70,29 +68,25 @@ const groupOrder: SidebarNavigationGroup[] = [
   'evidence',
   'experiments',
   'assistant',
-  'outputs'
+  'outputs',
+  'utility'
 ];
 
 function getSidebarGroup(section: AppSidebarSection): SidebarNavigationGroup {
   if (section === 'workspace') return 'overview';
   if (section === 'library' || section === 'arxiv' || section === 'reader') return 'reading';
+  if (section === 'settings') return 'utility';
   if (section === 'knowledgeGraph' || section === 'researchSheet') return 'evidence';
-  if (section === 'experimentMatrix' || section === 'settings') return 'experiments';
+  if (section === 'experimentMatrix') return 'experiments';
   if (section === 'ai' || section === 'paperTutor') return 'assistant';
   return 'outputs';
 }
 
 const navigationItems: AppSidebarNavigationItem[] = [
-  { section: 'workspace', label: '项目空间', icon: workspaceIcon },
-  { section: 'experimentMatrix', label: '实验矩阵', icon: researchSheetIcon },
-  { section: 'knowledgeGraph', label: '证据图谱', icon: analysisIcon },
-  { section: 'presentation', label: '组会 PPT', icon: translateIcon },
-  { section: 'arxiv', label: 'arXiv 检索', icon: searchIcon },
+  { section: 'workspace', label: '今日', icon: workspaceIcon },
   { section: 'library', label: '论文库', icon: libraryIcon },
-  { section: 'researchSheet', label: '研究表格', icon: researchSheetIcon },
+  { section: 'arxiv', label: 'arXiv 检索', icon: searchIcon },
   { section: 'reader', label: 'PDF 阅读', icon: pdfReaderIcon },
-  { section: 'paperTutor', label: '论文导师', icon: aiFillIcon, isUtility: true },
-  { section: 'ai', label: 'AI 助手', icon: aiFillIcon, isUtility: true },
   { section: 'settings', label: '设置', icon: settingsIcon, isUtility: true }
 ];
 

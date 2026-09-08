@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildHomePageMetrics,
-  buildResearchWorkspaceOverview
+  getHomePageVisibleActions
 } from './HomePage';
 import type { PaperRecord } from '../lib/papers';
 
@@ -47,68 +47,20 @@ describe('buildHomePageMetrics', () => {
   });
 });
 
-describe('buildResearchWorkspaceOverview', () => {
-  it('derives workbench objects and workflow readiness from local papers', () => {
-    const papers = [
-      makePaper('method-paper', {
-        notes: 'method card notes',
-        translatedPdfPath: 'C:/papers/method-paper-bilingual.pdf',
-        lastOpenedAt: '2026-02-01T00:00:00.000Z'
-      }),
-      makePaper('baseline-paper')
-    ];
-
-    const overview = buildResearchWorkspaceOverview(papers, {
-      paperCount: 2,
-      nodeCount: 8,
-      edgeCount: 11
-    });
-
-    expect(overview.objectCards).toEqual([
-      expect.objectContaining({ key: 'papers', value: '2', status: 'Ready' }),
-      expect.objectContaining({ key: 'evidenceGraph', value: '8', status: 'Ready' }),
-      expect.objectContaining({ key: 'notes', value: '1', status: 'Ready' }),
-      expect.objectContaining({ key: 'bilingualAssets', value: '1', status: 'Cached' })
-    ]);
-    expect(overview.pipeline.map((stage) => [stage.key, stage.status])).toEqual([
-      ['method', 'Ready'],
-      ['code', 'Planned'],
-      ['experiment', 'Draftable'],
-      ['runtime', 'Planned']
-    ]);
-    expect(overview.nextActions[0]).toMatchObject({
-      key: 'continue-reading',
-      actionLabel: '继续阅读'
-    });
-    expect(overview.risks.map((risk) => risk.key)).toEqual([
-      'project-space',
-      'code-mapping',
-      'runtime-center'
+describe('getHomePageVisibleActions', () => {
+  it('keeps library actions focused on importing, reading, editing, and removing papers', () => {
+    expect(getHomePageVisibleActions()).toEqual([
+      'import',
+      'open',
+      'edit',
+      'remove'
     ]);
   });
 
-  it('marks setup gaps before the first paper is imported', () => {
-    const overview = buildResearchWorkspaceOverview([], {
-      paperCount: 0,
-      nodeCount: 0,
-      edgeCount: 0
-    });
-
-    expect(overview.objectCards.map((card) => card.status)).toEqual([
-      'Setup needed',
-      'Evidence missing',
-      'Setup needed',
-      'Setup needed'
-    ]);
-    expect(overview.pipeline.map((stage) => stage.status)).toEqual([
-      'Needs paper',
-      'Planned',
-      'Needs evidence',
-      'Planned'
-    ]);
-    expect(overview.nextActions[0]).toMatchObject({
-      key: 'import-paper',
-      actionLabel: '导入论文'
-    });
+  it('does not include research workbench shortcuts in the library surface', () => {
+    expect(getHomePageVisibleActions()).not.toContain('research-sheet');
+    expect(getHomePageVisibleActions()).not.toContain('experiment-matrix');
+    expect(getHomePageVisibleActions()).not.toContain('knowledge-graph');
+    expect(getHomePageVisibleActions()).not.toContain('presentation');
   });
 });
